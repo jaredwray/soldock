@@ -147,6 +147,7 @@ export function Shell() {
 						replySeq={route.replySeq ?? null}
 						profileId={route.profileId ?? null}
 						threads={route.threads === true}
+						view={route.view ?? null}
 						search={route.search ?? null}
 						navOpen={navOpen}
 						onCloseNav={() => setNavOpen(false)}

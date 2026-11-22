@@ -32,6 +32,10 @@ function message(seq: number, version: number, parentId: string | null, text = `
 		thread: null,
 		files: [],
 		link_previews: [],
+		pinned: false,
+		untrusted: false,
+		forwarded: null,
+		cards: [],
 	};
 }
 

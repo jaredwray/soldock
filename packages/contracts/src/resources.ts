@@ -76,7 +76,9 @@ export const chatRoom = defineResource({
 				title:
 					room.kind === "dm"
 						? `Direct message with ${room.peer?.display_name ?? "a member"}`
-						: `Messages of #${room.name ?? "room"}`,
+						: room.kind === "group_dm"
+							? `Group direct message with ${room.peers.map((p) => p.display_name).join(", ") || "members"}`
+							: `Messages of #${room.name ?? "room"}`,
 			})),
 	},
 	updates:

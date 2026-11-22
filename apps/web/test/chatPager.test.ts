@@ -30,6 +30,10 @@ function fakeRoom(count: number) {
 			thread: null,
 			files: [],
 			link_previews: [],
+			pinned: false,
+			untrusted: false,
+			forwarded: null,
+			cards: [],
 		};
 		messages.push(message);
 		return message;

@@ -538,6 +538,26 @@ export function ThreadPanel({
 		view.current?.catchUp();
 	}
 
+	function triggerCardAction(messageId: string, cardId: string, actionId: string) {
+		setActionError(null);
+		api
+			.call("chat.trigger_card_action", {
+				room_id: roomId,
+				message_id: messageId,
+				card_id: cardId,
+				action_id: actionId,
+				idempotency_key: crypto.randomUUID(),
+			})
+			.then(
+				() => {
+					toast({ message: "Action recorded.", tone: "info" });
+				},
+				(error) => {
+					setActionError(errorMessage(error));
+				},
+			);
+	}
+
 	/** The props of `MessageItem` for one message of the view. */
 	function itemProps(message: ChatMessage) {
 		const own = message.author.principal_id === ownId;
@@ -579,6 +599,7 @@ export function ThreadPanel({
 			ownId,
 			quickEmoji,
 			onReact: (emoji: string, add: boolean) => react(message.id, emoji, add),
+			onCardAction: (cardId: string, actionId: string) => triggerCardAction(message.id, cardId, actionId),
 		};
 	}
 

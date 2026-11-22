@@ -2,7 +2,10 @@ import { describe, expect, it } from "vitest";
 import {
 	ADMIN_SECTIONS,
 	adminPath,
+	chatActivityPath,
+	chatDraftsPath,
 	chatPath,
+	chatSavedPath,
 	chatSearchPath,
 	chatThreadsPath,
 	type DriveView,
@@ -200,6 +203,15 @@ describe("routes", () => {
 	it("parses the path of the Threads view, and no longer path", () => {
 		expect(parseRoute(chatThreadsPath())).toEqual({ page: "chat", roomId: null, seq: null, threads: true });
 		expect(parseRoute(`${chatThreadsPath()}/x`)).toEqual({ page: "not-found" });
+	});
+
+	it("parses the paths of the Activity, Saved, and Drafts views, and no longer paths", () => {
+		expect(parseRoute(chatActivityPath())).toEqual({ page: "chat", roomId: null, seq: null, view: "activity" });
+		expect(parseRoute(chatSavedPath())).toEqual({ page: "chat", roomId: null, seq: null, view: "saved" });
+		expect(parseRoute(chatDraftsPath())).toEqual({ page: "chat", roomId: null, seq: null, view: "drafts" });
+		for (const path of [`${chatActivityPath()}/x`, `${chatSavedPath()}/x`, `${chatDraftsPath()}/x`]) {
+			expect(parseRoute(path), path).toEqual({ page: "not-found" });
+		}
 	});
 
 	// A search has a link: the path has the query, and the room of a search in one room.

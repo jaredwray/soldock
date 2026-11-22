@@ -26,6 +26,10 @@ function stored(seq: number, key: string | null, author: ChatMessage["author"] =
 		thread: null,
 		files: [],
 		link_previews: [],
+		pinned: false,
+		untrusted: false,
+		forwarded: null,
+		cards: [],
 	};
 }
 

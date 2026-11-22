@@ -40,6 +40,13 @@ export async function restartLegacyRoom(roomId: string, version: number, restore
 				await state.storage.deleteAlarm();
 				const sql = state.storage.sql;
 				restore(sql);
+				sql.exec("DROP TABLE IF EXISTS post_allowed");
+				sql.exec("DROP TABLE IF EXISTS pins");
+				sql.exec("DROP TABLE IF EXISTS card_actions");
+				sql.exec("DROP TABLE IF EXISTS activity_outbox");
+				sql.exec("ALTER TABLE messages DROP COLUMN untrusted");
+				sql.exec("ALTER TABLE messages DROP COLUMN forwarded_json");
+				sql.exec("ALTER TABLE messages DROP COLUMN cards_json");
 				sql.exec("DROP TABLE chat_notification_outbox");
 				sql.exec("ALTER TABLE members DROP COLUMN last_typed_at");
 				sql.exec("UPDATE meta SET value = ? WHERE key = 'schema_version'", String(version));

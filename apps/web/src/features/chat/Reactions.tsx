@@ -1,5 +1,6 @@
 import type { ChatReaction } from "@asterra/contracts";
 import { type RefObject, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { EmojiGlyph, useCustomEmoji } from "./customEmoji.tsx";
 import { emojiName, findEmoji } from "./emoji.ts";
 
 /** The names in the title of a reaction. More names than this show as "and N more". */
@@ -42,7 +43,9 @@ export function Reactions({
 							title={more > 0 ? `${names.join(", ")} and ${more} more` : names.join(", ")}
 							onClick={() => onToggle(reaction.emoji, !mine)}
 						>
-							<span aria-hidden="true">{reaction.emoji}</span>
+							<span aria-hidden="true">
+								<EmojiGlyph emoji={reaction.emoji} />
+							</span>
 							<span aria-hidden="true" className="chat-reaction-count">
 								{reaction.count}
 							</span>
@@ -78,7 +81,17 @@ export function ReactionPicker({
 	const [up, setUp] = useState(false);
 	const searchId = useId();
 	const root = useRef<HTMLDivElement>(null);
-	const choices = useMemo(() => findEmoji(query), [query]);
+	const customEmoji = useCustomEmoji();
+	const choices = useMemo(() => {
+		const q = query
+			.trim()
+			.toLowerCase()
+			.replace(/^:+|:+$/g, "");
+		const custom = customEmoji.list
+			.filter((item) => !q || item.name.includes(q))
+			.map((item) => ({ emoji: `:${item.name}:`, name: item.name }));
+		return [...custom, ...findEmoji(query)];
+	}, [query, customEmoji.list]);
 
 	useLayoutEffect(() => {
 		const picker = root.current;
@@ -151,7 +164,7 @@ export function ReactionPicker({
 								title={choice.name}
 								onClick={() => onPick(choice.emoji)}
 							>
-								{choice.emoji}
+								<EmojiGlyph emoji={choice.emoji} />
 							</button>
 						</li>
 					))}

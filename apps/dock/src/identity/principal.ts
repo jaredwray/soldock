@@ -1,6 +1,7 @@
 import { DurableObject } from "cloudflare:workers";
 import {
 	CHAT_PRESENCE_LIMITS,
+	type ChatActivityKind,
 	type ChatAddressedReason,
 	type ChatNotificationLevel,
 	type ChatRoom,
@@ -8,10 +9,31 @@ import {
 	EVENTS_LIMITS,
 	EVENTS_SOCKET_CLOSE,
 	EVENTS_SOCKET_PROTOCOL,
+	type PostingPolicy,
 	type PrincipalEvent,
+	type RoomKind,
 } from "@asterra/contracts";
 import { log } from "../platform/index.ts";
-import { type CredentialCheck, type CredentialRef, checkCredentials, credentialKey } from "./access.ts";
+import {
+	type CredentialBinding,
+	type CredentialCheck,
+	type CredentialRef,
+	checkCredentials,
+	credentialKey,
+	credentialState,
+} from "./access.ts";
+import {
+	type ActivityActor,
+	type ActivityInsert,
+	type ActivityRecord,
+	CHAT_PERSONAL_MIGRATION,
+	ChatPersonalStore,
+	type DraftRecord,
+	type ReminderRecord,
+	type SavedRef,
+	type ScheduledRecord,
+	type SectionRecord,
+} from "./chat-personal.ts";
 import {
 	ChatNotifications,
 	NOTIFICATION_MIGRATION,
@@ -36,7 +58,7 @@ type Row = Record<string, SqlStorageValue>;
 
 /** A room as the principal sees it, as the room object sends it. Times are in milliseconds. */
 export interface ChatRoomView {
-	kind: "public" | "private" | "dm";
+	kind: RoomKind;
 	name: string | null;
 	/** The NFC lowercase form of the name, for the order and the name filter. */
 	name_key: string | null;
@@ -54,9 +76,15 @@ export interface ChatRoomView {
 	mention_count: number;
 	/** The other member of a direct message, as JSON. */
 	peer_json: string | null;
+	/** The other members of a group direct message, as JSON array. */
+	peers_json?: string | null | undefined;
 	version: number;
 	/** True when the principal put its star on the room. */
 	starred: boolean;
+	archived_at?: number | null | undefined;
+	posting_policy?: PostingPolicy | undefined;
+	can_post?: boolean | undefined;
+	retention_days?: number | null | undefined;
 	/**
 	 * The threads of the room that the principal follows and that have replies, newest reply first, at most
 	 * `THREADS_PER_ROOM`. A state from before threads has none.
@@ -145,10 +173,11 @@ export interface ChatRoomEntry extends ChatRoomView {
 /** A joined room, as a search reads it. */
 export interface ChatRoomRef {
 	room_id: string;
-	kind: "public" | "private" | "dm";
+	kind: RoomKind;
 	name: string | null;
 	name_key: string | null;
 	peer_json: string | null;
+	peers_json?: string | null;
 }
 
 export interface ChatRoomQuery {
@@ -220,6 +249,7 @@ export function chatRoomOutput(entry: ChatRoomEntry): ChatRoom {
 		name: entry.name,
 		topic: entry.topic,
 		peer: entry.peer_json === null ? null : JSON.parse(entry.peer_json),
+		peers: entry.peers_json ? JSON.parse(entry.peers_json) : [],
 		created_at: iso(entry.created_at),
 		created_by: JSON.parse(entry.created_by_json),
 		member_count: entry.member_count,
@@ -232,6 +262,10 @@ export function chatRoomOutput(entry: ChatRoomEntry): ChatRoom {
 		mention_count: entry.mention_count,
 		version: entry.version,
 		starred: entry.starred,
+		archived_at: entry.archived_at == null ? null : iso(entry.archived_at),
+		posting_policy: entry.posting_policy ?? "members",
+		can_post: entry.can_post ?? true,
+		retention_days: entry.retention_days ?? null,
 	};
 }
 
@@ -305,16 +339,25 @@ const MIGRATIONS: string[][] = [
 			DELETE FROM chat_notification_levels WHERE room_id = NEW.room_id; END`,
 	],
 	["ALTER TABLE chat_notification_sounds ADD COLUMN foreground_devices TEXT NOT NULL DEFAULT '[]'"],
+	[
+		"ALTER TABLE chat_rooms ADD COLUMN peers_json TEXT",
+		"ALTER TABLE chat_rooms ADD COLUMN archived_at INTEGER",
+		"ALTER TABLE chat_rooms ADD COLUMN posting_policy TEXT NOT NULL DEFAULT 'members'",
+		"ALTER TABLE chat_rooms ADD COLUMN can_post INTEGER NOT NULL DEFAULT 1",
+		"ALTER TABLE chat_rooms ADD COLUMN retention_days INTEGER",
+		...CHAT_PERSONAL_MIGRATION,
+	],
 ];
 
 const COLUMNS = `room_id, kind, name, name_key, topic, created_at, created_by_json, member_count, role, last_seq,
-	last_message_at, activity_at, last_read_seq, unread_count, mention_count, peer_json, version, starred`;
+	last_message_at, activity_at, last_read_seq, unread_count, mention_count, peer_json, peers_json, version, starred,
+	archived_at, posting_policy, can_post, retention_days`;
 
-/** A row of `chat_rooms` as SQLite returns it: the star is 0 or 1. */
-type EntryRow = Omit<ChatRoomEntry, "starred"> & { starred: number } & Row;
+/** A row of `chat_rooms` as SQLite returns it: booleans are 0 or 1. */
+type EntryRow = Omit<ChatRoomEntry, "starred" | "can_post"> & { starred: number; can_post: number } & Row;
 
 function toEntry(row: EntryRow): ChatRoomEntry {
-	return { ...row, starred: row.starred === 1 };
+	return { ...row, starred: row.starred === 1, can_post: row.can_post !== 0 };
 }
 
 /** The columns of `chat_rooms` with the name of the table, for a join. */
@@ -332,6 +375,7 @@ type ThreadRow = EntryRow & { parent_id: string; thread_last_reply_at: number; t
 export class PrincipalDO extends DurableObject<Env> {
 	private readonly sql: SqlStorage;
 	private readonly notifications: ChatNotifications;
+	private readonly personal: ChatPersonalStore;
 	/** The end of the line of socket events. Each event goes out after the one before it, so the events keep their order. */
 	private announced: Promise<void> = Promise.resolve();
 
@@ -339,6 +383,7 @@ export class PrincipalDO extends DurableObject<Env> {
 		super(ctx, env);
 		this.sql = ctx.storage.sql;
 		this.notifications = new ChatNotifications(this.sql);
+		this.personal = new ChatPersonalStore(this.sql);
 		this.migrate();
 	}
 
@@ -389,18 +434,20 @@ export class PrincipalDO extends DurableObject<Env> {
 				const view = state.view;
 				const row = this.sql.exec<{ room_id: string; joined: number }>(
 					`INSERT INTO chat_rooms (room_id, stamp, joined, kind, name, name_key, topic, created_at, created_by_json,
-						member_count, role, last_seq, last_message_at, activity_at, last_read_seq, unread_count, peer_json, version,
-						starred, mention_count, membership_id)
-					VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21)
+						member_count, role, last_seq, last_message_at, activity_at, last_read_seq, unread_count, peer_json, peers_json, version,
+						starred, mention_count, membership_id, archived_at, posting_policy, can_post, retention_days)
+					VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26)
 					ON CONFLICT (room_id) DO UPDATE SET stamp = excluded.stamp, joined = excluded.joined, kind = excluded.kind,
 						name = excluded.name, name_key = excluded.name_key, topic = excluded.topic,
 						created_at = excluded.created_at, created_by_json = excluded.created_by_json,
 						member_count = excluded.member_count, role = excluded.role, last_seq = excluded.last_seq,
 						last_message_at = excluded.last_message_at, activity_at = excluded.activity_at,
 						last_read_seq = excluded.last_read_seq, unread_count = excluded.unread_count,
-						peer_json = excluded.peer_json, version = excluded.version, starred = excluded.starred,
-						mention_count = excluded.mention_count,
-						membership_id = CASE WHEN excluded.joined = 1 THEN COALESCE(excluded.membership_id, chat_rooms.membership_id) END
+						peer_json = excluded.peer_json, peers_json = excluded.peers_json, version = excluded.version,
+						starred = excluded.starred, mention_count = excluded.mention_count,
+						membership_id = CASE WHEN excluded.joined = 1 THEN COALESCE(excluded.membership_id, chat_rooms.membership_id) END,
+						archived_at = excluded.archived_at, posting_policy = excluded.posting_policy,
+						can_post = excluded.can_post, retention_days = excluded.retention_days
 					WHERE excluded.stamp > chat_rooms.stamp
 					RETURNING room_id, joined`,
 					state.room_id,
@@ -420,13 +467,21 @@ export class PrincipalDO extends DurableObject<Env> {
 					view?.last_read_seq ?? null,
 					view?.unread_count ?? null,
 					view?.peer_json ?? null,
+					view?.peers_json ?? null,
 					view?.version ?? null,
 					view?.starred ? 1 : 0,
 					view?.mention_count ?? 0,
 					state.membership_id ?? null,
+					view?.archived_at ?? null,
+					view?.posting_policy ?? "members",
+					view?.can_post === false ? 0 : 1,
+					view?.retention_days ?? null,
 				);
 				const accepted = row.toArray();
 				kept.push(...accepted);
+				if (accepted.length > 0 && view === null) {
+					this.personal.removeRoomPersonalState(state.room_id);
+				}
 				// A state from a room on an older version has no threads: the rows of the room stay as they were.
 				const threads = view === null ? [] : view.threads;
 				if (accepted.length > 0 && threads !== undefined) {
@@ -679,7 +734,9 @@ export class PrincipalDO extends DurableObject<Env> {
 	 */
 	chatRoomRefs(): { seeded: boolean; rooms: ChatRoomRef[] } {
 		const rooms = this.sql
-			.exec<ChatRoomRef & Row>("SELECT room_id, kind, name, name_key, peer_json FROM chat_rooms WHERE joined = 1")
+			.exec<ChatRoomRef & Row>(
+				"SELECT room_id, kind, name, name_key, peer_json, peers_json FROM chat_rooms WHERE joined = 1",
+			)
 			.toArray();
 		return { seeded: this.chatSeeded(), rooms };
 	}
@@ -931,6 +988,357 @@ export class PrincipalDO extends DurableObject<Env> {
 	override async alarm(): Promise<void> {
 		await this.enqueue([]);
 		await publishPresence(this.ctx, this.env.DIRECTORY);
+		await this.processDuePersonalWork();
+	}
+
+	private async schedulePersonalAlarm(): Promise<void> {
+		const next = this.personal.nextAlarmAt();
+		if (next === null) return;
+		const due = Math.max(Date.now(), next);
+		const current = await this.ctx.storage.getAlarm();
+		if (current === null || due < current) await this.ctx.storage.setAlarm(due);
+	}
+
+	/** Records one or more activity items (idempotent by id) and pushes a live count event. */
+	recordChatActivity(items: readonly ActivityInsert[]): void {
+		let added = 0;
+		const seeded =
+			this.sql.exec<{ value: string }>("SELECT value FROM meta WHERE key = 'chat_seeded'").toArray()[0]?.value === "1";
+		this.ctx.storage.transactionSync(() => {
+			for (const item of items) {
+				const roomRow = this.sql
+					.exec<{ joined: number }>("SELECT joined FROM chat_rooms WHERE room_id = ?", item.room_id)
+					.toArray()[0];
+				if (roomRow ? roomRow.joined !== 1 : seeded) continue;
+				if (this.personal.recordActivity(item)) added += 1;
+			}
+		});
+		if (added > 0 && this.ctx.getWebSockets().length > 0) {
+			const unread = this.personal.activityUnreadCount();
+			this.ctx.waitUntil(this.publish(() => [{ type: "chat.activity", unread_count: unread }]));
+		}
+	}
+
+	deleteChatActivities(ids: readonly string[]): number {
+		return this.personal.deleteActivities(ids);
+	}
+
+	listChatActivity(query: {
+		filter: "all" | "unread" | ChatActivityKind;
+		after: { createdAt: number; id: string } | null;
+		limit: number;
+	}): { items: ActivityRecord[]; unreadCount: number } {
+		return this.personal.listActivity(query);
+	}
+
+	markChatActivityRead(activityId?: string): number {
+		const unread = this.personal.markActivityRead(activityId, Date.now());
+		if (this.ctx.getWebSockets().length > 0) {
+			this.ctx.waitUntil(this.publish(() => [{ type: "chat.activity", unread_count: unread }]));
+		}
+		return unread;
+	}
+
+	listChatSections(): SectionRecord[] {
+		return this.personal.listSections();
+	}
+
+	createChatSection(id: string, name: string): SectionRecord | "full" {
+		const created = this.personal.createSection(id, name, Date.now());
+		if (created !== "full" && this.ctx.getWebSockets().length > 0) {
+			this.ctx.waitUntil(this.publish(() => [{ type: "chat.sections" }]));
+		}
+		return created;
+	}
+
+	updateChatSection(
+		id: string,
+		patch: { name?: string | undefined; position?: number | undefined },
+	): SectionRecord | null {
+		const updated = this.personal.updateSection(id, patch);
+		if (updated && this.ctx.getWebSockets().length > 0) {
+			this.ctx.waitUntil(this.publish(() => [{ type: "chat.sections" }]));
+		}
+		return updated;
+	}
+
+	deleteChatSection(id: string): boolean {
+		const deleted = this.personal.deleteSection(id);
+		if (deleted && this.ctx.getWebSockets().length > 0) {
+			this.ctx.waitUntil(this.publish(() => [{ type: "chat.sections" }]));
+		}
+		return deleted;
+	}
+
+	setChatRoomSection(roomId: string, sectionId: string | null): "ok" | "no_section" {
+		const result = this.personal.setRoomSection(roomId, sectionId);
+		if (result === "ok" && this.ctx.getWebSockets().length > 0) {
+			this.ctx.waitUntil(this.publish(() => [{ type: "chat.sections" }]));
+		}
+		return result;
+	}
+
+	saveChatMessage(roomId: string, messageId: string): { savedAt: number } | "full" {
+		return this.personal.saveMessage(roomId, messageId, Date.now());
+	}
+
+	unsaveChatMessage(roomId: string, messageId: string): boolean {
+		return this.personal.unsaveMessage(roomId, messageId);
+	}
+
+	listSavedChatMessages(query: {
+		after: { savedAt: number; roomId: string; messageId: string } | null;
+		limit: number;
+	}): SavedRef[] {
+		return this.personal.listSavedMessages(query);
+	}
+
+	saveChatDraft(input: {
+		roomId: string;
+		parentId: string | null;
+		bodyJson: string;
+		text: string;
+		markdown: string;
+	}): DraftRecord {
+		const saved = this.personal.saveDraft({ ...input, now: Date.now() });
+		if (this.ctx.getWebSockets().length > 0) {
+			this.ctx.waitUntil(
+				this.publish(() => [{ type: "chat.draft", room_id: saved.room_id, parent_id: saved.parent_id }]),
+			);
+		}
+		return saved;
+	}
+
+	deleteChatDraft(roomId: string, parentId: string | null): boolean {
+		const deleted = this.personal.deleteDraft(roomId, parentId);
+		if (deleted && this.ctx.getWebSockets().length > 0) {
+			this.ctx.waitUntil(this.publish(() => [{ type: "chat.draft", room_id: roomId, parent_id: parentId }]));
+		}
+		return deleted;
+	}
+
+	listChatDrafts(roomId?: string): DraftRecord[] {
+		return this.personal.listDrafts(roomId);
+	}
+
+	async scheduleChatMessage(input: {
+		id: string;
+		principalId: string;
+		actor: ActivityActor;
+		roomId: string;
+		parentId: string | null;
+		alsoInRoom: boolean;
+		text: string;
+		bodyJson: string;
+		markdown: string;
+		sendAt: number;
+		credentialBindingJson?: string | null;
+	}): Promise<ScheduledRecord | "full"> {
+		const created = this.personal.createScheduled({ ...input, now: Date.now() });
+		if (created !== "full") {
+			await this.schedulePersonalAlarm();
+			if (this.ctx.getWebSockets().length > 0) {
+				this.ctx.waitUntil(
+					this.publish(() => [{ type: "chat.scheduled", scheduled_id: created.id, room_id: created.room_id }]),
+				);
+			}
+		}
+		return created;
+	}
+
+	async listScheduledChatMessages(
+		roomId?: string,
+		status: "pending" | "sent" | "failed" | "all" = "pending",
+	): Promise<ScheduledRecord[]> {
+		await this.processDuePersonalWork();
+		return this.personal.listScheduled(roomId, status);
+	}
+
+	async updateScheduledChatMessage(
+		id: string,
+		patch: { text?: string; bodyJson?: string; markdown?: string; sendAt?: number },
+	): Promise<ScheduledRecord | "not_found" | "not_pending"> {
+		const updated = this.personal.updateScheduled(id, patch);
+		if (typeof updated === "object") {
+			await this.schedulePersonalAlarm();
+			if (this.ctx.getWebSockets().length > 0) {
+				this.ctx.waitUntil(
+					this.publish(() => [{ type: "chat.scheduled", scheduled_id: updated.id, room_id: updated.room_id }]),
+				);
+			}
+		}
+		return updated;
+	}
+
+	cancelScheduledChatMessage(id: string): boolean {
+		return this.personal.cancelScheduled(id);
+	}
+
+	async createChatReminder(input: {
+		id: string;
+		roomId: string;
+		messageId: string;
+		seq: number;
+		parentId: string | null;
+		parentSeq: number | null;
+		note: string;
+		preview: string;
+		untrusted?: boolean | undefined;
+		remindAt: number;
+		actor: ActivityActor;
+	}): Promise<ReminderRecord | "full"> {
+		this.sql.exec("INSERT OR REPLACE INTO meta (key, value) VALUES ('self_actor', ?)", JSON.stringify(input.actor));
+		const created = this.personal.createReminder({ ...input, now: Date.now() });
+		if (created !== "full") await this.schedulePersonalAlarm();
+		return created;
+	}
+
+	async listChatReminders(includeCompleted: boolean): Promise<ReminderRecord[]> {
+		await this.processDuePersonalWork();
+		return this.personal.listReminders(includeCompleted);
+	}
+
+	completeChatReminder(id: string): ReminderRecord | null {
+		return this.personal.completeReminder(id, Date.now());
+	}
+
+	deleteChatReminder(id: string): boolean {
+		return this.personal.deleteReminder(id);
+	}
+
+	/** Fires due reminders and delivers due scheduled messages. Safe to call repeatedly. */
+	async processDuePersonalWork(): Promise<void> {
+		const now = Date.now();
+		const events: PrincipalEvent[] = [];
+
+		// 1. Trigger due reminders.
+		const dueRem = this.personal.dueReminders(now);
+		if (dueRem.length > 0) {
+			const actorRow = this.sql.exec<{ value: string }>("SELECT value FROM meta WHERE key = 'self_actor'").toArray()[0];
+			const selfActor: ActivityActor = actorRow
+				? (JSON.parse(actorRow.value) as ActivityActor)
+				: { principal_id: "unknown", kind: "human", display_name: "Reminder" };
+			for (const reminder of dueRem) {
+				const roomRow = this.sql
+					.exec<{ name: string | null; joined: number }>(
+						"SELECT name, joined FROM chat_rooms WHERE room_id = ?",
+						reminder.room_id,
+					)
+					.toArray()[0];
+				const isMember = roomRow?.joined === 1;
+				const fired = this.personal.markReminderTriggered(reminder.id, now, selfActor, roomRow?.name ?? null, isMember);
+				if (fired) {
+					events.push({
+						type: "chat.reminder",
+						reminder_id: fired.id,
+						room_id: fired.room_id,
+						message_id: fired.message_id,
+						note: isMember ? fired.note || fired.preview : fired.note || "Reminder",
+					});
+				}
+			}
+			events.push({ type: "chat.activity", unread_count: this.personal.activityUnreadCount() });
+		}
+
+		// 2. Deliver due scheduled messages.
+		const MAX_SCHEDULED_ATTEMPTS = 5;
+		const dueSched = this.personal.dueScheduled(now);
+		for (const item of dueSched) {
+			let actor: { principal_id: string; kind: "human" | "agent"; display_name: string } | null = null;
+			if (item.credential_binding_json) {
+				const binding = JSON.parse(item.credential_binding_json) as CredentialBinding;
+				const checked = await credentialState(this.env.DIRECTORY, binding);
+				if (checked.state !== "live") {
+					if (this.personal.claimScheduledForSend(item.id, item.send_at, item.text, item.body_json, now)) {
+						this.personal.markScheduledFailed(
+							item.id,
+							checked.state === "archived"
+								? "Principal is archived."
+								: "The credential that scheduled this message is no longer valid.",
+						);
+						events.push({ type: "chat.scheduled", scheduled_id: item.id, room_id: item.room_id });
+					}
+					continue;
+				}
+				actor = {
+					principal_id: checked.principal.id,
+					kind: checked.principal.kind,
+					display_name: checked.principal.display_name,
+				};
+			} else {
+				const principal = await this.env.DIRECTORY.prepare(
+					"SELECT id, kind, display_name FROM principals WHERE id = ? AND archived_at IS NULL AND deleted_at IS NULL",
+				)
+					.bind(item.principal_id)
+					.first<{ id: string; kind: "human" | "agent"; display_name: string }>();
+				if (!principal) {
+					if (this.personal.claimScheduledForSend(item.id, item.send_at, item.text, item.body_json, now)) {
+						this.personal.markScheduledFailed(item.id, "Principal is archived or deleted.");
+						events.push({ type: "chat.scheduled", scheduled_id: item.id, room_id: item.room_id });
+					}
+					continue;
+				}
+				actor = { principal_id: principal.id, kind: principal.kind, display_name: principal.display_name };
+			}
+			// Re-verify and atomically claim after the credential await so a concurrent cancel or edit stops delivery.
+			if (!this.personal.claimScheduledForSend(item.id, item.send_at, item.text, item.body_json, now)) {
+				continue;
+			}
+			try {
+				const room = this.env.CHAT_ROOM.get(this.env.CHAT_ROOM.idFromName(item.room_id));
+				const result = await room.postScheduledMessage({
+					roomId: item.room_id,
+					actor,
+					scheduledId: item.id,
+					text: item.text,
+					bodyJson: item.body_json,
+					parentId: item.parent_id,
+					alsoInRoom: item.also_in_room,
+				});
+				if ("error" in result) {
+					if (result.error.code === "rate_limited") {
+						const attempts = item.attempts + 1;
+						if (attempts >= MAX_SCHEDULED_ATTEMPTS) {
+							this.personal.markScheduledFailed(item.id, "Rate limited after maximum delivery attempts.");
+							events.push({ type: "chat.scheduled", scheduled_id: item.id, room_id: item.room_id });
+						} else {
+							this.personal.markScheduledRetry(
+								item.id,
+								attempts,
+								now + 60_000 * 2 ** (attempts - 1),
+								result.error.message,
+							);
+						}
+					} else {
+						this.personal.markScheduledFailed(item.id, result.error.message);
+						events.push({ type: "chat.scheduled", scheduled_id: item.id, room_id: item.room_id });
+					}
+				} else {
+					this.personal.markScheduledSent(item.id, result.messageId);
+					events.push({ type: "chat.scheduled", scheduled_id: item.id, room_id: item.room_id });
+				}
+			} catch (error) {
+				const message = error instanceof Error ? error.message : String(error);
+				const attempts = item.attempts + 1;
+				log("warn", "scheduled chat message delivery failed", {
+					scheduledId: item.id,
+					attempts,
+					error: message,
+				});
+				if (attempts >= MAX_SCHEDULED_ATTEMPTS) {
+					this.personal.markScheduledFailed(item.id, `Delivery failed after ${MAX_SCHEDULED_ATTEMPTS} attempts.`);
+					events.push({ type: "chat.scheduled", scheduled_id: item.id, room_id: item.room_id });
+				} else {
+					this.personal.markScheduledRetry(item.id, attempts, now + 60_000 * 2 ** (attempts - 1), message);
+				}
+			}
+		}
+
+		if (events.length > 0 && this.ctx.getWebSockets().length > 0) {
+			this.ctx.waitUntil(this.publish(() => events));
+		}
+
+		await this.schedulePersonalAlarm();
 	}
 
 	override async webSocketMessage(socket: WebSocket, message: string | ArrayBuffer): Promise<void> {

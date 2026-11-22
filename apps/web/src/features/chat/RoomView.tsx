@@ -1,4 +1,12 @@
-import { CHAT_LIMITS, type ChatBody, type ChatMessage, type ChatRoom, type Principal } from "@asterra/contracts";
+import {
+	CHAT_LIMITS,
+	type ChatBody,
+	type ChatMessage,
+	type ChatRoom,
+	type ChatSection,
+	type ChatSlashCommand,
+	type Principal,
+} from "@asterra/contracts";
 import {
 	Fragment,
 	useCallback,
@@ -33,6 +41,7 @@ import { createDraftStore, draftStorage } from "./drafts.ts";
 import { EditHistoryDialog } from "./EditHistoryDialog.tsx";
 import { useFileDrop } from "./fileDrop.ts";
 import { countEmoji, frequentEmoji } from "./frequentEmoji.ts";
+import { ForwardDialog, ReminderDialog, ScheduleDialog } from "./Layer8Dialogs.tsx";
 import { type Editing, editedBody, editSavable, MessageItem } from "./MessageItem.tsx";
 import { canMentionGroups, type MentionContext, type MentionDirectory } from "./mentions.ts";
 import {
@@ -52,6 +61,7 @@ import {
 	startsNew,
 	unseenSendsNote,
 } from "./model.ts";
+import { PinsPanel } from "./PinsPanel.tsx";
 import { Presence } from "./Presence.tsx";
 import { useSearchKeys } from "./searchKeys.ts";
 import { createSendSettler } from "./settle.ts";
@@ -64,6 +74,10 @@ export interface RoomViewProps {
 	focusSeq: number | null;
 	/** The seq of a reply in the thread of that message, for a link to a reply, or null. The thread opens at it. */
 	focusReplySeq: number | null;
+	/** Optional thread parent id to open immediately when jumping from a synced thread draft. */
+	initialThreadId?: string | null;
+	/** Clears pending initialThreadId in the parent once consumed. */
+	onInitialThreadConsumed?: () => void;
 	/** The room in the room list of the person, or null when the list does not have it. */
 	listed: ChatRoom | null;
 	/** True after the room list loaded. */
@@ -72,6 +86,12 @@ export interface RoomViewProps {
 	listTick: number;
 	/** Gets the room list again, after a change that this view made. */
 	onRoomsChanged: () => Promise<void>;
+	/** All joined rooms of the person, for forwarding messages. */
+	rooms: readonly ChatRoom[];
+	/** Custom sidebar sections of the person, for room settings. */
+	sections: readonly ChatSection[];
+	/** Reloads sidebar sections after a room is assigned to one. */
+	onSectionsChanged: () => void;
 	/** The people and the agents that the page asked for, with their handles, for the mentions. */
 	directory: MentionDirectory<Principal>;
 }
@@ -81,7 +101,26 @@ type RoomDialog =
 	| { type: "settings" }
 	| { type: "delete"; message: ChatMessage }
 	| { type: "edits"; message: ChatMessage }
+	| { type: "forward"; message: ChatMessage }
+	| { type: "remind"; message: ChatMessage }
+	| { type: "schedule"; body: ChatBody }
+	| { type: "slash"; command: ChatSlashCommand; text: string }
+	| { type: "slashResult"; command: string; operation: string; result: unknown }
 	| null;
+
+function renderSlashPreview(template: Record<string, unknown>, vars: Record<string, string>): string {
+	const apply = (value: unknown): unknown => {
+		if (typeof value === "string") {
+			return value.replace(/\{\{(text|room_id|caller_id)\}\}/g, (_, key: string) => vars[key] ?? "");
+		}
+		if (Array.isArray(value)) return value.map(apply);
+		if (value !== null && typeof value === "object") {
+			return Object.fromEntries(Object.entries(value as Record<string, unknown>).map(([k, v]) => [k, apply(v)]));
+		}
+		return value;
+	};
+	return JSON.stringify(apply(template), null, 2);
+}
 
 /** The width under which the view of a thread takes the width of the room and hides it. */
 const THREAD_HIDES_ROOM = "(max-width: 899px)";
@@ -106,10 +145,15 @@ export function RoomView({
 	roomId,
 	focusSeq,
 	focusReplySeq,
+	initialThreadId = null,
+	onInitialThreadConsumed,
 	listed,
 	listReady,
 	listTick,
 	onRoomsChanged,
+	rooms,
+	sections,
+	onSectionsChanged,
 	directory,
 }: RoomViewProps) {
 	const self = useSession().whoami.principal;
@@ -136,6 +180,20 @@ export function RoomView({
 	});
 	const visible = usePageVisible();
 	const [dialog, setDialog] = useState<RoomDialog>(null);
+	const [pinsOpen, setPinsOpen] = useState(false);
+	const [slashCommands, setSlashCommands] = useState<readonly ChatSlashCommand[]>([]);
+	useEffect(() => {
+		let stopped = false;
+		api
+			.call("chat.list_slash_commands")
+			.then((res) => {
+				if (!stopped) setSlashCommands(res.commands);
+			})
+			.catch(() => {});
+		return () => {
+			stopped = true;
+		};
+	}, []);
 	// The message in the box stays for the room when the person opens a different room, and after a reload.
 	const drafts = useMemo(() => createDraftStore(draftStorage(), ownId), [ownId]);
 	// The emoji that the person uses most, for the quick reactions of each message. The list is the list
@@ -145,11 +203,48 @@ export function RoomView({
 	/** The reaction calls of each "message id" and "emoji": see `createToggleLine`. */
 	const reactions = useMemo(() => createToggleLine(), []);
 	const [draft, setDraftBody] = useState<ChatBody | null>(() => drafts.get(roomId));
+	const draftRef = useRef<ChatBody | null>(draft);
+	draftRef.current = draft;
+	const [composerVersion, setComposerVersion] = useState(0);
+	const serverDraftTimer = useRef<number | null>(null);
+	useEffect(() => {
+		if (drafts.get(roomId) !== null) return;
+		let stopped = false;
+		api
+			.call("chat.list_drafts")
+			.then((res) => {
+				if (stopped || draftRef.current !== null) return;
+				const match = res.drafts.find((d) => d.room_id === roomId && d.parent_id === null);
+				if (!match?.text.trim()) return;
+				const hydrated = match.body ?? textToBody(match.text);
+				drafts.set(roomId, hydrated);
+				setDraftBody(hydrated);
+				setComposerVersion((v) => v + 1);
+			})
+			.catch(() => {});
+		return () => {
+			stopped = true;
+		};
+	}, [drafts, roomId]);
 	function setDraft(body: ChatBody | null) {
 		if (body !== null) view.typing();
 		setDraftBody(body);
 		drafts.set(roomId, body);
+		if (serverDraftTimer.current !== null) window.clearTimeout(serverDraftTimer.current);
+		serverDraftTimer.current = window.setTimeout(() => {
+			if (body && bodyText(body).trim() !== "") {
+				void api.call("chat.save_draft", { room_id: roomId, body }).catch(() => {});
+			} else {
+				void api.call("chat.delete_draft", { room_id: roomId }).catch(() => {});
+			}
+		}, 1500);
 	}
+	useEffect(
+		() => () => {
+			if (serverDraftTimer.current !== null) window.clearTimeout(serverDraftTimer.current);
+		},
+		[],
+	);
 	const composer = useRef<ChatComposerHandle>(null);
 	/** The characters of the draft above the limit of the plain text, or 0. */
 	const draftOver = draft ? Math.max(0, bodyText(draft).length - CHAT_LIMITS.messageChars) : 0;
@@ -188,7 +283,13 @@ export function RoomView({
 	const refocus = useRef(false);
 	const [editing, setEditing] = useState<Editing | null>(null);
 	/** The id of the message whose thread shows beside the room, or null. */
-	const [threadId, setThreadId] = useState<string | null>(null);
+	const [threadId, setThreadId] = useState<string | null>(() => initialThreadId);
+	useEffect(() => {
+		if (initialThreadId) {
+			setThreadId(initialThreadId);
+			onInitialThreadConsumed?.();
+		}
+	}, [initialThreadId, onInitialThreadConsumed]);
 	/**
 	 * The reply that the open thread goes to and marks, for a link to a reply, or null. Each visit of a link
 	 * gives a new object, so the thread goes to the reply again, also for the same seq.
@@ -533,6 +634,17 @@ export function RoomView({
 
 	function send() {
 		if (!canSend) return;
+		const plain = draft ? bodyText(draft).trim() : "";
+		if (plain.startsWith("/") && files.list.length === 0) {
+			const match = /^\/([a-z0-9][a-z0-9_-]*)(?:\s+(.*))?$/s.exec(plain);
+			const cmdName = match?.[1];
+			const matchedCmd = cmdName ? slashCommands.find((c) => c.command === cmdName) : undefined;
+			if (matchedCmd) {
+				const argText = (match?.[2] ?? "").trim();
+				setDialog({ type: "slash", command: matchedCmd, text: argText });
+				return;
+			}
+		}
 		// Each file is in the drive, so the outbox carries only the files. They leave the box at once.
 		const sentFiles = attachments.take() ?? [];
 		// A new message goes after the newest message of the room. When the list is not there, it goes
@@ -751,6 +863,56 @@ export function RoomView({
 		});
 	}
 
+	function togglePin(message: ChatMessage) {
+		const call = message.pinned
+			? api.call("chat.unpin_message", { room_id: roomId, message_id: message.id })
+			: api.call("chat.pin_message", { room_id: roomId, message_id: message.id });
+		call.then(() => {
+			toast({ message: message.pinned ? "Message unpinned." : "Message pinned.", tone: "info" });
+			void view.reload();
+		}, fail);
+	}
+
+	function saveMessage(message: ChatMessage) {
+		api.call("chat.save_message", { room_id: roomId, message_id: message.id }).then(() => {
+			toast({ message: "Message saved.", tone: "info" });
+		}, fail);
+	}
+
+	function triggerCardAction(messageId: string, cardId: string, actionId: string) {
+		api
+			.call("chat.trigger_card_action", {
+				room_id: roomId,
+				message_id: messageId,
+				card_id: cardId,
+				action_id: actionId,
+				idempotency_key: crypto.randomUUID(),
+			})
+			.then(() => {
+				toast({ message: "Action recorded.", tone: "info" });
+			}, fail);
+	}
+
+	function onListKeyDown(event: React.KeyboardEvent<HTMLOListElement>) {
+		if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return;
+		const target = event.target as HTMLElement | null;
+		if (!target || target.closest("input, textarea, [contenteditable='true']")) return;
+		const items = [...event.currentTarget.querySelectorAll<HTMLElement>(":scope > li[data-row]")];
+		if (items.length === 0) return;
+		const currentRow = target.closest<HTMLElement>("li[data-row]");
+		const idx = currentRow ? items.indexOf(currentRow) : -1;
+		const nextIdx =
+			event.key === "ArrowUp"
+				? idx <= 0
+					? items.length - 1
+					: idx - 1
+				: idx < 0 || idx >= items.length - 1
+					? 0
+					: idx + 1;
+		event.preventDefault();
+		items[nextIdx]?.focus();
+	}
+
 	function deleteMessage(id: string) {
 		// The message shows as deleted at once. After a refusal, it shows again.
 		const change: LocalChange = { kind: "delete" };
@@ -828,13 +990,14 @@ export function RoomView({
 						{initials(title)}
 					</span>
 				) : (
-					<Icon name={room.kind === "private" ? "lock" : "hash"} size={22} />
+					<Icon name={room.kind === "group_dm" ? "team" : room.kind === "private" ? "lock" : "hash"} size={22} />
 				)}
 				<div className="chat-room-heading">
 					<h1 className="chat-title">
 						{room.kind === "dm" && <span className="visually-hidden">Direct message with </span>}
 						{title}
 					</h1>
+					{room.archived_at !== null && <span className="kind">archived</span>}
 					{room.role !== null && (
 						<StarButton starred={starring ?? listed?.starred ?? answeredStar ?? room.starred} onChange={setStar} />
 					)}
@@ -848,6 +1011,19 @@ export function RoomView({
 				{room.topic && <p className="chat-topic">{room.topic}</p>}
 				<span className="chat-header-actions">
 					{isMember && <RoomSearch roomId={roomId} title={title} />}
+					{isMember && (
+						<button
+							type="button"
+							className={pinsOpen ? "chat-header-button chat-header-button-active" : "chat-header-button"}
+							onClick={() => setPinsOpen((open) => !open)}
+							aria-label={`Pinned messages: ${view.pinCount}`}
+							aria-pressed={pinsOpen}
+							title="Pinned messages"
+						>
+							<Icon name="tag" />
+							{view.pinCount > 0 && view.pinCount}
+						</button>
+					)}
 					<button
 						type="button"
 						className="chat-header-button"
@@ -902,7 +1078,7 @@ export function RoomView({
 									</p>
 								</div>
 							)}
-							<ol className="chat-messages" role="log" aria-label={`Messages of ${title}`}>
+							<ol className="chat-messages" role="log" aria-label={`Messages of ${title}`} onKeyDown={onListKeyDown}>
 								{rows.map(({ key, message, pending }, index) => {
 									const previous = rows[index - 1]?.message;
 									// The first new message shows its author: the line starts a new part of the list.
@@ -965,6 +1141,11 @@ export function RoomView({
 												ownId={ownId}
 												quickEmoji={quickEmoji}
 												onReact={(emoji, add) => react(message.id, emoji, add)}
+												onTogglePin={room.archived_at === null ? () => togglePin(message) : undefined}
+												onSave={() => saveMessage(message)}
+												onRemind={() => setDialog({ type: "remind", message })}
+												onForward={() => setDialog({ type: "forward", message })}
+												onCardAction={(cardId, actionId) => triggerCardAction(message.id, cardId, actionId)}
 											/>
 										</Fragment>
 									);
@@ -1008,65 +1189,103 @@ export function RoomView({
 							</div>
 						)}
 					</div>
-					<form
-						className="chat-composer"
-						data-file-drop="room"
-						onSubmit={(event) => {
-							event.preventDefault();
-							send();
-						}}
-					>
-						<p className="chat-typing" role="status">
-							{typingLabel(view.members, view.typists)}
+					{room.archived_at !== null || !room.can_post ? (
+						<p className="chat-readonly-banner" role="status">
+							{room.archived_at !== null
+								? "This room is archived. Messages are read-only."
+								: "Posting in this room is restricted by its posting rules."}
 						</p>
-						<div className={dropping ? "chat-composer-box chat-composer-box-drop" : "chat-composer-box"}>
-							<ChatComposer
-								ref={composer}
-								id={draftId}
-								label={`Message to ${title}`}
-								placeholder={draftPlaceholder(room)}
-								initial={draft}
-								onChange={setDraft}
-								onSubmit={send}
-								onFiles={addFiles}
-								mentions={mentions}
-								placement="above"
-								files={
-									<AttachmentChips
-										files={files.list}
-										notice={files.notice}
-										onRetry={attachments.retry}
-										onRemove={attachments.remove}
-										onFocusAway={() => composer.current?.focus()}
-									/>
-								}
-							>
-								<span className="chat-composer-actions">
-									<AttachButton count={files.list.length} onFiles={addFiles} />
-									<button
-										type="submit"
-										className="chat-send"
-										aria-label="Send the message"
-										title="Send (Enter)"
-										disabled={!canSend}
-									>
-										<Icon name="arrowUp" size={18} />
-									</button>
-								</span>
-							</ChatComposer>
-						</div>
-						{filesNote(files.list) !== null && (
-							<p className="chat-composer-files-note" role="status">
-								{filesNote(files.list)}
+					) : (
+						<form
+							className="chat-composer"
+							data-file-drop="room"
+							onSubmit={(event) => {
+								event.preventDefault();
+								send();
+							}}
+						>
+							<p className="chat-typing" role="status">
+								{typingLabel(view.members, view.typists)}
 							</p>
-						)}
-						{draftOver > 0 && (
-							<p className="chat-composer-limit" role="status">
-								The message has {plural(draftOver, "character")} more than the limit of{" "}
-								{CHAT_LIMITS.messageChars.toLocaleString()}.
-							</p>
-						)}
-					</form>
+							{(() => {
+								const raw = draft ? bodyText(draft) : "";
+								if (!raw.startsWith("/") || slashCommands.length === 0) return null;
+								const prefix = raw.slice(1).split(/\s+/)[0]?.toLowerCase() ?? "";
+								const matching = slashCommands.filter((c) => c.command.startsWith(prefix)).slice(0, 6);
+								if (matching.length === 0) return null;
+								return (
+									<ul className="chat-slash-hints" aria-label="Slash commands">
+										{matching.map((cmd) => (
+											<li key={cmd.id}>
+												<code>/{cmd.command}</code>
+												{cmd.usage_hint && <span className="muted"> {cmd.usage_hint}</span>}
+												<span className="chat-slash-desc"> — {cmd.description}</span>
+											</li>
+										))}
+									</ul>
+								);
+							})()}
+							<div className={dropping ? "chat-composer-box chat-composer-box-drop" : "chat-composer-box"}>
+								<ChatComposer
+									key={composerVersion}
+									ref={composer}
+									id={draftId}
+									label={`Message to ${title}`}
+									placeholder={draftPlaceholder(room)}
+									initial={draft}
+									onChange={setDraft}
+									onSubmit={send}
+									onFiles={addFiles}
+									mentions={mentions}
+									placement="above"
+									files={
+										<AttachmentChips
+											files={files.list}
+											notice={files.notice}
+											onRetry={attachments.retry}
+											onRemove={attachments.remove}
+											onFocusAway={() => composer.current?.focus()}
+										/>
+									}
+								>
+									<span className="chat-composer-actions">
+										<AttachButton count={files.list.length} onFiles={addFiles} />
+										{draft && bodyText(draft).trim() !== "" && files.list.length === 0 && (
+											<button
+												type="button"
+												className="icon-button icon-button-small"
+												aria-label="Schedule message"
+												title="Schedule message"
+												onClick={() => setDialog({ type: "schedule", body: draft })}
+											>
+												<Icon name="clock" size={16} />
+											</button>
+										)}
+										<button
+											type="submit"
+											className="chat-send"
+											aria-label="Send the message"
+											title="Send (Enter)"
+											disabled={!canSend}
+										>
+											<Icon name="arrowUp" size={18} />
+										</button>
+									</span>
+								</ChatComposer>
+							</div>
+							{filesNote(files.list) !== null && (
+								<p className="chat-composer-files-note" role="status">
+									{filesNote(files.list)}
+								</p>
+							)}
+							{draftOver > 0 && (
+								<p className="chat-composer-limit" role="status">
+									The message has {plural(draftOver, "character")} more than the limit of{" "}
+									{CHAT_LIMITS.messageChars.toLocaleString()}.
+								</p>
+							)}
+						</form>
+					)}
 				</>
 			) : (
 				<div className="chat-empty chat-empty-page">
@@ -1110,8 +1329,51 @@ export function RoomView({
 					}}
 				/>
 			)}
+			{pinsOpen && isMember && (
+				<PinsPanel
+					roomId={roomId}
+					canUnpin={room.archived_at === null}
+					onClose={() => setPinsOpen(false)}
+					onJump={(seq) => {
+						setPinsOpen(false);
+						navigate(chatPath(roomId, seq));
+					}}
+					onChanged={() => void view.reload()}
+				/>
+			)}
 			{dialog?.type === "settings" && isMember && (
-				<RoomSettingsDialog room={room} onClose={() => setDialog(null)} onDetailsSaved={() => void onRoomsChanged()} />
+				<RoomSettingsDialog
+					room={room}
+					members={view.members}
+					postAllowedIds={view.postAllowedIds}
+					sections={sections}
+					onClose={() => setDialog(null)}
+					onDetailsSaved={() => {
+						void onRoomsChanged();
+						onSectionsChanged();
+						void view.reload();
+					}}
+					onDeleted={() => {
+						void onRoomsChanged();
+					}}
+				/>
+			)}
+			{dialog?.type === "forward" && (
+				<ForwardDialog roomId={roomId} message={dialog.message} rooms={rooms} onClose={() => setDialog(null)} />
+			)}
+			{dialog?.type === "remind" && (
+				<ReminderDialog roomId={roomId} message={dialog.message} onClose={() => setDialog(null)} />
+			)}
+			{dialog?.type === "schedule" && (
+				<ScheduleDialog
+					roomId={roomId}
+					body={dialog.body}
+					onClose={() => setDialog(null)}
+					onScheduled={() => {
+						setDraft(null);
+						composer.current?.clear();
+					}}
+				/>
 			)}
 			{dialog?.type === "edits" &&
 				(() => {
@@ -1129,6 +1391,67 @@ export function RoomView({
 						/>
 					);
 				})()}
+			{dialog?.type === "slash" && (
+				<ConfirmDialog
+					title={`Run /${dialog.command.command}?`}
+					confirmLabel="Run command"
+					onClose={() => setDialog((current) => (current?.type === "slash" ? null : current))}
+					onConfirm={async () => {
+						const { command, text } = dialog;
+						const res = await api.call("chat.invoke_slash_command", {
+							room_id: roomId,
+							command: command.command,
+							...(text ? { text } : {}),
+						});
+						setDraft(null);
+						composer.current?.clear();
+						if (command.operation === "chat.post_message") {
+							toast({ message: `Ran /${command.command}.`, tone: "info" });
+							void view.sync();
+						} else {
+							setDialog({
+								type: "slashResult",
+								command: command.command,
+								operation: res.operation,
+								result: res.result,
+							});
+						}
+					}}
+				>
+					<p>
+						This command runs <code>{dialog.command.operation}</code> with your permissions.
+					</p>
+					{Object.keys(dialog.command.input_template).length > 0 ? (
+						<pre className="chat-slash-preview">
+							{renderSlashPreview(dialog.command.input_template, {
+								text: dialog.text,
+								room_id: roomId,
+								caller_id: ownId,
+							})}
+						</pre>
+					) : (
+						<p>
+							{dialog.command.description}
+							{dialog.text ? ` Input: ${dialog.text}` : ""}
+						</p>
+					)}
+				</ConfirmDialog>
+			)}
+			{dialog?.type === "slashResult" && (
+				<ConfirmDialog
+					title={`/${dialog.command} result`}
+					confirmLabel="Done"
+					onClose={() => setDialog(null)}
+					onConfirm={async () => {
+						setDialog(null);
+					}}
+				>
+					<p>
+						Output from <code>{dialog.operation}</code>:
+					</p>
+					<pre className="chat-slash-preview">{JSON.stringify(dialog.result, null, 2)}</pre>
+				</ConfirmDialog>
+			)}
 			{dialog?.type === "delete" && (
 				<ConfirmDialog
 					title="Delete this message?"

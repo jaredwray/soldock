@@ -2,6 +2,7 @@ import type { ChatBody, ChatBodyBlock, ChatBodyInline } from "@asterra/contracts
 import { Fragment, type ReactNode, useEffect } from "react";
 import { Link } from "../../lib/router.tsx";
 import { profilePath } from "../../routes.ts";
+import { useCustomEmoji } from "./customEmoji.tsx";
 import { type MentionContext, textParts } from "./mentions.ts";
 import { bodyPeople } from "./people.ts";
 import { useWantPeople } from "./usePeople.ts";
@@ -11,6 +12,35 @@ import { useWantPeople } from "./usePeople.ts";
 // nothing, so a newer server cannot put HTML on the page.
 
 type Text = Extract<ChatBodyInline, { type: "text" }>;
+
+const CUSTOM_EMOJI_TOKEN = /:([a-z0-9][a-z0-9_-]{0,31}):/g;
+
+function TextWithCustomEmoji({ text }: { text: string }) {
+	const { byName } = useCustomEmoji();
+	if (byName.size === 0 || !text.includes(":")) return <>{text}</>;
+	const nodes: ReactNode[] = [];
+	let last = 0;
+	for (const match of text.matchAll(CUSTOM_EMOJI_TOKEN)) {
+		const name = match[1];
+		const start = match.index ?? 0;
+		const custom = name ? byName.get(name) : undefined;
+		if (!custom) continue;
+		if (start > last) nodes.push(text.slice(last, start));
+		nodes.push(
+			<img
+				key={`${start}:${name}`}
+				src={custom.url_path}
+				alt={`:${name}:`}
+				title={`:${name}:`}
+				className="chat-custom-emoji"
+			/>,
+		);
+		last = start + match[0].length;
+	}
+	if (nodes.length === 0) return <>{text}</>;
+	if (last < text.length) nodes.push(text.slice(last));
+	return <>{nodes}</>;
+}
 
 /** Text with the mentions of the directory as links to their profiles. */
 function TextWithMentions({ text, mentions }: { text: string; mentions: MentionContext }) {
@@ -31,7 +61,9 @@ function TextWithMentions({ text, mentions }: { text: string; mentions: MentionC
 					</Link>
 				) : (
 					// biome-ignore lint/suspicious/noArrayIndexKey: the same text always gives the same parts.
-					<Fragment key={index}>{part.text}</Fragment>
+					<Fragment key={index}>
+						<TextWithCustomEmoji text={part.text} />
+					</Fragment>
 				),
 			)}
 		</>

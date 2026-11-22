@@ -16,6 +16,7 @@ import {
 	linkPreviewCards,
 	newMessages,
 	nextReading,
+	roomTitle,
 	sidebarRooms,
 	startReading,
 	startsDay,
@@ -68,6 +69,10 @@ function message(seq: number, change: Partial<ChatMessage> = {}): ChatMessage {
 		thread: null,
 		files: [],
 		link_previews: [],
+		pinned: false,
+		untrusted: false,
+		forwarded: null,
+		cards: [],
 		...change,
 	};
 }
@@ -469,6 +474,7 @@ describe("the parts of the sidebar", () => {
 			name: kind === "dm" ? null : id,
 			topic: "",
 			peer: kind === "dm" ? BOT : null,
+			peers: kind === "group_dm" ? [ADA, BOT] : [],
 			created_at: "2026-01-01T09:00:00.000Z",
 			created_by: ADA,
 			member_count: 2,
@@ -481,6 +487,10 @@ describe("the parts of the sidebar", () => {
 			mention_count: 0,
 			version: 0,
 			starred,
+			archived_at: null,
+			posting_policy: "members",
+			can_post: true,
+			retention_days: null,
 		};
 	}
 
@@ -490,9 +500,29 @@ describe("the parts of the sidebar", () => {
 			listed("dm_b", "dm", true),
 			listed("rm_c", "private", true),
 			listed("dm_d", "dm", false),
+			listed("dm_g", "group_dm", false),
 		]);
 		const ids = (rooms: readonly ChatRoom[]) => rooms.map((room) => room.id);
-		expect([ids(parts.starred), ids(parts.named), ids(parts.direct)]).toEqual([["dm_b", "rm_c"], ["rm_a"], ["dm_d"]]);
+		expect([ids(parts.starred), ids(parts.named), ids(parts.direct)]).toEqual([
+			["dm_b", "rm_c"],
+			["rm_a"],
+			["dm_d", "dm_g"],
+		]);
+	});
+
+	it("omits unstarred rooms assigned to a custom section from the default groups", () => {
+		const parts = sidebarRooms(
+			[listed("rm_a", "public", false), listed("rm_b", "public", true), listed("dm_c", "group_dm", false)],
+			new Set(["rm_a", "rm_b", "dm_c"]),
+		);
+		const ids = (rooms: readonly ChatRoom[]) => rooms.map((room) => room.id);
+		expect([ids(parts.starred), ids(parts.named), ids(parts.direct)]).toEqual([["rm_b"], [], []]);
+	});
+
+	it("names a group direct message from its peer list", () => {
+		const group = listed("dm_g", "group_dm", false);
+		expect(roomTitle({ ...group, name: null })).toBe("Ada Lovelace, Deploy Bot");
+		expect(roomTitle({ ...group, name: "Launch crew" })).toBe("Launch crew");
 	});
 });
 

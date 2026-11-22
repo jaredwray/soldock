@@ -10,6 +10,7 @@ import { PageHeader } from "../../shell/PageHeader.tsx";
 import { isOrgAdmin, useSession } from "../auth/session.tsx";
 import { SecretDialog } from "../settings/SecretDialog.tsx";
 import { AdminSidebar, defaultSection, isAdminOnly, sectionIcon, sectionTitle } from "./AdminSidebar.tsx";
+import { ChatAdminSection } from "./ChatAdminSection.tsx";
 import { MailDomainsCard } from "./MailDomainsCard.tsx";
 import { MembersSection } from "./MembersSection.tsx";
 import { SharedDrivesSection } from "./SharedDrivesSection.tsx";
@@ -153,6 +154,8 @@ export function AdminPage({ section: routeSection, navOpen, onCloseNav }: AdminP
 				return <SharedMailboxesSection principals={principals} />;
 			case "shared-drives":
 				return <SharedDrivesSection principals={principals} selfId={me.id} />;
+			case "chat":
+				return <ChatAdminSection principals={principals} />;
 			case "domains":
 				return <MailDomainsCard />;
 		}

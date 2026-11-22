@@ -1,5 +1,5 @@
-import type { RoomKind, RoomRole } from "@asterra/contracts";
-import { decodeCursor, encodeCursor } from "../platform/index.ts";
+import type { ChatAdminRoom, PostingPolicy, RoomKind, RoomRole } from "@asterra/contracts";
+import { decodeCursor, encodeCursor, log } from "../platform/index.ts";
 import { type ActorRecord, nameKey, type RoomRecord } from "./room.ts";
 
 // Reads of the Chat index in D1 (`chat_rooms`, `chat_members`). Each `ChatRoomDO` writes its own rows.
@@ -19,6 +19,10 @@ interface IndexRow {
 	last_message_at: number | null;
 	activity_at: number;
 	version: number;
+	archived_at: number | null;
+	posting_policy: PostingPolicy;
+	retention_days: number | null;
+	owner_count: number;
 	role: RoomRole | null;
 	last_read_seq: number | null;
 	peer_json: string | null;
@@ -30,7 +34,8 @@ export interface RoomPage {
 }
 
 const COLUMNS = `r.id, r.kind, r.name, r.name_key, r.topic, r.created_at, r.created_by_json, r.member_count, r.last_seq,
-	r.last_message_at, r.activity_at, r.version, m.role, m.last_read_seq, m.peer_json`;
+	r.last_message_at, r.activity_at, r.version, r.archived_at, r.posting_policy, r.retention_days, r.owner_count,
+	m.role, m.last_read_seq, m.peer_json`;
 
 function toRecord(row: IndexRow): RoomRecord {
 	return {
@@ -39,6 +44,7 @@ function toRecord(row: IndexRow): RoomRecord {
 		name: row.name,
 		topic: row.topic,
 		peer: row.peer_json === null ? null : (JSON.parse(row.peer_json) as ActorRecord),
+		peers: [],
 		created_at: row.created_at,
 		created_by: JSON.parse(row.created_by_json) as ActorRecord,
 		member_count: row.member_count,
@@ -53,6 +59,10 @@ function toRecord(row: IndexRow): RoomRecord {
 		version: row.version,
 		// The star of a member is in its `PrincipalDO`. The index has no stars.
 		starred: false,
+		archived_at: row.archived_at,
+		posting_policy: row.posting_policy,
+		can_post: row.archived_at === null && (row.posting_policy === "members" || row.role === "owner"),
+		retention_days: row.retention_days,
 	};
 }
 
@@ -82,7 +92,7 @@ export async function listPublicRooms(db: D1Database, principalId: string, input
 		.prepare(
 			`SELECT ${COLUMNS} FROM chat_rooms r
 			LEFT JOIN chat_members m ON m.room_id = r.id AND m.principal_id = ?1
-			WHERE r.kind = 'public'
+			WHERE r.kind = 'public' AND r.archived_at IS NULL
 				AND (?2 IS NULL OR instr(r.name_key, ?2) > 0)
 				AND (?3 IS NULL OR r.name_key > ?3 OR (r.name_key = ?3 AND r.id > ?4))
 			ORDER BY r.name_key, r.id LIMIT ?5`,
@@ -96,6 +106,144 @@ export async function listPublicRooms(db: D1Database, principalId: string, input
 		)
 		.all<IndexRow>();
 	return page(results, input.limit, (row) => [row.name_key ?? "", row.id]);
+}
+
+/** Lists all rooms in the organization (metadata only) for admins and owners. */
+export async function adminListRooms(
+	db: D1Database,
+	callerId: string,
+	isOrgOwner: boolean,
+	input: {
+		kind: "all" | "public" | "private";
+		ownerless: boolean;
+		archived: "all" | "active" | "archived";
+		query: string | null;
+		cursor: string | null;
+		limit: number;
+	},
+): Promise<{ rooms: ChatAdminRoom[]; nextCursor: string | null } | null> {
+	const cursor = input.cursor === null ? null : decodeCursor<[number, string]>(input.cursor, ["number", "string"]);
+	if (input.cursor !== null && cursor === null) return null;
+	const clauses: string[] = [];
+	const params: (string | number | null)[] = [callerId];
+	if (input.kind === "all") {
+		clauses.push("r.kind IN ('public', 'private')");
+	} else {
+		clauses.push("r.kind = ?");
+		params.push(input.kind);
+	}
+	if (input.ownerless) {
+		clauses.push("r.owner_count = 0");
+	}
+	if (input.archived === "archived") {
+		clauses.push("r.archived_at IS NOT NULL");
+	} else if (input.archived === "active") {
+		clauses.push("r.archived_at IS NULL");
+	}
+	if (input.query !== null) {
+		clauses.push("instr(COALESCE(r.name_key, ''), ?) > 0");
+		params.push(nameKey(input.query));
+	}
+	if (cursor !== null) {
+		clauses.push("(r.activity_at < ? OR (r.activity_at = ? AND r.id < ?))");
+		params.push(cursor[0], cursor[0], cursor[1]);
+	}
+	params.push(input.limit + 1);
+	const { results } = await db
+		.prepare(
+			`SELECT r.id, r.kind, r.name, r.topic, r.created_at, r.created_by_json, r.member_count,
+				r.owner_count, r.last_seq, r.last_message_at, r.activity_at, r.archived_at,
+				r.posting_policy, r.retention_days, (m.principal_id IS NOT NULL) AS is_member
+			FROM chat_rooms r
+			LEFT JOIN chat_members m ON m.room_id = r.id AND m.principal_id = ?1
+			WHERE ${clauses.join(" AND ")}
+			ORDER BY r.activity_at DESC, r.id DESC LIMIT ?`,
+		)
+		.bind(...params)
+		.all<{
+			id: string;
+			kind: RoomKind;
+			name: string | null;
+			topic: string;
+			created_at: number;
+			created_by_json: string;
+			member_count: number;
+			owner_count: number;
+			last_seq: number;
+			last_message_at: number | null;
+			activity_at: number;
+			archived_at: number | null;
+			posting_policy: PostingPolicy;
+			retention_days: number | null;
+			is_member: number;
+		}>();
+	const shown = results.slice(0, input.limit);
+	const last = shown[shown.length - 1];
+	const iso = (ms: number) => new Date(ms).toISOString();
+	return {
+		rooms: shown.map((row) => {
+			const isMember = row.is_member === 1;
+			return {
+				id: row.id,
+				kind: row.kind,
+				name: row.name,
+				topic: row.topic,
+				created_at: iso(row.created_at),
+				created_by: JSON.parse(row.created_by_json) as ActorRecord,
+				member_count: row.member_count,
+				owner_count: row.owner_count,
+				last_seq: row.last_seq,
+				last_message_at: row.last_message_at === null ? null : iso(row.last_message_at),
+				archived_at: row.archived_at === null ? null : iso(row.archived_at),
+				posting_policy: row.posting_policy,
+				retention_days: row.retention_days,
+				is_member: isMember,
+				exportable: isOrgOwner && (row.kind === "public" || isMember),
+			};
+		}),
+		nextCursor: results.length > input.limit && last ? encodeCursor([last.activity_at, last.id]) : null,
+	};
+}
+
+/** Removes a deleted principal from rooms it belonged to (bounded per call). Idempotent. */
+export async function removeDeletedPrincipalFromRooms(
+	env: Pick<Env, "DIRECTORY" | "CHAT_ROOM">,
+	principalId: string,
+	maxRooms = 500,
+): Promise<{ roomsCleaned: number; failedRoomIds: string[] }> {
+	const { results } = await env.DIRECTORY.prepare("SELECT room_id FROM chat_members WHERE principal_id = ? LIMIT ?")
+		.bind(principalId, maxRooms)
+		.all<{ room_id: string }>();
+	let roomsCleaned = 0;
+	const failedRoomIds: string[] = [];
+	const PARALLEL = 25;
+	for (let i = 0; i < results.length; i += PARALLEL) {
+		const chunk = results.slice(i, i + PARALLEL);
+		const settled = await Promise.allSettled(
+			chunk.map(async ({ room_id }) => {
+				const res = await env.CHAT_ROOM.get(env.CHAT_ROOM.idFromName(room_id)).forceRemoveMember(principalId);
+				if (res.removed) roomsCleaned += 1;
+				else {
+					await env.DIRECTORY.prepare("DELETE FROM chat_members WHERE principal_id = ? AND room_id = ?")
+						.bind(principalId, room_id)
+						.run();
+					roomsCleaned += 1;
+				}
+			}),
+		);
+		settled.forEach((item, index) => {
+			if (item.status === "rejected") {
+				const roomId = chunk[index]?.room_id;
+				if (roomId) failedRoomIds.push(roomId);
+				log("warn", "failed to remove deleted principal from room", {
+					principalId,
+					roomId,
+					error: item.reason instanceof Error ? item.reason.message : String(item.reason),
+				});
+			}
+		});
+	}
+	return { roomsCleaned, failedRoomIds };
 }
 
 /**

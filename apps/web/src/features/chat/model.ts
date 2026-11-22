@@ -20,9 +20,18 @@ export function inRoomList(message: Pick<ChatMessage, "parent_id" | "also_in_roo
 	return message.parent_id === null || message.also_in_room;
 }
 
-/** The name that a room shows: its name, or the name of the other member for a direct message. */
-export function roomTitle(room: Pick<ChatRoom, "kind" | "name" | "peer">): string {
+/** The name that a room shows: its name, the name of the other member for a DM, or peer names for a group DM. */
+export function roomTitle(
+	room: Pick<ChatRoom, "kind" | "name" | "peer"> & { peers?: ChatRoom["peers"] | undefined },
+): string {
 	if (room.kind === "dm") return room.peer?.display_name ?? "Direct message";
+	if (room.kind === "group_dm") {
+		if (room.name) return room.name;
+		const names = (room.peers ?? []).map((p) => p.display_name);
+		if (names.length === 0) return "Group direct message";
+		if (names.length <= 3) return names.join(", ");
+		return `${names.slice(0, 3).join(", ")} +${names.length - 3}`;
+	}
 	return room.name ?? "Room";
 }
 
@@ -116,6 +125,10 @@ export function chatRows(
 				thread: null,
 				files: [...(pending.files ?? [])],
 				link_previews: [],
+				pinned: false,
+				untrusted: false,
+				forwarded: null,
+				cards: [],
 			},
 			pending,
 		});
@@ -308,24 +321,29 @@ export function timeLabel(iso: string): string {
 }
 
 /** The text in the empty box for a new message: "Message #room", or "Message" and the name of the other member. */
-export function draftPlaceholder(room: Pick<ChatRoom, "kind" | "name" | "peer">): string {
-	return `Message ${room.kind === "dm" ? "" : "#"}${roomTitle(room)}`;
+export function draftPlaceholder(
+	room: Pick<ChatRoom, "kind" | "name" | "peer"> & { peers?: ChatRoom["peers"] },
+): string {
+	return `Message ${room.kind === "dm" || room.kind === "group_dm" ? "" : "#"}${roomTitle(room)}`;
 }
 
 /**
  * The rooms of the sidebar: the rooms and the direct messages with a star, then the other rooms with a
- * name, then the other direct messages. A room is in one part only. Each part keeps the order of the list.
+ * name, then the other direct messages (including group DMs). A room is in one part only. Each part keeps the order of the list.
  */
-export function sidebarRooms(rooms: readonly ChatRoom[]): {
+export function sidebarRooms(
+	rooms: readonly ChatRoom[],
+	sectionedIds: ReadonlySet<string> = new Set(),
+): {
 	starred: ChatRoom[];
 	named: ChatRoom[];
 	direct: ChatRoom[];
 } {
-	const others = rooms.filter((room) => !room.starred);
+	const others = rooms.filter((room) => !room.starred && !sectionedIds.has(room.id));
 	return {
 		starred: rooms.filter((room) => room.starred),
-		named: others.filter((room) => room.kind !== "dm"),
-		direct: others.filter((room) => room.kind === "dm"),
+		named: others.filter((room) => room.kind !== "dm" && room.kind !== "group_dm"),
+		direct: others.filter((room) => room.kind === "dm" || room.kind === "group_dm"),
 	};
 }
 
