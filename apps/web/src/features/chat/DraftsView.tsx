@@ -12,7 +12,15 @@ import { textToBody } from "./composerSchema.ts";
 import { createDraftStore, draftStorage, threadDraftKey } from "./drafts.ts";
 import { roomTitle } from "./model.ts";
 
-export function DraftsView({ rooms, ownId }: { rooms: readonly ChatRoom[]; ownId: string }) {
+export function DraftsView({
+	rooms,
+	ownId,
+	onOpenThread,
+}: {
+	rooms: readonly ChatRoom[];
+	ownId: string;
+	onOpenThread: (roomId: string, parentId: string) => void;
+}) {
 	const toast = useToast();
 	const [tab, setTab] = useState<"drafts" | "scheduled">("drafts");
 	const [drafts, setDrafts] = useState<ChatDraft[]>([]);
@@ -55,7 +63,11 @@ export function DraftsView({ rooms, ownId }: { rooms: readonly ChatRoom[]; ownId
 		const store = createDraftStore(draftStorage(), ownId);
 		const key = draft.parent_id ? threadDraftKey(draft.room_id, draft.parent_id) : draft.room_id;
 		store.set(key, draft.body ?? textToBody(draft.text));
-		navigate(chatPath(draft.room_id));
+		if (draft.parent_id) {
+			onOpenThread(draft.room_id, draft.parent_id);
+		} else {
+			navigate(chatPath(draft.room_id));
+		}
 	}
 
 	async function deleteDraft(draft: ChatDraft) {

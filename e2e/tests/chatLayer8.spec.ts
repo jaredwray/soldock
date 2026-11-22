@@ -30,7 +30,9 @@ test("pins, saved messages, activity feed, and quick switcher work end to end", 
 
 		// Save the message and view it on /chat/saved.
 		await row.hover();
-		await row.getByRole("button", { name: "Save message" }).click();
+		const saveReq = page.waitForResponse((res) => res.url().includes("/api/v1/chat/saved") && res.status() === 200);
+		await row.getByRole("button", { name: "Bookmark message" }).click();
+		await saveReq;
 		await page.getByRole("link", { name: "Saved" }).click();
 		await expect(page.getByRole("heading", { name: "Saved & Reminders" })).toBeVisible();
 		await expect(page.locator(".chat-subview-body")).toContainText(text);

@@ -2332,10 +2332,22 @@ a.chat-author:hover {
 
 .dialog.room-settings {
 	--room-inset: clamp(20px, 5vw, 24px);
+	display: flex;
+	flex-direction: column;
 	width: min(472px, calc(100vw - 32px));
+	max-height: calc(100dvh - 32px);
+	overflow: hidden;
+}
+
+.room-settings > form {
+	display: flex;
+	flex: 1;
+	flex-direction: column;
+	min-height: 0;
 }
 
 .room-settings .dialog-header {
+	flex-shrink: 0;
 	align-items: center;
 	padding: var(--room-inset) var(--room-inset) 0;
 }
@@ -2345,6 +2357,9 @@ a.chat-author:hover {
 }
 
 .room-settings .dialog-body {
+	flex: 1;
+	min-height: 0;
+	overflow-y: auto;
 	padding: 18px var(--room-inset) 0;
 }
 
@@ -2477,7 +2492,8 @@ a.chat-author:hover {
 }
 
 .room-settings .dialog-actions {
-	padding: 24px var(--room-inset) var(--room-inset);
+	flex-shrink: 0;
+	padding: 18px var(--room-inset) var(--room-inset);
 }
 
 @media (pointer: coarse) {

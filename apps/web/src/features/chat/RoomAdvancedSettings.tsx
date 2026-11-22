@@ -62,6 +62,7 @@ export function RoomAdvancedSettings({
 
 	// Incoming webhooks
 	const [webhooks, setWebhooks] = useState<ChatIncomingWebhook[] | null>(null);
+	const [addingHook, setAddingHook] = useState(false);
 	const [newHookName, setNewHookName] = useState("");
 	const [createdSecret, setCreatedSecret] = useState<{ name: string; url_path: string; signing_secret: string } | null>(
 		null,
@@ -212,6 +213,7 @@ export function RoomAdvancedSettings({
 				url_path: res.webhook.url_path,
 				signing_secret: res.signing_secret,
 			});
+			setAddingHook(false);
 			await loadWebhooks();
 		} catch (caught) {
 			setError(errorMessage(caught));
@@ -413,23 +415,47 @@ export function RoomAdvancedSettings({
 					<h4>
 						<Icon name="link" size={16} /> Incoming webhooks
 					</h4>
-					<div className="chat-inline-row">
-						<label htmlFor={hookNameId} className="visually-hidden">
-							Webhook name
-						</label>
-						<input
-							id={hookNameId}
-							className="input"
-							value={newHookName}
-							maxLength={CHAT_LIMITS.incomingWebhookNameChars}
-							placeholder="Webhook name (e.g. Deploy alerts)"
-							disabled={busy}
-							onChange={(event) => setNewHookName(event.target.value)}
-						/>
-						<button type="button" className="button button-small" disabled={busy} onClick={() => void createWebhook()}>
-							Add
-						</button>
-					</div>
+					{addingHook ? (
+						<div className="chat-inline-row">
+							<label htmlFor={hookNameId} className="visually-hidden">
+								Webhook name
+							</label>
+							<input
+								id={hookNameId}
+								className="input"
+								value={newHookName}
+								maxLength={CHAT_LIMITS.incomingWebhookNameChars}
+								placeholder="Webhook name (e.g. Deploy alerts)"
+								disabled={busy}
+								onChange={(event) => setNewHookName(event.target.value)}
+							/>
+							<button
+								type="button"
+								className="button button-small"
+								disabled={busy}
+								onClick={() => void createWebhook()}
+							>
+								Create
+							</button>
+							<button
+								type="button"
+								className="button button-small"
+								disabled={busy}
+								onClick={() => {
+									setAddingHook(false);
+									setNewHookName("");
+								}}
+							>
+								Cancel
+							</button>
+						</div>
+					) : (
+						<div>
+							<button type="button" className="button button-small" disabled={busy} onClick={() => setAddingHook(true)}>
+								Add webhook
+							</button>
+						</div>
+					)}
 					{createdSecret && (
 						<div className="chat-secret-box" role="status">
 							<p>

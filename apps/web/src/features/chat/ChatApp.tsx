@@ -91,6 +91,7 @@ function ChatWorkspace({
 	const rooms = useRooms();
 	const unreadThreads = useUnreadThreads(rooms.threadsTick);
 	const [activityReadTick, setActivityReadTick] = useState(0);
+	const [initialThread, setInitialThread] = useState<{ roomId: string; parentId: string } | null>(null);
 	const unreadActivity = useUnreadActivity(rooms.activityTick + activityReadTick);
 	const [sections, setSections] = useState<ChatSection[]>([]);
 	const [dialog, setDialog] = useState<ChatDialog>(null);
@@ -212,7 +213,14 @@ function ChatWorkspace({
 					) : view === "saved" ? (
 						<SavedView />
 					) : view === "drafts" ? (
-						<DraftsView rooms={rooms.rooms} ownId={ownId} />
+						<DraftsView
+							rooms={rooms.rooms}
+							ownId={ownId}
+							onOpenThread={(targetRoomId, parentId) => {
+								setInitialThread({ roomId: targetRoomId, parentId });
+								navigate(chatPath(targetRoomId));
+							}}
+						/>
 					) : roomId === null ? (
 						<>
 							<PageHeader title="Chat" icon="chat" />
@@ -245,6 +253,8 @@ function ChatWorkspace({
 							roomId={roomId}
 							focusSeq={messageSeq}
 							focusReplySeq={replySeq}
+							initialThreadId={initialThread?.roomId === roomId ? initialThread.parentId : null}
+							onInitialThreadConsumed={() => setInitialThread(null)}
 							listed={listed}
 							listReady={rooms.status === "ready"}
 							listTick={rooms.tick}

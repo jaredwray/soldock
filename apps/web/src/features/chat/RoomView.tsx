@@ -74,6 +74,10 @@ export interface RoomViewProps {
 	focusSeq: number | null;
 	/** The seq of a reply in the thread of that message, for a link to a reply, or null. The thread opens at it. */
 	focusReplySeq: number | null;
+	/** Optional thread parent id to open immediately when jumping from a synced thread draft. */
+	initialThreadId?: string | null;
+	/** Clears pending initialThreadId in the parent once consumed. */
+	onInitialThreadConsumed?: () => void;
 	/** The room in the room list of the person, or null when the list does not have it. */
 	listed: ChatRoom | null;
 	/** True after the room list loaded. */
@@ -141,6 +145,8 @@ export function RoomView({
 	roomId,
 	focusSeq,
 	focusReplySeq,
+	initialThreadId = null,
+	onInitialThreadConsumed,
 	listed,
 	listReady,
 	listTick,
@@ -277,7 +283,13 @@ export function RoomView({
 	const refocus = useRef(false);
 	const [editing, setEditing] = useState<Editing | null>(null);
 	/** The id of the message whose thread shows beside the room, or null. */
-	const [threadId, setThreadId] = useState<string | null>(null);
+	const [threadId, setThreadId] = useState<string | null>(() => initialThreadId);
+	useEffect(() => {
+		if (initialThreadId) {
+			setThreadId(initialThreadId);
+			onInitialThreadConsumed?.();
+		}
+	}, [initialThreadId, onInitialThreadConsumed]);
 	/**
 	 * The reply that the open thread goes to and marks, for a link to a reply, or null. Each visit of a link
 	 * gives a new object, so the thread goes to the reply again, also for the same seq.

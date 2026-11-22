@@ -478,8 +478,8 @@ export function MessageItem({
 						<button
 							type="button"
 							className="icon-button icon-button-small"
-							aria-label="Save message"
-							title="Save"
+							aria-label="Bookmark message"
+							title="Bookmark"
 							onClick={onSave}
 						>
 							<Icon name="star" size={16} />
