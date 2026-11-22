@@ -48,8 +48,7 @@ export function ServiceAccountAccess({ account, version }: ServiceAccountAccessP
 				Access
 			</h2>
 			<p className="field-hint">
-				The scopes of a token decide what the account can do. Membership decides where. Items that a person shared
-				directly with it in Drive are not in this list.
+				The scopes of a token decide what the account can do. Membership and shares decide where.
 			</p>
 			{error && (
 				<div className="form-error" role="alert">
@@ -105,6 +104,23 @@ export function ServiceAccountAccess({ account, version }: ServiceAccountAccessP
 									</li>
 								))}
 							</ul>
+						)}
+					</dd>
+					<dt>Shared directly in Drive</dt>
+					<dd>
+						{access.drive_shared_items.length === 0 ? (
+							<span className="muted">None</span>
+						) : (
+							<ul>
+								{access.drive_shared_items.map((item) => (
+									<li key={`${item.space_id}/${item.item_id}`}>
+										{item.name} <span className="muted">{item.role}</span>
+									</li>
+								))}
+							</ul>
+						)}
+						{access.drive_shared_items_truncated && (
+							<p className="field-hint">Others shared more items. The list shows the newest shares.</p>
 						)}
 					</dd>
 					<dt>Chat rooms</dt>

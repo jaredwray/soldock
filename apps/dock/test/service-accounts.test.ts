@@ -676,8 +676,8 @@ describe("the activity log of a service account", () => {
 });
 
 describe("the access of a service account", () => {
-	it("lists its team mailboxes, shared drives and rooms with its role, and the scopes of its live tokens", async () => {
-		const { owner, admin, service } = await seedService();
+	it("lists its team mailboxes, shared drives, rooms and items shared directly, with its role, and the scopes of its live tokens", async () => {
+		const { owner, admin, ada, service } = await seedService();
 		const live = await serviceToken(admin, service.id, ["mail.read", "chat.read"]);
 		const revoked = await serviceToken(admin, service.id, ["drive.write"]);
 		const expired = await serviceToken(admin, service.id, ["mail.send"]);
@@ -701,6 +701,17 @@ describe("the access of a service account", () => {
 			member_ids: [service.id],
 		});
 		await sendMemberStates(owner.id, service.id);
+		// Ada shares three files directly with the account. She then removes one share and trashes one file.
+		const upload = async (name: string) =>
+			(await ada.call("drive.upload_file", { name, content_base64: base64(name) })).item;
+		const kept = await upload("kept.txt");
+		const unshared = await upload("gone.txt");
+		const trashed = await upload("trash.txt");
+		for (const item of [kept, unshared, trashed]) {
+			await ada.call("drive.share_item", { item_id: item.id, principal_id: service.id, role: "viewer" });
+		}
+		await ada.call("drive.unshare_item", { item_id: unshared.id, principal_id: service.id });
+		await ada.call("drive.trash_items", { item_ids: [trashed.id] });
 
 		const access = await vi.waitFor(async () => {
 			const result = await admin.call("directory.get_service_account_access", { principal_id: service.id });
@@ -714,6 +725,8 @@ describe("the access of a service account", () => {
 			shared_drives: [{ id: drive.id, name: "Releases", role: "editor" }],
 			chat_rooms: [{ id: room.id, kind: "private", name: "builds", role: "member" }],
 			chat_rooms_truncated: false,
+			drive_shared_items: [{ space_id: ada.id, item_id: kept.id, name: "kept.txt", kind: "file", role: "viewer" }],
+			drive_shared_items_truncated: false,
 			tokens: [{ key_id: live.keyId, label: "deploy", scopes: ["mail.read", "chat.read"], expires_at: null }],
 			scopes: ["chat.read", "mail.read"],
 		});

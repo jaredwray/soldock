@@ -276,6 +276,10 @@ This table is for a personal drive. A shared drive has no `owner`. Its roles are
   each item again, and that drive checks the access. A stale pointer gives no item.
 - The handler does not ask the drive of a deleted principal (`directory.delete_principal`). That
   drive stays in storage, but nobody can open it, so its items leave the lists.
+- `sharedItemsOfPrincipal` reads the `shared` pointers of a principal with the same rules, for the access
+  view of a service account (`directory.get_service_account_access`). It acts as that principal, so each
+  drive checks the access of the principal, not of the admin who asks. It checks no access of the caller:
+  the identity handler does that first.
 - A star is in the own drive of the principal that set it (`stars`), also for an item of somebody
   else. Nobody else sees it. A star can go away after the access ended.
 - A page of the `shared` or `starred` view can have fewer items than `limit`, because a pointer

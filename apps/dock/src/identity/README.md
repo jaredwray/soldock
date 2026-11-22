@@ -368,10 +368,15 @@ the API, with tokens. Nobody signs in as it, and it never connects through OAuth
   - Not recorded yet: a refused token (`401`), a refused socket open, and an event of an MCP
     subscription.
 - **Access.** `directory.get_service_account_access` returns its team mailboxes, its shared drives and
-  its rooms with its role, and the scopes of each live token. It reads the index tables in D1
-  (`team_mailbox_members`, `shared_drive_members` and `chat_members`), and no object. At
-  most 200 rooms, with `chat_rooms_truncated`. Items that a person shared directly with it in Drive are
-  not in the list: their pointers are in the drive objects, and D1 has no index of them.
+  its rooms with its role, the Drive items that others shared directly with it, with its role, and the
+  scopes of each live token. The memberships come from the index tables in D1 (`team_mailbox_members`,
+  `shared_drive_members` and `chat_members`). At most 200 rooms, with `chat_rooms_truncated`.
+  - The items shared directly come from the `shared_with_me` list of its own drive
+    (`sharedItemsOfPrincipal` of [`drive`](../drive/README.md)), the newest share first, at most 200,
+    with `drive_shared_items_truncated`. The drive of each item checks the access of the account again,
+    so a removed share and an item in the trash are not in the list.
+  - The names of these items tell an admin nothing new: an admin can create a token with `drive.read`
+    and read them.
 - **Rollback.** A Worker from before migration `0024` sees a service account as an agent. It ignores
   the end of a key, and it lets the sponsor manage the tokens. The stored scopes stay inside
   `SERVICE_SCOPES`, so a rollback gives no scope beyond them. Revoke the tokens before a rollback to stop

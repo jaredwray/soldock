@@ -590,6 +590,8 @@ export const SERVICE_ACTIVITY_LIMITS = {
 export const SERVICE_ACCESS_LIMITS = {
 	/** The chat rooms of `directory.get_service_account_access`, at most. */
 	rooms: 200,
+	/** The Drive items that others shared directly with the account, at most. */
+	sharedItems: 200,
 } as const;
 
 /** One call of a service account, or one change that an owner or an admin made to it. */
@@ -671,9 +673,9 @@ export const getServiceAccountAccess = defineOperation({
 	summary: "Show what a service account can reach",
 	description: [
 		SERVICE_ACCOUNT_RULES,
-		"Returns the team mailboxes, the shared drives and the chat rooms that the service account is a member of, with its role, and the scopes of each live token.",
-		"It also has its own mailbox and drive. Items that a person shared directly with it in Drive are not in this list.",
-		`chat_rooms has at most ${SERVICE_ACCESS_LIMITS.rooms} rooms. chat_rooms_truncated is true when it has more.`,
+		"Returns the team mailboxes, the shared drives and the chat rooms that the service account is a member of, with its role, the Drive items that others shared directly with it, with its role, and the scopes of each live token.",
+		"It also has its own mailbox and drive.",
+		`chat_rooms has at most ${SERVICE_ACCESS_LIMITS.rooms} rooms, and drive_shared_items at most ${SERVICE_ACCESS_LIMITS.sharedItems} items, the newest share first. The matching _truncated field is true when the account has more.`,
 	].join(" "),
 	http: { method: "GET", path: "/api/v1/directory/service-accounts/{principal_id}/access" },
 	scopes: ["directory.read"],
@@ -687,6 +689,11 @@ export const getServiceAccountAccess = defineOperation({
 		shared_drives: z.array(z.object({ id: z.string(), name: z.string(), role: z.string() })),
 		chat_rooms: z.array(z.object({ id: z.string(), kind: z.string(), name: z.string().nullable(), role: z.string() })),
 		chat_rooms_truncated: z.boolean(),
+		/** The items that others shared directly with the account in Drive, with its role, the newest share first. */
+		drive_shared_items: z.array(
+			z.object({ space_id: z.string(), item_id: z.string(), name: z.string(), kind: z.string(), role: z.string() }),
+		),
+		drive_shared_items_truncated: z.boolean(),
 		/** The tokens that work now: not revoked and not expired. */
 		tokens: z.array(
 			z.object({

@@ -435,6 +435,8 @@ export const identityHandlers: Pick<HandlerMap<CallContext>, IdentityOperation |
 			shared_drives: [],
 			chat_rooms: [],
 			chat_rooms_truncated: false,
+			drive_shared_items: [],
+			drive_shared_items_truncated: false,
 			tokens: keys.map((key) => ({
 				key_id: key.id,
 				label: key.label,
