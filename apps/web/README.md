@@ -332,7 +332,16 @@ MCP clients. The app has no UI-only path.
       A save calls the create operation for each new check mark and the delete operation for each removed one.
       The **Messages** menu of Chat starts with **Direct messages, mentions and followed threads** for an agent.
       An owner or an admin who is not the sponsor cannot change it, because a different filter adds a subscription.
-      Only the sponsor sees **Add webhook**, which sends events of the agent to a webhook that the sponsor created in Settings.
+      Only the sponsor sees **Add webhook**. It creates a webhook for the agent, or selects a webhook that the sponsor already has.
+      A new webhook asks for the URL, an optional label and an optional auth key, then the events.
+      The signing secret shows once. A custom header is set with `webhooks.create_endpoint`.
+      The sponsor can delete a webhook that the sponsor created. An endpoint with no events stays in the list, so the sponsor can delete it.
+      Settings does not list webhooks.
+      At 500px and below, **Edit events** and **Delete** are one above the other.
+      Chat has the menu **Messages**. **Each message** sends each message of the agent.
+      **Direct messages, mentions and followed threads** sends only the messages for the agent.
+      The menu starts with the second choice. A different choice deletes each saved chat subscription and creates it again.
+      The list shows that choice after the events.
       An owner or an admin can clear an event, but cannot add one.
       The Last delivery column shows a dash for the webhook of a different person, because only its creator sees its deliveries.
       An owner or an admin also gets **Read the mail of …**.
@@ -348,7 +357,7 @@ MCP clients. The app has no UI-only path.
     - **Webhooks of …**, each webhook that gets the mail event of the shared mailbox (`mail.list_webhook_subscriptions`).
       **Edit events** opens the check box of that event. An owner or an admin can clear it
       (`mail.delete_webhook_subscription`), for example when the mailbox reaches its limit of active subscriptions.
-      Members add a webhook in Settings.
+      A member creates a webhook with the API.
     - **New shared mailbox**, above the cards, opens a dialog with a name, an address and the first
       members (`directory.create_team_mailbox`).
     - The lists of new members do not offer an archived account.
@@ -362,7 +371,7 @@ MCP clients. The app has no UI-only path.
       agent with a role. The role menu of an agent has no Manager entry.
     - **Webhooks of …**, each webhook that gets a drive event of that drive (`drive.list_webhook_subscriptions`).
       **Edit events** opens the check boxes of the drive events. An owner or an admin can clear an event
-      (`drive.delete_webhook_subscription`). Members add a webhook in Settings.
+      (`drive.delete_webhook_subscription`). A member creates a webhook with the API.
     - **Delete …**, a button with a confirmation (`drive.delete_shared_drive`). The server refuses
       this while the drive holds an item, and the dialog shows that error.
     - The controls of the only manager are off, because a shared drive always keeps one manager. The
@@ -392,57 +401,14 @@ MCP clients. The app has no UI-only path.
   - An expired or decided request shows a message to start again in the app.
   - The page shows one card in the center, on the surface, as the sign-in page does.
 - **Settings** (`/settings`). Your account, your password, two-step verification, your API keys
-  (list, create, revoke), your webhooks (list, add, edit, delete) and sign out. A new password
+  (list, create, revoke) and sign out. Settings does not list webhooks. A new password
   (`account.set_password`) ends your sessions on other browsers. A new key can hold only the scopes
   of the session. A new key does not get `account.keys`, `directory.write`, `mail.webhooks`, `chat.webhooks` or `drive.webhooks`
   unless the person selects them.
-  - **Webhooks** is one list. A row is one webhook: an endpoint (`webhooks.list_endpoints`) and the events that
-    it sends. The row shows one line for each product and target, for example **Mail · Your mailbox**.
-    A line names three events or fewer. For more events, it shows their number.
-    A line says **All events** when the target can send no more events.
-    A stopped webhook and a stopped event show the reason.
-  - **Add webhook** and **Edit** open the same dialog. The dialog has the URL, the label, and one group of
-    check boxes for each product: Mail, Chat and Drive. Chat and Drive also have a check box for all their events:
-    **All three changes** and **All drive events**.
-    Chat offers created, edited and deleted messages. Drive offers item changes, shares, member changes and drive deletion.
-    A star sends nothing. Chat creates no browser storage.
-  - Chat has the menu **Messages**: **Each message**, or **Direct messages, mentions and followed threads**
-    (the filter `addressed` of `chat.create_webhook_subscription`). The menu applies to each chat event of the
-    target. The check boxes are changes to the messages of the menu, under the heading **Send a POST for**.
-    A hint under the menu tells what each check box sends for the choice. With the second choice, an edit counts
-    when the message is for the target after the edit. A delete counts when the message was for the target
-    before the delete, or when a different member deletes a message of the target. The menu starts with the
-    filter of the saved events. Without a saved event, it starts with the default of the server: an agent gets only the messages for it, and a person gets each message. The dialog always
-    sends the filter of the menu. A subscription has no update operation, so a different choice deletes each
-    saved chat subscription of the target and creates it again. A saved event that the person clears and
-    sets again keeps its saved filter, unless the person chose a filter in the menu. A person who cannot
-    add an event always keeps it. So a clear and a set send no call. The list shows the second choice after the
-    events of the line. A webhook with the two filters on one target, which only the API makes, shows
-    **Each message** in the menu, and the list gives the number of events with the second choice.
-  - A product with more than one target has a menu above its check boxes. Mail offers your mailbox and each
-    team mailbox of yours. Drive offers your drive and each shared drive of yours. The menu shows the
-    number of events of each target. Only a shared drive offers the member change and the drive deletion,
-    because your drive never sends them.
-  - A save changes the endpoint (`webhooks.create_endpoint` or `webhooks.update_endpoint`). Then it deletes the
-    subscription of each cleared check box and creates one for each new check mark (`mail.`, `chat.` and
-    `drive.create_webhook_subscription` and `delete_webhook_subscription`). No operation is only for the UI.
-  - When a call fails, the dialog gets the events from the server again. The save is good when the server
-    then has only the selected events, for example after a different tab made the same change first.
-    If not, the **Edit** dialog stays open with the message, and a second save sends only the remaining changes.
-  - The signing secret shows once, after **Add webhook**. When an event of the new webhook fails, the
-    problem shows in the secret dialog, and **Edit** adds the event later. The URL of a webhook cannot change.
-  - **Add webhook** and **Edit** are off while the list loads, so the dialog never opens with old events.
-    When the list does not load, the old rows go away, and the card shows the error and **Try again**.
-  - A stopped event has the text **Stopped** under its check box. To start it again, clear it, save, and set it.
-  - The dialog also takes an optional auth key (sent as `Authorization: Bearer`) and one optional
-    custom header (a name and a value). Both are password fields, and the list shows only that a key
-    is set and the name of the header. **Edit** keeps, replaces or removes the auth key and the header.
-  - A stopped webhook does not start again. Its dialog lets you clear an event, but not set one.
   - The page is one column of 720px. Each part has a heading and a short muted line, and its content
     is in a card on the surface. The account shows as rows with the name at the left and the value
-    at the right. A key shows its label above its scopes. A webhook shows its label above its URL.
-    At 900px and below, the table of keys has no Created and Last used columns, and the table of
-    webhooks has no Last delivery column. At 500px and below, Edit and Delete are one above the other.
+    at the right. A key shows its label above its scopes.
+    At 900px and below, the table of keys has no Created and Last used columns.
   - Each change to your own sign-in asks for your current password, because the server needs it
     from a browser session. On the setup page, the two-step step uses the password that the owner
     just typed.
@@ -1708,7 +1674,7 @@ Each view uses one search query: Inbox `in:inbox`, Starred `is:starred`, Sent `i
 | [`src/features/docs/`](src/features/docs/) | Docs: the schema, the commands, the autosave, the paste of Markdown (`markdownPaste.ts`), the editor and the page. For images: the store of the images of a doc (`images.ts`), the geometry (`imageModel.ts`), the commands (`imageCommands.ts`), the view of an image (`imageView.ts`), the plugin for a drop and a paste (`imagePlugin.ts`), the toolbar and the dialogs |
 | [`src/features/sheets/`](src/features/sheets/) | Sheets: the store with the tabs and the save queue, the toolbar, the grid, the formula bar, the tab bar, and the pure modules for cell names, the selection, clipboard text, the cells of the grid, the formats of cells and the formulas of the Σ menu |
 | [`src/features/chat/`](src/features/chat/) | Chat: the sidebar, the room view, the profile view, the dialogs (new room, public rooms, new direct message, members, name and topic), the message box with its toolbar, Markdown shortcuts and suggestions of a mention (`ChatComposer.tsx`, `composerSchema.ts`, `composerCommands.ts`), the files of a new message (`attachments.ts`, `ComposerFiles.tsx`, the drop in `fileDrop.ts`), the files and the link previews of a message (`MessageFiles.tsx`), the focus after the X of a chip (`focusAfterRemove.ts`), the data hooks, the pure rules in `model.ts`, the rules of mentions in `mentions.ts`, the part of the history that the page keeps in `history.ts`, the page reads in `pager.ts`, the last list of each room in `roomCache.ts`, the drafts in `drafts.ts`, the sends whose message the room has in `settle.ts`, and the sync of the open room in `sync.ts` |
-| [`src/features/settings/`](src/features/settings/) | Settings, the password and two-step verification cards, the TOTP setup panel, the API key manager, the webhook list with its dialog, the event check boxes, the webhook list of one target, and the one-time secret dialog |
+| [`src/features/settings/`](src/features/settings/) | Settings, the password and two-step verification cards, the TOTP setup panel, the API key manager, the event check boxes, the webhook list of one target, and the one-time secret dialog |
 | [`src/lib/`](src/lib/) | The API client, the router, the dialog, the select, toasts, icons (with the Iconoir files in `iconoir/`), the appearance, format helpers, the hook for the people and agents of the organization, the page chunks with the reload after a deploy, the upload of a file to Drive (`upload.ts`), the limit of the uploads and the small pictures that run at the same time (`limiter.ts`), and the small picture of a picture or a video (`filePreview.ts`) |
 | [`src/styles.css`](src/styles.css) | Plain CSS with custom properties. The `dark` class on `<html>` selects the dark colors. See [Design](#design) |
 | [`test/`](test/) | Vitest tests for the pure modules: routes, view queries, label rows, compose, rich text, editor commands, actions and shortcuts, the Drive rules, the Docs schema, commands, autosave and images, the Sheets cells, clipboard text, formats, Σ formulas and save queue, the message list rules, the mentions, the room sync and the files of a new message of Chat, the upload in parts, the limit of the uploads, the upload queue of Drive and the small pictures, the first values of the OAuth approval page, the icons and the appearance rules |

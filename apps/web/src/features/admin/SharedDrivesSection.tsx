@@ -152,7 +152,7 @@ function SharedDrivePanel({ drive, principals, selfId, onChanged, onDeleted }: P
 				targetName={drive.name}
 				domains={["drive"]}
 				canCreate={false}
-				note="Members add a webhook in Settings. You can clear an event here."
+				note="A member creates a webhook with the API. You can clear an event here."
 			/>
 			<div className="admin-card-meta">
 				<div>

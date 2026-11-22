@@ -18,8 +18,8 @@ interface SharedMailboxPanelProps {
 }
 
 /**
- * One shared mailbox, as a card like an agent: its name, its members and its webhooks. Members create
- * webhooks in Settings. An owner or an admin can clear an event of one.
+ * One shared mailbox, as a card like an agent: its name, its members and its webhooks. A member creates
+ * a webhook with the API. An owner or an admin can clear an event of one.
  */
 export function SharedMailboxPanel({ mailbox, principals, onChanged }: SharedMailboxPanelProps) {
 	const count = mailbox.member_ids.length;
@@ -38,7 +38,7 @@ export function SharedMailboxPanel({ mailbox, principals, onChanged }: SharedMai
 				targetName={mailbox.address}
 				domains={["mail"]}
 				canCreate={false}
-				note="Members add a webhook in Settings. You can clear an event, for example when the mailbox reaches its limit."
+				note="A member creates a webhook with the API. You can clear an event, for example when the mailbox reaches its limit."
 			/>
 		</AdminCard>
 	);
