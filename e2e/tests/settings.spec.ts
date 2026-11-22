@@ -6,13 +6,13 @@ test("the settings page scrolls inside its main area and never scrolls the docum
 	browser,
 }) => {
 	const context = await signIn(browser, "meiling");
-	const label = unique("Scroll hook");
-	const created = await context.request.post("/api/v1/webhooks/endpoints", {
+	const label = unique("Scroll key");
+	const created = await context.request.post("/api/v1/account/api-keys", {
 		headers: { origin: BASE_URL, "content-type": "application/json" },
-		data: { url: "https://hooks.example.com/scroll-check", label },
+		data: { label, scopes: ["account.read"] },
 	});
-	expect(created.ok(), `endpoint: ${await created.text()}`).toBe(true);
-	const { endpoint } = (await created.json()) as { endpoint: { id: string } };
+	expect(created.ok(), `key: ${await created.text()}`).toBe(true);
+	const { api_key: apiKey } = (await created.json()) as { api_key: { id: string } };
 
 	try {
 		const page = await context.newPage();
@@ -44,7 +44,7 @@ test("the settings page scrolls inside its main area and never scrolls the docum
 		expect(metrics.scrollYAfterWindowScroll).toBe(0);
 		expect(metrics.railBottom).toBe(metrics.docClientHeight);
 	} finally {
-		await context.request.delete(`/api/v1/webhooks/endpoints/${endpoint.id}`, {
+		await context.request.post(`/api/v1/account/api-keys/${apiKey.id}/revoke`, {
 			headers: { origin: BASE_URL },
 		});
 		await context.close();
