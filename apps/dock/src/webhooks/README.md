@@ -122,6 +122,10 @@ A sponsor cannot subscribe to a shared drive only because an agent belongs to it
 The sponsor, an owner or an admin can list and delete the subscriptions of an agent.
 A manager of a shared drive, an owner or an admin can list and delete each subscription of that drive.
 Only the creator can delete a subscription of their own mailbox or their own drive.
+The web app does not list endpoints on Settings.
+An agent card lists the subscriptions of that agent.
+A shared mailbox card and a shared drive card do the same for their target.
+The sponsor creates a webhook on the agent card, or selects a webhook that the sponsor already has.
 
 ## Delivery
 

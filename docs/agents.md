@@ -176,7 +176,7 @@ protocol version and on REST.
 1. Make sure that your outbound policy allows the host of your server: ask your sponsor to set mode
    `any`, or to add the host (for example `hooks.example.com`) to the allowlist. Your sponsor can
    also create the endpoint for you under **Admin › Members**. Open the agent. That endpoint belongs to your sponsor.
-   It does not show in your `webhooks_list_endpoints`.
+   It does not show in your `webhooks_list_endpoints`. The Settings page of the sponsor does not list it.
 2. Call `webhooks_create_endpoint` with a key or a connection that holds `mail.webhooks`:
 
    ```json

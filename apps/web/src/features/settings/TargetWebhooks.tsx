@@ -1,12 +1,19 @@
-import type { WebhookDomain, WebhookEndpoint } from "@asterra/contracts";
+import {
+	type CreatedWebhookEndpoint,
+	WEBHOOK_LIMITS,
+	type WebhookDomain,
+	type WebhookEndpoint,
+} from "@asterra/contracts";
 import { type FormEvent, useCallback, useEffect, useId, useState } from "react";
 import { api, errorMessage } from "../../lib/api.ts";
+import { ConfirmDialog } from "../../lib/ConfirmDialog.tsx";
 import { Dialog } from "../../lib/Dialog.tsx";
 import { Icon } from "../../lib/icons.tsx";
 import { Select } from "../../lib/Select.tsx";
 import { useToast } from "../../lib/toast.tsx";
 import { useSession } from "../auth/session.tsx";
 import { EventPicker } from "./EventPicker.tsx";
+import { WebhookSecretDialog } from "./SecretDialog.tsx";
 import { EventLines, keysOf, LastDelivery, stoppedKeysOf, useLatest, useWebhookDomains } from "./Webhooks.tsx";
 import { failureText, listSubscriptions, saveEvents } from "./webhookApi.ts";
 import { type ListedSubscription, stoppedText } from "./webhookModel.ts";
@@ -45,7 +52,8 @@ function rowsOf(subscriptions: readonly ListedSubscription[]): TargetRow[] {
 /**
  * The webhooks that get the events of one target that a person manages: an agent, a team mailbox or a
  * shared drive. **Edit events** opens the check boxes of one webhook. A person who did not create the
- * webhook can clear an event, but cannot add one. Create the webhook itself in Settings.
+ * webhook can clear an event, but cannot add one. **Add webhook** creates a webhook for this target,
+ * or selects a webhook that the person already has. The creator can delete that webhook.
  */
 export function TargetWebhooks({
 	heading,
@@ -64,6 +72,8 @@ export function TargetWebhooks({
 	const [own, setOwn] = useState<WebhookEndpoint[]>([]);
 	const [error, setError] = useState<string | null>(null);
 	const [dialog, setDialog] = useState<{ row: TargetRow | null } | null>(null);
+	const [deleting, setDeleting] = useState<WebhookEndpoint | null>(null);
+	const [created, setCreated] = useState<{ endpoint: CreatedWebhookEndpoint; problem: string | null } | null>(null);
 	const headingId = useId();
 
 	const listAll = useCallback(
@@ -175,15 +185,27 @@ export function TargetWebhooks({
 											</td>
 											<LastDelivery endpoint={endpoint} unknown={endpoint.created_by !== me} />
 											<td className="cell-actions">
-												<button
-													type="button"
-													className="button button-small"
-													onClick={() => setDialog({ row })}
-													aria-label={`Edit events of ${endpoint.label}`}
-													disabled={loading}
-												>
-													Edit events
-												</button>
+												<div className="row-actions row-actions-text">
+													<button
+														type="button"
+														className="button button-small"
+														onClick={() => setDialog({ row })}
+														aria-label={`Edit events of ${endpoint.label}`}
+														disabled={loading}
+													>
+														Edit events
+													</button>
+													{endpoint.created_by === me && (
+														<button
+															type="button"
+															className="button button-small button-danger-outline"
+															onClick={() => setDeleting(endpoint)}
+															aria-label={`Delete webhook ${endpoint.label}`}
+														>
+															Delete
+														</button>
+													)}
+												</div>
 											</td>
 										</tr>
 									);
@@ -213,15 +235,52 @@ export function TargetWebhooks({
 						toast({ message: `Events of “${endpoint.label}” saved.` });
 						void load();
 					}}
+					onCreated={(endpoint, failures) => {
+						setDialog(null);
+						// The secret dialog covers the page, so the problem shows in it and not in a toast.
+						setCreated({
+							endpoint,
+							problem:
+								failures.length > 0
+									? `Asterra created the webhook, but did not add each event. ${failureText(failures)} Select Edit events to try again.`
+									: null,
+						});
+						void load();
+					}}
 				/>
+			)}
+			{created && (
+				<WebhookSecretDialog endpoint={created.endpoint} problem={created.problem} onClose={() => setCreated(null)} />
+			)}
+			{deleting && (
+				<ConfirmDialog
+					title="Delete this webhook?"
+					confirmLabel="Delete webhook"
+					danger
+					onClose={() => setDeleting(null)}
+					onConfirm={async () => {
+						await api.call("webhooks.delete_endpoint", { endpoint_id: deleting.id });
+						toast({ message: `Webhook “${deleting.label}” deleted.` });
+						await load();
+					}}
+				>
+					<p>
+						Delete <strong>{deleting.label}</strong>? Asterra sends no more POST requests to {deleting.url}. You cannot
+						undo this.
+					</p>
+				</ConfirmDialog>
 			)}
 		</section>
 	);
 }
 
+/** The menu value for a new webhook. */
+const NEW_ENDPOINT = "new";
+
 /**
  * The check boxes of one webhook for one target. With a row, it changes the events of that webhook.
- * Without a row, the person selects one of their webhooks that has no event of the target yet.
+ * Without a row, the person creates a webhook for this target, or selects one that has no event of
+ * the target yet.
  */
 function TargetEventsDialog({
 	row,
@@ -234,6 +293,7 @@ function TargetEventsDialog({
 	refresh,
 	onClose,
 	onSaved,
+	onCreated,
 }: {
 	row: TargetRow | null;
 	addable: readonly WebhookEndpoint[];
@@ -246,22 +306,51 @@ function TargetEventsDialog({
 	refresh: (endpointId: string) => Promise<ListedSubscription[]>;
 	onClose: () => void;
 	onSaved: (endpoint: WebhookEndpoint) => void;
+	onCreated: (endpoint: CreatedWebhookEndpoint, failures: string[]) => void;
 }) {
-	const [endpointId, setEndpointId] = useState(row?.endpoint.id ?? addable[0]?.id ?? "");
+	const [endpointId, setEndpointId] = useState(row?.endpoint.id ?? addable[0]?.id ?? NEW_ENDPOINT);
 	// The subscriptions as the server has them. A save that fails in part changes them.
 	const [current, setCurrent] = useState<readonly ListedSubscription[]>(row?.subscriptions ?? []);
 	const [selected, setSelected] = useState(() => keysOf(row?.subscriptions ?? []));
 	// After a save that failed in part, the webhook has some of the events. The menu then stays on it.
 	const [started, setStarted] = useState(false);
+	const [url, setUrl] = useState("");
+	const [label, setLabel] = useState("");
+	const [authKey, setAuthKey] = useState("");
 	const [busy, setBusy] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 	const selectId = useId();
 	const hintId = useId();
-	const endpoint = row?.endpoint ?? addable.find((candidate) => candidate.id === endpointId);
-	const adds = endpoint ? canAdd(endpoint) : false;
+	const urlId = useId();
+	const urlHintId = useId();
+	const labelId = useId();
+	const keyId = useId();
+	const keyHintId = useId();
+	const creating = !row && endpointId === NEW_ENDPOINT;
+	const endpoint = creating ? undefined : (row?.endpoint ?? addable.find((candidate) => candidate.id === endpointId));
+	const adds = creating || (endpoint ? canAdd(endpoint) : false);
+
+	async function create() {
+		if (!url.trim()) return setError("Enter the URL of the receiver.");
+		setBusy(true);
+		setError(null);
+		try {
+			const made = await api.call("webhooks.create_endpoint", {
+				url: url.trim(),
+				...(label.trim() ? { label: label.trim() } : {}),
+				...(authKey.trim() ? { auth_key: authKey.trim() } : {}),
+			});
+			const applied = await saveEvents(made.endpoint, [], selected, refresh);
+			onCreated(made.endpoint, applied.failures);
+		} catch (caught) {
+			setError(errorMessage(caught));
+			setBusy(false);
+		}
+	}
 
 	async function submit(event: FormEvent<HTMLFormElement>) {
 		event.preventDefault();
+		if (creating) return create();
 		if (!endpoint) return;
 		setBusy(true);
 		setError(null);
@@ -286,12 +375,6 @@ function TargetEventsDialog({
 		>
 			<form onSubmit={submit} noValidate>
 				<div className="dialog-body form-stack">
-					{!row && addable.length === 0 && (
-						<p className="notice">
-							You have no webhook to add here. Add a webhook in Settings first. A webhook that is in the list above
-							changes with Edit events.
-						</p>
-					)}
 					{!row && addable.length > 0 && (
 						<div className="field">
 							<label htmlFor={selectId} className="field-label">
@@ -300,19 +383,77 @@ function TargetEventsDialog({
 							<Select
 								id={selectId}
 								value={endpointId}
-								options={addable.map((candidate) => ({
-									value: candidate.id,
-									label: candidate.label,
-									description: candidate.url,
-								}))}
+								options={[
+									{ value: NEW_ENDPOINT, label: "New webhook" },
+									...addable.map((candidate) => ({
+										value: candidate.id,
+										label: candidate.label,
+										description: candidate.url,
+									})),
+								]}
 								onChange={setEndpointId}
 								disabled={busy || started}
 								data-autofocus
 							/>
-							<p className="field-hint">Add a different webhook in Settings.</p>
 						</div>
 					)}
-					{endpoint && (
+					{creating && (
+						<>
+							<div className="field">
+								<label htmlFor={urlId} className="field-label">
+									Receiver URL
+								</label>
+								<input
+									id={urlId}
+									className="input"
+									type="url"
+									value={url}
+									placeholder="https://hooks.example.com/asterra"
+									onChange={(event) => setUrl(event.target.value)}
+									aria-describedby={urlHintId}
+									disabled={busy}
+									data-autofocus={addable.length === 0 ? true : undefined}
+								/>
+								<p id={urlHintId} className="field-hint">
+									An https URL with a public host name.
+								</p>
+							</div>
+							<div className="field">
+								<label htmlFor={labelId} className="field-label">
+									Label (optional)
+								</label>
+								<input
+									id={labelId}
+									className="input"
+									value={label}
+									maxLength={WEBHOOK_LIMITS.labelChars}
+									placeholder="For example: support bot"
+									onChange={(event) => setLabel(event.target.value)}
+									disabled={busy}
+								/>
+							</div>
+							<div className="field">
+								<label htmlFor={keyId} className="field-label">
+									Auth key (optional)
+								</label>
+								<input
+									id={keyId}
+									className="input input-mono"
+									type="password"
+									autoComplete="new-password"
+									value={authKey}
+									maxLength={WEBHOOK_LIMITS.authKeyChars}
+									onChange={(event) => setAuthKey(event.target.value)}
+									aria-describedby={keyHintId}
+									disabled={busy}
+								/>
+								<p id={keyHintId} className="field-hint">
+									Sent as Authorization: Bearer &lt;key&gt; on each POST. Asterra never shows it again.
+								</p>
+							</div>
+						</>
+					)}
+					{(creating || endpoint) && (
 						<>
 							{!adds && (
 								<p id={hintId} className="field-hint">
@@ -342,8 +483,8 @@ function TargetEventsDialog({
 					<button type="button" className="button" onClick={onClose} disabled={busy}>
 						Cancel
 					</button>
-					<button type="submit" className="button button-primary" disabled={busy || !endpoint}>
-						{busy ? "Saving…" : "Save"}
+					<button type="submit" className="button button-primary" disabled={busy || (!creating && !endpoint)}>
+						{busy ? "Saving…" : creating ? "Add webhook" : "Save"}
 					</button>
 				</div>
 			</form>
