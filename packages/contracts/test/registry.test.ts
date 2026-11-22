@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { z } from "zod";
 import {
 	AGENT_SCOPES,
+	ALL_SCOPES,
 	expandTemplate,
 	matchTemplate,
 	operationList,
@@ -9,6 +10,7 @@ import {
 	pathParams,
 	resourceList,
 	resources,
+	SERVICE_SCOPES,
 	templateVars,
 	toolName,
 } from "../src/index.ts";
@@ -77,6 +79,47 @@ describe("the operation registry", () => {
 				expect(AGENT_SCOPES, `${op.name} needs ${scope}`).toContain(scope);
 			}
 		}
+	});
+
+	// A service account is stored as an agent, so a product applies the agent rules to it. Its tokens hold
+	// less than an agent key: no keys, no directory changes and no webhooks. A new operation refuses it until
+	// its callers name it.
+	it("lists service accounts as callers only where an agent can call and a service token holds every scope", () => {
+		expect(AGENT_SCOPES).toEqual(expect.arrayContaining([...SERVICE_SCOPES]));
+		for (const scope of ["account.keys", "directory.write", "mail.webhooks", "chat.webhooks", "drive.webhooks"]) {
+			expect(SERVICE_SCOPES).not.toContain(scope);
+		}
+		const serviceOps = operationList.filter((op) => op.callers.includes("service"));
+		for (const op of serviceOps) {
+			expect(op.callers, op.name).toContain("agent");
+			for (const scope of [...op.scopes, ...(op.anyOfScopes ?? [])]) {
+				expect(SERVICE_SCOPES, `${op.name} needs ${scope}`).toContain(scope);
+			}
+		}
+		const refused =
+			/^(oauth|webhooks)\.|^chat\.(subscribe_push|unsubscribe_push|get_notification_settings|set_notification_settings|set_room_notification_level|set_status)$|_webhook/;
+		expect(serviceOps.map((op) => op.name).filter((name) => refused.test(name))).toEqual([]);
+		// Each agent operation that a service token can hold the scopes of is open to it, so the two kinds do not drift.
+		const missed = operationList.filter(
+			(op) =>
+				op.callers.includes("agent") &&
+				!op.callers.includes("service") &&
+				!refused.test(op.name) &&
+				[...op.scopes, ...(op.anyOfScopes ?? [])].every((scope) => SERVICE_SCOPES.includes(scope)),
+		);
+		expect(missed.map((op) => op.name)).toEqual([]);
+	});
+
+	it("takes a lifetime for a new API key in days or as a time, never both, within the limit", () => {
+		const input = operations["account.create_api_key"].input;
+		const base = { label: "ci", scopes: [ALL_SCOPES[0]] };
+		expect(input.safeParse({ ...base, expires_in_days: 7 }).success).toBe(true);
+		expect(input.safeParse({ ...base, expires_at: "2030-01-01T00:00:00Z" }).success).toBe(true);
+		expect(input.safeParse(base).success).toBe(true);
+		expect(input.safeParse({ ...base, expires_in_days: 7, expires_at: "2030-01-01T00:00:00Z" }).success).toBe(false);
+		expect(input.safeParse({ ...base, expires_in_days: 0 }).success).toBe(false);
+		expect(input.safeParse({ ...base, expires_in_days: 731 }).success).toBe(false);
+		expect(input.safeParse({ ...base, expires_at: "tomorrow" }).success).toBe(false);
 	});
 
 	it("marks an operation read-only only when it is a GET, and a GET only when it is read-only", () => {

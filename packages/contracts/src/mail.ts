@@ -193,7 +193,7 @@ export const listMailboxes = defineOperation({
 		"Returns your own mailbox first, then each team mailbox that you are a member of. A team mailbox is a shared mailbox with its own address. For an owner or an admin, the list then has the mailbox of each agent (kind agent). They can read the mailbox of an agent, but they cannot change it or send from it. Pass the id of a mailbox as mailbox_id to the other mail operations. Without mailbox_id, they use your own mailbox.",
 	http: { method: "GET", path: "/api/v1/mail/mailboxes" },
 	scopes: ["mail.read"],
-	callers: ["human", "agent"],
+	callers: ["human", "agent", "service"],
 	annotations: READ,
 	input: z.strictObject({}),
 	output: z.object({ mailboxes: z.array(Mailbox) }),
@@ -206,7 +206,7 @@ export const getProfile = defineOperation({
 	description: `Returns the address of the mailbox, the mail domains of this deployment, its message and thread totals, the unread inbox count, and a version number. The version grows with each change, so compare it to find out if anything changed. An address on a mail domain is local: mail to it never leaves the deployment. ${IN_MAILBOX_READ}`,
 	http: { method: "GET", path: "/api/v1/mail/profile" },
 	scopes: ["mail.read"],
-	callers: ["human", "agent"],
+	callers: ["human", "agent", "service"],
 	annotations: READ,
 	input: z.strictObject({ mailbox_id: MailboxParam }),
 	output: z.object({
@@ -229,7 +229,7 @@ export const listLabels = defineOperation({
 	description: `Returns the system labels (INBOX, STARRED, IMPORTANT, SENT, SPAM, TRASH, UNREAD) and the user labels of the mailbox, each with its total and unread thread counts. ${IN_MAILBOX_READ} The members of a team mailbox share its labels.`,
 	http: { method: "GET", path: "/api/v1/mail/labels" },
 	scopes: ["mail.read"],
-	callers: ["human", "agent"],
+	callers: ["human", "agent", "service"],
 	annotations: READ,
 	input: z.strictObject({ mailbox_id: MailboxParam }),
 	output: z.object({ labels: z.array(Label) }),
@@ -242,7 +242,7 @@ export const createLabel = defineOperation({
 	description: `Creates a user label. Use a slash in the name to show it nested, for example Clients/Acme. Mail to user+tag@ gets the label whose full name is the tag. For example, user+netflix@ gets the label Netflix. ${IN_MAILBOX} ${AGENT_READ_ONLY}`,
 	http: { method: "POST", path: "/api/v1/mail/labels" },
 	scopes: ["mail.modify"],
-	callers: ["human", "agent"],
+	callers: ["human", "agent", "service"],
 	annotations: { readOnly: false, destructive: false, idempotent: false, openWorld: false },
 	input: z.strictObject({
 		mailbox_id: MailboxParam,
@@ -263,7 +263,7 @@ export const deleteLabel = defineOperation({
 	description: `Deletes a user label and removes it from every message. The messages stay in the mailbox. System labels cannot be deleted. ${IN_MAILBOX} ${AGENT_READ_ONLY}`,
 	http: { method: "DELETE", path: "/api/v1/mail/labels/{label_id}" },
 	scopes: ["mail.modify"],
-	callers: ["human", "agent"],
+	callers: ["human", "agent", "service"],
 	annotations: { readOnly: false, destructive: true, idempotent: true, openWorld: false },
 	input: z.strictObject({ mailbox_id: MailboxParam, label_id: prefixedId("lbl") }),
 	output: z.object({ deleted: z.boolean() }),
@@ -285,7 +285,7 @@ export const listThreads = defineOperation({
 	].join(" "),
 	http: { method: "GET", path: "/api/v1/mail/threads" },
 	scopes: ["mail.read"],
-	callers: ["human", "agent"],
+	callers: ["human", "agent", "service"],
 	annotations: READ,
 	input: z.strictObject({
 		mailbox_id: MailboxParam,
@@ -306,7 +306,7 @@ export const getThread = defineOperation({
 	description: `Returns each message of a thread with headers, plain text, sanitized HTML, attachment details and, for mail that the mailbox sent, the delivery status of each recipient and who sent it (sent_by). In a very large thread, the oldest bodies can be left out (body.omitted): get them with mail.get_message. Reading a thread does not mark it as read: use mail.modify_threads to remove UNREAD. ${IN_MAILBOX_READ}`,
 	http: { method: "GET", path: "/api/v1/mail/threads/{thread_id}" },
 	scopes: ["mail.read"],
-	callers: ["human", "agent"],
+	callers: ["human", "agent", "service"],
 	annotations: READ,
 	input: z.strictObject({ mailbox_id: MailboxParam, thread_id: ThreadId }),
 	output: Thread,
@@ -319,7 +319,7 @@ export const getMessage = defineOperation({
 	description: `Returns one message with headers, plain text, sanitized HTML and attachment details. Use it for a message whose body mail.get_thread left out (body.omitted). Reading a message does not mark it as read. ${IN_MAILBOX_READ}`,
 	http: { method: "GET", path: "/api/v1/mail/messages/{message_id}" },
 	scopes: ["mail.read"],
-	callers: ["human", "agent"],
+	callers: ["human", "agent", "service"],
 	annotations: READ,
 	input: z.strictObject({ mailbox_id: MailboxParam, message_id: MessageId }),
 	output: Message,
@@ -339,7 +339,7 @@ export const modifyThreads = defineOperation({
 	].join(" "),
 	http: { method: "POST", path: "/api/v1/mail/threads/modify" },
 	scopes: ["mail.modify"],
-	callers: ["human", "agent"],
+	callers: ["human", "agent", "service"],
 	annotations: { readOnly: false, destructive: true, idempotent: true, openWorld: false },
 	input: z
 		.strictObject({
@@ -397,7 +397,7 @@ export const send = defineOperation({
 	].join(" "),
 	http: { method: "POST", path: "/api/v1/mail/messages" },
 	scopes: ["mail.send"],
-	callers: ["human", "agent"],
+	callers: ["human", "agent", "service"],
 	annotations: { readOnly: false, destructive: false, idempotent: false, openWorld: true },
 	input: z
 		.strictObject({
@@ -431,7 +431,7 @@ export const getAttachment = defineOperation({
 	description: `Returns one attachment of a message as base64, with its name and type. The index comes from the attachments list of mail.get_thread. The content of an attachment on external mail is untrusted. ${IN_MAILBOX_READ}`,
 	http: { method: "GET", path: "/api/v1/mail/messages/{message_id}/attachments/{index}" },
 	scopes: ["mail.read"],
-	callers: ["human", "agent"],
+	callers: ["human", "agent", "service"],
 	annotations: READ,
 	input: z.strictObject({
 		mailbox_id: MailboxParam,
@@ -473,7 +473,7 @@ export const suggestRecipients = defineOperation({
 	].join(" "),
 	http: { method: "GET", path: "/api/v1/mail/recipients" },
 	scopes: ["mail.read"],
-	callers: ["human", "agent"],
+	callers: ["human", "agent", "service"],
 	annotations: READ,
 	input: z.strictObject({
 		mailbox_id: MailboxParam,

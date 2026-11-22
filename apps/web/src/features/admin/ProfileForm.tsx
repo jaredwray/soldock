@@ -1,4 +1,4 @@
-import type { InputOf, Principal } from "@asterra/contracts";
+import { API_KEY_LIMITS, type InputOf, type Principal } from "@asterra/contracts";
 import { type FormEvent, useId, useState } from "react";
 import { api, errorMessage } from "../../lib/api.ts";
 import { Select } from "../../lib/Select.tsx";
@@ -22,28 +22,33 @@ interface ProfileFormProps {
 }
 
 /**
- * Changes the name of a person or an agent, the role of a person, or the sponsor of an agent
- * (`directory.update_principal`). The form sends only the fields that changed. Nobody changes their
- * own role or the role of the owner, so the role control is off for them.
+ * Changes the name of a person, an agent or a service account, the role of a person, the sponsor of an
+ * agent or a service account, or the description of a service account (`directory.update_principal`).
+ * The form sends only the fields that changed. Nobody changes their own role or the role of the owner,
+ * so the role control is off for them.
  */
 export function ProfileForm({ me, principal, humans, onChanged }: ProfileFormProps) {
 	const toast = useToast();
 	const [name, setName] = useState(principal.display_name);
 	const [role, setRole] = useState<Role>(principal.org_role === "admin" ? "admin" : "member");
 	const [sponsorId, setSponsorId] = useState(principal.sponsor_id ?? "");
+	const [description, setDescription] = useState(principal.description ?? "");
 	const [busy, setBusy] = useState(false);
 	const [error, setError] = useState<string | null>(null);
-	const ids = { name: useId(), role: useId(), roleHint: useId(), sponsor: useId() };
+	const ids = { name: useId(), role: useId(), roleHint: useId(), sponsor: useId(), description: useId() };
 	const isOwner = principal.org_role === "owner";
 	const isMe = principal.id === me.id;
-	const isAgent = principal.kind === "agent";
+	// An agent and a service account have a sponsor and no role.
+	const isAgent = principal.kind !== "human";
+	const isService = principal.kind === "service";
 	// The current sponsor stays in the list, also when archived, so the control shows the current value.
 	const sponsors = humans.filter((human) => human.archived_at === null || human.id === principal.sponsor_id);
 	const trimmed = name.trim();
 	const unchanged =
 		trimmed === principal.display_name &&
 		(isAgent || isOwner || isMe || role === principal.org_role) &&
-		(!isAgent || sponsorId === (principal.sponsor_id ?? ""));
+		(!isAgent || sponsorId === (principal.sponsor_id ?? "")) &&
+		(!isService || description.trim() === (principal.description ?? ""));
 
 	async function submit(event: FormEvent<HTMLFormElement>) {
 		event.preventDefault();
@@ -52,6 +57,7 @@ export function ProfileForm({ me, principal, humans, onChanged }: ProfileFormPro
 		if (trimmed !== principal.display_name) input.display_name = trimmed;
 		if (!isAgent && !isOwner && !isMe && role !== principal.org_role) input.org_role = role;
 		if (isAgent && sponsorId && sponsorId !== principal.sponsor_id) input.sponsor_id = sponsorId;
+		if (isService && description.trim() !== (principal.description ?? "")) input.description = description.trim();
 		if (Object.keys(input).length === 1) return;
 		setBusy(true);
 		setError(null);
@@ -69,7 +75,9 @@ export function ProfileForm({ me, principal, humans, onChanged }: ProfileFormPro
 
 	return (
 		<form className="admin-card-form" onSubmit={submit} noValidate>
-			<h2 className="subpanel-title">{isAgent ? "Name and sponsor" : "Name and role"}</h2>
+			<h2 className="subpanel-title">
+				{isService ? "Name, description and sponsor" : isAgent ? "Name and sponsor" : "Name and role"}
+			</h2>
 			<div className="field">
 				<label htmlFor={ids.name} className="field-label">
 					Display name
@@ -83,6 +91,22 @@ export function ProfileForm({ me, principal, humans, onChanged }: ProfileFormPro
 					disabled={busy}
 				/>
 			</div>
+			{isService && (
+				<div className="field">
+					<label htmlFor={ids.description} className="field-label">
+						Description
+					</label>
+					<input
+						id={ids.description}
+						className="input"
+						value={description}
+						maxLength={API_KEY_LIMITS.descriptionChars}
+						onChange={(event) => setDescription(event.target.value)}
+						disabled={busy}
+						placeholder="What the account is for"
+					/>
+				</div>
+			)}
 			{!isAgent && (
 				<div className="field">
 					<label htmlFor={ids.role} className="field-label">

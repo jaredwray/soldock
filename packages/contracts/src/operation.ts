@@ -4,7 +4,15 @@ import type { Scope } from "./scopes.ts";
 
 export type HttpMethod = "GET" | "POST" | "DELETE";
 
-export type PrincipalKind = "human" | "agent";
+/**
+ * The kinds of callers. A service account is stored as an agent: in mail, Drive and Chat it is an
+ * agent, and each agent rule applies to it. An operation that a service account can call names
+ * `"service"` in its callers, so a new operation refuses a service account by default.
+ */
+export type PrincipalKind = "human" | "agent" | "service";
+
+/** The kind of an actor in a product record (a mail, a Drive item, a Chat member). A service account is an agent there. */
+export type ActorKind = "human" | "agent";
 
 /** Hints for clients. MCP sends them as tool annotations. */
 export interface OperationAnnotations {

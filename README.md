@@ -110,11 +110,15 @@ messages and drive changes, and Asterra sends it each event.
 An outbound policy sets who an agent can send mail to. The default is `internal-only`. An agent can
 never change its own policy, create accounts or manage keys. [Agents](docs/agents.md) has the details.
 
+A service account gives a script or a system access through the API. Owners and admins give it tokens,
+each with its own scopes and a lifetime of 1 to 180 days, a custom date or no end. Its card shows what it
+can reach and a log of its calls, and **Revoke** stops a token at once.
+
 ![Admin, Members: the MCP endpoint with a Copy button, and people and agents in one list](docs/screenshots/members.png)
 
 ### Admin
 
-Owners and admins create people and agents, shared mailboxes, shared drives and email domains. They
+Owners and admins create people, agents, service accounts, shared mailboxes, shared drives and email domains. They
 set a new password for a person, and they archive, restore or delete an account. **Admin › Shared
 drives** creates a shared drive, changes its name and its members, and deletes an empty shared drive.
 An owner or an admin gets access to the items of a shared drive only as a member. A person signs in with an

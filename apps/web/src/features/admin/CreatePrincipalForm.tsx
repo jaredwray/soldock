@@ -1,6 +1,7 @@
 import {
 	AGENT_SCOPES,
 	ALL_SCOPES,
+	API_KEY_LIMITS,
 	type CreatedApiKey,
 	EmailAddress,
 	type InputOf,
@@ -14,6 +15,7 @@ import {
 import { type FormEvent, useId, useState } from "react";
 import { api, errorMessage } from "../../lib/api.ts";
 import { Dialog } from "../../lib/Dialog.tsx";
+import { KIND_NAMES } from "../../lib/principalKind.ts";
 import { Select } from "../../lib/Select.tsx";
 import { useSession } from "../auth/session.tsx";
 import { McpEndpointBanner } from "./McpEndpointBanner.tsx";
@@ -28,14 +30,15 @@ interface CreatePrincipalDialogProps {
 	/** The people who can sponsor a new agent. An archived person cannot. */
 	humans: readonly Principal[];
 	onClose: () => void;
-	onCreated: (principal: Principal, key: CreatedApiKey) => void;
+	/** The new principal, with its first API key. A service account has no first key: null. */
+	onCreated: (principal: Principal, key: CreatedApiKey | null) => void;
 }
 
-/** Creates a person or an agent in a modal dialog, from the button in the Members section. */
+/** Creates a person, an agent or a service account in a modal dialog, from the button in the Members section. */
 export function CreatePrincipalDialog({ me, humans, onClose, onCreated }: CreatePrincipalDialogProps) {
 	const [busy, setBusy] = useState(false);
 	return (
-		<Dialog title="New person or agent" onClose={() => !busy && onClose()}>
+		<Dialog title="New member" onClose={() => !busy && onClose()}>
 			<CreatePrincipalForm me={me} humans={humans} onBusy={setBusy} onCancel={onClose} onCreated={onCreated} />
 		</Dialog>
 	);
@@ -46,16 +49,28 @@ interface CreatePrincipalFormProps {
 	humans: readonly Principal[];
 	onBusy: (busy: boolean) => void;
 	onCancel: () => void;
-	onCreated: (principal: Principal, key: CreatedApiKey) => void;
+	onCreated: (principal: Principal, key: CreatedApiKey | null) => void;
 }
 
-/** Creates a person or an agent. The result holds a first API key, which shows once. */
+type Kind = "human" | "agent" | "service";
+
+const KIND_HINTS: Record<Kind, string> = {
+	human: "Signs in to the web app with a password.",
+	agent: "An AI agent. It connects with OAuth or an API key, and a sponsor is accountable for it.",
+	service: "Gives a script or a system access through the API, with tokens that owners and admins manage.",
+};
+
+/**
+ * Creates a person, an agent or a service account. The result of a person or an agent holds a first API
+ * key, which shows once. A service account gets its tokens in its card, with a lifetime for each.
+ */
 function CreatePrincipalForm({ me, humans, onBusy, onCancel, onCreated }: CreatePrincipalFormProps) {
 	const { whoami } = useSession();
 	// A credential cannot grant a scope that it does not hold. The form offers only the scopes of this session.
 	const humanScopes = ALL_SCOPES.filter((scope) => whoami.scopes.includes(scope));
 	const agentScopes = AGENT_SCOPES.filter((scope) => whoami.scopes.includes(scope));
-	const [kind, setKind] = useState<"human" | "agent">("human");
+	const [kind, setKind] = useState<Kind>("human");
+	const [description, setDescription] = useState("");
 	const [name, setName] = useState("");
 	const [address, setAddress] = useState("");
 	const [password, setPassword] = useState("");
@@ -72,6 +87,8 @@ function CreatePrincipalForm({ me, humans, onBusy, onCancel, onCreated }: Create
 		passwordHint: useId(),
 		role: useId(),
 		sponsor: useId(),
+		description: useId(),
+		kindHint: useId(),
 	};
 
 	async function submit(event: FormEvent<HTMLFormElement>) {
@@ -85,6 +102,22 @@ function CreatePrincipalForm({ me, humans, onBusy, onCancel, onCreated }: Create
 		setBusy(true);
 		onBusy(true);
 		setError(null);
+		if (kind === "service") {
+			try {
+				const result = await api.call("directory.create_service_account", {
+					display_name: name.trim(),
+					address: address.trim(),
+					sponsor_id: sponsorId,
+					...(description.trim() ? { description: description.trim() } : {}),
+				});
+				onCreated(result.principal, null);
+			} catch (caught) {
+				setError(errorMessage(caught));
+				setBusy(false);
+				onBusy(false);
+			}
+			return;
+		}
 		const input: InputOf<"directory.create_principal"> =
 			kind === "human"
 				? {
@@ -124,9 +157,9 @@ function CreatePrincipalForm({ me, humans, onBusy, onCancel, onCreated }: Create
 	return (
 		<form onSubmit={submit} noValidate>
 			<div className="dialog-body form-grid">
-				<fieldset className="segmented">
+				<fieldset className="segmented" aria-describedby={ids.kindHint}>
 					<legend className="field-label">Kind</legend>
-					{(["human", "agent"] as const).map((value) => (
+					{(["human", "agent", "service"] as const).map((value) => (
 						<label key={value} className={kind === value ? "segment segment-active" : "segment"}>
 							<input
 								type="radio"
@@ -136,9 +169,12 @@ function CreatePrincipalForm({ me, humans, onBusy, onCancel, onCreated }: Create
 								onChange={() => setKind(value)}
 								disabled={busy}
 							/>
-							{value === "human" ? "Person" : "Agent"}
+							{KIND_NAMES[value]}
 						</label>
 					))}
+					<p id={ids.kindHint} className="field-hint form-grid-wide">
+						{KIND_HINTS[kind]}
+					</p>
 				</fieldset>
 				{kind === "agent" && (
 					// OAuth is the main way to add an agent. This form, with a first API key, is for clients without OAuth.
@@ -157,7 +193,7 @@ function CreatePrincipalForm({ me, humans, onBusy, onCancel, onCreated }: Create
 						maxLength={100}
 						onChange={(event) => setName(event.target.value)}
 						disabled={busy}
-						placeholder={kind === "agent" ? "Invoice assistant" : "Ada Lovelace"}
+						placeholder={kind === "agent" ? "Invoice assistant" : kind === "service" ? "CI pipeline" : "Ada Lovelace"}
 					/>
 				</div>
 				<div className="field">
@@ -171,7 +207,9 @@ function CreatePrincipalForm({ me, humans, onBusy, onCancel, onCreated }: Create
 						value={address}
 						onChange={(event) => setAddress(event.target.value)}
 						disabled={busy}
-						placeholder={kind === "agent" ? "invoices@example.com" : "ada@example.com"}
+						placeholder={
+							kind === "agent" ? "invoices@example.com" : kind === "service" ? "ci@example.com" : "ada@example.com"
+						}
 					/>
 				</div>
 				{kind === "human" ? (
@@ -202,6 +240,43 @@ function CreatePrincipalForm({ me, humans, onBusy, onCancel, onCreated }: Create
 						</div>
 						<p className="field-hint form-grid-wide">
 							The first key of the person gets the scopes of this session: {humanScopes.join(", ")}.
+						</p>
+					</>
+				) : kind === "service" ? (
+					<>
+						<div className="field">
+							<label htmlFor={ids.sponsor} className="field-label">
+								Sponsor
+							</label>
+							<Select
+								id={ids.sponsor}
+								value={sponsorId}
+								options={sponsors.map((human) => ({
+									value: human.id,
+									label: human.display_name,
+									description: human.address,
+								}))}
+								onChange={setSponsorId}
+								disabled={busy}
+							/>
+						</div>
+						<div className="field">
+							<label htmlFor={ids.description} className="field-label">
+								Description
+							</label>
+							<input
+								id={ids.description}
+								className="input"
+								value={description}
+								maxLength={API_KEY_LIMITS.descriptionChars}
+								onChange={(event) => setDescription(event.target.value)}
+								disabled={busy}
+								placeholder="Posts build results to #builds"
+							/>
+						</div>
+						<p className="field-hint form-grid-wide">
+							The sponsor is the person to ask about the account. Only owners and admins create its tokens. Open the
+							account under Members after you create it to add a token.
 						</p>
 					</>
 				) : (
@@ -257,7 +332,13 @@ function CreatePrincipalForm({ me, humans, onBusy, onCancel, onCreated }: Create
 					Cancel
 				</button>
 				<button type="submit" className="button button-primary" disabled={busy}>
-					{busy ? "Creating…" : kind === "agent" ? "Create agent" : "Create person"}
+					{busy
+						? "Creating…"
+						: kind === "agent"
+							? "Create agent"
+							: kind === "service"
+								? "Create service account"
+								: "Create person"}
 				</button>
 			</div>
 		</form>

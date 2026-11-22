@@ -294,7 +294,8 @@ count for the drive. No principal is the owner of an item.
 
 - Only an owner or an admin of the organization creates a shared drive
   (`drive.create_shared_drive`). The creator is a member only when `members` names the creator.
-- An agent can be an `editor` or a `viewer`. A manager is a person.
+- An agent can be an `editor` or a `viewer`. A manager is a person. A
+  [service account](../identity/README.md#service-accounts) is an agent here, so it is never a manager.
 - The role of a principal for an item is the highest of its member role and its grants on the item
   and on each folder above it. Thus a manager can share one item with a principal that is not a
   member, and can make a viewer of the drive an editor of one item.

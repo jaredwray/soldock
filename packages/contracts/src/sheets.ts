@@ -212,7 +212,7 @@ export const createSheet = defineOperation({
 	].join(" "),
 	http: { method: "POST", path: "/api/v1/sheets" },
 	scopes: ["drive.write"],
-	callers: ["human", "agent"],
+	callers: ["human", "agent", "service"],
 	annotations: { readOnly: false, destructive: false, idempotent: false, openWorld: false },
 	input: z.strictObject({
 		space_id: SpaceParam,
@@ -231,7 +231,7 @@ export const getSheet = defineOperation({
 	description: `Returns each cell of one tab that has an input or a format, with the input, the result of its formula and the format. rows and columns give the last row and the last column of the tab that have a cell with an input. Set range (for example A1:D20) to get only the cells in that range. ${TAB_NOTE} Set tab_id to read a different tab than the first. ${IN_SPACE}`,
 	http: { method: "GET", path: "/api/v1/sheets/{item_id}" },
 	scopes: ["drive.read"],
-	callers: ["human", "agent"],
+	callers: ["human", "agent", "service"],
 	annotations: { readOnly: true, destructive: false, idempotent: true, openWorld: false },
 	input: z.strictObject({
 		space_id: SpaceParam,
@@ -265,7 +265,7 @@ export const updateCells = defineOperation({
 	].join(" "),
 	http: { method: "POST", path: "/api/v1/sheets/{item_id}/cells" },
 	scopes: ["drive.write"],
-	callers: ["human", "agent"],
+	callers: ["human", "agent", "service"],
 	annotations: { readOnly: false, destructive: true, idempotent: true, openWorld: false },
 	input: z.strictObject({
 		space_id: SpaceParam,
@@ -301,7 +301,7 @@ export const formatCells = defineOperation({
 	].join(" "),
 	http: { method: "POST", path: "/api/v1/sheets/{item_id}/formats" },
 	scopes: ["drive.write"],
-	callers: ["human", "agent"],
+	callers: ["human", "agent", "service"],
 	annotations: { readOnly: false, destructive: false, idempotent: true, openWorld: false },
 	input: z.strictObject({
 		space_id: SpaceParam,
@@ -340,7 +340,7 @@ export const addTab = defineOperation({
 	].join(" "),
 	http: { method: "POST", path: "/api/v1/sheets/{item_id}/tabs" },
 	scopes: ["drive.write"],
-	callers: ["human", "agent"],
+	callers: ["human", "agent", "service"],
 	annotations: { readOnly: false, destructive: false, idempotent: false, openWorld: false },
 	input: z.strictObject({
 		space_id: SpaceParam,
@@ -364,7 +364,7 @@ export const renameTab = defineOperation({
 	].join(" "),
 	http: { method: "POST", path: "/api/v1/sheets/{item_id}/tabs/{tab_id}/rename" },
 	scopes: ["drive.write"],
-	callers: ["human", "agent"],
+	callers: ["human", "agent", "service"],
 	annotations: { readOnly: false, destructive: false, idempotent: true, openWorld: false },
 	input: z.strictObject({
 		space_id: SpaceParam,
@@ -383,7 +383,7 @@ export const moveTab = defineOperation({
 	description: `Moves a tab to the position index: 0 is the first. An index after the last tab moves the tab to the end. You need the editor role. ${IN_SPACE}`,
 	http: { method: "POST", path: "/api/v1/sheets/{item_id}/tabs/{tab_id}/move" },
 	scopes: ["drive.write"],
-	callers: ["human", "agent"],
+	callers: ["human", "agent", "service"],
 	annotations: { readOnly: false, destructive: false, idempotent: true, openWorld: false },
 	input: z.strictObject({
 		space_id: SpaceParam,
@@ -407,7 +407,7 @@ export const duplicateTab = defineOperation({
 	].join(" "),
 	http: { method: "POST", path: "/api/v1/sheets/{item_id}/tabs/{tab_id}/duplicate" },
 	scopes: ["drive.write"],
-	callers: ["human", "agent"],
+	callers: ["human", "agent", "service"],
 	annotations: { readOnly: false, destructive: false, idempotent: false, openWorld: false },
 	input: z.strictObject({
 		space_id: SpaceParam,
@@ -432,7 +432,7 @@ export const deleteTab = defineOperation({
 	].join(" "),
 	http: { method: "DELETE", path: "/api/v1/sheets/{item_id}/tabs/{tab_id}" },
 	scopes: ["drive.write"],
-	callers: ["human", "agent"],
+	callers: ["human", "agent", "service"],
 	annotations: { readOnly: false, destructive: true, idempotent: false, openWorld: false },
 	input: z.strictObject({
 		space_id: SpaceParam,

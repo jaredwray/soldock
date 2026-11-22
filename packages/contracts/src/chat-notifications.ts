@@ -167,7 +167,7 @@ export const chatNotificationOperations = {
 			"Pass up to 50 principal ids with a comma between them. The result gives availability and custom status for those principals in your organization.",
 		http: { method: "GET", path: "/api/v1/chat/presence" },
 		scopes: ["chat.read", "directory.read"],
-		callers: ["human", "agent"],
+		callers: ["human", "agent", "service"],
 		annotations: READ,
 		input: z.strictObject({
 			principal_ids: z

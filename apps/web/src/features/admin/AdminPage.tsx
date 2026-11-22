@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { errorMessage } from "../../lib/api.ts";
 import { setPageTitle } from "../../lib/pageTitle.ts";
 import { navigate } from "../../lib/router.tsx";
+import { useToast } from "../../lib/toast.tsx";
 import { useOnChange } from "../../lib/useOnChange.ts";
 import { listAllPrincipals } from "../../lib/usePrincipals.ts";
 import { type AdminSection, adminPath } from "../../routes.ts";
@@ -38,6 +39,7 @@ interface AdminPageProps {
  */
 export function AdminPage({ section: routeSection, navOpen, onCloseNav }: AdminPageProps) {
 	const { whoami } = useSession();
+	const toast = useToast();
 	const me = whoami.principal;
 	const elevated = isOrgAdmin(me);
 	const section = routeSection ?? defaultSection();
@@ -145,7 +147,9 @@ export function AdminPage({ section: routeSection, navOpen, onCloseNav }: AdminP
 						principals={principals}
 						onChanged={() => void load()}
 						onCreated={(principal, key) => {
-							setCreated({ principal, key });
+							// A service account has no first key. Its card adds tokens.
+							if (key) setCreated({ principal, key });
+							else toast({ message: `${principal.display_name} is ready. Open it to add a token.` });
 							void load();
 						}}
 					/>

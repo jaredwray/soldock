@@ -5,12 +5,15 @@ import { AgentDetails } from "./AgentDetails.tsx";
 import { ProfileForm, ROLE_NAMES } from "./ProfileForm.tsx";
 import { policySummary } from "./policy.ts";
 import { ResetSignIn } from "./ResetSignIn.tsx";
+import { ServiceAccountDetails } from "./ServiceAccountDetails.tsx";
 
 interface PrincipalCardProps {
 	principal: Principal;
 	me: Principal;
 	/** The people of the directory. The sponsor list of an agent uses them. */
 	humans: readonly Principal[];
+	/** The whole directory, for the names of the creators of a service account and of its tokens. */
+	principals: readonly Principal[];
 	/** True for an owner or an admin. A sponsor sees the agent tools only. */
 	elevated: boolean;
 	onChanged: () => void;
@@ -20,13 +23,15 @@ interface PrincipalCardProps {
 }
 
 /**
- * One person or one agent, as a card that opens. An owner or an admin changes the account in the card.
- * An agent card also has the policy, the connected apps, the webhooks and the API keys.
+ * One person, agent or service account, as a card that opens. An owner or an admin changes the account
+ * in the card. An agent card also has the policy, the connected apps, the webhooks and the API keys. A
+ * service account card has the policy, the tokens, the access and the activity.
  */
 export function PrincipalCard({
 	principal,
 	me,
 	humans,
+	principals,
 	elevated,
 	onChanged,
 	onArchive,
@@ -35,6 +40,7 @@ export function PrincipalCard({
 }: PrincipalCardProps) {
 	const archived = principal.archived_at !== null;
 	const isAgent = principal.kind === "agent";
+	const isService = principal.kind === "service";
 	const isOwner = principal.org_role === "owner";
 	// The server lets only the owner change the owner, and nobody archives or deletes the owner or themselves.
 	const canEdit = elevated && (!isOwner || principal.id === me.id);
@@ -43,8 +49,8 @@ export function PrincipalCard({
 
 	return (
 		<AdminCard
-			icon={isAgent ? "bot" : "team"}
-			mark={isAgent ? undefined : initials(principal.display_name)}
+			icon={isService ? "settings" : isAgent ? "bot" : "team"}
+			mark={isAgent || isService ? undefined : initials(principal.display_name)}
 			muted={archived}
 			onOpen={onChanged}
 			name={
@@ -57,19 +63,20 @@ export function PrincipalCard({
 			chips={
 				<>
 					{archived && <span className="chip">Archived</span>}
-					{!isAgent && principal.org_role && (
+					{principal.kind === "human" && principal.org_role && (
 						<span className={principal.org_role === "member" ? "role-chip" : "role-chip role-chip-strong"}>
 							{ROLE_NAMES[principal.org_role]}
 						</span>
 					)}
 					{isAgent && <span className="chip">Agent</span>}
+					{isService && <span className="chip">Service account</span>}
 					{principal.outbound_policy && <span className="chip">{policySummary(principal.outbound_policy)}</span>}
 				</>
 			}
 		>
 			{canEdit && <ProfileForm me={me} principal={principal} humans={humans} onChanged={onChanged} />}
 			{elevated && !canEdit && <p className="panel-note">Only the owner can change this account.</p>}
-			{canRemove && !isAgent && <ResetSignIn person={principal} />}
+			{canRemove && principal.kind === "human" && <ResetSignIn person={principal} />}
 			{isAgent && (
 				<AgentDetails
 					agent={principal}
@@ -79,11 +86,16 @@ export function PrincipalCard({
 					onChanged={onChanged}
 				/>
 			)}
+			{isService && elevated && (
+				<ServiceAccountDetails account={principal} principals={principals} onChanged={onChanged} />
+			)}
 			{canRemove && (
 				<div>
 					<h2 className="subpanel-title">Account</h2>
 					<p className="field-hint">
-						Archive stops sign-in and each key. The mail and the files stay. Delete removes the account.
+						{isService
+							? "Archive stops each token. The mail and the files stay. Delete removes the account and revokes its tokens."
+							: "Archive stops sign-in and each key. The mail and the files stay. Delete removes the account."}
 					</p>
 					<div className="admin-card-actions">
 						{archived ? (

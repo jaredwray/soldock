@@ -1,8 +1,15 @@
 // The operation handlers and the resource change feeds of each domain, joined, and the subscriptions of
 // MCP Events. The composition root and the tests use these maps.
-import { chatHandlers, chatWatchers, invokeSlashCommand, removeDeletedPrincipalFromRooms } from "./chat/index.ts";
+import { SERVICE_ACCESS_LIMITS } from "@asterra/contracts";
+import {
+	chatHandlers,
+	chatWatchers,
+	invokeSlashCommand,
+	removeDeletedPrincipalFromRooms,
+	roomsOfPrincipal,
+} from "./chat/index.ts";
 import { docsHandlers } from "./docs/index.ts";
-import { driveHandlers, driveWatchers, enableDriveEvents } from "./drive/index.ts";
+import { driveHandlers, driveWatchers, enableDriveEvents, sharedDrivesOfPrincipal } from "./drive/index.ts";
 import { type CallContext, identityHandlers } from "./identity/index.ts";
 import { enableMailEvents, mailHandlers, mailWatchers } from "./mail/index.ts";
 import type { EventSubscriptions, HandlerMap, WatcherMap } from "./platform/index.ts";
@@ -24,6 +31,16 @@ export const handlers: HandlerMap<CallContext> = {
 			command: input.command,
 			text: input.text ?? "",
 		});
+	},
+	// The identity handler checks the access and reads the team mailboxes and the tokens. The shared drives
+	// and the rooms come from the indexes of Drive and Chat.
+	async "directory.get_service_account_access"(call, input) {
+		const result = await identityHandlers["directory.get_service_account_access"](call, input);
+		const [drives, rooms] = await Promise.all([
+			sharedDrivesOfPrincipal(call.env.DIRECTORY, result.principal_id),
+			roomsOfPrincipal(call.env.DIRECTORY, result.principal_id, SERVICE_ACCESS_LIMITS.rooms),
+		]);
+		return { ...result, shared_drives: drives, chat_rooms: rooms.rooms, chat_rooms_truncated: rooms.truncated };
 	},
 	async "directory.delete_principal"(call, input) {
 		const result = await identityHandlers["directory.delete_principal"](call, input);

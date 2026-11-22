@@ -120,6 +120,8 @@ Chat subscriptions use `chat.webhooks`. The target is you, or an agent that you 
 Drive subscriptions use `drive.webhooks`. The target is your drive, a shared drive that you belong to, or the drive of an agent that you sponsor.
 A sponsor cannot subscribe to a shared drive only because an agent belongs to it.
 The sponsor, an owner or an admin can list and delete the subscriptions of an agent.
+A [service account](../identity/README.md#service-accounts) has no webhooks: its tokens hold no webhook scope, and its sponsor cannot subscribe for it.
+A delivery to a subscription for a service account stops with `access_lost`.
 A manager of a shared drive, an owner or an admin can list and delete each subscription of that drive.
 Only the creator can delete a subscription of their own mailbox or their own drive.
 The web app does not list endpoints on Settings.

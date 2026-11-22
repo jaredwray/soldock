@@ -91,6 +91,34 @@ An agent key or an OAuth connection can hold only `account.read`, `directory.rea
 `mail.modify`, `mail.send`, `mail.webhooks`, `drive.read`, `drive.write`, `drive.share`, `drive.webhooks`, `chat.read`, `chat.write` and `chat.webhooks`.
 An agent can never manage keys or connections, create principals or change its own policy.
 
+## Service accounts
+
+A service account gives a script or a system access through the API, for example a CI pipeline or a
+nightly report. It is a member with an address, a mailbox, a drive and chat, as an agent is. In mail,
+Drive and Chat it acts as an agent, so its outbound policy applies.
+
+1. An owner or an admin opens **Admin › Members**, selects **New member**, then **Service account**.
+   The account gets a display name, an address on a mail domain, a description and a sponsor. The REST
+   and MCP operation is `directory.create_service_account`. It has no token yet.
+2. The owner or the admin opens the account and creates a token: a label, an optional description,
+   the scopes, and a lifetime of 1, 7, 30, 90 or 180 days, a custom date or Never
+   (`account.create_api_key` with `principal_id`, and `expires_in_days` or `expires_at`). The secret
+   shows once. An account can have many tokens.
+3. The script sends the token as a bearer token to REST or MCP. An expired or revoked token gets
+   `401`.
+4. The card shows each token with its creator, its end and its last use, what the account can reach
+   (`directory.get_service_account_access`), and its activity log
+   (`directory.list_service_account_activity`). **Revoke** stops a token at once
+   (`account.revoke_api_key`).
+
+A token of a service account can hold only `account.read`, `directory.read`, `mail.read`,
+`mail.modify`, `mail.send`, `drive.read`, `drive.write`, `drive.share`, `chat.read` and `chat.write`.
+It cannot manage keys, change the directory, connect through OAuth or create webhooks. Only owners and
+admins manage a service account and its tokens: its sponsor and its creator get no right from that role.
+
+An API key of a person or an agent can have a lifetime too. Without one, a key works until somebody
+revokes it.
+
 ## The MCP endpoint
 
 - URL: `https://<dock-host>/mcp` (Streamable HTTP, no sessions)

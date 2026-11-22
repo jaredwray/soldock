@@ -1,7 +1,9 @@
 import type { CreatedApiKey, CreatedWebhookEndpoint } from "@asterra/contracts";
 import { type ReactNode, useId, useRef, useState } from "react";
 import { Dialog } from "../../lib/Dialog.tsx";
+import { fullDate } from "../../lib/format.ts";
 import { Icon } from "../../lib/icons.tsx";
+import { expiryLabel } from "./ttl.ts";
 
 /** Shows the secret of a new API key. The server returns it once and never again. */
 export function SecretDialog({
@@ -11,7 +13,7 @@ export function SecretDialog({
 	children,
 }: {
 	apiKey: CreatedApiKey;
-	title?: string;
+	title?: string | undefined;
 	onClose: () => void;
 	/** More text under the key, for example what to do next. */
 	children?: ReactNode;
@@ -25,6 +27,9 @@ export function SecretDialog({
 			onClose={onClose}
 		>
 			<p className="field-hint">Scopes: {apiKey.scopes.join(", ")}</p>
+			<p className="field-hint">
+				Expires: {apiKey.expires_at ? `${expiryLabel(apiKey.expires_at)} (${fullDate(apiKey.expires_at)})` : "Never"}
+			</p>
 			{children}
 		</OneTimeSecretDialog>
 	);

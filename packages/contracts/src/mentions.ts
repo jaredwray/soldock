@@ -11,7 +11,7 @@
 /** The fields of a principal that a mention uses. */
 export interface MentionPerson {
 	id: string;
-	kind: "human" | "agent";
+	kind: "human" | "agent" | "service";
 	display_name: string;
 	address: string;
 	archived_at: string | null;

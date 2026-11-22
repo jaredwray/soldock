@@ -72,14 +72,20 @@ export { ApiError, type ClientOptions, createClient, type FetchLike } from "./cl
 export { Address, EmailAddress, prefixedId, Timestamp } from "./common.ts";
 export {
 	AllowlistEntry,
+	API_KEY_LIMITS,
+	API_KEY_TTL_DAYS,
 	ApiKey,
 	CreatedApiKey,
 	commaListEntries,
+	Description,
 	DIRECTORY_LIMITS,
 	DirectoryEntry,
 	DisplayName,
 	OutboundPolicy,
 	Principal,
+	SERVICE_ACCESS_LIMITS,
+	SERVICE_ACTIVITY_LIMITS,
+	ServiceActivityEntry,
 } from "./directory.ts";
 export {
 	DOC_IMAGE_LAYOUTS,
@@ -169,6 +175,7 @@ export {
 } from "./mentions.ts";
 export { OAUTH_LIMITS, OAuthAuthorization, OAuthGrant } from "./oauth.ts";
 export {
+	type ActorKind,
 	COMMON_ERRORS,
 	defineOperation,
 	type HttpMethod,
@@ -199,7 +206,7 @@ export {
 	resources,
 	templateVars,
 } from "./resources.ts";
-export { AGENT_SCOPES, ALL_SCOPES, isScope, SCOPES, type Scope } from "./scopes.ts";
+export { AGENT_SCOPES, ALL_SCOPES, isScope, SCOPES, type Scope, SERVICE_SCOPES } from "./scopes.ts";
 export { SETUP_TOKEN_MIN_LENGTH, SetupInput, SetupResult, SetupStatus, SetupVerifyResult } from "./setup.ts";
 export {
 	CELL_ALIGNS,

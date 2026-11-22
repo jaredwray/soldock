@@ -738,7 +738,7 @@ export const listRooms = defineOperation({
 	].join(" "),
 	http: { method: "GET", path: "/api/v1/chat/rooms" },
 	scopes: ["chat.read"],
-	callers: ["human", "agent"],
+	callers: ["human", "agent", "service"],
 	annotations: READ,
 	input: z.strictObject({
 		view: z.enum(["joined", "public", "starred"]).default("joined"),
@@ -765,7 +765,7 @@ export const createRoom = defineOperation({
 	].join(" "),
 	http: { method: "POST", path: "/api/v1/chat/rooms" },
 	scopes: ["chat.write"],
-	callers: ["human", "agent"],
+	callers: ["human", "agent", "service"],
 	annotations: CREATE,
 	input: z.strictObject({
 		kind: z.enum(["public", "private"]),
@@ -784,7 +784,7 @@ export const openDm = defineOperation({
 		"Returns the room for direct messages between you and principal_id, and creates it when it does not exist. You and that principal have one such room, so a second call returns the same room. Then post with chat.post_message.",
 	http: { method: "POST", path: "/api/v1/chat/dms" },
 	scopes: ["chat.write"],
-	callers: ["human", "agent"],
+	callers: ["human", "agent", "service"],
 	annotations: CHANGE,
 	input: z.strictObject({ principal_id: PrincipalId }),
 	output: z.object({ room: ChatRoom }),
@@ -798,7 +798,7 @@ export const getRoom = defineOperation({
 		"Returns the room and each member with their role. You can get a public room without being a member. A private room and a direct message exist for their members only.",
 	http: { method: "GET", path: "/api/v1/chat/rooms/{room_id}" },
 	scopes: ["chat.read"],
-	callers: ["human", "agent"],
+	callers: ["human", "agent", "service"],
 	annotations: READ,
 	input: z.strictObject({ room_id: RoomId }),
 	output: z.object({
@@ -817,7 +817,7 @@ export const updateRoom = defineOperation({
 		"Sets a new name, a new topic, or the two. An empty topic removes the topic. Only the owner of the room can do this. A direct message has no name and no topic.",
 	http: { method: "POST", path: "/api/v1/chat/rooms/{room_id}/update" },
 	scopes: ["chat.write"],
-	callers: ["human", "agent"],
+	callers: ["human", "agent", "service"],
 	annotations: CHANGE,
 	input: z
 		.strictObject({ room_id: RoomId, name: RoomName.optional(), topic: RoomTopic.optional() })
@@ -833,7 +833,7 @@ export const joinRoom = defineOperation({
 		"Makes you a member of a public room. You can then read its messages, also the messages from before, and post. A private room refuses: a member must add you with chat.add_members. A second call changes nothing.",
 	http: { method: "POST", path: "/api/v1/chat/rooms/{room_id}/join" },
 	scopes: ["chat.write"],
-	callers: ["human", "agent"],
+	callers: ["human", "agent", "service"],
 	annotations: CHANGE,
 	input: z.strictObject({ room_id: RoomId }),
 	output: z.object({ room: ChatRoom }),
@@ -846,7 +846,7 @@ export const addMembers = defineOperation({
 	description: `Makes each principal a member of the room. Each member of a room can add members. A principal that is a member already is skipped. A room has at most ${CHAT_LIMITS.membersPerRoom} members. A direct message keeps its two members. ${MEMBERS_ONLY}`,
 	http: { method: "POST", path: "/api/v1/chat/rooms/{room_id}/members" },
 	scopes: ["chat.write"],
-	callers: ["human", "agent"],
+	callers: ["human", "agent", "service"],
 	annotations: CHANGE,
 	input: z.strictObject({
 		room_id: RoomId,
@@ -870,7 +870,7 @@ export const removeMember = defineOperation({
 	].join(" "),
 	http: { method: "DELETE", path: "/api/v1/chat/rooms/{room_id}/members/{principal_id}" },
 	scopes: ["chat.write"],
-	callers: ["human", "agent"],
+	callers: ["human", "agent", "service"],
 	annotations: REMOVE,
 	input: z.strictObject({ room_id: RoomId, principal_id: PrincipalId }),
 	output: z.object({ removed: z.boolean() }),
@@ -891,7 +891,7 @@ export const listMessages = defineOperation({
 	].join(" "),
 	http: { method: "GET", path: "/api/v1/chat/rooms/{room_id}/messages" },
 	scopes: ["chat.read"],
-	callers: ["human", "agent"],
+	callers: ["human", "agent", "service"],
 	annotations: READ,
 	input: z
 		.strictObject({
@@ -927,7 +927,7 @@ export const postMessage = defineOperation({
 	description: `Adds a message to the room. ${FORMS_NOTE} The room is then read for you, and unread for each other member. ${FILES_NOTE} ${THREADS} ${MENTIONS} ${MEMBERS_ONLY} ${RATE_LIMIT}`,
 	http: { method: "POST", path: "/api/v1/chat/rooms/{room_id}/messages" },
 	scopes: ["chat.write"],
-	callers: ["human", "agent"],
+	callers: ["human", "agent", "service"],
 	annotations: CREATE,
 	input: z
 		.strictObject({
@@ -958,7 +958,7 @@ export const downloadChatFile = defineOperation({
 	].join(" "),
 	http: { method: "GET", path: "/api/v1/chat/rooms/{room_id}/messages/{message_id}/files/{item_id}" },
 	scopes: ["chat.read"],
-	callers: ["human", "agent"],
+	callers: ["human", "agent", "service"],
 	annotations: READ,
 	input: z.strictObject({
 		room_id: RoomId,
@@ -993,7 +993,7 @@ export const removeLinkPreview = defineOperation({
 		"Removes the preview of one link of a message that you wrote, or of each link without url. The link stays in the text. The preview does not come back, also after an edit that keeps the link. A second call changes nothing.",
 	http: { method: "POST", path: "/api/v1/chat/rooms/{room_id}/messages/{message_id}/link-previews/remove" },
 	scopes: ["chat.write"],
-	callers: ["human", "agent"],
+	callers: ["human", "agent", "service"],
 	annotations: { readOnly: false, destructive: true, idempotent: true, openWorld: false },
 	input: z.strictObject({
 		room_id: RoomId,
@@ -1011,7 +1011,7 @@ export const downloadLinkImage = defineOperation({
 		"Returns the picture of the preview of a link as base64. The server stored it when it fetched the page, so the site of the link never sees who reads the message. Only a member of the room can get it. It is content from outside the organization.",
 	http: { method: "GET", path: "/api/v1/chat/rooms/{room_id}/messages/{message_id}/link-previews/image" },
 	scopes: ["chat.read"],
-	callers: ["human", "agent"],
+	callers: ["human", "agent", "service"],
 	annotations: READ,
 	input: z.strictObject({ room_id: RoomId, message_id: MessageId, url: z.string().max(2048) }),
 	output: z.object({
@@ -1039,7 +1039,7 @@ export const listReplies = defineOperation({
 	].join(" "),
 	http: { method: "GET", path: "/api/v1/chat/rooms/{room_id}/messages/{message_id}/replies" },
 	scopes: ["chat.read"],
-	callers: ["human", "agent"],
+	callers: ["human", "agent", "service"],
 	annotations: READ,
 	input: z
 		.strictObject({
@@ -1086,7 +1086,7 @@ export const followThread = defineOperation({
 	].join(" "),
 	http: { method: "POST", path: "/api/v1/chat/rooms/{room_id}/messages/{message_id}/follow" },
 	scopes: ["chat.write"],
-	callers: ["human", "agent"],
+	callers: ["human", "agent", "service"],
 	annotations: CHANGE,
 	input: z.strictObject({ room_id: RoomId, message_id: MessageId, following: z.boolean() }),
 	output: z.object({ follow: ChatThreadFollow }),
@@ -1119,7 +1119,7 @@ export const listThreads = defineOperation({
 	].join(" "),
 	http: { method: "GET", path: "/api/v1/chat/threads" },
 	scopes: ["chat.read"],
-	callers: ["human", "agent"],
+	callers: ["human", "agent", "service"],
 	annotations: READ,
 	input: z.strictObject({
 		filter: z.enum(["all", "unread"]).default("all"),
@@ -1173,7 +1173,7 @@ export const listAddressed = defineOperation({
 	].join(" "),
 	http: { method: "GET", path: "/api/v1/chat/addressed" },
 	scopes: ["chat.read"],
-	callers: ["human", "agent"],
+	callers: ["human", "agent", "service"],
 	annotations: READ,
 	input: z.strictObject({
 		cursor: z.string().max(500).optional(),
@@ -1199,7 +1199,7 @@ export const markThreadRead = defineOperation({
 	].join(" "),
 	http: { method: "POST", path: "/api/v1/chat/rooms/{room_id}/messages/{message_id}/read" },
 	scopes: ["chat.write"],
-	callers: ["human", "agent"],
+	callers: ["human", "agent", "service"],
 	annotations: CHANGE,
 	input: z.strictObject({ room_id: RoomId, message_id: MessageId, seq: z.number().int().min(0).optional() }),
 	output: z.object({ follow: ChatThreadFollow }),
@@ -1252,7 +1252,7 @@ export const searchMessages = defineOperation({
 	].join(" "),
 	http: { method: "GET", path: "/api/v1/chat/search" },
 	scopes: ["chat.read"],
-	callers: ["human", "agent"],
+	callers: ["human", "agent", "service"],
 	annotations: READ,
 	input: z.strictObject({
 		query: z.string().trim().min(1).max(CHAT_LIMITS.searchQueryChars),
@@ -1276,7 +1276,7 @@ export const editMessage = defineOperation({
 	description: `Replaces the content of a message that you wrote. ${FORMS_NOTE} The message keeps its place, and edited_at shows the time of the change. A deleted message cannot change. An edit keeps the mentions of a group (@here, @channel) that the message has. A new mention of a group follows the rule of chat.post_message. Set file_ids to change the files: the list replaces the files of the message, and an empty list removes each file. Set cards to replace or clear cards. Without text, an edit with file_ids or cards keeps the text. A file that leaves each message of the room leaves the room: its members cannot download it after that. ${RATE_LIMIT}`,
 	http: { method: "POST", path: "/api/v1/chat/rooms/{room_id}/messages/{message_id}/edit" },
 	scopes: ["chat.write"],
-	callers: ["human", "agent"],
+	callers: ["human", "agent", "service"],
 	annotations: CHANGE,
 	input: z
 		.strictObject({
@@ -1298,7 +1298,7 @@ export const deleteMessage = defineOperation({
 		"Deletes the text of a message. This cannot be undone. The message keeps its place, with deleted: true. You can delete a message that you wrote. The owner of a room can delete each message of the room.",
 	http: { method: "DELETE", path: "/api/v1/chat/rooms/{room_id}/messages/{message_id}" },
 	scopes: ["chat.write"],
-	callers: ["human", "agent"],
+	callers: ["human", "agent", "service"],
 	annotations: REMOVE,
 	input: z.strictObject({ room_id: RoomId, message_id: MessageId }),
 	output: z.object({
@@ -1351,7 +1351,7 @@ export const addReaction = defineOperation({
 	description: `Adds your reaction with one emoji to a message. A second call with the same emoji changes nothing. A message can have reactions with ${CHAT_LIMITS.reactionEmoji} different emoji at most. A deleted message takes no reaction. ${MEMBERS_ONLY} ${RATE_LIMIT}`,
 	http: { method: "POST", path: "/api/v1/chat/rooms/{room_id}/messages/{message_id}/reactions" },
 	scopes: ["chat.write"],
-	callers: ["human", "agent"],
+	callers: ["human", "agent", "service"],
 	annotations: CHANGE,
 	input: z.strictObject({ room_id: RoomId, message_id: MessageId, emoji: Emoji }),
 	output: z.object({ message: ChatMessage }),
@@ -1364,7 +1364,7 @@ export const removeReaction = defineOperation({
 	description: `Removes your reaction with one emoji from a message. A call for a reaction that you do not have changes nothing. ${MEMBERS_ONLY} ${RATE_LIMIT}`,
 	http: { method: "DELETE", path: "/api/v1/chat/rooms/{room_id}/messages/{message_id}/reactions" },
 	scopes: ["chat.write"],
-	callers: ["human", "agent"],
+	callers: ["human", "agent", "service"],
 	annotations: CHANGE,
 	input: z.strictObject({ room_id: RoomId, message_id: MessageId, emoji: Emoji }),
 	output: z.object({ message: ChatMessage }),
@@ -1378,7 +1378,7 @@ export const markRead = defineOperation({
 		"Sets your read marker to the message seq. Without seq, the marker goes to the newest message, so the room is read. A lower seq makes the room unread again from the message after it. Only you see your marker. chat.get_room has the new marker at once. chat.list_rooms has it on each of your devices when the call returns, or a moment later when the update of your list fails.",
 	http: { method: "POST", path: "/api/v1/chat/rooms/{room_id}/read" },
 	scopes: ["chat.write"],
-	callers: ["human", "agent"],
+	callers: ["human", "agent", "service"],
 	annotations: CHANGE,
 	input: z.strictObject({ room_id: RoomId, seq: z.number().int().min(0).optional() }),
 	output: z.object({ last_read_seq: z.number().int(), unread: z.boolean() }),
@@ -1397,7 +1397,7 @@ export const starRoom = defineOperation({
 	].join(" "),
 	http: { method: "POST", path: "/api/v1/chat/rooms/{room_id}/star" },
 	scopes: ["chat.write"],
-	callers: ["human", "agent"],
+	callers: ["human", "agent", "service"],
 	annotations: CHANGE,
 	input: z.strictObject({ room_id: RoomId, starred: z.boolean() }),
 	output: z.object({ room: ChatRoom }),

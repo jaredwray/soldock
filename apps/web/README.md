@@ -286,15 +286,20 @@ MCP clients. The app has no UI-only path.
     The parts load their data, so the card renders them only after the first open.
     The parts stay after the card closes, so a form keeps its text.
     A policy choice that is not saved shows a status line. The chip keeps the saved policy.
-    A person shows initials in the avatar. An agent shows the agent icon.
-    The chips show the role of a person, or **Agent** and the outbound policy.
+    A person shows initials in the avatar. An agent shows the agent icon. A service account shows the settings icon.
+    The chips show the role of a person, or **Agent** or **Service account** and the outbound policy.
+    The buttons **All**, **People**, **Agents** and **Service accounts** above the list keep one kind, with the count of each kind (`aria-pressed`).
+    People come first, then agents, then service accounts.
     An archived account has an **Archived** chip. Your name shows **(you)**.
     A banner above the list shows the full URL of `/mcp`, with a copy button.
     OAuth is the main way to add an agent. The client needs only this URL.
     A member who sponsors an agent sees only those agents. The section title is then **Your agents**.
     That member does not get the forms that change an account.
-    - **New person or agent**, above the list, opens a dialog for an owner or an admin.
-      The first API key of a new principal shows once, with a copy button.
+    - **New member**, above the list, opens a dialog for an owner or an admin.
+      The kinds are Person, Agent and Service account, with one line that says what each kind is for.
+      The first API key of a new person or agent shows once, with a copy button.
+      A service account (`directory.create_service_account`) gets a name, an address, a description and a sponsor, and no key.
+      A toast tells the admin to open it to add a token.
       A credential cannot grant a scope that it does not hold.
       The form offers only the scopes of the session.
       For an agent, the form also applies `AGENT_SCOPES`.
@@ -319,6 +324,15 @@ MCP clients. The app has no UI-only path.
       The confirmation says that delete cannot be undone.
       For a person who sponsors agents, the dialog names the agents.
       It tells the admin to give each agent a different sponsor first, or to archive or delete the agent.
+    - A service account card has these parts, for an owner or an admin only:
+      **Name, description and sponsor** (`directory.update_principal`, with `description`).
+      The creation time, the creator and the sponsor.
+      The outbound policy.
+      **Tokens of …**: the API key manager with the word "token", `SERVICE_SCOPES`, a lifetime of 90 days first, and the creator and the revoker of each token.
+      **Access** (`directory.get_service_account_access`): the scopes of each live token, the own mailbox and drive, the team mailboxes, the shared drives and the rooms with the role.
+      **Activity** (`directory.list_service_account_activity`): a table of the newest entries, a filter for one token, **Refresh** and **Load more**.
+      A create or a revoke of a token loads the access and the activity again.
+      Each part shows its loading, empty and error states, and an error has **Try again**.
     - An agent card also has the outbound policy, the connected apps, the webhooks and the API keys.
       The policy sets the mail recipients and the webhook hosts (`directory.update_agent_policy`).
       **Apps connected as …** uses `oauth.list_grants`, **Add scopes** (`oauth.add_grant_scopes`) and Revoke (`oauth.revoke_grant`).
@@ -404,7 +418,9 @@ MCP clients. The app has no UI-only path.
   (list, create, revoke) and sign out. Settings does not list webhooks. A new password
   (`account.set_password`) ends your sessions on other browsers. A new key can hold only the scopes
   of the session. A new key does not get `account.keys`, `directory.write`, `mail.webhooks`, `chat.webhooks` or `drive.webhooks`
-  unless the person selects them.
+  unless the person selects them. A new key has a label, an optional description and a lifetime: 1, 7,
+  30, 90 or 180 days, a custom last day (from tomorrow to 729 days), or Never (`settings/ttl.ts`).
+  The list shows the end of each key, and **Expired** or **Revoked**. The secret dialog shows the end.
   - The page is one column of 720px. Each part has a heading and a short muted line, and its content
     is in a card on the surface. The account shows as rows with the name at the left and the value
     at the right. A key shows its label above its scopes.
@@ -1672,14 +1688,14 @@ Each view uses one search query: Inbox `in:inbox`, Starred `is:starred`, Sent `i
 | [`src/shell/`](src/shell/) | The signed-in frame: the rail, the account menu with the Appearance choice, the search box, the header row of a page, and the header of a sidebar |
 | [`src/features/auth/`](src/features/auth/) | The sign-in page and the `/auth/*` calls |
 | [`src/features/mail/`](src/features/mail/) | Mail: data hooks, sidebar, toolbar, thread list, thread view, composer and shortcuts |
-| [`src/features/admin/`](src/features/admin/) | Admin: the side navigation, the directory, the create form, the MCP endpoint banner, the agent panels with their OAuth connections, the sign-in help, the team mailboxes and the email domains |
+| [`src/features/admin/`](src/features/admin/) | Admin: the side navigation, the directory, the create form, the MCP endpoint banner, the agent panels with their OAuth connections, the service account panels (details, access and activity), the sign-in help, the team mailboxes and the email domains |
 | [`src/features/connect/`](src/features/connect/) | The OAuth approval page, and the pure rules of its first values in `connect.ts` |
 | [`src/features/drive/`](src/features/drive/) | Drive: the sidebar, the item list, the menus and dialogs (new folder, rename, move, share, versions, preview), the data hooks, the pure rules in `model.ts`, the upload queue in `uploadQueue.ts`, and the document header that the editors share |
 | [`src/features/docs/`](src/features/docs/) | Docs: the schema, the commands, the autosave, the paste of Markdown (`markdownPaste.ts`), the editor and the page. For images: the store of the images of a doc (`images.ts`), the geometry (`imageModel.ts`), the commands (`imageCommands.ts`), the view of an image (`imageView.ts`), the plugin for a drop and a paste (`imagePlugin.ts`), the toolbar and the dialogs |
 | [`src/features/sheets/`](src/features/sheets/) | Sheets: the store with the tabs and the save queue, the toolbar, the grid, the formula bar, the tab bar, and the pure modules for cell names, the selection, clipboard text, the cells of the grid, the formats of cells and the formulas of the Σ menu |
 | [`src/features/chat/`](src/features/chat/) | Chat: the sidebar, the room view, the profile view, the dialogs (new room, public rooms, new direct message, members, name and topic), the message box with its toolbar, Markdown shortcuts and suggestions of a mention (`ChatComposer.tsx`, `composerSchema.ts`, `composerCommands.ts`), the files of a new message (`attachments.ts`, `ComposerFiles.tsx`, the drop in `fileDrop.ts`), the files and the link previews of a message (`MessageFiles.tsx`), the focus after the X of a chip (`focusAfterRemove.ts`), the data hooks, the pure rules in `model.ts`, the rules of mentions in `mentions.ts`, the part of the history that the page keeps in `history.ts`, the page reads in `pager.ts`, the last list of each room in `roomCache.ts`, the drafts in `drafts.ts`, the sends whose message the room has in `settle.ts`, and the sync of the open room in `sync.ts` |
-| [`src/features/settings/`](src/features/settings/) | Settings, the password and two-step verification cards, the TOTP setup panel, the API key manager, the event check boxes, the webhook list of one target, and the one-time secret dialog |
-| [`src/lib/`](src/lib/) | The API client, the router, the dialog, the select, toasts, icons (with the Iconoir files in `iconoir/`), the appearance, format helpers, the hook for the people and agents of the organization, the page chunks with the reload after a deploy, the upload of a file to Drive (`upload.ts`), the limit of the uploads and the small pictures that run at the same time (`limiter.ts`), and the small picture of a picture or a video (`filePreview.ts`) |
+| [`src/features/settings/`](src/features/settings/) | Settings, the password and two-step verification cards, the TOTP setup panel, the API key manager with the lifetime of a key (`ttl.ts`), the event check boxes, the webhook list of one target, and the one-time secret dialog |
+| [`src/lib/`](src/lib/) | The API client, the router, the dialog, the select, toasts, icons (with the Iconoir files in `iconoir/`), the appearance, format helpers, the names of the kinds of principals (`principalKind.ts`), the hook for the people and agents of the organization, the page chunks with the reload after a deploy, the upload of a file to Drive (`upload.ts`), the limit of the uploads and the small pictures that run at the same time (`limiter.ts`), and the small picture of a picture or a video (`filePreview.ts`) |
 | [`src/styles.css`](src/styles.css) | Plain CSS with custom properties. The `dark` class on `<html>` selects the dark colors. See [Design](#design) |
 | [`test/`](test/) | Vitest tests for the pure modules: routes, view queries, label rows, compose, rich text, editor commands, actions and shortcuts, the Drive rules, the Docs schema, commands, autosave and images, the Sheets cells, clipboard text, formats, Σ formulas and save queue, the message list rules, the mentions, the room sync and the files of a new message of Chat, the upload in parts, the limit of the uploads, the upload queue of Drive and the small pictures, the first values of the OAuth approval page, the icons and the appearance rules |
 

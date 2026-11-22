@@ -1,13 +1,18 @@
 import { DIRECTORY_LIMITS, type DirectoryEntry, type Principal } from "@asterra/contracts";
 import { useEffect, useState } from "react";
 import { api } from "./api.ts";
+import { kindTag } from "./principalKind.ts";
 import type { SelectOption } from "./Select.tsx";
 
-/** A person or an agent as an option of a `Select`: the name, "(agent)" for an agent, and the address. */
+/**
+ * A person, an agent or a service account as an option of a `Select`: the name, "(agent)" or
+ * "(service account)" when it is not a person, and the address.
+ */
 export function principalOption(principal: Principal): SelectOption<string> {
+	const tag = kindTag(principal.kind);
 	return {
 		value: principal.id,
-		label: principal.kind === "agent" ? `${principal.display_name} (agent)` : principal.display_name,
+		label: tag ? `${principal.display_name} (${tag})` : principal.display_name,
 		description: principal.address,
 	};
 }

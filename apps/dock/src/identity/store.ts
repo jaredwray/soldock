@@ -1,6 +1,7 @@
-import { AGENT_SCOPES, ALL_SCOPES, nameAliasParts, type Scope, searchFold } from "@asterra/contracts";
+import { AGENT_SCOPES, ALL_SCOPES, nameAliasParts, type Scope, SERVICE_SCOPES, searchFold } from "@asterra/contracts";
 import { log, newId, OperationError, randomToken, sha256Hex } from "../platform/index.ts";
 
+/** The kind that the directory stores. A service account is an agent row with `service`. */
 export type PrincipalKind = "human" | "agent";
 export type OrgRole = "owner" | "admin" | "member";
 export type OutboundMode = "internal-only" | "allowlist" | "any";
@@ -22,22 +23,38 @@ export interface PrincipalRecord {
 	created_at: string;
 	/** Set while the principal is archived: it cannot sign in or use a credential. */
 	archived_at: string | null;
+	/**
+	 * True for a service account: an agent row whose tokens only owners and admins manage, with the
+	 * smaller ceiling `SERVICE_SCOPES`. Mail, Drive and Chat see an agent.
+	 */
+	service: boolean;
+	/** What a service account is for. */
+	description: string | null;
+	/** Who created the principal. A record only: it gives no rights. */
+	created_by: string | null;
 }
 
 export interface ApiKeyRecord {
 	id: string;
 	principal_id: string;
 	label: string;
+	description: string | null;
 	scopes: Scope[];
+	created_by: string;
 	created_at: string;
 	last_used_at: string | null;
+	/** When the key stops. Null: it has no end. */
+	expires_at: string | null;
 	revoked_at: string | null;
+	revoked_by: string | null;
 }
 
-interface PrincipalRow extends Omit<PrincipalRecord, "outbound_allowlist" | "password_set" | "totp_enabled"> {
+interface PrincipalRow
+	extends Omit<PrincipalRecord, "outbound_allowlist" | "password_set" | "totp_enabled" | "service"> {
 	outbound_allowlist: string;
 	password_set: number;
 	totp_enabled: number;
+	service: number;
 }
 
 interface ApiKeyRow extends Omit<ApiKeyRecord, "scopes"> {
@@ -49,7 +66,8 @@ interface ApiKeyRow extends Omit<ApiKeyRecord, "scopes"> {
  * A deleted principal has no address, so each query with the primary address leaves it out.
  */
 const PRINCIPAL_COLUMNS = `p.id, p.kind, p.display_name, p.org_role, p.sponsor_id, p.outbound_mode, p.outbound_allowlist,
-	p.password_hash IS NOT NULL AS password_set, p.totp_secret IS NOT NULL AS totp_enabled, p.created_at, p.archived_at`;
+	p.password_hash IS NOT NULL AS password_set, p.totp_secret IS NOT NULL AS totp_enabled, p.created_at, p.archived_at,
+	p.service, p.description, p.created_by`;
 
 const PRINCIPAL_SELECT = `SELECT ${PRINCIPAL_COLUMNS}, a.address
 	FROM principals p JOIN addresses a ON a.principal_id = p.id AND a.is_primary = 1`;
@@ -57,7 +75,19 @@ const PRINCIPAL_SELECT = `SELECT ${PRINCIPAL_COLUMNS}, a.address
 /** The start of a select of principals with their primary address: the tables and the joins follow. */
 const PRINCIPAL_SELECT_FROM = `SELECT ${PRINCIPAL_COLUMNS}, a.address FROM`;
 
-const API_KEY_SELECT = "SELECT id, principal_id, label, scopes, created_at, last_used_at, revoked_at FROM api_keys";
+const API_KEY_SELECT = `SELECT id, principal_id, label, description, scopes, created_by, created_at, last_used_at, expires_at,
+	revoked_at, revoked_by FROM api_keys`;
+
+/** The condition of a key that did not expire, with the time of now as parameter `?n`. */
+export function keyNotExpired(n: number, table = ""): string {
+	const column = table ? `${table}.expires_at` : "expires_at";
+	return `(${column} IS NULL OR ${column} > ?${n})`;
+}
+
+/** True when the key has an end and the end is past. */
+export function keyExpired(key: Pick<ApiKeyRecord, "expires_at">, now = Date.now()): boolean {
+	return key.expires_at !== null && Date.parse(key.expires_at) <= now;
+}
 
 /** The prefix of every API key secret, so secret scanners and people can recognize one. */
 export const API_KEY_PREFIX = "sdk_";
@@ -71,6 +101,7 @@ function toPrincipal(row: PrincipalRow): PrincipalRecord {
 		outbound_allowlist: JSON.parse(row.outbound_allowlist) as string[],
 		password_set: row.password_set === 1,
 		totp_enabled: row.totp_enabled === 1,
+		service: row.service === 1,
 	};
 }
 
@@ -136,9 +167,13 @@ export function domainOf(address: string): string {
 	return address.slice(address.lastIndexOf("@") + 1).toLowerCase();
 }
 
-/** The scopes that a key for this kind of principal can hold at most. */
-export function scopeCeiling(kind: PrincipalKind): readonly Scope[] {
-	return kind === "agent" ? AGENT_SCOPES : ALL_SCOPES;
+/**
+ * The scopes that a key for this principal can hold at most. A service account holds less than an agent:
+ * no keys, no directory changes and no webhooks.
+ */
+export function scopeCeiling(principal: Pick<PrincipalRecord, "kind" | "service">): readonly Scope[] {
+	if (principal.service) return SERVICE_SCOPES;
+	return principal.kind === "agent" ? AGENT_SCOPES : ALL_SCOPES;
 }
 
 /** True while the directory has no principal: first-run setup has not run. */
@@ -372,6 +407,8 @@ export async function listPrincipalPage(
 		activeOnly: boolean;
 		/** The id of a sponsor, for the agents of that sponsor only. */
 		sponsorId: string | null;
+		/** Only the humans, only the agents, or only the service accounts. */
+		kind: "human" | "agent" | "service" | null;
 		/** True for the order of the best match first (see `directory.list_principals`). It has one page. */
 		byMatch: boolean;
 		after: DirectoryPosition | null;
@@ -394,6 +431,8 @@ export async function listPrincipalPage(
 	}
 	if (options.activeOnly) where.push("p.archived_at IS NULL");
 	if (options.sponsorId !== null) where.push(`p.sponsor_id = ${bind(options.sponsorId)}`);
+	if (options.kind === "service") where.push("p.service = 1");
+	else if (options.kind !== null) where.push(`p.kind = ${bind(options.kind)} AND p.service = 0`);
 	if (options.after !== null) {
 		const [kind, name, id] = options.after;
 		where.push(`(p.kind, p.display_name, p.id) > (${bind(kind)}, ${bind(name)}, ${bind(id)})`);
@@ -449,6 +488,12 @@ export interface NewPrincipal {
 	sponsor_id: string | null;
 	/** The stored form of the first password (`hashPassword`). Humans only. */
 	password_hash: string | null;
+	/** True for a service account. It must be an agent. */
+	service?: boolean;
+	/** What a service account is for. */
+	description?: string | null;
+	/** Who creates the principal. Null for the owner from setup. */
+	created_by?: string | null;
 }
 
 /**
@@ -487,6 +532,9 @@ export interface NewApiKey {
 	label: string;
 	scopes: readonly Scope[];
 	created_by: string | null;
+	description?: string | null;
+	/** When the key stops, as an ISO time. Null or missing: it has no end. */
+	expires_at?: string | null;
 }
 
 /** Options of `createPrincipal`. */
@@ -534,6 +582,7 @@ export async function createPrincipal(
 	const aliases = nameAliasParts(principal.display_name);
 	const secret = key ? `${API_KEY_PREFIX}${randomToken(32)}` : null;
 	const outboundMode: OutboundMode | null = principal.kind === "agent" ? "internal-only" : null;
+	const service = principal.kind === "agent" && principal.service === true;
 	const guard = `WHERE NOT EXISTS (SELECT 1 FROM setup_lock WHERE token IS NOT NULL)${options.onlyIfEmpty ? " AND NOT EXISTS (SELECT 1 FROM principals)" : ""}`;
 	const condition = options.condition ? ` AND ${options.condition.sql}` : "";
 	try {
@@ -551,8 +600,8 @@ export async function createPrincipal(
 			db
 				.prepare(
 					`INSERT INTO principals (id, kind, display_name, org_role, sponsor_id, outbound_mode, outbound_allowlist,
-					password_hash, created_at)
-					SELECT ?, ?, ?, ?, ?, ?, '[]', ?, ? ${guard}${condition}`,
+					password_hash, created_at, service, description, created_by)
+					SELECT ?, ?, ?, ?, ?, ?, '[]', ?, ?, ?, ?, ? ${guard}${condition}`,
 				)
 				.bind(
 					id,
@@ -563,6 +612,9 @@ export async function createPrincipal(
 					outboundMode,
 					principal.kind === "human" ? principal.password_hash : null,
 					now,
+					service ? 1 : 0,
+					service ? principal.description || null : null,
+					principal.created_by ?? null,
 					...(options.condition?.params ?? []),
 				),
 			// The name aliases of the mention read, in the same transaction. A lost guard inserted no row, so
@@ -609,10 +661,14 @@ export async function createPrincipal(
 			id: keyId,
 			principal_id: id,
 			label: key.label,
+			description: null,
 			scopes: [...key.scopes],
+			created_by: key.created_by ?? id,
 			created_at: now,
 			last_used_at: null,
+			expires_at: null,
 			revoked_at: null,
+			revoked_by: null,
 		},
 		secret,
 	};
@@ -645,6 +701,8 @@ export interface PrincipalChanges {
 	display_name?: string | undefined;
 	org_role?: "admin" | "member" | undefined;
 	sponsor_id?: string | undefined;
+	/** A service account only. An empty text removes the description. */
+	description?: string | undefined;
 }
 
 /**
@@ -664,8 +722,10 @@ export async function updatePrincipal(db: D1Database, id: string, changes: Princ
 				name_folded = CASE WHEN ?1 IS NULL THEN name_folded ELSE ?7 END,
 				aliases_set = CASE WHEN ?1 IS NULL THEN aliases_set ELSE 1 END,
 				org_role = CASE WHEN kind = 'human' THEN COALESCE(?2, org_role) ELSE org_role END,
-				sponsor_id = CASE WHEN kind = 'agent' THEN COALESCE(?3, sponsor_id) ELSE sponsor_id END
+				sponsor_id = CASE WHEN kind = 'agent' THEN COALESCE(?3, sponsor_id) ELSE sponsor_id END,
+				description = CASE WHEN ?8 IS NULL THEN description ELSE NULLIF(?8, '') END
 			WHERE id = ?4 AND deleted_at IS NULL AND (?2 IS NULL OR org_role IS NOT 'owner')
+			AND (?8 IS NULL OR service = 1)
 			AND (?3 IS NULL OR EXISTS (SELECT 1 FROM principals sponsor WHERE sponsor.id = ?3 AND sponsor.kind = 'human'
 				AND sponsor.archived_at IS NULL AND sponsor.deleted_at IS NULL))
 			RETURNING id`,
@@ -678,6 +738,7 @@ export async function updatePrincipal(db: D1Database, id: string, changes: Princ
 			aliases?.first ?? null,
 			aliases?.full ?? null,
 			changes.display_name === undefined ? null : searchFold(changes.display_name),
+			changes.description ?? null,
 		)
 		.all();
 	// The rows of the update itself: D1 also counts the write of the trigger `principals_aliases_stale` in
@@ -898,21 +959,39 @@ export async function createApiKey(
 	const now = new Date().toISOString();
 	const id = newId("key");
 	const secret = `${API_KEY_PREFIX}${randomToken(32)}`;
+	const description = key.description || null;
+	const expiresAt = key.expires_at ?? null;
+	const createdBy = key.created_by ?? principalId;
 	await db
 		.prepare(
-			"INSERT INTO api_keys (id, principal_id, key_hash, label, scopes, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+			`INSERT INTO api_keys (id, principal_id, key_hash, label, scopes, created_by, created_at, description, expires_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		)
-		.bind(id, principalId, await sha256Hex(secret), key.label, JSON.stringify(key.scopes), key.created_by, now)
+		.bind(
+			id,
+			principalId,
+			await sha256Hex(secret),
+			key.label,
+			JSON.stringify(key.scopes),
+			createdBy,
+			now,
+			description,
+			expiresAt,
+		)
 		.run();
 	return {
 		key: {
 			id,
 			principal_id: principalId,
 			label: key.label,
+			description,
 			scopes: [...key.scopes],
+			created_by: createdBy,
 			created_at: now,
 			last_used_at: null,
+			expires_at: expiresAt,
 			revoked_at: null,
+			revoked_by: null,
 		},
 		secret,
 	};
@@ -931,23 +1010,38 @@ export async function getApiKey(db: D1Database, id: string): Promise<ApiKeyRecor
 	return row ? toApiKey(row) : null;
 }
 
-/** Revokes a key. Browser sessions do not come from keys, so they stay. */
-export async function revokeApiKey(db: D1Database, id: string): Promise<void> {
-	await db
-		.prepare("UPDATE api_keys SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL")
-		.bind(new Date().toISOString(), id)
+/**
+ * Revokes a key, and records who revoked it. Browser sessions do not come from keys, so they stay. Returns
+ * false when the key was revoked before: a second revoke changes nothing.
+ */
+export async function revokeApiKey(db: D1Database, id: string, revokedBy: string): Promise<boolean> {
+	const result = await db
+		.prepare("UPDATE api_keys SET revoked_at = ?, revoked_by = ? WHERE id = ? AND revoked_at IS NULL")
+		.bind(new Date().toISOString(), revokedBy, id)
 		.run();
+	return result.meta.changes === 1;
 }
 
-/** The live key with this secret, and its principal. */
+/** The live tokens of a principal: not revoked and not expired. */
+export async function liveApiKeys(db: D1Database, principalId: string): Promise<ApiKeyRecord[]> {
+	const { results } = await db
+		.prepare(
+			`${API_KEY_SELECT} WHERE principal_id = ?1 AND revoked_at IS NULL AND ${keyNotExpired(2)} ORDER BY created_at DESC`,
+		)
+		.bind(principalId, new Date().toISOString())
+		.all<ApiKeyRow>();
+	return results.map(toApiKey);
+}
+
+/** The live key with this secret, and its principal. A revoked key and an expired key are not live. */
 export async function findApiKey(
 	db: D1Database,
 	secret: string,
 ): Promise<{ key: ApiKeyRecord; principal: PrincipalRecord } | null> {
 	if (!secret.startsWith(API_KEY_PREFIX)) return null;
 	const row = await db
-		.prepare(`${API_KEY_SELECT} WHERE key_hash = ? AND revoked_at IS NULL`)
-		.bind(await sha256Hex(secret))
+		.prepare(`${API_KEY_SELECT} WHERE key_hash = ?1 AND revoked_at IS NULL AND ${keyNotExpired(2)}`)
+		.bind(await sha256Hex(secret), new Date().toISOString())
 		.first<ApiKeyRow>();
 	if (!row) return null;
 	const principal = await getPrincipal(db, row.principal_id);

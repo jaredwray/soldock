@@ -1,16 +1,16 @@
 # `identity` module
 
-> Status: **started**. The directory, team mailboxes, API keys, OAuth for agents, sign-in with a password and optional two-step
+> Status: **started**. The directory, team mailboxes, API keys with an optional lifetime, service accounts with their activity log, OAuth for agents, sign-in with a password and optional two-step
 > verification (TOTP), browser sessions for humans and first-run setup exist. Passkeys, delegated OAuth tokens for humans, groups and the audit log in R2 are not built
 > yet. Keep this README current as the module grows. It is the module's contract.
 
 | | |
 | --- | --- |
-| **Purpose** | Principals (humans, agents, groups), directory, passkeys, sessions, API keys, OAuth authorization server, `client_credentials`, authorization (`authorize()`), agent policies, audit log, `PrincipalDO`. |
+| **Purpose** | Principals (humans, agents, service accounts, groups), directory, passkeys, sessions, API keys, OAuth authorization server, `client_credentials`, authorization (`authorize()`), agent policies, audit log, `PrincipalDO`. |
 | **Owns** | D1 `directory` tables, except `chat_rooms`, `chat_members`, `chat_custom_emoji`, `chat_incoming_webhooks`, `chat_slash_commands` (`chat`) and `webhooks` and `chat_webhooks` (`webhooks`). `PrincipalDO` owns the Chat state, personal Chat views (activity, sections, saved messages, drafts, scheduled messages, reminders), notification settings and events sockets of each principal. Later: R2 `audit`. |
 | **Depends on** | `platform`. |
-| **Operations** | `chat.get_presence`, `chat.set_status`, `account.whoami`, `account.list_api_keys`, `account.create_api_key`, `account.revoke_api_key`, `account.set_password`, `account.create_totp_secret`, `account.enable_totp`, `account.disable_totp`, `directory.list_principals`, `directory.get_principals`, `directory.create_principal`, `directory.update_agent_policy`, `directory.update_principal`, `directory.archive_principal`, `directory.restore_principal`, `directory.delete_principal`, `directory.list_mail_domains`, `directory.add_mail_domain`, `directory.remove_mail_domain`, `directory.list_team_mailboxes`, `directory.create_team_mailbox`, `directory.update_team_mailbox`, `directory.add_team_mailbox_member`, `directory.remove_team_mailbox_member`, `oauth.get_authorization`, `oauth.approve_authorization`, `oauth.deny_authorization`, `oauth.list_grants`, `oauth.revoke_grant`, `oauth.add_grant_scopes` |
-| **Data inventory** | D1 `directory`: `principals` (with `password_hash`, `totp_secret`, `totp_pending_secret`, `totp_last_step`, `sign_in_failures`, `sign_in_locked_until`, `chat_online_until`, `chat_active_until`, `chat_status_json`, `archived_at`, `deleted_at`, and the name aliases of a Chat mention `alias_first`, `alias_full` and `aliases_set`, and the name in the form of a search `name_folded`, which come from the display name), `addresses`, `api_keys`, `sessions`, `setup_lock`, `mail_domains`, `team_mailboxes` (name, address, creator), `team_mailbox_members` (mailbox, principal, who added the member), `oauth_clients` (registered MCP clients: name, URI, redirect URIs), `oauth_requests` (authorization requests: client, redirect URI, state, PKCE challenge, scopes, approval, code hash, the grant that the code made), `oauth_grants` (approved connections: client, principal, scopes, approver, hashes of the access token and of the current, previous and consumed refresh tokens) ([`migrations/`](../../migrations/)). The TOTP secrets are stored as plain base32 in D1, because a server must read them to check a code. Unused and empty since migration `0004`, kept for the Worker from before it: `principals.sign_in_email` and `sign_in_codes`. A later migration removes them. `PrincipalDO` (one for each principal, keyed by the principal id): tables `chat_rooms`, `chat_threads`, `chat_addressed`, `chat_activity`, `chat_sections`, `chat_section_rooms`, `chat_saved_messages`, `chat_drafts`, `chat_scheduled_messages`, `chat_reminders`, `chat_notification_levels`, `chat_push_devices`, and `chat_notification_sounds` (see [The object of a principal](#the-object-of-a-principal)), table `meta` (schema version, the owner id in `presence_principal`, `chat_seeded` after the first fill, and `chat_threads_filled` after the first fill of the threads), and the hibernatable sockets of `/ws/events` (not in the database: each keeps the reference to its credential, the time of its open and of its last check, and its latest activity report; no backup). Backups: not built yet. |
+| **Operations** | `chat.get_presence`, `chat.set_status`, `account.whoami`, `account.list_api_keys`, `account.create_api_key`, `account.revoke_api_key`, `account.set_password`, `account.create_totp_secret`, `account.enable_totp`, `account.disable_totp`, `directory.list_principals`, `directory.get_principals`, `directory.create_principal`, `directory.update_agent_policy`, `directory.update_principal`, `directory.archive_principal`, `directory.restore_principal`, `directory.delete_principal`, `directory.list_mail_domains`, `directory.add_mail_domain`, `directory.remove_mail_domain`, `directory.list_team_mailboxes`, `directory.create_team_mailbox`, `directory.update_team_mailbox`, `directory.add_team_mailbox_member`, `directory.remove_team_mailbox_member`, `directory.create_service_account`, `directory.list_service_account_activity`, `directory.get_service_account_access`, `oauth.get_authorization`, `oauth.approve_authorization`, `oauth.deny_authorization`, `oauth.list_grants`, `oauth.revoke_grant`, `oauth.add_grant_scopes` |
+| **Data inventory** | D1 `directory`: `principals` (with `password_hash`, `totp_secret`, `totp_pending_secret`, `totp_last_step`, `sign_in_failures`, `sign_in_locked_until`, `chat_online_until`, `chat_active_until`, `chat_status_json`, `archived_at`, `deleted_at`, and the name aliases of a Chat mention `alias_first`, `alias_full` and `aliases_set`, and the name in the form of a search `name_folded`, which come from the display name, and `service`, `description` and `created_by` of [service accounts](#service-accounts)), `addresses`, `api_keys` (with `expires_at`, `description` and `revoked_by`), `sessions`, `setup_lock`, `mail_domains`, `team_mailboxes` (name, address, creator), `team_mailbox_members` (mailbox, principal, who added the member), `oauth_clients` (registered MCP clients: name, URI, redirect URIs), `oauth_requests` (authorization requests: client, redirect URI, state, PKCE challenge, scopes, approval, code hash, the grant that the code made), `oauth_grants` (approved connections: client, principal, scopes, approver, hashes of the access token and of the current, previous and consumed refresh tokens) ([`migrations/`](../../migrations/)). The TOTP secrets are stored as plain base32 in D1, because a server must read them to check a code. Unused and empty since migration `0004`, kept for the Worker from before it: `principals.sign_in_email` and `sign_in_codes`. A later migration removes them. `PrincipalDO` (one for each principal, keyed by the principal id): tables `chat_rooms`, `chat_threads`, `chat_addressed`, `chat_activity`, `chat_sections`, `chat_section_rooms`, `chat_saved_messages`, `chat_drafts`, `chat_scheduled_messages`, `chat_reminders`, `chat_notification_levels`, `chat_push_devices`, and `chat_notification_sounds` (see [The object of a principal](#the-object-of-a-principal)), table `service_activity` (the activity log of a service account: at most 10,000 entries and 90 days, see [Service accounts](#service-accounts)), table `meta` (schema version, the owner id in `presence_principal`, `chat_seeded` after the first fill, and `chat_threads_filled` after the first fill of the threads), and the hibernatable sockets of `/ws/events` (not in the database: each keeps the reference to its credential, the time of its open and of its last check, and its latest activity report; no backup). Backups: not built yet. |
 
 Public surface: `index.ts` only. Other domains must not import files from this folder directly.
 
@@ -164,6 +164,9 @@ The directory stores these fields in `chat_status_json`. Each read checks the en
   and `internal-only` allows no webhook ([`mail`](../mail/README.md#webhooks)). The same rule
   limits the web addresses that the agent imports an image from
   ([`docs`](../docs/README.md#an-image-from-a-web-address)).
+- A **service account** gives a script or a system access through the API. It is an agent row with
+  `service = 1`, so mail, Drive and Chat apply each agent rule to it. The directory and
+  `account.whoami` show the kind `service`. [Service accounts](#service-accounts) has the rules.
 - Owners and admins can read the own mailbox of each agent (`canReadAgentMailboxes`). They cannot
   change it or send from it. The mailbox of a person stays private. The sponsor of an agent does not
   get this access. The [`mail`](../mail/README.md#agent-mailboxes) module applies the rule.
@@ -295,6 +298,78 @@ can act on another admin. Only the owner is out of reach, as for credentials.
   new team mailbox member (also a first member of a new team mailbox). So a parallel change cannot
   break them.
 
+## Service accounts
+
+A service account is a member for a script or a system, for example a CI pipeline. It acts only through
+the API, with tokens. Nobody signs in as it, and it never connects through OAuth.
+
+- **Storage.** The directory stores it as an agent row with `service = 1` (migration `0023`). A `CHECK`
+  lets only an agent row have `service = 1`. In mail, Drive and Chat it is an agent: its outbound policy
+  applies to mail, it cannot be a manager of a shared drive, and its chat messages and mail show an agent
+  author. A product record has no third kind yet.
+- **Address.** It has a primary address on a saved mail domain, as each principal has. So it has its own
+  mailbox, drive and chat, and owners and admins can add it to team mailboxes, shared drives and rooms.
+  Owners and admins can read its mailbox, as they read the mailbox of an agent. They can create a token
+  with `mail.read` too, so a different rule would protect nothing.
+- **Who manages it.** Only owners and admins create it (`directory.create_service_account`), change it,
+  manage its tokens and read its activity and access. `created_by` records the creator. `sponsor_id`
+  names the accountable person, the creator by default. Neither gives a right: a creator or a sponsor
+  who is not an admin cannot list, create or revoke its tokens, change its policy, or add a webhook for
+  it. An admin who becomes a member loses these rights at once.
+- **Sponsor rules.** The sponsor rules of an agent apply. A person who sponsors a live service account
+  cannot be archived, and a person who sponsors any service account cannot be deleted. Give it a
+  different sponsor first. A service account whose sponsor is archived cannot be restored.
+- **Description.** `description` says what the account is for, at most 500 characters.
+  `directory.update_principal` changes it for a service account only. An empty text removes it.
+- **Tokens.** A token is an API key of the service account (`account.create_api_key` with its
+  `principal_id`). It has a label, an optional description, its scopes, its creator, an optional end,
+  and, after a revoke, who revoked it. A service account can have many tokens. `account.revoke_api_key`
+  stops one token at once and closes its sockets. A second revoke changes nothing.
+- **Scopes.** A token can hold only `SERVICE_SCOPES`: `account.read`, `directory.read`, `mail.read`,
+  `mail.modify`, `mail.send`, `drive.read`, `drive.write`, `drive.share`, `chat.read` and `chat.write`.
+  It never holds `account.keys`, `directory.write` or a webhook scope, so it cannot widen its own access
+  or send data to a URL outside the organization.
+- **Operations.** The invoker gives a service account the caller kind `service`. An operation that it
+  can call names `"service"` in its callers. So a new operation refuses a service account until its
+  callers name it. The registry test keeps the rule: an operation names `"service"` only when it names
+  `"agent"` and a service token can hold each scope it needs, and never for OAuth, webhooks or push.
+- **Activity log.** The `PrincipalDO` of the service account keeps its log in table `service_activity`.
+  - Each call of a token through REST or MCP adds one entry: the operation, the result (`ok`, `denied`
+    or `error`), the error code, the token, the surface (`rest` or `mcp`), the resource of the input
+    (`mailbox_id`, `space_id`, `room_id` or `principal_id`) and the request id. A call that the input
+    check refused has no resource.
+  - Each change by an owner or an admin adds an entry with the surface `admin`: the creation, a change,
+    a policy change, an archive, a restore, a delete, a token create, a token revoke, and a team mailbox
+    membership.
+  - The invoker reports each call to the `record` hook of the call context (`activityRecorder`). The
+    write goes through `waitUntil`, so it never slows or fails the call. A failed write logs a warning.
+  - Each 100th entry removes the entries after the newest 10,000, and the entries older than 90 days
+    (`SERVICE_ACTIVITY_LIMITS`). A read also leaves out the entries older than 90 days.
+  - `directory.list_service_account_activity` reads it, the newest first, in pages with a cursor, and can
+    keep the entries of one token.
+  - A download under `/dl/` and an upload part under `/blob/` run their operation with the same call
+    context, so they add an entry with the surface `rest`. A slash command adds an entry for itself and
+    one for the operation that it runs.
+  - Not recorded yet: a refused token (`401`), a socket open, and an event of an MCP subscription.
+- **Access.** `directory.get_service_account_access` returns its team mailboxes, its shared drives and
+  its rooms with its role, and the scopes of each live token. It reads the index tables in D1
+  (`team_mailbox_members`, `shared_drive_members` and `chat_members`), and no object. At
+  most 200 rooms, with `chat_rooms_truncated`. Items that a person shared directly with it in Drive are
+  not in the list: their pointers are in the drive objects, and D1 has no index of them.
+- **Rollback.** A Worker from before migration `0023` sees a service account as an agent. It ignores
+  the end of a key, and it lets the sponsor manage the tokens. The stored scopes stay inside
+  `SERVICE_SCOPES`, so a rollback gives no scope beyond them. Revoke the tokens before a rollback to stop
+  them.
+
+## API keys with an end
+
+Each API key can have an end, also the key of a person or an agent. `account.create_api_key` takes
+`expires_in_days` (1 to 730) or `expires_at` (at least 60 seconds and at most 730 days after now), not
+both. Without them, the key has no end. The web app offers 1, 7, 30, 90 and 180 days, a custom date and
+Never. `api_keys.expires_at` stores the end. An expired key is not authenticated (`findApiKey`), its
+sockets close at the next check (`checkCredentials`), and a lasting effect that it made stops
+(`credentialState`). `account.list_api_keys` shows `expires_at` and `expired`.
+
 ## Team mailboxes
 
 A team mailbox is a shared mailbox with its own address, for example `support@example.com`. It is
@@ -345,7 +420,7 @@ A saved domain does not verify DNS or configure Cloudflare Email Routing or Emai
 
 | Credential | Who | Where |
 | --- | --- | --- |
-| API key `sdk_<43 base64url characters>` | Humans and agents | `Authorization: Bearer` on `/api/v1` and `/mcp`. Only the SHA-256 is stored |
+| API key `sdk_<43 base64url characters>` | Humans, agents and service accounts | `Authorization: Bearer` on `/api/v1` and `/mcp`. It can have an end ([API keys with an end](#api-keys-with-an-end)). Only the SHA-256 is stored |
 | Password (12 to 128 characters) | Humans only | `POST /auth/session`. Only a PBKDF2-HMAC-SHA256 hash is stored: 100,000 iterations (the most that workerd allows), a 16-byte random salt, NFKC normalization. The stored form names the scheme and the iterations, so a later version can raise the work |
 | TOTP code (6 digits, 30 seconds, HMAC-SHA1, RFC 6238) | Humans who turned it on | `POST /auth/session`, with the password. A code from one step before or after the current step also works. Each code works one time (`totp_last_step`) |
 | OAuth access token `sdo_<43 base64url characters>` | Agents, through an MCP client | `Authorization: Bearer` on `/api/v1` and `/mcp`. It works for one hour. Only the SHA-256 is stored |
@@ -380,8 +455,8 @@ A saved domain does not verify DNS or configure Cloudflare Email Routing or Emai
   `SetupInput`, `SetupResult`).
 - `POST /auth/setup` with `start_fresh: "DELETE DIRECTORY"` deletes all directory accounts,
   addresses, keys, sessions, passwords, and OAuth clients and connections. It recreates the schema from the bundled migrations
-  (`0001`, then `0003` to `0013`, in that order), so a fresh directory has the schema of an upgraded one.
-  It records `0001` to `0013` in `d1_migrations`, the table that `wrangler d1 migrations apply`
+  (`0001`, then each later migration except `0002` and `0015`, up to `0023`, in that order), so a fresh directory has the schema of an upgraded one.
+  It records these migrations and `0002` in `d1_migrations`, the table that `wrangler d1 migrations apply`
   reads. Otherwise a later migration run applies `0004` again, and its copy of the principals drops
   the passwords.
   The reset, new domain, and new owner share one D1 transaction. A failure rolls back all three.
@@ -579,7 +654,9 @@ Each call passes three checks:
 1. **Caller kind and scopes** (the shared invoker): the operation lists the principal kinds that
    can call it and the scopes that the credential must hold. A key holds the scopes that it was
    given, and never more than the ceiling of its principal kind: agents can hold only the scopes in
-   `AGENT_SCOPES` of `@asterra/contracts`, which has no `account.keys` and no `directory.write`. A session holds
+   `AGENT_SCOPES` of `@asterra/contracts`, which has no `account.keys` and no `directory.write`. Service
+   accounts can hold only `SERVICE_SCOPES`, which also has no webhook scope. An operation accepts a
+   service account only when its callers name `"service"`. A session holds
    every human scope, because only a credential with every human scope can set a password.
 2. **Role and resource** (the handler):
    - Only owners and admins create, change, archive, restore and delete principals. Only the owner
@@ -591,7 +668,8 @@ Each call passes three checks:
      can: it has no `directory.write` scope, and the operation accepts humans only.
    - A human manages their own credentials (keys, password and two-step verification) and the keys
      of the agents that they sponsor. Owners and admins manage the credentials of others, except the owner's: only the
-     owner manages those, so an admin can never act as the owner.
+     owner manages those, so an admin can never act as the owner. Only owners and admins manage the
+     tokens and the policy of a service account.
    - A new key can hold only scopes that the creating credential holds, so a narrow key cannot
      mint a wider one.
    - A sign-in gives a session with every human scope. So only a credential that holds every human
@@ -657,7 +735,8 @@ address, and the migration that removes `sign_in_email` and `sign_in_codes`.
 
 Each change and each refused change writes an `audit: true` line to Workers Logs (`op`, `actor`,
 `actorKind`, `credential`, `target`, `result`, `requestId`). The hash-chained audit log in R2
-replaces this later.
+replaces this later. `actorKind` is `service` for a service account. A service account also has its own
+activity log in its `PrincipalDO` ([Service accounts](#service-accounts)).
 
 ## Webhook scopes
 

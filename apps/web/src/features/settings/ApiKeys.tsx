@@ -1,11 +1,20 @@
-import { type ApiKey, type CreatedApiKey, SCOPES, type Scope } from "@asterra/contracts";
+import {
+	API_KEY_LIMITS,
+	type ApiKey,
+	type CreatedApiKey,
+	type Principal,
+	SCOPES,
+	type Scope,
+} from "@asterra/contracts";
 import { type FormEvent, useCallback, useEffect, useId, useState } from "react";
 import { api, errorMessage } from "../../lib/api.ts";
 import { ConfirmDialog } from "../../lib/ConfirmDialog.tsx";
 import { fullDate, shortDate } from "../../lib/format.ts";
+import { Select } from "../../lib/Select.tsx";
 import { useToast } from "../../lib/toast.tsx";
 import { useSession } from "../auth/session.tsx";
 import { SecretDialog } from "./SecretDialog.tsx";
+import { customDateBounds, expiryLabel, TTL_OPTIONS, type TtlChoice, ttlInput } from "./ttl.ts";
 
 /**
  * Scopes that a new key does not get unless the person selects them. A webhook sends notices to a URL
@@ -30,10 +39,33 @@ interface ApiKeyManagerProps {
 	heading: string;
 	/** A short line under the heading. */
 	note?: string;
+	/** The word for one key in the text of the form: "key", or "token" for a service account. */
+	noun?: "key" | "token";
+	/** The lifetime that the form selects first. No end by default. */
+	defaultTtl?: TtlChoice;
+	/** The people of the directory. When set, the list names who created each key and who revoked it. */
+	people?: readonly Principal[];
+	/** Called after a key is created or revoked, so a view next to the list can load again. */
+	onChange?: () => void;
+}
+
+/** The name of a principal of the directory, or a note for a principal that is not in it. */
+function personName(people: readonly Principal[], id: string | null): string {
+	if (id === null) return "Unknown";
+	return people.find((person) => person.id === id)?.display_name ?? "A deleted member";
 }
 
 /** Lists, creates and revokes the API keys of one principal. */
-export function ApiKeyManager({ principalId, allowedScopes, heading, note }: ApiKeyManagerProps) {
+export function ApiKeyManager({
+	principalId,
+	allowedScopes,
+	heading,
+	note,
+	noun = "key",
+	defaultTtl = "never",
+	people,
+	onChange,
+}: ApiKeyManagerProps) {
 	const headingId = useId();
 	const toast = useToast();
 	const { whoami } = useSession();
@@ -57,7 +89,9 @@ export function ApiKeyManager({ principalId, allowedScopes, heading, note }: Api
 		void load();
 	}, [load]);
 
-	const active = (keys ?? []).filter((key) => !key.revoked);
+	// The keys that work first, then the expired keys, then the revoked keys.
+	const active = (keys ?? []).filter((key) => !key.revoked && !key.expired);
+	const expired = (keys ?? []).filter((key) => !key.revoked && key.expired);
 	const revoked = (keys ?? []).filter((key) => key.revoked);
 
 	return (
@@ -74,8 +108,10 @@ export function ApiKeyManager({ principalId, allowedScopes, heading, note }: Api
 				</p>
 			)}
 			<div className="panel-card panel-card-list">
-				{keys === null && !error && <p className="panel-empty">Loading keys…</p>}
-				{keys !== null && keys.length === 0 && <p className="panel-empty">No API keys yet.</p>}
+				{keys === null && !error && <p className="panel-empty">Loading {noun}s…</p>}
+				{keys !== null && keys.length === 0 && (
+					<p className="panel-empty">{noun === "token" ? "No tokens yet." : "No API keys yet."}</p>
+				)}
 				{keys !== null && keys.length > 0 && (
 					<div className="table-scroll">
 						<table className="table table-rows">
@@ -86,6 +122,7 @@ export function ApiKeyManager({ principalId, allowedScopes, heading, note }: Api
 									<th scope="col" className="col-optional">
 										Created
 									</th>
+									<th scope="col">Expires</th>
 									<th scope="col" className="col-optional">
 										Last used
 									</th>
@@ -95,17 +132,26 @@ export function ApiKeyManager({ principalId, allowedScopes, heading, note }: Api
 								</tr>
 							</thead>
 							<tbody>
-								{[...active, ...revoked].map((key) => (
-									<tr key={key.id} className={key.revoked ? "row-muted" : undefined}>
+								{[...active, ...expired, ...revoked].map((key) => (
+									<tr key={key.id} className={key.revoked || key.expired ? "row-muted" : undefined}>
 										<td>
 											<div className="row-title">
 												{key.label}
 												{key.revoked && <span className="status status-failed">Revoked</span>}
+												{!key.revoked && key.expired && <span className="status status-failed">Expired</span>}
 											</div>
+											{key.description && <div className="row-note">{key.description}</div>}
 											<div className="row-note cell-scopes">{key.scopes.join(", ")}</div>
+											{people && key.revoked && key.revoked_by && (
+												<div className="row-note">Revoked by {personName(people, key.revoked_by)}</div>
+											)}
 										</td>
 										<td className="cell-date col-optional" title={fullDate(key.created_at)}>
 											{shortDate(key.created_at)}
+											{people && <div className="row-note">by {personName(people, key.created_by)}</div>}
+										</td>
+										<td className="cell-date" title={key.expires_at ? fullDate(key.expires_at) : undefined}>
+											{key.revoked ? "—" : expiryLabel(key.expires_at)}
 										</td>
 										<td className="cell-date col-optional">
 											{key.last_used_at ? shortDate(key.last_used_at) : "Never"}
@@ -116,7 +162,7 @@ export function ApiKeyManager({ principalId, allowedScopes, heading, note }: Api
 													type="button"
 													className="button button-small button-danger-outline"
 													onClick={() => setRevoking(key)}
-													aria-label={`Revoke key ${key.label}`}
+													aria-label={`Revoke ${noun} ${key.label}`}
 												>
 													Revoke
 												</button>
@@ -132,27 +178,37 @@ export function ApiKeyManager({ principalId, allowedScopes, heading, note }: Api
 					principalId={principalId}
 					allowedScopes={offeredScopes}
 					narrowed={offeredScopes.length < allowedScopes.length}
+					noun={noun}
+					defaultTtl={defaultTtl}
 					onCreated={(key) => {
 						setCreated(key);
 						void load();
+						onChange?.();
 					}}
 				/>
 			</div>
-			{created && <SecretDialog apiKey={created} onClose={() => setCreated(null)} />}
+			{created && (
+				<SecretDialog
+					apiKey={created}
+					title={noun === "token" ? "Copy the new token" : undefined}
+					onClose={() => setCreated(null)}
+				/>
+			)}
 			{revoking && (
 				<ConfirmDialog
-					title="Revoke this key?"
-					confirmLabel="Revoke key"
+					title={`Revoke this ${noun}?`}
+					confirmLabel={`Revoke ${noun}`}
 					danger
 					onClose={() => setRevoking(null)}
 					onConfirm={async () => {
 						await api.call("account.revoke_api_key", { key_id: revoking.id });
-						toast({ message: `Key “${revoking.label}” revoked.` });
+						toast({ message: `${noun === "token" ? "Token" : "Key"} “${revoking.label}” revoked.` });
 						await load();
+						onChange?.();
 					}}
 				>
 					<p>
-						Revoke <strong>{revoking.label}</strong>? Each call with this key fails at once. You cannot undo this.
+						Revoke <strong>{revoking.label}</strong>? Each call with this {noun} fails at once. You cannot undo this.
 					</p>
 				</ConfirmDialog>
 			)}
@@ -164,30 +220,43 @@ function CreateKeyForm({
 	principalId,
 	allowedScopes,
 	narrowed,
+	noun,
+	defaultTtl,
 	onCreated,
 }: {
 	principalId: string | undefined;
 	allowedScopes: readonly Scope[];
 	/** True when this session holds fewer scopes than the key owner can have. */
 	narrowed: boolean;
+	noun: "key" | "token";
+	defaultTtl: TtlChoice;
 	onCreated: (key: CreatedApiKey) => void;
 }) {
 	const [label, setLabel] = useState("");
+	const [description, setDescription] = useState("");
+	const [ttl, setTtl] = useState<TtlChoice>(defaultTtl);
+	const [customDate, setCustomDate] = useState("");
 	const [scopes, setScopes] = useState<ReadonlySet<Scope>>(
 		() => new Set(allowedScopes.filter((scope) => !PRIVILEGED.includes(scope))),
 	);
 	const [busy, setBusy] = useState(false);
 	const [error, setError] = useState<string | null>(null);
-	const labelId = useId();
+	const ids = { label: useId(), description: useId(), ttl: useId(), ttlHint: useId(), date: useId() };
+	const bounds = customDateBounds(Date.now());
 
 	async function submit(event: FormEvent<HTMLFormElement>) {
 		event.preventDefault();
 		if (!label.trim()) {
-			setError("Enter a label for the key.");
+			setError(`Enter a label for the ${noun}.`);
 			return;
 		}
 		if (scopes.size === 0) {
 			setError("Select at least one scope.");
+			return;
+		}
+		const lifetime = ttlInput(ttl, customDate);
+		if (typeof lifetime === "string") {
+			setError(lifetime);
 			return;
 		}
 		setBusy(true);
@@ -196,9 +265,12 @@ function CreateKeyForm({
 			const result = await api.call("account.create_api_key", {
 				label: label.trim(),
 				scopes: allowedScopes.filter((scope) => scopes.has(scope)),
+				...(description.trim() ? { description: description.trim() } : {}),
+				...lifetime,
 				...(principalId ? { principal_id: principalId } : {}),
 			});
 			setLabel("");
+			setDescription("");
 			onCreated(result.api_key);
 		} catch (caught) {
 			setError(errorMessage(caught));
@@ -219,19 +291,68 @@ function CreateKeyForm({
 	return (
 		<form className="panel-form panel-form-divided" onSubmit={submit} noValidate>
 			<div className="field">
-				<label htmlFor={labelId} className="field-label">
-					New key label
+				<label htmlFor={ids.label} className="field-label">
+					New {noun} label
 				</label>
 				<input
-					id={labelId}
+					id={ids.label}
 					className="input"
 					value={label}
-					maxLength={100}
-					placeholder="For example: laptop CLI"
+					maxLength={API_KEY_LIMITS.labelChars}
+					placeholder={noun === "token" ? "For example: GitHub Actions" : "For example: laptop CLI"}
 					onChange={(event) => setLabel(event.target.value)}
 					disabled={busy}
 				/>
 			</div>
+			<div className="field">
+				<label htmlFor={ids.description} className="field-label">
+					Description (optional)
+				</label>
+				<input
+					id={ids.description}
+					className="input"
+					value={description}
+					maxLength={API_KEY_LIMITS.descriptionChars}
+					placeholder="What uses it, and who to ask about it"
+					onChange={(event) => setDescription(event.target.value)}
+					disabled={busy}
+				/>
+			</div>
+			<div className="field">
+				<label htmlFor={ids.ttl} className="field-label">
+					Expires
+				</label>
+				<Select
+					id={ids.ttl}
+					value={ttl}
+					options={TTL_OPTIONS}
+					onChange={setTtl}
+					aria-describedby={ids.ttlHint}
+					disabled={busy}
+				/>
+				<p id={ids.ttlHint} className="field-hint">
+					{ttl === "never"
+						? `The ${noun} works until somebody revokes it.`
+						: `The ${noun} stops by itself at that time. You can revoke it before.`}
+				</p>
+			</div>
+			{ttl === "custom" && (
+				<div className="field">
+					<label htmlFor={ids.date} className="field-label">
+						Last day
+					</label>
+					<input
+						id={ids.date}
+						className="input"
+						type="date"
+						value={customDate}
+						min={bounds.min}
+						max={bounds.max}
+						onChange={(event) => setCustomDate(event.target.value)}
+						disabled={busy}
+					/>
+				</div>
+			)}
 			<fieldset className="scope-list">
 				<legend className="field-label">Scopes</legend>
 				{narrowed && (
@@ -261,7 +382,7 @@ function CreateKeyForm({
 				</p>
 			)}
 			<button type="submit" className="button button-primary" disabled={busy}>
-				{busy ? "Creating…" : "Create key"}
+				{busy ? "Creating…" : `Create ${noun}`}
 			</button>
 		</form>
 	);

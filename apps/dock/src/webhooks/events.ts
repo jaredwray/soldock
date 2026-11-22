@@ -298,7 +298,7 @@ export function createEventSubscriptions(prepare: EventTargetHooks = {}): EventS
 				: MCP_EVENT_LIMITS.ttlMs;
 		const expiresAt = new Date(now + life).toISOString();
 		// The filter of a chat subscription without `filter` in the arguments. Mail and Drive have no filter.
-		const defaultFilter = event.domain === "chat" ? defaultChatWebhookFilter(call.caller.kind) : "all";
+		const defaultFilter = event.domain === "chat" ? defaultChatWebhookFilter(call.caller.principal.kind) : "all";
 
 		/**
 		 * Gives the subscription its new end and its new secret. A subscription that stopped starts again.

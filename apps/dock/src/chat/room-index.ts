@@ -265,3 +265,24 @@ export async function joinedRoomIds(
 		.all<{ room_id: string }>();
 	return new Set(results.map((row) => row.room_id));
 }
+
+/**
+ * The rooms that the index has the principal as a member of, with its role: the named rooms first, in the
+ * order of their names, then the direct messages. At most `limit` rooms. `truncated` is true when the
+ * principal has more. The access view of a service account reads it. The index can be a moment behind a
+ * room, and the room object still decides each access.
+ */
+export async function roomsOfPrincipal(
+	db: D1Database,
+	principalId: string,
+	limit: number,
+): Promise<{ rooms: { id: string; kind: string; name: string | null; role: string }[]; truncated: boolean }> {
+	const { results } = await db
+		.prepare(
+			`SELECT r.id, r.kind, r.name, m.role FROM chat_members m JOIN chat_rooms r ON r.id = m.room_id
+			WHERE m.principal_id = ?1 ORDER BY r.name_key IS NULL, r.name_key, r.id LIMIT ?2`,
+		)
+		.bind(principalId, limit + 1)
+		.all<{ id: string; kind: string; name: string | null; role: string }>();
+	return { rooms: results.slice(0, limit), truncated: results.length > limit };
+}

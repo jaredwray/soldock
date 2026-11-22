@@ -434,7 +434,7 @@ async function checkDelivery(
 			}
 		} else {
 			const agent = await getPrincipal(db, target);
-			if (agent?.kind !== "agent" || creator.kind !== "human" || agent.sponsor_id !== creator.id) {
+			if (agent?.kind !== "agent" || agent.service || creator.kind !== "human" || agent.sponsor_id !== creator.id) {
 				return { action: "disable_subscription", reason: "access_lost" };
 			}
 			if (agent.archived_at !== null) return { action: "skip" };

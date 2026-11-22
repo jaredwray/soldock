@@ -1,5 +1,5 @@
-import { ALL_SCOPES, type Scope } from "@asterra/contracts";
-import { type Caller, sha256Hex } from "../platform/index.ts";
+import { ALL_SCOPES, type PrincipalKind, type Scope } from "@asterra/contracts";
+import { type Caller, type InvokeOutcome, sha256Hex } from "../platform/index.ts";
 import { ACCESS_TOKEN_PREFIX, findGrantByAccessToken, touchGrant } from "./oauth-store.ts";
 import { findApiKey, findSession, type PrincipalRecord, scopeCeiling, touchApiKey } from "./store.ts";
 
@@ -9,7 +9,11 @@ export const SESSION_COOKIE = "__Host-soldock_session";
 /** The authenticated principal of a request and what its credential can do. */
 export interface AuthContext extends Caller {
 	principal: PrincipalRecord;
-	kind: PrincipalRecord["kind"];
+	/**
+	 * The kind of the caller: `service` for a service account. A product record uses
+	 * `principal.kind`, so a service account is an agent there.
+	 */
+	kind: PrincipalKind;
 	/** `oauth`: an access token that an MCP client got through OAuth. */
 	credential: "session" | "api_key" | "oauth";
 	keyId: string | null;
@@ -30,6 +34,8 @@ export interface CallContext {
 	/** The origin of the request, such as `https://work.soldock.org`. A webhook cannot use its host. */
 	origin: string;
 	waitUntil(promise: Promise<unknown>): void;
+	/** Set for a service account: the invoker reports each call to its activity log. */
+	record?: ((outcome: InvokeOutcome) => void) | undefined;
 }
 
 export function readCookie(request: Request, name: string): string | null {
@@ -61,9 +67,10 @@ export async function authenticate(
 		if (!match?.[1]) return null;
 		if (match[1].startsWith(ACCESS_TOKEN_PREFIX)) {
 			const granted = await findGrantByAccessToken(env.DIRECTORY, match[1]);
-			if (!granted || granted.principal.archived_at !== null) return null;
+			// A service account never connects through OAuth. The approval refuses it, and this is a second guard.
+			if (!granted || granted.principal.archived_at !== null || granted.principal.service) return null;
 			waitUntil(touchGrant(env.DIRECTORY, granted.grant));
-			const ceiling = new Set<Scope>(scopeCeiling(granted.principal.kind));
+			const ceiling = new Set<Scope>(scopeCeiling(granted.principal));
 			return {
 				id: granted.principal.id,
 				principal: granted.principal,
@@ -80,11 +87,11 @@ export async function authenticate(
 		if (!found || found.principal.archived_at !== null) return null;
 		waitUntil(touchApiKey(env.DIRECTORY, found.key));
 		// The ceiling applies again here, so a key row with a wider scope list still cannot exceed it.
-		const ceiling = new Set<Scope>(scopeCeiling(found.principal.kind));
+		const ceiling = new Set<Scope>(scopeCeiling(found.principal));
 		return {
 			id: found.principal.id,
 			principal: found.principal,
-			kind: found.principal.kind,
+			kind: found.principal.service ? "service" : found.principal.kind,
 			credential: "api_key",
 			keyId: found.key.id,
 			grantId: null,
