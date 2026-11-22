@@ -9,8 +9,14 @@ import {
 	roomsOfPrincipal,
 } from "./chat/index.ts";
 import { docsHandlers } from "./docs/index.ts";
-import { driveHandlers, driveWatchers, enableDriveEvents, sharedDrivesOfPrincipal } from "./drive/index.ts";
-import { type CallContext, identityHandlers } from "./identity/index.ts";
+import {
+	driveHandlers,
+	driveWatchers,
+	enableDriveEvents,
+	sharedDrivesOfPrincipal,
+	sharedItemsOfPrincipal,
+} from "./drive/index.ts";
+import { type CallContext, getPrincipal, identityHandlers } from "./identity/index.ts";
 import { enableMailEvents, mailHandlers, mailWatchers } from "./mail/index.ts";
 import type { EventSubscriptions, HandlerMap, WatcherMap } from "./platform/index.ts";
 import { log } from "./platform/index.ts";
@@ -33,14 +39,26 @@ export const handlers: HandlerMap<CallContext> = {
 		});
 	},
 	// The identity handler checks the access and reads the team mailboxes and the tokens. The shared drives
-	// and the rooms come from the indexes of Drive and Chat.
+	// and the rooms come from the indexes of Drive and Chat. The items shared directly come from the drive of
+	// the account, and the drive of each item checks the access of the account again.
 	async "directory.get_service_account_access"(call, input) {
 		const result = await identityHandlers["directory.get_service_account_access"](call, input);
-		const [drives, rooms] = await Promise.all([
+		const account = await getPrincipal(call.env.DIRECTORY, result.principal_id);
+		const [drives, rooms, shared] = await Promise.all([
 			sharedDrivesOfPrincipal(call.env.DIRECTORY, result.principal_id),
 			roomsOfPrincipal(call.env.DIRECTORY, result.principal_id, SERVICE_ACCESS_LIMITS.rooms),
+			account
+				? sharedItemsOfPrincipal(call.env, account, SERVICE_ACCESS_LIMITS.sharedItems)
+				: { items: [], truncated: false },
 		]);
-		return { ...result, shared_drives: drives, chat_rooms: rooms.rooms, chat_rooms_truncated: rooms.truncated };
+		return {
+			...result,
+			shared_drives: drives,
+			chat_rooms: rooms.rooms,
+			chat_rooms_truncated: rooms.truncated,
+			drive_shared_items: shared.items,
+			drive_shared_items_truncated: shared.truncated,
+		};
 	},
 	async "directory.delete_principal"(call, input) {
 		const result = await identityHandlers["directory.delete_principal"](call, input);

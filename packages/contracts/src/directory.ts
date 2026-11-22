@@ -1,5 +1,6 @@
 import { EmailAddress, ID_CHARS, prefixedId, Timestamp } from "./common.ts";
 import { defineOperation } from "./operation.ts";
+import { TokenResources } from "./restrictions.ts";
 import { ALL_SCOPES, type Scope } from "./scopes.ts";
 import { PASSWORD_MAX_LENGTH, Password, TotpCode } from "./signin.ts";
 import { z } from "./zod.ts";
@@ -90,6 +91,10 @@ export const API_KEY_LIMITS = {
 	labelChars: 100,
 	/** The characters of a description of a key or of a service account. */
 	descriptionChars: 500,
+	/** The minutes that the old secret works after a rotation: the default, and the most. */
+	rotationOverlapMinutes: { default: 60, max: 1440 },
+	/** The owners and admins get a notice this many days before a token of a service account ends. */
+	expiryNoticeDays: 7,
 } as const;
 
 export const ApiKey = z.object({
@@ -111,6 +116,14 @@ export const ApiKey = z.object({
 	revoked_at: Timestamp.nullable(),
 	/** The principal who revoked the key. Null for a key that is not revoked, or that a delete of its principal revoked. */
 	revoked_by: z.string().nullable(),
+	/** When the secret of the key last changed (`account.rotate_api_key`). Null for a key that never rotated. */
+	rotated_at: Timestamp.nullable(),
+	/** The principal who made the last rotation. */
+	rotated_by: z.string().nullable(),
+	/** Until when the secret before the last rotation also works. Null when no old secret works. */
+	previous_secret_expires_at: Timestamp.nullable(),
+	/** The mailboxes, drives and rooms that a token of a service account is limited to. Null: not limited. */
+	resources: TokenResources.nullable(),
 });
 export type ApiKey = z.infer<typeof ApiKey>;
 
@@ -149,6 +162,8 @@ export const whoami = defineOperation({
 		),
 		/** `oauth`: an access token that an MCP client got through OAuth. */
 		credential: z.enum(["session", "api_key", "oauth"]),
+		/** The mailboxes, drives and rooms that this token is limited to. Null: not limited. */
+		resources: TokenResources.nullable(),
 		/** How a human signs in to the web app. Null for an agent and a service account, which never sign in. */
 		sign_in: z
 			.object({
@@ -441,6 +456,7 @@ export const createApiKey = defineOperation({
 		"Creates an API key for yourself, or for an agent that you sponsor. Owners and admins can create a key for anyone except the owner, and they alone create the tokens of a service account.",
 		"An agent key can hold only agent scopes, and a service account token only service account scopes. The secret is shown only once.",
 		`Set expires_in_days (1 to ${API_KEY_LIMITS.maxDays}), or expires_at for a custom end, to make the key stop at that time. Without them, the key has no end.`,
+		"For a token of a service account, set resources to limit it to listed mailboxes (the id of the account for its own, or team mailboxes), drives (the id of the account, or shared drives) and rooms. A limited token cannot call the operations that read across rooms.",
 	].join(" "),
 	http: { method: "POST", path: "/api/v1/account/api-keys" },
 	scopes: ["account.keys"],
@@ -456,6 +472,12 @@ export const createApiKey = defineOperation({
 			expires_in_days: z.number().int().min(1).max(API_KEY_LIMITS.maxDays).optional(),
 			/** A custom end of the key. */
 			expires_at: Timestamp.optional(),
+			/**
+			 * For a token of a service account only: the mailboxes, drives and rooms that it is limited to. Each
+			 * list is complete, and an empty list allows nothing of that product. The own mailbox and drive have
+			 * the id of the account.
+			 */
+			resources: TokenResources.optional(),
 		})
 		.refine((input) => input.expires_in_days === undefined || input.expires_at === undefined, {
 			message: "send expires_in_days or expires_at, not both",
@@ -476,6 +498,42 @@ export const revokeApiKey = defineOperation({
 	annotations: { readOnly: false, destructive: true, idempotent: true, openWorld: false },
 	input: z.strictObject({ key_id: prefixedId("key") }),
 	output: z.object({ revoked: z.boolean() }),
+	errors: ["not_found"],
+});
+
+export const rotateApiKey = defineOperation({
+	name: "account.rotate_api_key",
+	summary: "Give an API key a new secret",
+	description: [
+		"Gives the key a new secret and returns it once. The key keeps its id, label, scopes and end.",
+		`The old secret works for overlap_minutes more (default ${API_KEY_LIMITS.rotationOverlapMinutes.default}, at most ${API_KEY_LIMITS.rotationOverlapMinutes.max}; 0 stops it at once), so a script can change to the new secret first.`,
+		"A key has one rotation at a time: a rotation while the old secret still works gets conflict. account.end_api_key_rotation stops the old secret before its time.",
+		"The same principals that can revoke a key can rotate it, and the credential of the call must hold each scope of the key. A revoked or expired key cannot rotate.",
+	].join(" "),
+	http: { method: "POST", path: "/api/v1/account/api-keys/{key_id}/rotate" },
+	scopes: ["account.keys"],
+	callers: ["human"],
+	// The old secret stops, at once with overlap_minutes 0, as a revoke stops a key.
+	annotations: { readOnly: false, destructive: true, idempotent: false, openWorld: false },
+	input: z.strictObject({
+		key_id: prefixedId("key"),
+		overlap_minutes: z.number().int().min(0).max(API_KEY_LIMITS.rotationOverlapMinutes.max).optional(),
+	}),
+	output: z.object({ api_key: CreatedApiKey }),
+	errors: ["not_found", "conflict"],
+});
+
+export const endApiKeyRotation = defineOperation({
+	name: "account.end_api_key_rotation",
+	summary: "Stop the old secret of an API key",
+	description:
+		"Stops the secret that the last rotation replaced, before the end of its overlap. The current secret keeps working. A key without an old secret does not change. The same principals that can revoke a key can call it.",
+	http: { method: "POST", path: "/api/v1/account/api-keys/{key_id}/rotate/end" },
+	scopes: ["account.keys"],
+	callers: ["human"],
+	annotations: { readOnly: false, destructive: true, idempotent: true, openWorld: false },
+	input: z.strictObject({ key_id: prefixedId("key") }),
+	output: z.object({ api_key: ApiKey }),
 	errors: ["not_found"],
 });
 
@@ -583,6 +641,12 @@ export const SERVICE_ACTIVITY_LIMITS = {
 	 * remove an entry of an owner or an admin (surface `admin`). Only the days limit removes it.
 	 */
 	entries: 10_000,
+	/**
+	 * The membership changes by members (surface `member`) that the log keeps, at most. The oldest go first.
+	 * A member can repeat a change, so this cap keeps those entries from the place of the calls and of the
+	 * changes by owners and admins.
+	 */
+	memberChanges: 1_000,
 	/** The days that the log keeps an entry. */
 	days: 90,
 } as const;
@@ -590,6 +654,8 @@ export const SERVICE_ACTIVITY_LIMITS = {
 export const SERVICE_ACCESS_LIMITS = {
 	/** The chat rooms of `directory.get_service_account_access`, at most. */
 	rooms: 200,
+	/** The Drive items that others shared directly with the account, at most. */
+	sharedItems: 200,
 } as const;
 
 /** One call of a service account, or one change that an owner or an admin made to it. */
@@ -602,8 +668,13 @@ export const ServiceActivityEntry = z.object({
 	result: z.enum(["ok", "denied", "error"]),
 	/** The error code of a call that did not work. */
 	code: z.string().nullable(),
-	/** `rest` and `mcp`: a call of the service account. `admin`: a change by an owner or an admin. */
-	surface: z.enum(["rest", "mcp", "admin"]),
+	/**
+	 * `rest` and `mcp`: a call of the service account. `admin`: a change by an owner or an admin to the
+	 * account, its tokens or its memberships. `member`: a membership change by a member or an agent, for
+	 * example a room that it adds the account to, or an item that it shares with the account. `system`: a
+	 * step of Asterra itself, such as the notice before a token ends.
+	 */
+	surface: z.enum(["rest", "mcp", "admin", "member", "system"]),
 	/** The token of the call, or the token that the change was about. */
 	key_id: z.string().nullable(),
 	/** Who made the call or the change. */
@@ -671,9 +742,9 @@ export const getServiceAccountAccess = defineOperation({
 	summary: "Show what a service account can reach",
 	description: [
 		SERVICE_ACCOUNT_RULES,
-		"Returns the team mailboxes, the shared drives and the chat rooms that the service account is a member of, with its role, and the scopes of each live token.",
-		"It also has its own mailbox and drive. Items that a person shared directly with it in Drive are not in this list.",
-		`chat_rooms has at most ${SERVICE_ACCESS_LIMITS.rooms} rooms. chat_rooms_truncated is true when it has more.`,
+		"Returns the team mailboxes, the shared drives and the chat rooms that the service account is a member of, with its role, the Drive items that others shared directly with it, with its role, and the scopes of each live token.",
+		"It also has its own mailbox and drive.",
+		`chat_rooms has at most ${SERVICE_ACCESS_LIMITS.rooms} rooms, and drive_shared_items at most ${SERVICE_ACCESS_LIMITS.sharedItems} items, the newest share first. The matching _truncated field is true when the account has more.`,
 	].join(" "),
 	http: { method: "GET", path: "/api/v1/directory/service-accounts/{principal_id}/access" },
 	scopes: ["directory.read"],
@@ -685,8 +756,22 @@ export const getServiceAccountAccess = defineOperation({
 		principal_id: z.string(),
 		team_mailboxes: z.array(z.object({ id: z.string(), display_name: z.string(), address: z.string() })),
 		shared_drives: z.array(z.object({ id: z.string(), name: z.string(), role: z.string() })),
-		chat_rooms: z.array(z.object({ id: z.string(), kind: z.string(), name: z.string().nullable(), role: z.string() })),
+		// `peer_name` is the name of the other member of a direct message. It is null for each other kind.
+		chat_rooms: z.array(
+			z.object({
+				id: z.string(),
+				kind: z.string(),
+				name: z.string().nullable(),
+				peer_name: z.string().nullable(),
+				role: z.string(),
+			}),
+		),
 		chat_rooms_truncated: z.boolean(),
+		/** The items that others shared directly with the account in Drive, with its role, the newest share first. */
+		drive_shared_items: z.array(
+			z.object({ space_id: z.string(), item_id: z.string(), name: z.string(), kind: z.string(), role: z.string() }),
+		),
+		drive_shared_items_truncated: z.boolean(),
 		/** The tokens that work now: not revoked and not expired. */
 		tokens: z.array(
 			z.object({
@@ -694,6 +779,7 @@ export const getServiceAccountAccess = defineOperation({
 				label: z.string(),
 				scopes: z.array(z.string()),
 				expires_at: Timestamp.nullable(),
+				resources: TokenResources.nullable(),
 			}),
 		),
 		/** Each scope that a live token holds. */
@@ -707,6 +793,8 @@ export const directoryOperations = {
 	"account.list_api_keys": listApiKeys,
 	"account.create_api_key": createApiKey,
 	"account.revoke_api_key": revokeApiKey,
+	"account.rotate_api_key": rotateApiKey,
+	"account.end_api_key_rotation": endApiKeyRotation,
 	"account.set_password": setPassword,
 	"account.create_totp_secret": createTotpSecret,
 	"account.enable_totp": enableTotp,

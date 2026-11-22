@@ -102,14 +102,47 @@ Drive and Chat it acts as an agent, so its outbound policy applies.
    and MCP operation is `directory.create_service_account`. It has no token yet.
 2. The owner or the admin opens the account and creates a token: a label, an optional description,
    the scopes, and a lifetime of 1, 7, 30, 90 or 180 days, a custom date or Never
-   (`account.create_api_key` with `principal_id`, and `expires_in_days` or `expires_at`). The secret
-   shows once. An account can have many tokens.
+   (`account.create_api_key` with `principal_id`, and `expires_in_days` or `expires_at`). The token
+   can also have limits: the mailboxes, the drives and the rooms that it reaches (`resources`). The
+   secret shows once. An account can have many tokens.
 3. The script sends the token as a bearer token to REST or MCP. An expired or revoked token gets
    `401`.
-4. The card shows each token with its creator, its end and its last use, what the account can reach
-   (`directory.get_service_account_access`), and its activity log
+4. The card shows each token with its creator, its end, its limits and its last use, what the account
+   can reach (`directory.get_service_account_access`), and its activity log
    (`directory.list_service_account_activity`). **Revoke** stops a token at once
    (`account.revoke_api_key`).
+
+**Rotate a token.** **Rotate** gives a token a new secret (`account.rotate_api_key`). The token keeps
+its scopes, its limits and its end. The caller must hold each scope of the token. A rotation does not
+extend the end. Before the end, create a new token and put it in each script. The old secret works for `overlap_minutes` more: 60 by default, at
+most 1,440, or 0 to stop it at once.
+
+1. Rotate the token, and copy the new secret.
+2. Put the new secret in each script before the old secret stops.
+3. Select **Stop old secret now** to stop the old secret before its time
+   (`account.end_api_key_rotation`).
+
+**Limit a token.** A token with `resources` has three lists: `mailbox_ids`, `drive_ids` and
+`room_ids`, each with at most 20 ids. The own mailbox and the own drive have the id of the account. An
+empty list allows nothing of that product. A limited token gets `403` for a call that names a resource
+outside its lists. The lists of mailboxes, shared drives and rooms show only the listed ones. A limited
+token cannot open a room, start a direct message, use the personal views of Chat or open `/ws/events`.
+MCP shows only the tools and resources that the token can use.
+
+**Notice before the end.** Seven days before a token ends, each owner and admin gets one internal mail
+with the account, the label of the token and its end. The key list shows **Expires soon**. A token
+with a lifetime of seven days or less gets no notice.
+
+**The activity log.** The log shows each call of a token, with its result. It also shows these events:
+
+- A call with a revoked, expired or rotated secret of the account (`auth.refused_token`).
+- A socket or a feed that a token opens, also when the open fails.
+- A change of the rooms, the direct messages and the shared drives of the account by a different
+  principal: **Admin change** for an owner or an admin, and **Member change** for each other member.
+- The notice before the end of a token (`account.token_expiry_notice`).
+- A change of a token or of the account by an owner or an admin.
+
+The access view also shows the Drive items that a member shared directly with the account.
 
 A token of a service account can hold only `account.read`, `directory.read`, `mail.read`,
 `mail.modify`, `mail.send`, `drive.read`, `drive.write`, `drive.share`, `chat.read` and `chat.write`.

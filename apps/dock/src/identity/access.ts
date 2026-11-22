@@ -1,9 +1,17 @@
-import { operationList, operationNeedsScope, SCOPES, type Scope } from "@asterra/contracts";
+import { operationList, operationNeedsScope, type Scope, scopeDescription } from "@asterra/contracts";
 import { audit, log, OperationError } from "../platform/index.ts";
 import type { AuthContext, CallContext } from "./auth.ts";
 import { getGrant } from "./oauth-store.ts";
 import type { ServiceActivityInput } from "./service-activity.ts";
-import { getApiKey, getPrincipal, keyExpired, keyNotExpired, type PrincipalRecord, scopeCeiling } from "./store.ts";
+import {
+	findStoppedServiceKey,
+	getApiKey,
+	getPrincipal,
+	keyExpired,
+	keyNotExpired,
+	type PrincipalRecord,
+	scopeCeiling,
+} from "./store.ts";
 
 // The access rules that the API key and the OAuth handlers share.
 
@@ -78,7 +86,7 @@ export function missingScopes(caller: AuthContext): MissingScope[] {
 		.filter((scope) => !caller.scopes.has(scope))
 		.map((scope) => ({
 			scope,
-			description: SCOPES[scope],
+			description: scopeDescription(scope, caller.kind),
 			operations: operationList
 				.filter((operation) => operationNeedsScope(operation, scope, caller.scopes, caller.kind))
 				.map((operation) => operation.name),
@@ -153,8 +161,8 @@ export function activityRecorder(
 }
 
 /**
- * Records a socket that a service account opened, in its activity log. Nothing is recorded for each other
- * caller. A failure never fails the open.
+ * Records a socket that a service account opened, or tried to open, in its activity log. Nothing is
+ * recorded for each other caller. A failure never fails the open.
  */
 export function recordSocketOpen(
 	caller: AuthContext,
@@ -163,11 +171,54 @@ export function recordSocketOpen(
 	requestId: string,
 	op: "events.open_socket" | "chat.open_room_socket",
 	input: { room_id?: string } = {},
+	outcome: { result: "ok" | "denied" | "error"; code: string | null } = { result: "ok", code: null },
 ): void {
 	try {
-		activityRecorder(caller, env, waitUntil, requestId, "rest")?.({ op, result: "ok", code: null, input });
+		activityRecorder(caller, env, waitUntil, requestId, "rest")?.({ op, ...outcome, input });
 	} catch {
 		// The record of an open is best effort. The socket stays open.
+	}
+}
+
+/** The outcome of a refused socket open, for `recordSocketOpen`. */
+export function refusedOutcome(error: unknown): { result: "denied" | "error"; code: string } {
+	if (error instanceof OperationError) {
+		return { result: error.code === "forbidden" ? "denied" : "error", code: error.code };
+	}
+	return { result: "error", code: "internal" };
+}
+
+/** Where a request came from, for the activity log of a token that the request names. */
+export interface RequestTrace {
+	requestId: string;
+	surface: ActivitySurface;
+}
+
+/**
+ * Records a refused token of a service account (revoked, expired, or of an archived account) in the
+ * activity log of the account, as `auth.refused_token` with the reason as the code. A secret of no token,
+ * and a key of a person or an agent, record nothing. The log keeps at most one such entry for each token
+ * in each minute. A failure only writes a warning.
+ */
+export async function recordRefusedToken(env: Env, secret: string, trace: RequestTrace): Promise<void> {
+	try {
+		const stopped = await findStoppedServiceKey(env.DIRECTORY, secret);
+		if (!stopped) return;
+		await appendServiceActivity(env, stopped.principalId, {
+			at: Date.now(),
+			op: "auth.refused_token",
+			result: "denied",
+			code: stopped.reason,
+			surface: trace.surface,
+			keyId: stopped.keyId,
+			actorId: stopped.principalId,
+			resourceId: null,
+			requestId: trace.requestId,
+		});
+	} catch (error) {
+		log("warn", "service activity: the record of a refused token failed", {
+			error: error instanceof Error ? error.message : String(error),
+		});
 	}
 }
 
@@ -194,6 +245,58 @@ export function recordServiceChange(
 			resourceId: target.id,
 			requestId: call.requestId,
 		}),
+	);
+}
+
+/**
+ * Records a membership change that a different principal made for service accounts: a room, a shared
+ * drive or a share of a Drive item. Each listed id that is a service account gets one entry with the
+ * caller as the actor, and the room, the drive or the item as the resource. The surface is `admin` for an
+ * owner or an admin, and `member` for each other caller, which has its own count limit. The own id of the
+ * caller is left out, because its own call is in its log already. The write does not wait, and a failure
+ * only writes a warning.
+ */
+export function recordServiceMemberships(
+	call: CallContext,
+	principalIds: readonly string[],
+	op: string,
+	resourceId: string,
+): void {
+	const ids = [...new Set(principalIds)].filter((id) => id !== call.caller.principal.id);
+	if (ids.length === 0) return;
+	const surface = isAdmin(call.caller) ? "admin" : "member";
+	call.waitUntil(
+		(async () => {
+			try {
+				const { results } = await call.env.DIRECTORY.prepare(
+					`SELECT p.id FROM json_each(?) wanted CROSS JOIN principals p ON p.id = wanted.value
+					WHERE p.service = 1 AND p.deleted_at IS NULL`,
+				)
+					.bind(JSON.stringify(ids))
+					.all<{ id: string }>();
+				const at = Date.now();
+				await Promise.all(
+					results.map((row) =>
+						appendServiceActivity(call.env, row.id, {
+							at,
+							op,
+							result: "ok",
+							code: null,
+							surface,
+							keyId: null,
+							actorId: call.caller.principal.id,
+							resourceId,
+							requestId: call.requestId,
+						}),
+					),
+				);
+			} catch (error) {
+				log("warn", "service activity: the record of a membership change failed", {
+					op,
+					error: error instanceof Error ? error.message : String(error),
+				});
+			}
+		})(),
 	);
 }
 
@@ -285,6 +388,11 @@ export interface CredentialRef {
 	kind: AuthContext["credential"];
 	id: string;
 	grantId?: string;
+	/**
+	 * The number of the secret of an API key, when the key rotated before the open (1 or more). A ref
+	 * without it names the first secret (0), so the refs of keys that never rotated do not change.
+	 */
+	gen?: number;
 }
 
 /** The same credential can open several sockets and register a push device. */
@@ -302,6 +410,7 @@ export function credentialRef(caller: AuthContext): CredentialRef {
 	if (id === null) throw new Error(`a ${caller.credential} credential without an id`);
 	const ref: CredentialRef = { principalId: caller.principal.id, kind: caller.credential, id };
 	if (caller.grantId !== null) ref.grantId = caller.grantId;
+	if (caller.keyGeneration !== null && caller.keyGeneration > 0) ref.gen = caller.keyGeneration;
 	return ref;
 }
 
@@ -324,11 +433,14 @@ export type CredentialCheck = "live" | "renew" | "ended";
  */
 export async function checkCredentials(db: D1Database, refs: readonly CredentialRef[]): Promise<CredentialCheck[]> {
 	if (refs.length === 0) return [];
-	const keys = refs.map(credentialKey);
+	// Two secrets of one key are two credentials here: the old one stops with its overlap. The key of a
+	// ref has the number of its secret. `credentialKey` stays as it is, because push devices match on it.
+	const keys = refs.map((ref) => `${credentialKey(ref)}:${ref.gen ?? 0}`);
 	const unique = [...new Map(refs.map((ref, index) => [keys[index] as string, ref])).values()];
 	const { results } = await db
 		.prepare(
-			`SELECT json_extract(ref.value, '$.kind') || ':' || json_extract(ref.value, '$.id') AS key,
+			`SELECT json_extract(ref.value, '$.kind') || ':' || json_extract(ref.value, '$.id') || ':'
+					|| COALESCE(json_extract(ref.value, '$.gen'), 0) AS key,
 				CASE json_extract(ref.value, '$.kind')
 					WHEN 'session' THEN CASE WHEN p.kind = 'human' AND EXISTS (
 						SELECT 1 FROM sessions s
@@ -337,7 +449,9 @@ export async function checkCredentials(db: D1Database, refs: readonly Credential
 					WHEN 'api_key' THEN CASE WHEN EXISTS (
 						SELECT 1 FROM api_keys k
 						WHERE k.id = json_extract(ref.value, '$.id') AND k.principal_id = p.id AND k.revoked_at IS NULL
-							AND ${keyNotExpired(2, "k")})
+							AND ${keyNotExpired(2, "k")}
+							AND (COALESCE(json_extract(ref.value, '$.gen'), 0) = k.rotation
+								OR (COALESCE(json_extract(ref.value, '$.gen'), 0) = k.rotation - 1 AND k.prev_expires_at > ?2)))
 						THEN 'live' END
 					WHEN 'oauth' THEN CASE
 						WHEN EXISTS (

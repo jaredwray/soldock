@@ -14,6 +14,8 @@ const SURFACE_NAMES: Record<ServiceActivityEntry["surface"], string> = {
 	rest: "REST",
 	mcp: "MCP",
 	admin: "Admin change",
+	member: "Member change",
+	system: "Asterra",
 };
 
 interface ServiceAccountActivityProps {

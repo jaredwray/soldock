@@ -73,9 +73,15 @@ function recordFeedOpen(
 	call: CallContext,
 	op: "chat.open_room_socket" | "events.open_socket",
 	input: { room_id?: string },
+	refusal?: OperationError,
 ): void {
 	try {
-		call.record?.({ op, result: "ok", code: null, input });
+		call.record?.({
+			op,
+			result: refusal ? (refusal.code === "forbidden" ? "denied" : "error") : "ok",
+			code: refusal?.code ?? null,
+			input,
+		});
 	} catch {
 		// The record of an open is best effort. The feed stays open.
 	}
@@ -99,7 +105,10 @@ const roomWatcher: ResourceWatcher<CallContext> = {
 		} catch (error) {
 			// `not_found`, `forbidden`: the index has the caller as a member, and the room does not, so the
 			// index is behind. `conflict`: the caller has too many sockets to the room.
-			if (error instanceof OperationError && REFUSALS.has(error.code)) return null;
+			if (error instanceof OperationError && REFUSALS.has(error.code)) {
+				recordFeedOpen(call, "chat.open_room_socket", { room_id: vars.room_id as string }, error);
+				return null;
+			}
 			throw error;
 		}
 		recordFeedOpen(call, "chat.open_room_socket", { room_id: vars.room_id as string });
@@ -156,7 +165,10 @@ function eventsWatcher(
 			try {
 				response = await openEventsSocket(call.env, call.caller, { feed: true });
 			} catch (error) {
-				if (error instanceof OperationError && error.code === "conflict") return null;
+				if (error instanceof OperationError && error.code === "conflict") {
+					recordFeedOpen(call, "events.open_socket", {}, error);
+					return null;
+				}
 				throw error;
 			}
 			recordFeedOpen(call, "events.open_socket", {});

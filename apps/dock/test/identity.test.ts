@@ -11,6 +11,7 @@ import mentionAliasMigration from "../migrations/0017_mention_aliases.sql?raw";
 import nameFoldedMigration from "../migrations/0018_name_folded.sql?raw";
 import directoryOrderMigration from "../migrations/0019_directory_order.sql?raw";
 import serviceAccountMigration from "../migrations/0024_service_accounts.sql?raw";
+import serviceTokenMigration from "../migrations/0025_service_tokens.sql?raw";
 import { matchTotp, totpCode } from "../src/identity/totp.ts";
 import legacyDirectory from "./fixtures/directory-v1.sql?raw";
 import {
@@ -853,6 +854,7 @@ describe("directory upgrade", () => {
 		await run(nameFoldedMigration.split("--> statement-breakpoint"));
 		await run(directoryOrderMigration.split("--> statement-breakpoint"));
 		await run(serviceAccountMigration.split("--> statement-breakpoint"));
+		await run(serviceTokenMigration.split("--> statement-breakpoint"));
 
 		const owner = api(key);
 		expect(await owner("account.whoami")).toMatchObject({

@@ -1,12 +1,20 @@
 import {
+	allowsResource,
 	DRIVE_LIMITS,
 	driveDownloadPath,
+	listedIds,
 	type OperationName,
 	type SharedDrive,
 	type SharedDriveMember,
 } from "@asterra/contracts";
 import { type AttachmentRecord, attachmentKey, documentStub } from "../collab/index.ts";
-import { type CallContext, getPrincipals, isAdmin, unknownPrincipalIds } from "../identity/index.ts";
+import {
+	type CallContext,
+	getPrincipals,
+	isAdmin,
+	recordServiceMemberships,
+	unknownPrincipalIds,
+} from "../identity/index.ts";
 import {
 	base64ToBytes,
 	bytesToBase64,
@@ -35,7 +43,7 @@ import {
 } from "./access.ts";
 import { setPreview, toVersion } from "./preview.ts";
 import { chatFolderFor } from "./rooms.ts";
-import { listSharedDriveRows, sharedDriveState } from "./shared-index.ts";
+import { listSharedDriveRows, serviceMembersOfDrive, sharedDriveState } from "./shared-index.ts";
 import {
 	type ItemRecord,
 	type ItemRef,
@@ -86,6 +94,10 @@ async function hydrate(call: CallContext, refs: ItemRef[]): Promise<ItemRecord[]
 	// The drive of a deleted principal, and a deleted shared drive, stay in storage, but openSpace refuses
 	// them. Their items leave the lists too.
 	for (const spaceId of await unknownSpaceIds(call.env.DIRECTORY, [...bySpace.keys()])) bySpace.delete(spaceId);
+	// A token with resource limits gets no item of a drive outside its list.
+	for (const spaceId of [...bySpace.keys()]) {
+		if (!allowsResource(call.caller.restriction, "drive", spaceId)) bySpace.delete(spaceId);
+	}
 	const found = new Map<string, ItemRecord>();
 	await Promise.all(
 		[...bySpace].map(async ([spaceId, itemIds]) => {
@@ -279,7 +291,16 @@ export const driveHandlers: Pick<HandlerMap<CallContext>, DriveOperation> = {
 		}
 		if (input.view === "starred" || input.view === "shared") {
 			const own = await ownSpace(call);
-			const page = accept(await own.space.listRefs(own.ctx, { list: input.view, cursor, limit }));
+			// A token with resource limits gets the pointers into its listed drives only, so the cursor never names
+			// a different drive. `hydrate` checks each drive again.
+			const page = accept(
+				await own.space.listRefs(own.ctx, {
+					list: input.view,
+					cursor,
+					limit,
+					spaceIds: listedIds(call.caller.restriction, "drive"),
+				}),
+			);
 			const records = (await hydrate(call, page.items)).filter((record) => kind === null || record.kind === kind);
 			return { items: await toItems(call, records), next_cursor: page.nextCursor };
 		}
@@ -632,13 +653,17 @@ export const driveHandlers: Pick<HandlerMap<CallContext>, DriveOperation> = {
 		}
 		const permission = accept(await own.space.share(own.ctx, input.item_id, input.principal_id, input.role));
 		auditOk(call, own, "drive.share_item", `${input.item_id}:${input.principal_id}:${input.role}`);
+		recordServiceMemberships(call, [input.principal_id], "drive.share_item", input.item_id);
 		return { permission: { ...permission, created_at: new Date(permission.created_at).toISOString() } };
 	},
 
 	async "drive.unshare_item"(call, input) {
 		const opened = await openSpace(call, input.space_id);
 		const result = accept(await opened.space.unshare(opened.ctx, input.item_id, input.principal_id));
-		if (result.removed) auditOk(call, opened, "drive.unshare_item", `${input.item_id}:${input.principal_id}`);
+		if (result.removed) {
+			auditOk(call, opened, "drive.unshare_item", `${input.item_id}:${input.principal_id}`);
+			recordServiceMemberships(call, [input.principal_id], "drive.unshare_item", input.item_id);
+		}
 		return result;
 	},
 
@@ -676,6 +701,12 @@ export const driveHandlers: Pick<HandlerMap<CallContext>, DriveOperation> = {
 			for (const member of members) {
 				auditOk(call, opened, "drive.add_shared_drive_members", `${member.principalId}:${member.role}`);
 			}
+			recordServiceMemberships(
+				call,
+				members.map((member) => member.principalId),
+				"drive.create_shared_drive",
+				driveId,
+			);
 		}
 		return toSharedDrive(call, created.drive);
 	},
@@ -686,10 +717,13 @@ export const driveHandlers: Pick<HandlerMap<CallContext>, DriveOperation> = {
 			throw new OperationError("forbidden", "Only owners and admins of the organization can list each shared drive.");
 		}
 		const limit = input.limit ?? DEFAULT_PAGE;
+		// A token with resource limits sees only its listed drives. The query keeps only those, so the cursor
+		// never names a different drive.
 		const rows = await listSharedDriveRows(call.env.DIRECTORY, call.caller.id, {
 			all,
 			after: input.cursor === undefined ? null : decodeDriveCursor(input.cursor),
 			limit: limit + 1,
+			ids: listedIds(call.caller.restriction, "drive"),
 		});
 		const page = rows.slice(0, limit);
 		const last = page[page.length - 1];
@@ -725,6 +759,12 @@ export const driveHandlers: Pick<HandlerMap<CallContext>, DriveOperation> = {
 		for (const member of result.changed) {
 			auditOk(call, opened, "drive.add_shared_drive_members", `${member.principalId}:${member.role}`);
 		}
+		recordServiceMemberships(
+			call,
+			result.changed.map((member) => member.principalId),
+			"drive.add_shared_drive_members",
+			input.drive_id,
+		);
 		return toSharedDrive(call, result.drive);
 	},
 
@@ -733,6 +773,7 @@ export const driveHandlers: Pick<HandlerMap<CallContext>, DriveOperation> = {
 		const result = accept(await opened.space.removeMember(opened.ctx, input.principal_id));
 		if (result.removed) {
 			auditOk(call, opened, "drive.remove_shared_drive_member", input.principal_id);
+			recordServiceMemberships(call, [input.principal_id], "drive.remove_shared_drive_member", input.drive_id);
 			await loseDriveAccess(call.env.DIRECTORY, input.drive_id, input.principal_id);
 		}
 		return result;
@@ -747,8 +788,13 @@ export const driveHandlers: Pick<HandlerMap<CallContext>, DriveOperation> = {
 		// The index has the delete only after the object did it. A second call has nothing to do.
 		if (state === "deleted") return { deleted: false };
 		const opened = spaceOf(call, input.drive_id);
+		// The service accounts of the drive lose it. The index names them before the delete, for their logs.
+		const services = await serviceMembersOfDrive(call.env.DIRECTORY, input.drive_id);
 		const result = accept(await opened.space.deleteSharedDrive(opened.ctx));
-		if (result.deleted) auditOk(call, opened, "drive.delete_shared_drive", input.drive_id);
+		if (result.deleted) {
+			auditOk(call, opened, "drive.delete_shared_drive", input.drive_id);
+			recordServiceMemberships(call, services, "drive.delete_shared_drive", input.drive_id);
+		}
 		return result;
 	},
 };

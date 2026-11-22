@@ -47,6 +47,12 @@ interface ActivityRow extends Record<string, SqlStorageValue> {
 	request_id: string | null;
 }
 
+/** The operation of a refused token in the log. */
+const REFUSED_TOKEN_OP = "auth.refused_token";
+
+/** A refused token adds at most one entry in this time. */
+const REFUSAL_WINDOW_MS = 60_000;
+
 /** The log removes old rows after each `PRUNE_EVERY` inserts. */
 const PRUNE_EVERY = 100;
 
@@ -59,8 +65,22 @@ export class ServiceActivityStore {
 		this.sql = sql;
 	}
 
-	/** Adds one entry. Each `PRUNE_EVERY`th entry also removes the entries above the limits. */
+	/**
+	 * Adds one entry. Each `PRUNE_EVERY`th entry also removes the entries above the limits. A refused token
+	 * adds at most one entry in each `REFUSAL_WINDOW_MS` for each token, so a script that keeps a dead token
+	 * cannot push the real calls out of the log.
+	 */
 	record(entry: ServiceActivityInput): void {
+		if (entry.op === REFUSED_TOKEN_OP && entry.keyId !== null) {
+			const newest = this.sql
+				.exec<{ at: number }>(
+					"SELECT at FROM service_activity WHERE key_id = ? AND op = ? ORDER BY seq DESC LIMIT 1",
+					entry.keyId,
+					REFUSED_TOKEN_OP,
+				)
+				.toArray()[0];
+			if (newest && newest.at > entry.at - REFUSAL_WINDOW_MS) return;
+		}
 		const seq = this.sql
 			.exec<{ seq: number }>(
 				`INSERT INTO service_activity (at, op, result, code, surface, key_id, actor_id, resource_id, request_id)
@@ -80,18 +100,23 @@ export class ServiceActivityStore {
 	}
 
 	/**
-	 * Removes the entries older than the days of the limit, and each call after the newest `entries` calls.
-	 * The count limit counts calls only and keeps each entry of an owner or an admin (surface `admin`), so
-	 * calls cannot push a change out, and a change does not take the place of a call.
+	 * Removes the entries older than the days of the limit, each call after the newest `entries` calls, and
+	 * each change by a member after the newest `memberChanges` of them. The count limit of the calls counts
+	 * calls only (surface `rest` or `mcp`). The changes of members (surface `member`) have their own limit.
+	 * Only the days limit removes a change of an owner or an admin (`admin`) or of Asterra (`system`). So
+	 * calls and members cannot push such a change out, and a change does not take the place of a call.
 	 */
 	prune(now: number): void {
 		this.sql.exec(
 			`DELETE FROM service_activity
-			WHERE (surface <> 'admin' AND seq <= (
-				SELECT seq FROM service_activity WHERE surface <> 'admin' ORDER BY seq DESC LIMIT 1 OFFSET ?1))
+			WHERE (surface IN ('rest', 'mcp') AND seq <= (
+				SELECT seq FROM service_activity WHERE surface IN ('rest', 'mcp') ORDER BY seq DESC LIMIT 1 OFFSET ?1))
+			OR (surface = 'member' AND seq <= (
+				SELECT seq FROM service_activity WHERE surface = 'member' ORDER BY seq DESC LIMIT 1 OFFSET ?3))
 			OR at < ?2`,
 			SERVICE_ACTIVITY_LIMITS.entries,
 			now - SERVICE_ACTIVITY_LIMITS.days * DAY_MS,
+			SERVICE_ACTIVITY_LIMITS.memberChanges,
 		);
 	}
 

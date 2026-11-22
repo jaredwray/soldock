@@ -192,6 +192,8 @@ export interface ChatRoomQuery {
 	/** Keep only the rooms with the star of the principal. */
 	starred: boolean;
 	limit: number;
+	/** Keep only these rooms: the list of a token with resource limits. Null or absent for no filter. */
+	roomIds?: readonly string[] | null;
 }
 
 /** The largest unread count that a room sends. A room with more unread messages sends this number. */
@@ -705,6 +707,7 @@ export class PrincipalDO extends DurableObject<Env> {
 					AND (?1 IS NULL OR instr(name_key, ?1) > 0)
 					AND (?2 IS NULL OR activity_at < ?2 OR (activity_at = ?2 AND room_id < ?3))
 					AND (?5 IS NULL OR activity_at > ?5 OR (activity_at = ?5 AND room_id >= ?6))
+					AND (?7 IS NULL OR room_id IN (SELECT value FROM json_each(?7)))
 				ORDER BY activity_at DESC, room_id DESC LIMIT ?4`,
 				query.nameKey,
 				query.after?.activityAt ?? null,
@@ -712,6 +715,7 @@ export class PrincipalDO extends DurableObject<Env> {
 				query.limit + 1,
 				query.until?.activityAt ?? null,
 				query.until?.roomId ?? null,
+				query.roomIds == null ? null : JSON.stringify(query.roomIds),
 			)
 			.toArray()
 			.map(toEntry);

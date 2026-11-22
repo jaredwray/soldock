@@ -1,8 +1,13 @@
 import { runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
-import { EVENTS_SOCKET_PATH, SERVICE_ACTIVITY_LIMITS, SERVICE_SCOPES } from "@asterra/contracts";
+import {
+	EVENTS_SOCKET_PATH,
+	SERVICE_ACTIVITY_LIMITS,
+	SERVICE_SCOPE_DESCRIPTIONS,
+	SERVICE_SCOPES,
+} from "@asterra/contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { checkCredentials, credentialState } from "../src/identity/index.ts";
+import { type CredentialRef, checkCredentials, credentialState } from "../src/identity/index.ts";
 import {
 	type Actor,
 	api,
@@ -278,6 +283,113 @@ describe("tokens of a service account", () => {
 	});
 });
 
+describe("rotation of a token", () => {
+	it("gives a new secret and keeps the old one for its overlap, for owners and admins only", async () => {
+		const { owner, admin, ada, bot, service } = await seedService();
+		const token = await serviceToken(admin, service.id, ["account.read", "chat.read"], { expires_in_days: 30 });
+		const before = (await admin.call("account.list_api_keys", { principal_id: service.id })).api_keys[0];
+		// The sponsor, a member, an agent and the token itself cannot rotate it.
+		const rotate = { key_id: token.keyId };
+		expect(await codeOf(ada.call("account.rotate_api_key", rotate))).toBe("forbidden");
+		expect(await codeOf(bot.call("account.rotate_api_key", rotate))).toBe("forbidden");
+		expect(await codeOf(token.call("account.rotate_api_key", rotate))).toBe("forbidden");
+
+		const { api_key } = await admin.call("account.rotate_api_key", { key_id: token.keyId, overlap_minutes: 60 });
+		expect(api_key).toMatchObject({
+			id: token.keyId,
+			scopes: ["account.read", "chat.read"],
+			expires_at: before?.expires_at,
+			rotated_by: admin.id,
+		});
+		expect(Date.parse(api_key.previous_secret_expires_at ?? "")).toBeGreaterThan(Date.now() + 59 * 60_000);
+		const fresh = api(api_key.secret);
+		// Both secrets work during the overlap. A second rotation must wait for its end.
+		await token.call("account.whoami");
+		await fresh("account.whoami");
+		expect(await codeOf(owner.call("account.rotate_api_key", rotate))).toBe("conflict");
+		// A room socket of each secret keeps the reference of its secret. Both are live during the overlap.
+		const { room } = await admin.call("chat.create_room", { kind: "private", name: "ci", member_ids: [service.id] });
+		for (const secret of [token.key, api_key.secret]) {
+			const opened = await upgradeRoomSocket(room.id, bearer(secret));
+			expect(opened.status).toBe(101);
+			opened.webSocket?.accept();
+		}
+		const refs = await runInDurableObject(env.CHAT_ROOM.get(env.CHAT_ROOM.idFromName(room.id)), (_instance, state) =>
+			state
+				.getWebSockets()
+				.map((socket) => (socket.deserializeAttachment() as { credential: CredentialRef }).credential)
+				// The order of the sockets is not fixed. The old secret has no number, the new one has 1.
+				.sort((a, b) => (a.gen ?? 0) - (b.gen ?? 0)),
+		);
+		expect(refs.map((ref) => ref.gen)).toEqual([undefined, 1]);
+		expect(await checkCredentials(env.DIRECTORY, refs)).toEqual(["live", "live"]);
+
+		// The end of the overlap ends the socket of the old secret only.
+		await owner.call("account.end_api_key_rotation", rotate);
+		expect(await codeOf(token.call("account.whoami"))).toBe("unauthenticated");
+		await fresh("account.whoami");
+		expect(await checkCredentials(env.DIRECTORY, refs)).toEqual(["ended", "live"]);
+		const listed = (await admin.call("account.list_api_keys", { principal_id: service.id })).api_keys[0];
+		expect(listed?.previous_secret_expires_at).toBeNull();
+
+		// Rotation and its end are changes of an admin in the log.
+		const page = await activityOf(admin, service.id, 4, token.keyId);
+		const changes = page.entries.filter((entry) => entry.surface === "admin");
+		expect(changes.map((entry) => entry.operation).slice(0, 2)).toEqual([
+			"account.end_api_key_rotation",
+			"account.rotate_api_key",
+		]);
+	});
+
+	it("stops the old secret after its overlap or at once, and refuses a revoked or expired key or a narrower credential", async () => {
+		const { admin, ada, service } = await seedService();
+		const token = await serviceToken(admin, service.id, ["account.read"]);
+		const first = await admin.call("account.rotate_api_key", { key_id: token.keyId, overlap_minutes: 30 });
+		// The overlap ends: the old secret is refused with the reason rotated.
+		await env.DIRECTORY.prepare("UPDATE api_keys SET prev_expires_at = ? WHERE id = ?").bind(PAST, token.keyId).run();
+		expect(await codeOf(token.call("account.whoami"))).toBe("unauthenticated");
+		await api(first.api_key.secret)("account.whoami");
+		await vi.waitFor(async () => {
+			const page = await admin.call("directory.list_service_account_activity", {
+				principal_id: service.id,
+				key_id: token.keyId,
+			});
+			expect(page.entries.find((entry) => entry.operation === "auth.refused_token")).toMatchObject({
+				code: "rotated",
+				surface: "rest",
+			});
+		});
+		// An overlap of 0 stops the old secret at once. The overlap of the last rotation ended, so it may rotate.
+		const second = await admin.call("account.rotate_api_key", { key_id: token.keyId, overlap_minutes: 0 });
+		expect(second.api_key.previous_secret_expires_at).toBeNull();
+		expect(await codeOf(api(first.api_key.secret)("account.whoami"))).toBe("unauthenticated");
+		await api(second.api_key.secret)("account.whoami");
+		// A revoke stops each secret. A revoked key, and an expired key, cannot rotate.
+		const third = await admin.call("account.rotate_api_key", { key_id: token.keyId, overlap_minutes: 60 });
+		await admin.call("account.revoke_api_key", { key_id: token.keyId });
+		expect(await codeOf(api(second.api_key.secret)("account.whoami"))).toBe("unauthenticated");
+		expect(await codeOf(api(third.api_key.secret)("account.whoami"))).toBe("unauthenticated");
+		expect(await codeOf(admin.call("account.rotate_api_key", { key_id: token.keyId }))).toBe("conflict");
+		const other = await serviceToken(admin, service.id, ["account.read"]);
+		await expire(other.keyId);
+		expect(await codeOf(admin.call("account.rotate_api_key", { key_id: other.keyId }))).toBe("conflict");
+		// A person rotates their own key.
+		const own = await ada.call("account.create_api_key", { label: "laptop", scopes: ["account.read"] });
+		const rotated = await ada.call("account.rotate_api_key", { key_id: own.api_key.id });
+		await api(rotated.api_key.secret)("account.whoami");
+		// A narrow key cannot rotate a wider key, because the new secret would give scopes that it does not hold.
+		const wide = await ada.call("account.create_api_key", { label: "wide", scopes: ["account.read", "mail.read"] });
+		const narrow = await ada.call("account.create_api_key", { label: "narrow", scopes: ["account.keys"] });
+		const asNarrow = api(narrow.api_key.secret);
+		expect(await codeOf(asNarrow("account.rotate_api_key", { key_id: wide.api_key.id }))).toBe("forbidden");
+		const narrowAdmin = await admin.call("account.create_api_key", { label: "narrow", scopes: ["account.keys"] });
+		const wideToken = await serviceToken(admin, service.id, ["account.read", "mail.read"]);
+		expect(await codeOf(api(narrowAdmin.api_key.secret)("account.rotate_api_key", { key_id: wideToken.keyId }))).toBe(
+			"forbidden",
+		);
+	});
+});
+
 describe("the lifetime of an API key", () => {
 	it("ends a token of a service account, and a key of a person, on REST, on MCP and for live connections", async () => {
 		const { owner, admin, ada, service } = await seedService();
@@ -321,6 +433,12 @@ describe("calls of a service account", () => {
 		const whoami = await token.call("account.whoami");
 		expect(whoami).toMatchObject({ principal: { kind: "service" }, credential: "api_key", sign_in: null });
 		expect(whoami.missing_scopes).toEqual([]);
+		// A narrow token learns what it misses, with the text of a service account, not of a person.
+		const narrow = await serviceToken(admin, service.id, ["account.read"]);
+		const missing = (await narrow.call("account.whoami")).missing_scopes;
+		expect(missing.find((entry) => entry.scope === "mail.read")?.description).toBe(
+			SERVICE_SCOPE_DESCRIPTIONS["mail.read"],
+		);
 
 		expect(await codeOf(token.call("account.create_api_key", { label: "x", scopes: ["mail.read"] }))).toBe("forbidden");
 		expect(
@@ -467,6 +585,137 @@ describe("the life of a service account", () => {
 });
 
 describe("the activity log of a service account", () => {
+	it("records a refused token at most once a minute, with the reason, and a refused socket open", async () => {
+		const { owner, admin, service } = await seedService();
+		const revoked = await serviceToken(admin, service.id, ["account.read"]);
+		const expired = await serviceToken(admin, service.id, ["account.read"]);
+		const narrow = await serviceToken(admin, service.id, ["account.read"]);
+		const reader = await serviceToken(admin, service.id, ["chat.read"]);
+		await admin.call("account.revoke_api_key", { key_id: revoked.keyId });
+		await expire(expired.keyId);
+		// Two refusals of one token within a minute add one entry.
+		expect(await codeOf(revoked.call("account.whoami"))).toBe("unauthenticated");
+		expect(await codeOf(revoked.call("account.whoami"))).toBe("unauthenticated");
+		expect((await mcp(expired.key, "tools/list")).status).toBe(401);
+		// A secret of no token names no account, so it adds nothing.
+		expect((await request("/api/v1/account", { headers: bearer(`sdk_${"x".repeat(43)}`) })).status).toBe(401);
+		// A socket that the credential cannot open, and a room of which the account is not a member.
+		const events = await request(EVENTS_SOCKET_PATH, { headers: { upgrade: "websocket", ...bearer(narrow.key) } });
+		expect(events.status).toBe(403);
+		const { room } = await owner.call("chat.create_room", { kind: "private", name: "secret" });
+		expect((await upgradeRoomSocket(room.id, bearer(reader.key))).status).toBeGreaterThanOrEqual(400);
+
+		const interesting = <T extends { operation: string }>(entries: T[]) =>
+			entries.filter((entry) => entry.operation === "auth.refused_token" || entry.operation.endsWith("_socket"));
+		const entries = await vi.waitFor(async () => {
+			const page = await admin.call("directory.list_service_account_activity", { principal_id: service.id });
+			const found = interesting(page.entries);
+			expect(found).toHaveLength(4);
+			return found;
+		});
+		expect(entries.map((entry) => [entry.operation, entry.result, entry.code, entry.surface, entry.key_id])).toEqual(
+			expect.arrayContaining([
+				["auth.refused_token", "denied", "revoked", "rest", revoked.keyId],
+				["auth.refused_token", "denied", "expired", "mcp", expired.keyId],
+				["events.open_socket", "denied", "forbidden", "rest", narrow.keyId],
+			]),
+		);
+		const roomEntry = entries.find((entry) => entry.operation === "chat.open_room_socket");
+		expect(roomEntry).toMatchObject({ resource_id: room.id, key_id: reader.keyId, surface: "rest" });
+		expect(["denied", "error"]).toContain(roomEntry?.result);
+
+		// The token of an archived account is refused with the reason archived.
+		await admin.call("directory.archive_principal", { principal_id: service.id });
+		expect(await codeOf(narrow.call("account.whoami"))).toBe("unauthenticated");
+		await vi.waitFor(async () => {
+			const page = await admin.call("directory.list_service_account_activity", {
+				principal_id: service.id,
+				key_id: narrow.keyId,
+			});
+			expect(page.entries[0]).toMatchObject({ operation: "auth.refused_token", code: "archived" });
+		});
+	});
+
+	it("records the membership changes that others make for it, and not its own", async () => {
+		const { owner, admin, ada, service } = await seedService();
+		const token = await serviceToken(admin, service.id, ["chat.read", "chat.write"]);
+		const { shared_drive: drive } = await admin.call("drive.create_shared_drive", {
+			name: "Ops",
+			members: [
+				{ principal_id: admin.id, role: "manager" },
+				{ principal_id: service.id, role: "viewer" },
+			],
+		});
+		await admin.call("drive.remove_shared_drive_member", { drive_id: drive.id, principal_id: service.id });
+		const { room } = await ada.call("chat.create_room", { kind: "private", name: "ada-room" });
+		await ada.call("chat.add_members", { room_id: room.id, principal_ids: [service.id] });
+		await ada.call("chat.remove_member", { room_id: room.id, principal_id: service.id });
+		const file = (await ada.call("drive.upload_file", { name: "a.txt", content_base64: base64("a") })).item;
+		await ada.call("drive.share_item", { item_id: file.id, principal_id: service.id, role: "viewer" });
+		const { room: lobby } = await owner.call("chat.create_room", { kind: "public", name: "lobby" });
+		await token.call("chat.join_room", { room_id: lobby.id });
+		// The delete of its only member leaves a room without an owner. An admin makes the account its owner.
+		const carol = await createActor(owner, {
+			kind: "human",
+			display_name: "Carol",
+			address: "carol@dock.test",
+			org_role: "member",
+			password: PASSWORD,
+		});
+		const { room: orphan } = await carol.call("chat.create_room", { kind: "public", name: "orphan" });
+		await owner.call("directory.delete_principal", { principal_id: carol.id });
+		await admin.call("chat.admin_assign_owner", { room_id: orphan.id, principal_id: service.id });
+		// An admin deletes a room and a shared drive of the account.
+		const { room: doomed } = await admin.call("chat.create_room", {
+			kind: "private",
+			name: "doomed",
+			member_ids: [service.id],
+		});
+		await admin.call("chat.delete_room", { room_id: doomed.id });
+		const { shared_drive: gone } = await admin.call("drive.create_shared_drive", {
+			name: "Gone",
+			members: [
+				{ principal_id: admin.id, role: "manager" },
+				{ principal_id: service.id, role: "viewer" },
+			],
+		});
+		await admin.call("drive.delete_shared_drive", { drive_id: gone.id });
+
+		const memberships = new Set([
+			"drive.create_shared_drive",
+			"drive.remove_shared_drive_member",
+			"chat.add_members",
+			"chat.remove_member",
+			"drive.share_item",
+			"chat.join_room",
+			"chat.admin_assign_owner",
+			"chat.delete_room",
+			"drive.delete_shared_drive",
+		]);
+		const entries = await vi.waitFor(async () => {
+			const page = await admin.call("directory.list_service_account_activity", { principal_id: service.id });
+			const found = page.entries.filter((entry) => memberships.has(entry.operation));
+			expect(found).toHaveLength(10);
+			return found;
+		});
+		expect(entries.map((entry) => [entry.operation, entry.surface, entry.actor_id, entry.resource_id])).toEqual(
+			expect.arrayContaining([
+				["drive.create_shared_drive", "admin", admin.id, drive.id],
+				["drive.remove_shared_drive_member", "admin", admin.id, drive.id],
+				// Ada is a member, so her changes have the surface member, with their own count limit.
+				["chat.add_members", "member", ada.id, room.id],
+				["chat.remove_member", "member", ada.id, room.id],
+				["drive.share_item", "member", ada.id, file.id],
+				// Its own join is its own call: one entry with the surface rest, and no admin entry.
+				["chat.join_room", "rest", service.id, lobby.id],
+				["chat.admin_assign_owner", "admin", admin.id, orphan.id],
+				["chat.delete_room", "admin", admin.id, doomed.id],
+				["drive.create_shared_drive", "admin", admin.id, gone.id],
+				["drive.delete_shared_drive", "admin", admin.id, gone.id],
+			]),
+		);
+	});
+
 	it("records each call with its token, surface, result and request id, and each change by an admin", async () => {
 		const { admin, service } = await seedService();
 		const token = await serviceToken(admin, service.id, ["account.read", "mail.read", "mail.send"]);
@@ -585,7 +834,7 @@ describe("the activity log of a service account", () => {
 		await feeds.cancel();
 	});
 
-	it("keeps the newest calls of the limit and each change by an admin, and drops entries older than the days of the limit", async () => {
+	it("keeps the newest calls and member changes of their limits and each change by an admin, and drops entries older than the days of the limit", async () => {
 		const { admin, service } = await seedService();
 		// The entry of the creation reaches the object first, so it cannot land between the rows below.
 		await activityOf(admin, service.id, 1);
@@ -618,6 +867,16 @@ describe("the activity log of a service account", () => {
 					service.id,
 				);
 			}
+			// Then 100 more changes by members than their limit. The last row keeps the next insert a multiple of 100.
+			const firstMember = SERVICE_ACTIVITY_LIMITS.entries + 100;
+			for (let seq = firstMember; seq < firstMember + SERVICE_ACTIVITY_LIMITS.memberChanges + 100; seq++) {
+				sql.exec(
+					"INSERT INTO service_activity (seq, at, op, result, surface, actor_id) VALUES (?, ?, 'chat.add_members', 'ok', 'member', ?)",
+					seq,
+					now,
+					service.id,
+				);
+			}
 		});
 		await stub.recordServiceActivity({
 			at: now,
@@ -638,10 +897,17 @@ describe("the activity log of a service account", () => {
 				.exec<{ op: string }>("SELECT op FROM service_activity WHERE surface = 'admin'")
 				.toArray()
 				.map((row) => row.op),
+			members: state.storage.sql
+				.exec<{ n: number }>("SELECT COUNT(*) AS n FROM service_activity WHERE surface = 'member'")
+				.one().n,
 		}));
-		// The count limit kept the newest calls, as many as the limit, and each change by an admin among them.
-		// The days limit removed `old`.
-		expect(count).toEqual({ calls: SERVICE_ACTIVITY_LIMITS.entries, admin: ["change", ...Array(10).fill("later")] });
+		// The count limits kept the newest calls and the newest member changes, as many as each limit, and each
+		// change by an admin. The days limit removed `old`.
+		expect(count).toEqual({
+			calls: SERVICE_ACTIVITY_LIMITS.entries,
+			admin: ["change", ...Array(10).fill("later")],
+			members: SERVICE_ACTIVITY_LIMITS.memberChanges,
+		});
 	});
 
 	it("is for owners and admins only, and for a service account only", async () => {
@@ -665,8 +931,8 @@ describe("the activity log of a service account", () => {
 });
 
 describe("the access of a service account", () => {
-	it("lists its team mailboxes, shared drives and rooms with its role, and the scopes of its live tokens", async () => {
-		const { owner, admin, service } = await seedService();
+	it("lists its team mailboxes, shared drives, rooms and items shared directly, with its role, and the scopes of its live tokens", async () => {
+		const { owner, admin, ada, service } = await seedService();
 		const live = await serviceToken(admin, service.id, ["mail.read", "chat.read"]);
 		const revoked = await serviceToken(admin, service.id, ["drive.write"]);
 		const expired = await serviceToken(admin, service.id, ["mail.send"]);
@@ -689,21 +955,41 @@ describe("the access of a service account", () => {
 			name: "builds",
 			member_ids: [service.id],
 		});
+		const { room: dm } = await owner.call("chat.open_dm", { principal_id: service.id });
 		await sendMemberStates(owner.id, service.id);
+		// Ada shares three files directly with the account. She then removes one share and trashes one file.
+		const upload = async (name: string) =>
+			(await ada.call("drive.upload_file", { name, content_base64: base64(name) })).item;
+		const kept = await upload("kept.txt");
+		const unshared = await upload("gone.txt");
+		const trashed = await upload("trash.txt");
+		for (const item of [kept, unshared, trashed]) {
+			await ada.call("drive.share_item", { item_id: item.id, principal_id: service.id, role: "viewer" });
+		}
+		await ada.call("drive.unshare_item", { item_id: unshared.id, principal_id: service.id });
+		await ada.call("drive.trash_items", { item_ids: [trashed.id] });
 
 		const access = await vi.waitFor(async () => {
 			const result = await admin.call("directory.get_service_account_access", { principal_id: service.id });
 			expect(result.shared_drives).toHaveLength(1);
-			expect(result.chat_rooms).toHaveLength(1);
+			expect(result.chat_rooms).toHaveLength(2);
 			return result;
 		});
 		expect(access).toEqual({
 			principal_id: service.id,
 			team_mailboxes: [{ id: team_mailbox.id, display_name: "Support", address: "support@dock.test" }],
 			shared_drives: [{ id: drive.id, name: "Releases", role: "editor" }],
-			chat_rooms: [{ id: room.id, kind: "private", name: "builds", role: "member" }],
+			// A direct message names its other member, so an admin can tell two of them apart.
+			chat_rooms: [
+				{ id: room.id, kind: "private", name: "builds", peer_name: null, role: "member" },
+				{ id: dm.id, kind: "dm", name: null, peer_name: "Olive Owner", role: "member" },
+			],
 			chat_rooms_truncated: false,
-			tokens: [{ key_id: live.keyId, label: "deploy", scopes: ["mail.read", "chat.read"], expires_at: null }],
+			drive_shared_items: [{ space_id: ada.id, item_id: kept.id, name: "kept.txt", kind: "file", role: "viewer" }],
+			drive_shared_items_truncated: false,
+			tokens: [
+				{ key_id: live.keyId, label: "deploy", scopes: ["mail.read", "chat.read"], expires_at: null, resources: null },
+			],
 			scopes: ["chat.read", "mail.read"],
 		});
 		const viaMcp = await callTool(admin.key, "directory_get_service_account_access", { principal_id: service.id });

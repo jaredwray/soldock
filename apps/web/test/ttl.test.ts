@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
 	customDateBounds,
+	expiresSoon,
 	expiryLabel,
 	expiryPhrase,
 	localDate,
@@ -54,5 +55,14 @@ describe("the lifetime of a new API key", () => {
 		expect(expiryPhrase(null, NOW)).toBe("no end");
 		expect(expiryPhrase(new Date(NOW + 7 * DAY).toISOString(), NOW)).toBe("ends in 7 days");
 		expect(expiryPhrase(new Date(NOW + 180 * DAY).toISOString(), NOW)).toMatch(/^ends on [A-Z0-9]/);
+	});
+
+	// The owners and admins get a notice seven days before a token ends. The list marks the same keys.
+	it("marks a key that ends within seven days, and not an ended key or a key without an end", () => {
+		expect(expiresSoon(new Date(NOW + 7 * DAY).toISOString(), NOW)).toBe(true);
+		expect(expiresSoon(new Date(NOW + 7 * DAY + 1000).toISOString(), NOW)).toBe(false);
+		expect(expiresSoon(new Date(NOW + 1000).toISOString(), NOW)).toBe(true);
+		expect(expiresSoon(new Date(NOW - 1000).toISOString(), NOW)).toBe(false);
+		expect(expiresSoon(null, NOW)).toBe(false);
 	});
 });

@@ -20,6 +20,7 @@ import chatFilterExplicitSchema from "../../migrations/0021_chat_filter_explicit
 import chatLayer8Schema from "../../migrations/0022_chat_layer8.sql";
 import chatFilterAgentDefaultSchema from "../../migrations/0023_chat_filter_agent_default.sql";
 import serviceAccountSchema from "../../migrations/0024_service_accounts.sql";
+import serviceTokenSchema from "../../migrations/0025_service_tokens.sql";
 import { log, OperationError, randomToken } from "../platform/index.ts";
 import { allMailboxIds } from "./team-mailboxes.ts";
 
@@ -139,6 +140,7 @@ function freshDirectoryStatements(db: D1Database): D1PreparedStatement[] {
 		...chatLayer8Schema.split("--> statement-breakpoint"),
 		...chatFilterAgentDefaultSchema.split("--> statement-breakpoint"),
 		...serviceAccountSchema.split("--> statement-breakpoint"),
+		...serviceTokenSchema.split("--> statement-breakpoint"),
 		// The directory now has the schema of each bundled migration. Record them in the table that
 		// `wrangler d1 migrations apply` reads, or it runs them again later. A second run of 0004 would
 		// copy the principals without their passwords. The columns are the ones that wrangler creates.
@@ -173,4 +175,5 @@ const BUNDLED_MIGRATIONS = [
 	"0022_chat_layer8.sql",
 	"0023_chat_filter_agent_default.sql",
 	"0024_service_accounts.sql",
+	"0025_service_tokens.sql",
 ] as const;

@@ -1,4 +1,4 @@
-import { MAIL_LIMITS, type Message } from "@asterra/contracts";
+import { allowsResource, MAIL_LIMITS, type Message } from "@asterra/contracts";
 import {
 	agentMailboxes,
 	agentMailboxFor,
@@ -248,7 +248,11 @@ export const mailHandlers: Pick<HandlerMap<CallContext>, MailOperation> = {
 			teamMailboxesOf(call.env.DIRECTORY, call.caller.id),
 			canReadAgentMailboxes(call.caller) ? agentMailboxes(call.env.DIRECTORY) : [],
 		]);
-		return { mailboxes: [ownMailbox(call), ...teams, ...agents] };
+		// A token with resource limits sees only its listed mailboxes.
+		const mailboxes = [ownMailbox(call), ...teams, ...agents].filter((mailbox) =>
+			allowsResource(call.caller.restriction, "mailbox", mailbox.id),
+		);
+		return { mailboxes };
 	},
 
 	// The settings of a person live in their own mailbox. These operations take no mailbox_id, so a member

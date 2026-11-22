@@ -8,9 +8,13 @@ import {
 	operationList,
 	operations,
 	pathParams,
+	RESOURCE_RULES,
 	resourceList,
+	resourceRefusal,
 	resources,
+	SERVICE_SCOPE_DESCRIPTIONS,
 	SERVICE_SCOPES,
+	scopeDescription,
 	templateVars,
 	toolName,
 } from "../src/index.ts";
@@ -110,6 +114,18 @@ describe("the operation registry", () => {
 		expect(missed.map((op) => op.name)).toEqual([]);
 	});
 
+	// The token form of a service account and `missing_scopes` show these texts. A text for a person ("your
+	// mail", rights of owners and admins) would tell a wrong story about the account.
+	it("names the service account, and no right of a person, in the scope text of a service token", () => {
+		for (const scope of SERVICE_SCOPES) {
+			const text = scopeDescription(scope, "service");
+			expect(text, scope).toBe(SERVICE_SCOPE_DESCRIPTIONS[scope as keyof typeof SERVICE_SCOPE_DESCRIPTIONS]);
+			expect(text, scope).not.toMatch(/\byour?\b/i);
+			expect(text, scope).not.toMatch(/owners and admins/i);
+		}
+		expect(scopeDescription("mail.read", "human")).toMatch(/your mail/);
+	});
+
 	it("takes a lifetime for a new API key in days or as a time, never both, within the limit", () => {
 		const input = operations["account.create_api_key"].input;
 		const base = { label: "ci", scopes: [ALL_SCOPES[0]] };
@@ -160,6 +176,97 @@ describe("the resource registry", () => {
 			"asterra://mail/%E0%A4%A/inbox",
 		]) {
 			expect(matchTemplate(template, uri), uri).toBeNull();
+		}
+	});
+});
+
+// The resource limits of a token of a service account. The invoker refuses a limited token for each
+// operation without a rule, and each rule must name each input field that names a mailbox, a drive or a room.
+describe("the resource rules of a limited token", () => {
+	const serviceOps = operationList.filter((op) => op.callers.includes("service"));
+	const RESOURCE_FIELD = /^(mailbox_id|space_id|drive_id|room_id)$|_(space|room|mailbox|drive)_id$/;
+
+	it("gives each operation that a service account can call one rule, and no other operation a rule", () => {
+		expect(Object.keys(RESOURCE_RULES).sort()).toEqual(serviceOps.map((op) => op.name).sort());
+	});
+
+	it("names in each check only input fields, and each field that names a resource", () => {
+		for (const op of serviceOps) {
+			const rule = RESOURCE_RULES[op.name];
+			const fields = Object.keys(shape(op.input));
+			const named = fields.filter((field) => RESOURCE_FIELD.test(field));
+			if (rule?.mode === "check") {
+				for (const field of rule.fields) {
+					expect(fields, `${op.name}.${field.field}`).toContain(field.field);
+					if (field.absent === "own") expect(["mailbox", "drive"], op.name).toContain(field.resource);
+				}
+				for (const field of named) {
+					expect(
+						rule.fields.map((entry) => entry.field),
+						`${op.name} must check ${field}`,
+					).toContain(field);
+				}
+			} else if (rule?.mode !== "refuse") {
+				expect(named, `${op.name} names a resource, so it needs a check`).toEqual([]);
+			}
+		}
+	});
+
+	it("keeps the operations without a check in these exact lists", () => {
+		const of = (mode: string) =>
+			Object.entries(RESOURCE_RULES)
+				.filter(([, rule]) => rule.mode === mode)
+				.map(([name]) => name)
+				.sort();
+		expect(of("none")).toEqual([
+			"account.whoami",
+			"chat.get_presence",
+			"chat.list_custom_emoji",
+			"chat.list_slash_commands",
+			"directory.get_principals",
+			"directory.list_principals",
+			"directory.list_team_mailboxes",
+		]);
+		expect(of("filter")).toEqual(["chat.list_rooms", "drive.list_shared_drives", "mail.list_mailboxes"]);
+	});
+
+	it("refuses each check and refuse operation for a token that lists nothing, and passes a check of listed ids", () => {
+		const caller = { id: "prn_self", restriction: { mailbox_ids: [], drive_ids: [], room_ids: [] } };
+		const all = {
+			id: "prn_self",
+			restriction: { mailbox_ids: ["prn_self", "x"], drive_ids: ["prn_self", "x"], room_ids: ["x"] },
+		};
+		for (const op of serviceOps) {
+			const rule = RESOURCE_RULES[op.name];
+			if (rule?.mode === "check") {
+				expect(resourceRefusal(op.name, {}, caller), op.name).not.toBeNull();
+				const listed = Object.fromEntries(
+					rule.fields.map((field) => [field.field, field.value === "own" || field.field === "file_ids" ? ["f"] : "x"]),
+				);
+				expect(resourceRefusal(op.name, listed, all), op.name).toBeNull();
+				const outside = Object.fromEntries(
+					rule.fields.map((field) => [field.field, field.value === "own" ? ["f"] : "y"]),
+				);
+				if (rule.fields.some((field) => field.value !== "own")) {
+					expect(resourceRefusal(op.name, outside, all), op.name).not.toBeNull();
+				}
+			} else if (rule?.mode === "refuse") {
+				expect(resourceRefusal(op.name, {}, all), op.name).not.toBeNull();
+			} else {
+				expect(resourceRefusal(op.name, {}, caller), op.name).toBeNull();
+			}
+			// A token without limits is never refused.
+			expect(resourceRefusal(op.name, {}, { id: "prn_self", restriction: null })).toBeNull();
+		}
+		// An operation without a rule is refused for a limited token.
+		expect(resourceRefusal("webhooks.create_endpoint", {}, all)).not.toBeNull();
+	});
+
+	it("makes each MCP resource kind say how a limited token treats it", () => {
+		for (const resource of resourceList) {
+			const restricted = resource.restricted;
+			if (restricted === "refuse") continue;
+			expect(templateVars(resource.uriTemplate), resource.name).toContain(restricted.var);
 		}
 	});
 });

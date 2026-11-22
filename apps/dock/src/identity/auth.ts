@@ -1,5 +1,6 @@
 import { ALL_SCOPES, type PrincipalKind, type Scope } from "@asterra/contracts";
 import { type Caller, type InvokeOutcome, sha256Hex } from "../platform/index.ts";
+import { type RequestTrace, recordRefusedToken } from "./access.ts";
 import { ACCESS_TOKEN_PREFIX, findGrantByAccessToken, touchGrant } from "./oauth-store.ts";
 import { findApiKey, findSession, type PrincipalRecord, scopeCeiling, touchApiKey } from "./store.ts";
 
@@ -17,6 +18,11 @@ export interface AuthContext extends Caller {
 	/** `oauth`: an access token that an MCP client got through OAuth. */
 	credential: "session" | "api_key" | "oauth";
 	keyId: string | null;
+	/**
+	 * The number of the secret of an API key: 0 for the first secret, one more for each rotation. A live
+	 * connection keeps it, so the old secret stops with its overlap. Null for each other credential.
+	 */
+	keyGeneration: number | null;
 	/** The OAuth grant of an `oauth` credential. A lasting effect, such as a webhook, stops with the grant. */
 	grantId: string | null;
 	/** The SHA-256 of the session cookie, for a session. A change can end the other sessions and keep this one. */
@@ -59,7 +65,11 @@ export async function authenticate(
 	request: Request,
 	env: Env,
 	waitUntil: (promise: Promise<unknown>) => void,
-	options: { allowSession: boolean },
+	options: {
+		allowSession: boolean;
+		/** Where the request came from. A refused token of a service account goes into its activity log. */
+		trace: RequestTrace;
+	},
 ): Promise<AuthContext | null> {
 	const authorization = request.headers.get("authorization");
 	if (authorization !== null) {
@@ -77,6 +87,8 @@ export async function authenticate(
 				kind: granted.principal.kind,
 				credential: "oauth",
 				keyId: null,
+				keyGeneration: null,
+				restriction: null,
 				grantId: granted.grant.id,
 				sessionHash: null,
 				accessHash: await sha256Hex(match[1]),
@@ -84,7 +96,10 @@ export async function authenticate(
 			};
 		}
 		const found = await findApiKey(env.DIRECTORY, match[1]);
-		if (!found || found.principal.archived_at !== null) return null;
+		if (!found || found.principal.archived_at !== null) {
+			waitUntil(recordRefusedToken(env, match[1], options.trace));
+			return null;
+		}
 		waitUntil(touchApiKey(env.DIRECTORY, found.key));
 		// The ceiling applies again here, so a key row with a wider scope list still cannot exceed it.
 		const ceiling = new Set<Scope>(scopeCeiling(found.principal));
@@ -94,6 +109,10 @@ export async function authenticate(
 			kind: found.principal.service ? "service" : found.principal.kind,
 			credential: "api_key",
 			keyId: found.key.id,
+			keyGeneration: found.generation,
+			// Only a token of a service account gets limits through the API. A stored limit on a different key
+			// applies too, so a limit never fails open.
+			restriction: found.key.resources,
 			grantId: null,
 			sessionHash: null,
 			accessHash: null,
@@ -112,6 +131,8 @@ export async function authenticate(
 		kind: "human",
 		credential: "session",
 		keyId: null,
+		keyGeneration: null,
+		restriction: null,
 		grantId: null,
 		sessionHash: session.tokenHash,
 		accessHash: null,

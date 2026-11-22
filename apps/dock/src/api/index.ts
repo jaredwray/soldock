@@ -69,7 +69,10 @@ export async function callOf(
 	options: { change: boolean; ownSiteRead?: boolean },
 ): Promise<CallContext | null> {
 	const waitUntil = (promise: Promise<unknown>) => c.executionCtx.waitUntil(promise);
-	const caller = await authenticate(c.req.raw, c.env, waitUntil, { allowSession: true });
+	const caller = await authenticate(c.req.raw, c.env, waitUntil, {
+		allowSession: true,
+		trace: { requestId: c.var.requestId, surface: "rest" },
+	});
 	if (!caller) return null;
 	if (caller.credential === "session") {
 		if (options.change && !isSameOrigin(c.req.raw)) {

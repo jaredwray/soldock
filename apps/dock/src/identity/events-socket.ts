@@ -2,7 +2,7 @@ import { EVENTS_SOCKET_PATH, operations } from "@asterra/contracts";
 import type { Hono } from "hono";
 import { unauthenticatedResponse } from "../api/index.ts";
 import { CALLER_NAMES, log, OperationError, type RequestIdVariables } from "../platform/index.ts";
-import { credentialRef, recordSocketOpen } from "./access.ts";
+import { credentialRef, recordSocketOpen, refusedOutcome } from "./access.ts";
 import { type AuthContext, authenticate, isSameOrigin } from "./auth.ts";
 import { EVENTS_SOCKET_HEADER, type EventsSocketOpen } from "./principal.ts";
 
@@ -24,6 +24,14 @@ export async function openEventsSocket(
 	caller: AuthContext,
 	options: { feed: boolean },
 ): Promise<Response> {
+	// The socket carries the changes of each room of the principal, so a token with resource limits never
+	// gets one. The route and the feeds of MCP both come here.
+	if (caller.restriction !== null) {
+		throw new OperationError(
+			"forbidden",
+			"This token is limited to listed resources, and the events socket carries each room.",
+		);
+	}
 	const open: EventsSocketOpen = { credential: credentialRef(caller), feed: options.feed };
 	const principal = env.PRINCIPAL.get(env.PRINCIPAL.idFromName(caller.principal.id));
 	const response = await principal.fetch("https://principal.internal/events", {
@@ -48,26 +56,35 @@ export function mountEventsSocket(app: Hono<SocketEnv>): void {
 			throw new OperationError("invalid", "This path accepts a WebSocket upgrade only.");
 		}
 		const waitUntil = (promise: Promise<unknown>) => c.executionCtx.waitUntil(promise);
-		const caller = await authenticate(request, c.env, waitUntil, { allowSession: true });
-		if (!caller) return unauthenticatedResponse(c.var.requestId, new URL(request.url).pathname);
-		if (caller.credential === "session" && !isSameOrigin(request)) {
-			throw new OperationError("forbidden", "A socket with the session cookie must come from this origin.");
-		}
-		if (!READ_OPERATION.callers.includes(caller.kind)) {
-			throw new OperationError("forbidden", `${CALLER_NAMES[caller.kind]} cannot open the events socket.`);
-		}
-		const missing = READ_OPERATION.scopes.filter((scope) => !caller.scopes.has(scope));
-		if (missing.length > 0) {
-			throw new OperationError("forbidden", `The credential does not have the scope ${missing.join(", ")}.`);
-		}
-		const response = await openEventsSocket(c.env, caller, { feed: false });
-		// A service account gets one entry in its activity log for each socket that it opens.
-		recordSocketOpen(caller, c.env, waitUntil, c.var.requestId, "events.open_socket");
-		log("info", "events socket opened", {
-			principalId: caller.principal.id,
-			credential: caller.credential,
-			requestId: c.var.requestId,
+		const caller = await authenticate(request, c.env, waitUntil, {
+			allowSession: true,
+			trace: { requestId: c.var.requestId, surface: "rest" },
 		});
-		return response;
+		if (!caller) return unauthenticatedResponse(c.var.requestId, new URL(request.url).pathname);
+		try {
+			if (caller.credential === "session" && !isSameOrigin(request)) {
+				throw new OperationError("forbidden", "A socket with the session cookie must come from this origin.");
+			}
+			if (!READ_OPERATION.callers.includes(caller.kind)) {
+				throw new OperationError("forbidden", `${CALLER_NAMES[caller.kind]} cannot open the events socket.`);
+			}
+			const missing = READ_OPERATION.scopes.filter((scope) => !caller.scopes.has(scope));
+			if (missing.length > 0) {
+				throw new OperationError("forbidden", `The credential does not have the scope ${missing.join(", ")}.`);
+			}
+			const response = await openEventsSocket(c.env, caller, { feed: false });
+			// A service account gets one entry in its activity log for each socket that it opens.
+			recordSocketOpen(caller, c.env, waitUntil, c.var.requestId, "events.open_socket");
+			log("info", "events socket opened", {
+				principalId: caller.principal.id,
+				credential: caller.credential,
+				requestId: c.var.requestId,
+			});
+			return response;
+		} catch (error) {
+			// A service account gets an entry for a refused open too.
+			recordSocketOpen(caller, c.env, waitUntil, c.var.requestId, "events.open_socket", {}, refusedOutcome(error));
+			throw error;
+		}
 	});
 }

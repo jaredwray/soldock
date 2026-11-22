@@ -1,7 +1,14 @@
-import { isErrorCode, operations, RoomId } from "@asterra/contracts";
+import { allowsResource, isErrorCode, operations, RoomId } from "@asterra/contracts";
 import type { Hono } from "hono";
 import { unauthenticatedResponse } from "../api/index.ts";
-import { type AuthContext, authenticate, credentialRef, isSameOrigin, recordSocketOpen } from "../identity/index.ts";
+import {
+	type AuthContext,
+	authenticate,
+	credentialRef,
+	isSameOrigin,
+	recordSocketOpen,
+	refusedOutcome,
+} from "../identity/index.ts";
 import { CALLER_NAMES, log, OperationError, type RequestIdVariables } from "../platform/index.ts";
 import { type Refusal, SOCKET_HEADER, type SocketOpen } from "./room.ts";
 
@@ -27,6 +34,11 @@ export async function openRoomSocket(
 	roomId: string,
 	options: { feed: boolean },
 ): Promise<Response> {
+	// A token with resource limits gets a socket only to a listed room. The route and the feeds of MCP both
+	// come here.
+	if (!allowsResource(caller.restriction, "room", roomId)) {
+		throw new OperationError("forbidden", "This token is limited, and its list does not name this room.");
+	}
 	const open: SocketOpen = {
 		roomId,
 		actor: {
@@ -62,30 +74,48 @@ export function mountChatSocket(app: Hono<SocketEnv>): void {
 			throw new OperationError("invalid", "This path accepts a WebSocket upgrade only.");
 		}
 		const waitUntil = (promise: Promise<unknown>) => c.executionCtx.waitUntil(promise);
-		const caller = await authenticate(request, c.env, waitUntil, { allowSession: true });
-		if (!caller) return unauthenticatedResponse(c.var.requestId, new URL(request.url).pathname);
-		if (caller.credential === "session" && !isSameOrigin(request)) {
-			throw new OperationError("forbidden", "A socket with the session cookie must come from this origin.");
-		}
-		if (!READ_OPERATION.callers.includes(caller.kind)) {
-			throw new OperationError("forbidden", `${CALLER_NAMES[caller.kind]} cannot open a room socket.`);
-		}
-		const missing = READ_OPERATION.scopes.filter((scope) => !caller.scopes.has(scope));
-		if (missing.length > 0) {
-			throw new OperationError("forbidden", `The credential does not have the scope ${missing.join(", ")}.`);
-		}
-		// An id that is not a room id names no room. No object wakes for it.
-		const roomId = RoomId.safeParse(c.req.param("room_id"));
-		if (!roomId.success) throw new OperationError("not_found", "No room has that id, or you have no access to it.");
-		const response = await openRoomSocket(c.env, caller, roomId.data, { feed: false });
-		// A service account gets one entry in its activity log for each socket that it opens.
-		recordSocketOpen(caller, c.env, waitUntil, c.var.requestId, "chat.open_room_socket", { room_id: roomId.data });
-		log("info", "chat socket opened", {
-			principalId: caller.id,
-			credential: caller.credential,
-			roomId: roomId.data,
-			requestId: c.var.requestId,
+		const caller = await authenticate(request, c.env, waitUntil, {
+			allowSession: true,
+			trace: { requestId: c.var.requestId, surface: "rest" },
 		});
-		return response;
+		if (!caller) return unauthenticatedResponse(c.var.requestId, new URL(request.url).pathname);
+		const roomParam = RoomId.safeParse(c.req.param("room_id"));
+		try {
+			if (caller.credential === "session" && !isSameOrigin(request)) {
+				throw new OperationError("forbidden", "A socket with the session cookie must come from this origin.");
+			}
+			if (!READ_OPERATION.callers.includes(caller.kind)) {
+				throw new OperationError("forbidden", `${CALLER_NAMES[caller.kind]} cannot open a room socket.`);
+			}
+			const missing = READ_OPERATION.scopes.filter((scope) => !caller.scopes.has(scope));
+			if (missing.length > 0) {
+				throw new OperationError("forbidden", `The credential does not have the scope ${missing.join(", ")}.`);
+			}
+			// An id that is not a room id names no room. No object wakes for it.
+			const roomId = RoomId.safeParse(c.req.param("room_id"));
+			if (!roomId.success) throw new OperationError("not_found", "No room has that id, or you have no access to it.");
+			const response = await openRoomSocket(c.env, caller, roomId.data, { feed: false });
+			// A service account gets one entry in its activity log for each socket that it opens.
+			recordSocketOpen(caller, c.env, waitUntil, c.var.requestId, "chat.open_room_socket", { room_id: roomId.data });
+			log("info", "chat socket opened", {
+				principalId: caller.id,
+				credential: caller.credential,
+				roomId: roomId.data,
+				requestId: c.var.requestId,
+			});
+			return response;
+		} catch (error) {
+			// A service account gets an entry for a refused open too.
+			recordSocketOpen(
+				caller,
+				c.env,
+				waitUntil,
+				c.var.requestId,
+				"chat.open_room_socket",
+				roomParam.success ? { room_id: roomParam.data } : {},
+				refusedOutcome(error),
+			);
+			throw error;
+		}
 	});
 }

@@ -7,10 +7,13 @@ import {
 	type DirectoryEntry,
 	mentionDirectory,
 	mentionHandle,
+	RoomId,
 	SERVICE_ACTIVITY_LIMITS,
+	SharedDriveId,
 	SIGN_IN_LOCK_MINUTES,
 	searchFold,
 	TEAM_MAILBOX_LIMITS,
+	type TokenResources,
 } from "@asterra/contracts";
 import { audit, decodeCursor, encodeCursor, type HandlerMap, OperationError } from "../platform/index.ts";
 import { auditOk, credentialOwner, grantableScopes, isAdmin, missingScopes, recordServiceChange } from "./access.ts";
@@ -33,10 +36,12 @@ import {
 	disableTotp,
 	domainOf,
 	enableTotp,
+	endApiKeyRotation,
 	getApiKey,
 	getDirectoryRecords,
 	getPrincipal,
 	getPrincipals,
+	keyExpired,
 	listApiKeys,
 	listPrincipalPage,
 	liveApiKeys,
@@ -47,6 +52,7 @@ import {
 	removeMailDomain,
 	restorePrincipal,
 	revokeApiKey,
+	rotateApiKey,
 	setPassword,
 	setPendingTotpSecret,
 	unknownPrincipalIds,
@@ -57,6 +63,7 @@ import {
 	addTeamMailboxMember,
 	createTeamMailbox,
 	getTeamMailbox,
+	isTeamMailboxId,
 	listTeamMailboxes,
 	removeTeamMailboxMember,
 	renameTeamMailbox,
@@ -70,6 +77,8 @@ type IdentityOperation =
 	| "account.list_api_keys"
 	| "account.create_api_key"
 	| "account.revoke_api_key"
+	| "account.rotate_api_key"
+	| "account.end_api_key_rotation"
 	| "account.set_password"
 	| "account.create_totp_secret"
 	| "account.enable_totp"
@@ -144,6 +153,33 @@ function keyExpiry(input: { expires_in_days?: number | undefined; expires_at?: s
 		throw new OperationError("invalid", `expires_at must be at most ${API_KEY_LIMITS.maxDays} days from now.`);
 	}
 	return new Date(end).toISOString();
+}
+
+/**
+ * Checks the resource limits of a new token. Only a token of a service account can have them. A mailbox is
+ * the own mailbox of the account (its id) or a team mailbox that exists. A drive is the own drive of the
+ * account or a shared drive. A room is a room id. Any other id is refused, also the id of a different
+ * principal: a limited token does not reach items that a person shared directly with the account.
+ */
+async function assertTokenResources(call: CallContext, target: PrincipalRecord, resources: TokenResources) {
+	if (!target.service) throw new OperationError("invalid", "Only a token of a service account can have resources.");
+	for (const id of resources.mailbox_ids) {
+		if (id === target.id) continue;
+		if (!isTeamMailboxId(id)) {
+			throw new OperationError("invalid", `${id} is not the own mailbox of the account or a team mailbox.`);
+		}
+		if (!(await getTeamMailbox(call.env.DIRECTORY, id))) {
+			throw new OperationError("not_found", `No team mailbox has the id ${id}.`);
+		}
+	}
+	for (const id of resources.drive_ids) {
+		if (id !== target.id && !SharedDriveId.safeParse(id).success) {
+			throw new OperationError("invalid", `${id} is not the own drive of the account or a shared drive.`);
+		}
+	}
+	for (const id of resources.room_ids) {
+		if (!RoomId.safeParse(id).success) throw new OperationError("invalid", `${id} is not a room id.`);
+	}
 }
 
 /** The text for the agents and service accounts that a person sponsors, for a refused archive or delete. */
@@ -260,6 +296,7 @@ export const identityHandlers: Pick<HandlerMap<CallContext>, IdentityOperation |
 			scopes: [...call.caller.scopes],
 			missing_scopes: missingScopes(call.caller),
 			credential: call.caller.credential,
+			resources: call.caller.restriction,
 			sign_in:
 				call.caller.kind === "human"
 					? { password_set: call.caller.principal.password_set, totp_enabled: call.caller.principal.totp_enabled }
@@ -435,11 +472,14 @@ export const identityHandlers: Pick<HandlerMap<CallContext>, IdentityOperation |
 			shared_drives: [],
 			chat_rooms: [],
 			chat_rooms_truncated: false,
+			drive_shared_items: [],
+			drive_shared_items_truncated: false,
 			tokens: keys.map((key) => ({
 				key_id: key.id,
 				label: key.label,
 				scopes: key.scopes,
 				expires_at: key.expires_at,
+				resources: key.resources,
 			})),
 			scopes: [...new Set(keys.flatMap((key) => key.scopes))].sort(),
 		};
@@ -630,12 +670,14 @@ export const identityHandlers: Pick<HandlerMap<CallContext>, IdentityOperation |
 	async "account.create_api_key"(call, input) {
 		const target = await credentialOwner(call, input.principal_id);
 		const scopes = grantableScopes(call.caller, target, input.scopes);
+		if (input.resources !== undefined) await assertTokenResources(call, target, input.resources);
 		const created = await createApiKey(call.env.DIRECTORY, target.id, {
 			label: input.label,
 			scopes,
 			created_by: call.caller.principal.id,
 			description: input.description ?? null,
 			expires_at: keyExpiry(input),
+			resources: input.resources ?? null,
 		});
 		auditOk(call, "account.create_api_key", created.key.id);
 		recordServiceChange(call, target, "account.create_api_key", created.key.id);
@@ -651,6 +693,51 @@ export const identityHandlers: Pick<HandlerMap<CallContext>, IdentityOperation |
 		auditOk(call, "account.revoke_api_key", key.id);
 		if (changed) recordServiceChange(call, owner, "account.revoke_api_key", key.id);
 		return { revoked: true };
+	},
+
+	async "account.rotate_api_key"(call, input) {
+		const key = await getApiKey(call.env.DIRECTORY, input.key_id);
+		if (!key) throw new OperationError("not_found", "No API key has that id.");
+		const owner = await credentialOwner(call, key.principal_id);
+		// The new secret gives each scope of the key. So the caller must hold each one, as for a new key.
+		const notHeld = key.scopes.filter((scope) => !call.caller.scopes.has(scope));
+		if (notHeld.length > 0) {
+			throw new OperationError(
+				"forbidden",
+				`Your credential does not hold ${notHeld.join(", ")}, so it cannot rotate this key.`,
+			);
+		}
+		const overlapMinutes = input.overlap_minutes ?? API_KEY_LIMITS.rotationOverlapMinutes.default;
+		const rotated = await rotateApiKey(call.env.DIRECTORY, key.id, call.caller.principal.id, overlapMinutes * 60_000);
+		if (!rotated) {
+			const now = await getApiKey(call.env.DIRECTORY, key.id);
+			throw new OperationError(
+				"conflict",
+				!now || now.revoked_at !== null
+					? "This key is revoked. Create a new key."
+					: keyExpired(now)
+						? "This key expired. Create a new key."
+						: "The old secret of the last rotation still works. Wait for its end, or call account.end_api_key_rotation first.",
+			);
+		}
+		auditOk(call, "account.rotate_api_key", key.id);
+		recordServiceChange(call, owner, "account.rotate_api_key", key.id);
+		return { api_key: { ...toApiKeyOutput(rotated.key), secret: rotated.secret } };
+	},
+
+	async "account.end_api_key_rotation"(call, input) {
+		const key = await getApiKey(call.env.DIRECTORY, input.key_id);
+		if (!key) throw new OperationError("not_found", "No API key has that id.");
+		const owner = await credentialOwner(call, key.principal_id);
+		// Only a call that stops a live old secret is a change, as only a revoke of a live key is.
+		const live = key.prev_expires_at !== null && Date.parse(key.prev_expires_at) > Date.now();
+		const ended = await endApiKeyRotation(call.env.DIRECTORY, key.id);
+		if (!ended) throw new OperationError("not_found", "No API key has that id.");
+		if (live) {
+			auditOk(call, "account.end_api_key_rotation", key.id);
+			recordServiceChange(call, owner, "account.end_api_key_rotation", key.id);
+		}
+		return { api_key: toApiKeyOutput(ended) };
 	},
 
 	async "account.set_password"(call, input) {

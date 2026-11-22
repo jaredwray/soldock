@@ -40,5 +40,12 @@ export function toApiKeyOutput(record: ApiKeyRecord): ApiKey {
 		revoked: record.revoked_at !== null,
 		revoked_at: record.revoked_at,
 		revoked_by: record.revoked_by,
+		rotated_at: record.rotated_at,
+		rotated_by: record.rotated_by,
+		resources: record.resources,
+		previous_secret_expires_at:
+			record.prev_expires_at !== null && Date.parse(record.prev_expires_at) > Date.now() && record.revoked_at === null
+				? record.prev_expires_at
+				: null,
 	};
 }

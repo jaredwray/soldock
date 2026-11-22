@@ -5,6 +5,7 @@ import {
 	type ChatSearchRoom,
 	type ChatThreadFollow,
 	isCustomEmoji,
+	listedIds,
 	mentionDirectory,
 	type OperationName,
 	prefixedId,
@@ -17,6 +18,7 @@ import {
 	getPrincipals,
 	isAdmin,
 	mentionCandidates,
+	recordServiceMemberships,
 } from "../identity/index.ts";
 import {
 	audit,
@@ -468,10 +470,13 @@ export const chatHandlers: Pick<HandlerMap<CallContext>, ChatOperation> = {
 	...chatPresenceHandlers,
 	...chatLayer8Handlers,
 	async "chat.list_rooms"(call, input) {
+		// A token with resource limits sees only its listed rooms. The queries keep only those, so the cursor
+		// never names a different room.
 		const list = {
 			query: input.query ?? null,
 			cursor: input.cursor ?? null,
 			limit: input.limit ?? DEFAULT_PAGE,
+			ids: listedIds(call.caller.restriction, "room"),
 		};
 		const page =
 			input.view === "public"
@@ -548,6 +553,12 @@ export const chatHandlers: Pick<HandlerMap<CallContext>, ChatOperation> = {
 			}),
 		);
 		auditOk(call, "chat.create_room", room.id);
+		recordServiceMemberships(
+			call,
+			members.map((member) => member.principal_id),
+			"chat.create_room",
+			room.id,
+		);
 		return { room: toRoom(room) };
 	},
 
@@ -558,7 +569,10 @@ export const chatHandlers: Pick<HandlerMap<CallContext>, ChatOperation> = {
 		const [peer] = await actorsOf(call, [input.principal_id]);
 		const opened = openRoom(call, await dmRoomId(call.caller.id, input.principal_id));
 		const result = accept(await opened.room.openDm(opened.ctx, peer as ActorRecord));
-		if (result.created) auditOk(call, "chat.open_dm", result.room.id);
+		if (result.created) {
+			auditOk(call, "chat.open_dm", result.room.id);
+			recordServiceMemberships(call, [input.principal_id], "chat.open_dm", result.room.id);
+		}
 		return { room: toRoom(result.room) };
 	},
 
@@ -594,13 +608,17 @@ export const chatHandlers: Pick<HandlerMap<CallContext>, ChatOperation> = {
 		const members = await actorsOf(call, input.principal_ids);
 		const result = accept(await opened.room.addMembers(opened.ctx, members));
 		if (result.added.length > 0) auditOk(call, "chat.add_members", `${input.room_id}:${result.added.join(",")}`);
+		recordServiceMemberships(call, result.added, "chat.add_members", input.room_id);
 		return { members_added: result.added.length, room: toRoom(result.room) };
 	},
 
 	async "chat.remove_member"(call, input) {
 		const opened = openRoom(call, input.room_id);
 		const result = accept(await opened.room.removeMember(opened.ctx, input.principal_id));
-		if (result.removed) auditOk(call, "chat.remove_member", `${input.room_id}:${input.principal_id}`);
+		if (result.removed) {
+			auditOk(call, "chat.remove_member", `${input.room_id}:${input.principal_id}`);
+			recordServiceMemberships(call, [input.principal_id], "chat.remove_member", input.room_id);
+		}
 		return result;
 	},
 

@@ -10,6 +10,8 @@ import type { ListInput, RoomPage } from "./room-index.ts";
 const SEED_PARALLEL = 25;
 /** The most rooms that the first fill asks in one request. */
 const SEED_MAX = 200;
+/** The parts of the fill that the list of a limited token does before its page: at most 1,000 rooms. */
+const LIMITED_FILL_PARTS = 5;
 
 function principalStub(env: Pick<Env, "PRINCIPAL">, principalId: string) {
 	return env.PRINCIPAL.get(env.PRINCIPAL.idFromName(principalId));
@@ -124,13 +126,22 @@ export async function listJoinedRooms(
 		until: null,
 		starred,
 		limit: input.limit,
+		roomIds: input.ids ?? null,
 	};
 	let listed = await principal.listChatRooms(query);
 	// While the fill is not complete, the page ends at the place that the fill reached. The rooms after
 	// it can come in a later part, so the page gives a cursor to that place. The next list continues
 	// the fill, and then the list after that place. A search then finds an old room too.
 	let reached: Position | null = null;
-	if (!listed.seeded) {
+	if (!listed.seeded && input.ids != null) {
+		// The place of the fill can be a room outside the list of a limited token, so a limited list gives no
+		// cursor to it. It does the fill first, in a few parts. A room that the fill did not reach in these
+		// parts shows in a later list.
+		for (let part = 0; part < LIMITED_FILL_PARTS; part++) {
+			if ((await seedJoinedRooms(env, principalId)) === null) break;
+		}
+		listed = await principal.listChatRooms(query);
+	} else if (!listed.seeded) {
 		reached = await seedJoinedRooms(env, principalId);
 		if (reached !== null && after !== null && !isAfter(reached, after)) reached = null;
 		listed = await principal.listChatRooms({ ...query, until: reached });
