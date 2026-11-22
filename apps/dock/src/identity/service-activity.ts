@@ -101,14 +101,14 @@ export class ServiceActivityStore {
 
 	/**
 	 * Removes the entries older than the days of the limit, and each call after the newest `entries` calls.
-	 * The count limit counts calls only and keeps each entry of an owner or an admin (surface `admin`), so
-	 * calls cannot push a change out, and a change does not take the place of a call.
+	 * The count limit counts calls only (surface `rest` or `mcp`) and keeps each change (surface `admin` or
+	 * `system`), so calls cannot push a change out, and a change does not take the place of a call.
 	 */
 	prune(now: number): void {
 		this.sql.exec(
 			`DELETE FROM service_activity
-			WHERE (surface <> 'admin' AND seq <= (
-				SELECT seq FROM service_activity WHERE surface <> 'admin' ORDER BY seq DESC LIMIT 1 OFFSET ?1))
+			WHERE (surface IN ('rest', 'mcp') AND seq <= (
+				SELECT seq FROM service_activity WHERE surface IN ('rest', 'mcp') ORDER BY seq DESC LIMIT 1 OFFSET ?1))
 			OR at < ?2`,
 			SERVICE_ACTIVITY_LIMITS.entries,
 			now - SERVICE_ACTIVITY_LIMITS.days * DAY_MS,

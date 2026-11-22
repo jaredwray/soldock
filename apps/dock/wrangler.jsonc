@@ -21,6 +21,11 @@
 	"observability": {
 		"enabled": true
 	},
+	// One hourly run of `scheduled` (src/scheduled.ts): the notice before a token of a service account ends.
+	// A named env inherits this value.
+	"triggers": {
+		"crons": ["23 * * * *"]
+	},
 	"assets": {
 		// The apps/web build. Run `pnpm build` at the repository root before dev, tests or deploy.
 		"directory": "../web/dist",

@@ -85,6 +85,11 @@ describe("wrangler.jsonc", () => {
 		expect(config.assets.not_found_handling).toBe("single-page-application");
 	});
 
+	// `runScheduled` does each job of one hourly run. A second cron would run each job twice in its hour.
+	it("declares one hourly cron, which each env inherits", () => {
+		expect((config as { triggers?: { crons?: string[] } }).triggers?.crons).toEqual(["23 * * * *"]);
+	});
+
 	it("pins a compatibility date and enables nodejs_compat and observability", () => {
 		expect(config.compatibility_date).toMatch(/^\d{4}-\d{2}-\d{2}$/);
 		expect(config.compatibility_flags).toContain("nodejs_compat");

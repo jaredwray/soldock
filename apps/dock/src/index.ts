@@ -6,6 +6,7 @@ import { events, handlers, watchers } from "./handlers.ts";
 import { handleEmail, handleInboundBatch, MAIL_INBOUND_QUEUE } from "./mail/index.ts";
 import { log } from "./platform/index.ts";
 import { isWorkerPath } from "./routes.ts";
+import { runScheduled } from "./scheduled.ts";
 import { handleWebhookBatch, WEBHOOK_QUEUE } from "./webhooks/index.ts";
 
 export { ChatRoomDO, ChatSearchDO } from "./chat/index.ts";
@@ -53,7 +54,8 @@ export default {
 		batch.ackAll();
 	},
 
-	async scheduled(controller) {
+	async scheduled(controller, env) {
 		log("info", "scheduled event", { cron: controller.cron });
+		await runScheduled(env, controller.scheduledTime);
 	},
 } satisfies ExportedHandler<Env>;

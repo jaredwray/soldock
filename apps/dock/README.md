@@ -13,6 +13,7 @@ The entire backend as one deployable Worker (modular monolith): `fetch`, `email`
 | [`wrangler.jsonc`](wrangler.jsonc) | Worker config: pinned compatibility date, `nodejs_compat` and `enable_request_signal`, observability, static assets with SPA fallback, and `run_worker_first` for every Worker-owned prefix. The top level is production. `env.development` is the `soldock-dock-dev` Worker at its custom domain `work.soldock.org` ([docs/self-hosting.md](../../docs/self-hosting.md)). Neither Worker serves `workers.dev` or Preview URLs: one origin each |
 | [`src/index.ts`](src/index.ts) | Composition root. Sends Worker-owned paths to the Hono app and everything else to static assets. Exports the `email`, `queue` and `scheduled` handlers, and the Durable Object classes `MailboxDO`, `DriveSpaceDO`, `DocumentDO`, `ChatRoomDO`, `ChatSearchDO` and `PrincipalDO` |
 | [`src/handlers.ts`](src/handlers.ts) | The operation handlers of each domain, joined into one map for the REST and MCP adapters, and the change feed of each resource kind for MCP subscriptions |
+| [`src/scheduled.ts`](src/scheduled.ts) | The jobs of the hourly cron: the notice before a token of a service account ends |
 | [`src/routes.ts`](src/routes.ts) | `WORKER_PREFIXES`, the paths the Worker owns. Must match `run_worker_first`; `test/config.test.ts` enforces it |
 | [`src/app.ts`](src/app.ts) | The Hono app: request ids, problem+json errors, `/auth/*`, `/oauth/*` and `/.well-known/*`, the REST routes and `/mcp` |
 | [`src/platform/`](src/platform/) | Cross-cutting runtime services: HTTP plumbing, ids, crypto, logs, the operation invoker |
@@ -67,7 +68,9 @@ The entire backend as one deployable Worker (modular monolith): `fetch`, `email`
 - `email` accepts mail for known addresses and rejects other mail at SMTP time. `queue` consumes
   `soldock-mail-inbound`, `soldock-webhooks`, `soldock-chat-push` and `soldock-chat-previews`,
   and acknowledges batches of other queues.
-  `scheduled` logs.
+  `scheduled` runs once an hour (`triggers.crons` in `wrangler.jsonc`, which each env inherits) and calls
+  `runScheduled` ([`src/scheduled.ts`](src/scheduled.ts)): today, the notice before a token of a service
+  account ends ([`identity`](src/identity/README.md#notice-before-a-token-ends)).
 
 ## Bindings
 

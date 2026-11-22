@@ -30,6 +30,14 @@ export type {
 	SectionRecord,
 } from "./chat-personal.ts";
 export { mountEventsSocket, openEventsSocket } from "./events-socket.ts";
+export {
+	type DueNotice,
+	dueExpiryNotices,
+	markExpiryNotice,
+	type NoticeRecipient,
+	noticeRecipients,
+	recordExpiryNotice,
+} from "./expiry-notice.ts";
 export { identityHandlers } from "./handlers.ts";
 export { mountOAuthRoutes, protectedResourceMetadataUrl } from "./oauth-routes.ts";
 export { toPrincipalOutput } from "./output.ts";

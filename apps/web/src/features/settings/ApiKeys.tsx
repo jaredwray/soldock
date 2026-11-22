@@ -14,7 +14,7 @@ import { Select } from "../../lib/Select.tsx";
 import { useToast } from "../../lib/toast.tsx";
 import { useSession } from "../auth/session.tsx";
 import { SecretDialog } from "./SecretDialog.tsx";
-import { customDateBounds, expiryLabel, TTL_OPTIONS, type TtlChoice, ttlInput } from "./ttl.ts";
+import { customDateBounds, expiresSoon, expiryLabel, TTL_OPTIONS, type TtlChoice, ttlInput } from "./ttl.ts";
 
 /**
  * Scopes that a new key does not get unless the person selects them. A webhook sends notices to a URL
@@ -167,6 +167,9 @@ export function ApiKeyManager({
 												{key.label}
 												{key.revoked && <span className="status status-failed">Revoked</span>}
 												{!key.revoked && key.expired && <span className="status status-failed">Expired</span>}
+												{!key.revoked && !key.expired && expiresSoon(key.expires_at) && (
+													<span className="status">Expires soon</span>
+												)}
 											</div>
 											{key.description && <div className="row-note">{key.description}</div>}
 											<div className="row-note cell-scopes">{key.scopes.join(", ")}</div>

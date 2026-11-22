@@ -37,6 +37,13 @@ Public surface: `index.ts` only. Other domains must not import files from this f
 
 A mailbox is one `MailboxDO`. Its mailbox id names the object and the owner part of its R2 keys.
 
+`deliverSystemNotice` delivers a notice of Asterra itself to a mailbox of this deployment, as internal
+mail: no outbound mail and no Email Service. Today the notice before a token of a service account ends
+uses it ([`identity`](../identity/README.md#notice-before-a-token-ends)). Its `From` is the address of
+the service account, because the deployment has no address of its own, and a reply lands in a mailbox
+that admins can read. The caller gives a fixed Message-ID and date, so a second delivery has the same
+bytes, and the mailbox drops it as a copy.
+
 | Kind | Mailbox id | Who can use it |
 | --- | --- | --- |
 | `personal` | The id of the principal (`prn_…`) | That principal only |

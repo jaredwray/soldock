@@ -1,5 +1,6 @@
 import { addressTag } from "../identity/index.ts";
 import { sha256Hex } from "../platform/index.ts";
+import { composeMessage } from "./mime/compose.ts";
 import { parseMail } from "./mime/parse.ts";
 
 /**
@@ -80,4 +81,34 @@ export async function deliverInternal(env: Env, mailboxId: string, address: stri
 		receivedAt: Date.now(),
 		tag: addressTag(address),
 	});
+}
+
+/**
+ * Delivers a notice of Asterra itself to one mailbox of this deployment, for example the notice before
+ * a token of a service account ends. It never leaves the deployment: no outbound mail, no Email Service.
+ * The caller gives a fixed `messageId` and `date`, so a second delivery of the same notice has the same
+ * bytes, and the mailbox drops it.
+ */
+export async function deliverSystemNotice(
+	env: Env,
+	notice: {
+		from: { name: string; address: string };
+		to: { mailboxId: string; address: string };
+		subject: string;
+		text: string;
+		messageId: string;
+		date: Date;
+	},
+) {
+	const raw = composeMessage({
+		from: notice.from,
+		to: [notice.to.address],
+		cc: [],
+		subject: notice.subject,
+		text: notice.text,
+		messageId: notice.messageId,
+		date: notice.date,
+		attachments: [],
+	});
+	return deliverInternal(env, notice.to.mailboxId, notice.to.address, new TextEncoder().encode(raw));
 }

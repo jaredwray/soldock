@@ -92,6 +92,8 @@ export const API_KEY_LIMITS = {
 	descriptionChars: 500,
 	/** The minutes that the old secret works after a rotation: the default, and the most. */
 	rotationOverlapMinutes: { default: 60, max: 1440 },
+	/** The owners and admins get a notice this many days before a token of a service account ends. */
+	expiryNoticeDays: 7,
 } as const;
 
 export const ApiKey = z.object({
@@ -650,9 +652,9 @@ export const ServiceActivityEntry = z.object({
 	/**
 	 * `rest` and `mcp`: a call of the service account. `admin`: a change by a different principal to the
 	 * account, its tokens or its memberships (an owner or an admin, or a member who adds it to a room or
-	 * shares an item with it).
+	 * shares an item with it). `system`: a step of Asterra itself, such as the notice before a token ends.
 	 */
-	surface: z.enum(["rest", "mcp", "admin"]),
+	surface: z.enum(["rest", "mcp", "admin", "system"]),
 	/** The token of the call, or the token that the change was about. */
 	key_id: z.string().nullable(),
 	/** Who made the call or the change. */

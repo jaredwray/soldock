@@ -67,3 +67,13 @@ export function expiryLabel(expiresAt: string | null, now: number = Date.now()):
 	if (days < 60) return `In ${days} days`;
 	return new Date(end).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
 }
+
+/**
+ * True for a key that ends within `API_KEY_LIMITS.expiryNoticeDays` days and did not end yet. The owners and
+ * admins get a notice for a token of a service account at that time.
+ */
+export function expiresSoon(expiresAt: string | null, now: number = Date.now()): boolean {
+	if (expiresAt === null) return false;
+	const end = Date.parse(expiresAt);
+	return end > now && end - now <= API_KEY_LIMITS.expiryNoticeDays * DAY_MS;
+}
