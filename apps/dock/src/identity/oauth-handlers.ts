@@ -11,22 +11,13 @@ import {
 	newCode,
 	type OAuthGrantRecord,
 	type OAuthRequestRecord,
-	pendingRequestCondition,
 	revokeGrant,
 	setGrantScopes,
 } from "./oauth-store.ts";
 import { redirectHost, redirectWith } from "./oauth-urls.ts";
 import { toPrincipalOutput } from "./output.ts";
 import { endEventSockets } from "./principal.ts";
-import {
-	assertPrimaryAddress,
-	createPrincipal,
-	domainOf,
-	getPrincipal,
-	liveSponsorCondition,
-	mailDomains,
-	scopeCeiling,
-} from "./store.ts";
+import { assertPrimaryAddress, createPrincipal, domainOf, getPrincipal, mailDomains, scopeCeiling } from "./store.ts";
 
 type OAuthOperation =
 	| "oauth.get_authorization"
@@ -118,8 +109,6 @@ export const oauthHandlers: Pick<HandlerMap<CallContext>, OAuthOperation> = {
 			const scopes = grantableScopes(call.caller, { kind: "agent", service: false }, input.scopes);
 			const { code, approval } = await approvalAt();
 			// The request must still wait, and the approver, who becomes the sponsor, must still be active.
-			const pending = pendingRequestCondition(request.id, approval.now);
-			const sponsor = liveSponsorCondition(call.caller.principal.id);
 			const created = await createPrincipal(
 				call.env.DIRECTORY,
 				{
@@ -133,7 +122,8 @@ export const oauthHandlers: Pick<HandlerMap<CallContext>, OAuthOperation> = {
 				},
 				null,
 				{
-					condition: { sql: `${pending.sql} AND ${sponsor.sql}`, params: [...pending.params, ...sponsor.params] },
+					pendingRequest: { id: request.id, now: approval.now },
+					liveSponsorId: call.caller.principal.id,
 					afterCreate: (principalId) => [approveStatement(call.env.DIRECTORY, { ...approval, principalId, scopes })],
 				},
 			);

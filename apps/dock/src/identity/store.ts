@@ -496,17 +496,6 @@ export interface NewPrincipal {
 	created_by?: string | null;
 }
 
-/**
- * The condition of an agent insert that its sponsor is still a person who is not archived or deleted, in
- * the transaction of the insert. A sponsor that a parallel request archives or deletes gets no new agent.
- */
-export function liveSponsorCondition(sponsorId: string): { sql: string; params: unknown[] } {
-	return {
-		sql: "EXISTS (SELECT 1 FROM principals WHERE id = ? AND kind = 'human' AND archived_at IS NULL AND deleted_at IS NULL)",
-		params: [sponsorId],
-	};
-}
-
 /** Turns a directory constraint failure into an error that the caller can read. */
 export function conflictOf(error: unknown): OperationError | null {
 	const text = String(error);
@@ -544,10 +533,18 @@ export interface CreatePrincipalOptions {
 	beforeCreate?: D1PreparedStatement[];
 	mailDomain?: string;
 	/**
-	 * One more condition of the principal insert, as SQL with `?` parameters. The transaction writes
-	 * nothing when it is false. An OAuth approval uses it, so an expired request creates no agent.
+	 * The insert writes only while this principal is a person who is not archived or deleted, in the
+	 * transaction of the insert. So a sponsor that a parallel request archives or deletes gets no new agent
+	 * or service account.
 	 */
-	condition?: { sql: string; params: unknown[] };
+	liveSponsorId?: string;
+	/**
+	 * The insert writes only while this OAuth request waits for a person at `now`: no code, no denial, and
+	 * not expired (the rule `PENDING` of `oauth-store.ts`). So an OAuth approval of an expired or decided
+	 * request creates no agent. Pass the same `now` to `approveStatement`, so that the insert and the
+	 * approval in one transaction agree.
+	 */
+	pendingRequest?: { id: string; now: string };
 	/** Statements after the inserts, in the same transaction. They get the id of the new principal. */
 	afterCreate?: (principalId: string) => D1PreparedStatement[];
 }
@@ -583,16 +580,22 @@ export async function createPrincipal(
 	const secret = key ? `${API_KEY_PREFIX}${randomToken(32)}` : null;
 	const outboundMode: OutboundMode | null = principal.kind === "agent" ? "internal-only" : null;
 	const service = principal.kind === "agent" && principal.service === true;
-	const guard = `WHERE NOT EXISTS (SELECT 1 FROM setup_lock WHERE token IS NOT NULL)${options.onlyIfEmpty ? " AND NOT EXISTS (SELECT 1 FROM principals)" : ""}`;
-	const condition = options.condition ? ` AND ${options.condition.sql}` : "";
+	// Each statement is fixed SQL. The options are bound values: 1 or 0 for `onlyIfEmpty`, and null for an
+	// option that is not set.
+	const onlyIfEmpty = options.onlyIfEmpty ? 1 : 0;
 	try {
 		const beforeCreate = [...(options.beforeCreate ?? [])];
 		if (options.mailDomain) {
 			// The domain and owner share one transaction and the same guard. A lost setup race writes neither.
 			beforeCreate.push(
 				db
-					.prepare(`INSERT INTO mail_domains (domain) SELECT ? ${guard} ON CONFLICT DO NOTHING`)
-					.bind(options.mailDomain),
+					.prepare(
+						`INSERT INTO mail_domains (domain) SELECT ?1
+						WHERE NOT EXISTS (SELECT 1 FROM setup_lock WHERE token IS NOT NULL)
+							AND (?2 = 0 OR NOT EXISTS (SELECT 1 FROM principals))
+						ON CONFLICT DO NOTHING`,
+					)
+					.bind(options.mailDomain, onlyIfEmpty),
 			);
 		}
 		const results = await db.batch([
@@ -600,8 +603,14 @@ export async function createPrincipal(
 			db
 				.prepare(
 					`INSERT INTO principals (id, kind, display_name, org_role, sponsor_id, outbound_mode, outbound_allowlist,
-					password_hash, created_at, service, description, created_by)
-					SELECT ?, ?, ?, ?, ?, ?, '[]', ?, ?, ?, ?, ? ${guard}${condition}`,
+						password_hash, created_at, service, description, created_by)
+					SELECT ?1, ?2, ?3, ?4, ?5, ?6, '[]', ?7, ?8, ?9, ?10, ?11
+					WHERE NOT EXISTS (SELECT 1 FROM setup_lock WHERE token IS NOT NULL)
+						AND (?12 = 0 OR NOT EXISTS (SELECT 1 FROM principals))
+						AND (?13 IS NULL OR EXISTS (SELECT 1 FROM principals sponsor WHERE sponsor.id = ?13
+							AND sponsor.kind = 'human' AND sponsor.archived_at IS NULL AND sponsor.deleted_at IS NULL))
+						AND (?14 IS NULL OR EXISTS (SELECT 1 FROM oauth_requests r WHERE r.id = ?14
+							AND r.code_hash IS NULL AND r.denied_at IS NULL AND r.expires_at > ?15))`,
 				)
 				.bind(
 					id,
@@ -615,7 +624,10 @@ export async function createPrincipal(
 					service ? 1 : 0,
 					service ? principal.description || null : null,
 					principal.created_by ?? null,
-					...(options.condition?.params ?? []),
+					onlyIfEmpty,
+					options.liveSponsorId ?? null,
+					options.pendingRequest?.id ?? null,
+					options.pendingRequest?.now ?? null,
 				),
 			// The name aliases of the mention read, in the same transaction. A lost guard inserted no row, so
 			// this update then changes nothing.

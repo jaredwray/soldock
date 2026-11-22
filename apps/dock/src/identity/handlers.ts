@@ -40,7 +40,6 @@ import {
 	listApiKeys,
 	listPrincipalPage,
 	liveApiKeys,
-	liveSponsorCondition,
 	mailDomains,
 	mentionCandidates,
 	type PrincipalRecord,
@@ -351,7 +350,7 @@ export const identityHandlers: Pick<HandlerMap<CallContext>, IdentityOperation |
 			},
 			{ label: "First key", scopes, created_by: call.caller.principal.id },
 			// A sponsor archived or deleted during the request must not get a new agent.
-			sponsorId ? { condition: liveSponsorCondition(sponsorId) } : {},
+			sponsorId ? { liveSponsorId: sponsorId } : {},
 		);
 		if (!created) {
 			throw new OperationError(
@@ -392,7 +391,7 @@ export const identityHandlers: Pick<HandlerMap<CallContext>, IdentityOperation |
 			},
 			null,
 			// A sponsor archived or deleted during the request must not get a new service account.
-			{ condition: liveSponsorCondition(sponsorId) },
+			{ liveSponsorId: sponsorId },
 		);
 		if (!created) {
 			throw new OperationError(

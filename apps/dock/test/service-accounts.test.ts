@@ -15,6 +15,7 @@ import {
 	mcp,
 	modernRequest,
 	PASSWORD,
+	racing,
 	readSocket,
 	readSse,
 	receiveWebhooks,
@@ -22,6 +23,7 @@ import {
 	seedOrg,
 	sendMemberStates,
 	upgradeRoomSocket,
+	withEnv,
 } from "./helpers.ts";
 
 // Service accounts: a third kind of member. Owners and admins create one, give it tokens with a lifetime,
@@ -123,6 +125,20 @@ describe("service accounts", () => {
 		expect(
 			await codeOf(admin.call("directory.create_service_account", { display_name: "X", address: "ci@dock.test" })),
 		).toBe("conflict");
+		// A sponsor that a parallel request archives after the read of the handler gets no service account: the
+		// insert checks the sponsor again in its transaction.
+		const res = await withEnv(
+			{ DIRECTORY: racing("UPDATE principals SET archived_at = '2026-01-01T00:00:00.000Z' WHERE id = ?", ada.id) },
+			"/api/v1/directory/service-accounts",
+			{
+				method: "POST",
+				headers: { authorization: `Bearer ${admin.key}`, "content-type": "application/json" },
+				body: JSON.stringify({ display_name: "Race", address: "race@dock.test", sponsor_id: ada.id }),
+			},
+		);
+		expect(res.status).toBe(409);
+		const listed = await owner.call("directory.list_principals", { kind: "service" });
+		expect(listed.principals.map((principal) => principal.address)).not.toContain("race@dock.test");
 	});
 
 	it("show as their own kind in the directory, and an admin changes the description", async () => {
@@ -579,7 +595,8 @@ describe("the activity log of a service account", () => {
 			const sql = state.storage.sql;
 			sql.exec("DELETE FROM service_activity");
 			// Two changes by an admin: one older than the days of the limit, and one inside them. Then calls up
-			// to the limit. The next insert is a multiple of 100, so it prunes.
+			// to the limit, with a change by an admin at each 1,000th row, inside the newest calls. The next
+			// insert is a multiple of 100, so it prunes.
 			sql.exec(
 				"INSERT INTO service_activity (seq, at, op, result, surface, actor_id) VALUES (1, ?, 'old', 'ok', 'admin', ?)",
 				now - (SERVICE_ACTIVITY_LIMITS.days + 1) * 86_400_000,
@@ -591,10 +608,13 @@ describe("the activity log of a service account", () => {
 				service.id,
 			);
 			for (let seq = 3; seq < SERVICE_ACTIVITY_LIMITS.entries + 100; seq++) {
+				const admin = seq % 1000 === 0;
 				sql.exec(
-					"INSERT INTO service_activity (seq, at, op, result, surface, actor_id) VALUES (?, ?, 'seed', 'ok', 'rest', ?)",
+					"INSERT INTO service_activity (seq, at, op, result, surface, actor_id) VALUES (?, ?, ?, 'ok', ?, ?)",
 					seq,
 					now,
+					admin ? "later" : "seed",
+					admin ? "admin" : "rest",
 					service.id,
 				);
 			}
@@ -619,8 +639,9 @@ describe("the activity log of a service account", () => {
 				.toArray()
 				.map((row) => row.op),
 		}));
-		// The count limit removed the oldest calls and kept the change by an admin. The days limit removed `old`.
-		expect(count).toEqual({ calls: SERVICE_ACTIVITY_LIMITS.entries, admin: ["change"] });
+		// The count limit kept the newest calls, as many as the limit, and each change by an admin among them.
+		// The days limit removed `old`.
+		expect(count).toEqual({ calls: SERVICE_ACTIVITY_LIMITS.entries, admin: ["change", ...Array(10).fill("later")] });
 	});
 
 	it("is for owners and admins only, and for a service account only", async () => {
