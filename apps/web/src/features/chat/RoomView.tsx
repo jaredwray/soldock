@@ -209,7 +209,7 @@ export function RoomView({
 			.then((res) => {
 				if (stopped || draftRef.current !== null) return;
 				const match = res.drafts.find((d) => d.room_id === roomId && d.parent_id === null);
-				if (!match || !match.text.trim()) return;
+				if (!match?.text.trim()) return;
 				const hydrated = match.body ?? textToBody(match.text);
 				drafts.set(roomId, hydrated);
 				setDraftBody(hydrated);

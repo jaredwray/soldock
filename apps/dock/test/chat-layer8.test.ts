@@ -180,7 +180,7 @@ describe("pins, saved messages, drafts, scheduled messages, and reminders", () =
 		const principal = env.PRINCIPAL.get(env.PRINCIPAL.idFromName(ada.id));
 		await runInDurableObject(principal, async (_instance, state) => {
 			state.storage.sql.exec("UPDATE chat_scheduled_messages SET send_at = ? WHERE id = ?", Date.now() - 1000, s1.id);
-			await state.storage.setAlarm(Date.now() - 100);
+			await state.storage.setAlarm(Date.now() + 60_000);
 		});
 		await runDurableObjectAlarm(principal);
 
@@ -215,7 +215,7 @@ describe("pins, saved messages, drafts, scheduled messages, and reminders", () =
 				Date.now() - 1000,
 				revokedSched.id,
 			);
-			await state.storage.setAlarm(Date.now() - 100);
+			await state.storage.setAlarm(Date.now() + 60_000);
 		});
 		await runDurableObjectAlarm(principal);
 		const failedRows = (await ada.call("chat.list_scheduled_messages", { status: "failed" })).scheduled;
@@ -276,7 +276,7 @@ describe("pins, saved messages, drafts, scheduled messages, and reminders", () =
 		const principal = env.PRINCIPAL.get(env.PRINCIPAL.idFromName(ada.id));
 		await runInDurableObject(principal, async (_instance, state) => {
 			state.storage.sql.exec("UPDATE chat_reminders SET remind_at = ? WHERE id = ?", Date.now() - 1000, rem.id);
-			await state.storage.setAlarm(Date.now() - 100);
+			await state.storage.setAlarm(Date.now() + 60_000);
 		});
 		await runDurableObjectAlarm(principal);
 
@@ -893,7 +893,7 @@ describe("incoming webhooks, forwarding untrusted content, slash commands, and c
 		const botPrincipal = env.PRINCIPAL.get(env.PRINCIPAL.idFromName(bot.id));
 		await runInDurableObject(botPrincipal, async (_instance, state) => {
 			state.storage.sql.exec("UPDATE chat_reminders SET remind_at = ? WHERE id = ?", Date.now() - 1000, rem.id);
-			await state.storage.setAlarm(Date.now() - 100);
+			await state.storage.setAlarm(Date.now() + 60_000);
 		});
 		await runDurableObjectAlarm(botPrincipal);
 		const botFeed = await bot.call("chat.list_activity");
@@ -1069,7 +1069,7 @@ describe("incoming webhooks, forwarding untrusted content, slash commands, and c
 			expect(expireTarget).toBeDefined();
 			await runInDurableObject(roomStub, async (_instance, st) => {
 				st.storage.sql.exec("UPDATE messages SET created_at = ? WHERE id = ?", tenDaysAgo, expireTarget?.id ?? "");
-				await st.storage.setAlarm(Date.now() - 100);
+				await st.storage.setAlarm(Date.now() + 60_000);
 			});
 			await runDurableObjectAlarm(roomStub);
 
@@ -1144,7 +1144,7 @@ describe("incoming webhooks, forwarding untrusted content, slash commands, and c
 				Date.now() - 1000,
 				sched.id,
 			);
-			await st.storage.setAlarm(Date.now() - 100);
+			await st.storage.setAlarm(Date.now() + 60_000);
 		});
 		await runDurableObjectAlarm(principal);
 		const failed = (await ada.call("chat.list_scheduled_messages", { status: "failed" })).scheduled;
