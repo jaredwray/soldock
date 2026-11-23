@@ -19,6 +19,7 @@ import { audit, decodeCursor, encodeCursor, type HandlerMap, OperationError } fr
 import {
 	auditOk,
 	canManageAgent,
+	createdTarget,
 	credentialOwner,
 	grantableScopes,
 	isAdmin,
@@ -398,7 +399,8 @@ export const identityHandlers: Pick<HandlerMap<CallContext>, IdentityOperation |
 			assertFullCredential(call.caller);
 		}
 		// Each key and each OAuth connection of the agent gives these scopes. So the credential of the call must
-		// hold each one, as for a new key. The contract makes an agent send scopes.
+		// hold each one, as for a new key. The contract makes an agent send scopes. The limits say where each of
+		// these scopes applies, so the same credential can create the agent without limits (`limits: "none"`).
 		const agentScopes =
 			input.kind === "agent" ? grantableScopes(call.caller, { kind: "agent", service: false }, input.scopes ?? []) : [];
 		// A person signs in with the password and creates keys in Settings. Only an agent gets a first key, which
@@ -416,6 +418,7 @@ export const identityHandlers: Pick<HandlerMap<CallContext>, IdentityOperation |
 				password_hash: input.kind === "human" && input.password ? await hashPassword(input.password) : null,
 				created_by: call.caller.principal.id,
 				agent_scopes: agentScopes,
+				no_limits: input.limits === "none",
 			},
 			firstKey,
 			// A sponsor archived or deleted during the request must not get a new agent.
@@ -427,7 +430,7 @@ export const identityHandlers: Pick<HandlerMap<CallContext>, IdentityOperation |
 				"A directory reset is in progress, or the sponsor changed during the request. Try again.",
 			);
 		}
-		auditOk(call, "directory.create_principal", created.principal.id);
+		auditOk(call, "directory.create_principal", createdTarget(created.principal));
 		return {
 			principal: toPrincipalOutput(created.principal),
 			api_key:
@@ -464,6 +467,7 @@ export const identityHandlers: Pick<HandlerMap<CallContext>, IdentityOperation |
 				description: input.description ?? null,
 				created_by: call.caller.principal.id,
 				agent_scopes: scopes,
+				no_limits: input.limits === "none",
 			},
 			null,
 			// A sponsor archived or deleted during the request must not get a new service account.
@@ -475,7 +479,7 @@ export const identityHandlers: Pick<HandlerMap<CallContext>, IdentityOperation |
 				"A directory reset is in progress, or the sponsor changed during the request. Try again.",
 			);
 		}
-		auditOk(call, "directory.create_service_account", created.principal.id);
+		auditOk(call, "directory.create_service_account", createdTarget(created.principal));
 		recordServiceChange(call, created.principal, "directory.create_service_account");
 		return { principal: toPrincipalOutput(created.principal) };
 	},

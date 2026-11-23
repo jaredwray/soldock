@@ -118,7 +118,10 @@ function refresh(clientId: string, refreshToken: string) {
 	return token({ grant_type: "refresh_token", refresh_token: refreshToken, client_id: clientId });
 }
 
-/** The whole flow: a client registers, `approver` approves it for a new agent, and the client gets tokens. */
+/**
+ * The whole flow: a client registers, `approver` approves it for a new agent, and the client gets tokens. The
+ * agent has no limits, so the tests reach each membership of the agent.
+ */
 async function connectNewAgent(approver: Actor, address = "claude@dock.test") {
 	const clientId = await registerClient();
 	const { requestId, verifier } = await startAuthorization(clientId);
@@ -126,6 +129,7 @@ async function connectNewAgent(approver: Actor, address = "claude@dock.test") {
 		request_id: requestId,
 		new_agent: { display_name: "Claude", address },
 		scopes: ["account.read", "mail.read", "chat.read"],
+		limits: "none",
 	});
 	const res = await exchange(clientId, approved.redirect_to, verifier);
 	expect(res.status).toBe(200);
@@ -337,10 +341,12 @@ describe("OAuth approval", () => {
 		expect(tools).toContain("chat_list_rooms");
 		expect(tools).not.toContain("mail_send");
 		expect(tools).not.toContain("drive_list_items");
+		// The approval sent no `limits`, so the new agent is limited to its own mailbox and its own drive.
 		const whoami = await callTool(tokens.access_token, "account_whoami");
 		expect(whoami.structuredContent).toMatchObject({
 			principal: { id: approved.principal.id, kind: "agent" },
 			credential: "oauth",
+			resources: { mailbox_ids: [approved.principal.id], drive_ids: [approved.principal.id], room_ids: [] },
 		});
 		// The token works on REST too, and an agent that connects with OAuth gets no API key.
 		expect(await api(tokens.access_token)("account.whoami")).toMatchObject({ credential: "oauth" });
@@ -494,6 +500,13 @@ describe("OAuth approval", () => {
 			scopes: ["mail.read"],
 		});
 		expect(await codeOf(own)).toBe("invalid");
+		// A connection has no limits of its own either: the agent keeps its limits.
+		const unlimited = owner.call("oauth.approve_authorization", {
+			request_id: requestId,
+			agent_id: bot.id,
+			limits: "none",
+		});
+		expect(await codeOf(unlimited)).toBe("invalid");
 		const keys = owner.call("oauth.approve_authorization", {
 			request_id: requestId,
 			new_agent: { display_name: "Keys", address: "keys@dock.test" },
@@ -1015,6 +1028,8 @@ describe("OAuth and webhooks", () => {
 			request_id: requestId,
 			new_agent: { display_name: "Claude", address: "claude@dock.test" },
 			scopes: [`${domain}.read`, `${domain}.webhooks`],
+			// A limited agent cannot make a chat webhook.
+			limits: "none",
 		});
 		const tokens = (await (await exchange(clientId, approved.redirect_to, verifier)).json()) as Tokens;
 		const agent = approved.principal;
@@ -1204,6 +1219,8 @@ describe("OAuth and webhooks", () => {
 			request_id: first.requestId,
 			new_agent: { display_name: "Dot", address: "dot@dock.test" },
 			scopes: [...scopes],
+			// A chat event without a room needs an agent without limits.
+			limits: "none",
 		});
 		const tokens = (await (await exchange(clientId, approved.redirect_to, first.verifier)).json()) as Tokens;
 		const agent = approved.principal;

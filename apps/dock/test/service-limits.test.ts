@@ -336,6 +336,48 @@ describe("a limited service account", () => {
 	});
 });
 
+describe("the limits of a new agent", () => {
+	// A new agent has no membership. Each member of a room can add the agent to the room. That membership must
+	// not widen what the agent reaches: only a manager of the agent does that, with the limits.
+	it("keep the agent in its own mailbox and drive until a manager adds a membership to them", async () => {
+		const { owner, ada } = await seedOrg();
+		const created = await owner.call("directory.create_principal", {
+			kind: "agent",
+			display_name: "Helper",
+			address: "helper@dock.test",
+			sponsor_id: ada.id,
+			scopes: ["account.read", "mail.read", "drive.read", "chat.read"],
+		});
+		const id = created.principal.id;
+		const agent = api(created.api_key?.secret ?? "");
+		const own = { mailbox_ids: [id], drive_ids: [id], room_ids: [] };
+		expect((await owner.call("directory.get_agent_access", { principal_id: id })).resources).toEqual(own);
+		// The own mailbox and the own drive work at once.
+		expect((await agent("mail.list_threads", {})).threads).toEqual([]);
+		expect((await agent("drive.list_items", {})).items).toEqual([]);
+
+		const { room } = await ada.call("chat.create_room", { kind: "private", name: "Builds", member_ids: [id] });
+		const { team_mailbox: team } = await owner.call("directory.create_team_mailbox", {
+			display_name: "Support",
+			address: "support@dock.test",
+			member_ids: [id],
+		});
+		expect((await owner.call("directory.get_agent_access", { principal_id: id })).chat_rooms).toMatchObject([
+			{ id: room.id },
+		]);
+		expect((await agent("chat.list_rooms", {})).rooms).toEqual([]);
+		expect(await codeOf(agent("chat.list_messages", { room_id: room.id }))).toBe("forbidden");
+		expect((await agent("mail.list_mailboxes")).mailboxes.map((mailbox) => mailbox.id)).toEqual([id]);
+		expect(await codeOf(agent("mail.list_threads", { mailbox_id: team.id }))).toBe("forbidden");
+
+		// The sponsor adds the room. The agent reaches it at its next call, and still not the team mailbox.
+		await setLimits(ada, id, { ...own, room_ids: [room.id] });
+		expect((await agent("chat.list_rooms", {})).rooms.map((listed) => listed.id)).toEqual([room.id]);
+		expect((await agent("chat.list_messages", { room_id: room.id })).messages).toEqual([]);
+		expect(await codeOf(agent("mail.list_threads", { mailbox_id: team.id }))).toBe("forbidden");
+	});
+});
+
 describe("the limits of an agent", () => {
 	// An agent can call operations that a service account cannot: webhooks and personal Chat settings. Each one
 	// has a rule, so a limited agent cannot reach a resource outside its list through them.

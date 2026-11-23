@@ -211,6 +211,7 @@ export {
 	AGENT_RESOURCE_LIMITS,
 	AgentResources,
 	allowsResource,
+	defaultAgentResources,
 	listedIds,
 	RESOURCE_RULES,
 	type ResourceField,

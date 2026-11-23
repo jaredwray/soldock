@@ -374,6 +374,17 @@ of a service account that the old Worker saves in that time is lost. A rollback 
 this migration is not supported: it gives each key of an agent its old scopes, and a new key none. Fix a
 problem with a new deploy.
 
+### Limits of a new agent
+
+A new agent or service account is limited to its own mailbox and its own drive. It reaches no chat room,
+no team mailbox and no shared drive until a manager adds them to its limits. No migration is necessary.
+
+- An agent or a service account from before this change keeps its access. Its limits do not change.
+- A script that creates an agent and then uses a team mailbox, a shared drive or a room must change. Send
+  `limits: "none"` to `directory.create_principal` or `directory.create_service_account` for an agent
+  without limits. Or set its limits with `directory.set_agent_access` after you add the memberships.
+- [Agents](agents.md#permissions-of-an-agent) has the rules.
+
 ### Recover a sign-in
 
 - A person who forgot the password, or lost the phone with the authenticator app, asks an owner or an

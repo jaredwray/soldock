@@ -155,6 +155,9 @@ function ApprovalForm({ authorization, agents, domains, canCreate, offered, onDo
 	const [scopes, setScopes] = useState<ReadonlySet<Scope>>(
 		() => new Set(defaultScopes(authorization.requested_scopes, offered)),
 	);
+	// A new agent starts with a limit to its own mailbox and its own drive: the default of the server. Without
+	// the check, the form sends `limits: "none"`, and the new agent has no limits.
+	const [limited, setLimited] = useState(true);
 	const [busy, setBusy] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 	const ids = {
@@ -164,6 +167,7 @@ function ApprovalForm({ authorization, agents, domains, canCreate, offered, onDo
 		addressHint: useId(),
 		agent: useId(),
 		warning: useId(),
+		limitHint: useId(),
 	};
 	const requested = new Set(authorization.requested_scopes);
 	const canApprove = canCreate || agents.length > 0;
@@ -185,6 +189,7 @@ function ApprovalForm({ authorization, agents, domains, canCreate, offered, onDo
 					? {
 							new_agent: { display_name: name.trim(), address: address.trim() },
 							scopes: offered.filter((scope) => scopes.has(scope)),
+							...(limited ? {} : { limits: "none" as const }),
 						}
 					: { agent_id: agentId }),
 			});
@@ -350,9 +355,26 @@ function ApprovalForm({ authorization, agents, domains, canCreate, offered, onDo
 											</label>
 										))}
 									</fieldset>
+									<div className="field form-grid-wide">
+										<label className="check-row">
+											<input
+												type="checkbox"
+												className="checkbox"
+												checked={limited}
+												onChange={() => setLimited((current) => !current)}
+												aria-describedby={ids.limitHint}
+												disabled={busy}
+											/>
+											<span>Limit this agent to its own mailbox and its own drive</span>
+										</label>
+										<p id={ids.limitHint} className="field-hint">
+											With the limit, the app reaches no chat room, no team mailbox and no shared drive. Without the
+											limit, the app reaches each mailbox, drive and room that the agent is a member of.
+										</p>
+									</div>
 									<p className="field-hint form-grid-wide">
 										A new agent can send mail only inside this organization. Open the agent under Admin › Members to
-										change its policy and its permissions.
+										change its policy, its scopes and its limits.
 									</p>
 								</>
 							) : (

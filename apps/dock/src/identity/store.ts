@@ -2,6 +2,7 @@ import {
 	AGENT_SCOPES,
 	AgentResources,
 	ALL_SCOPES,
+	defaultAgentResources,
 	nameAliasParts,
 	type Scope,
 	SERVICE_SCOPES,
@@ -570,6 +571,11 @@ export interface NewPrincipal {
 	created_by?: string | null;
 	/** The scopes of a new agent or service account. Values outside the ceiling of its kind are left out. */
 	agent_scopes?: readonly Scope[];
+	/**
+	 * True for a new agent or service account without resource limits. Without it, the new agent is limited to
+	 * its own mailbox and its own drive (`defaultAgentResources`).
+	 */
+	no_limits?: boolean;
 }
 
 /** Turns a directory constraint failure into an error that the caller can read. */
@@ -687,8 +693,8 @@ export async function createPrincipal(
 			db
 				.prepare(
 					`INSERT INTO principals (id, kind, display_name, org_role, sponsor_id, outbound_mode, outbound_allowlist,
-						password_hash, created_at, service, description, created_by, agent_scopes)
-					SELECT ?1, ?2, ?3, ?4, ?5, ?6, '[]', ?7, ?8, ?9, ?10, ?11, ?16
+						password_hash, created_at, service, description, created_by, agent_scopes, agent_resources)
+					SELECT ?1, ?2, ?3, ?4, ?5, ?6, '[]', ?7, ?8, ?9, ?10, ?11, ?16, ?17
 					WHERE NOT EXISTS (SELECT 1 FROM setup_lock WHERE token IS NOT NULL)
 						AND (?12 = 0 OR NOT EXISTS (SELECT 1 FROM principals))
 						AND (?13 IS NULL OR EXISTS (SELECT 1 FROM principals sponsor WHERE sponsor.id = ?13
@@ -717,6 +723,8 @@ export async function createPrincipal(
 								scopeCeiling({ kind: "agent", service }).filter((s) => principal.agent_scopes?.includes(s)),
 							)
 						: null,
+					// A new agent reaches only its own mailbox and its own drive, unless its creator removes the limits.
+					principal.kind === "agent" && principal.no_limits !== true ? JSON.stringify(defaultAgentResources(id)) : null,
 				),
 			// The name aliases of the mention read, in the same transaction. A lost guard inserted no row, so
 			// this update then changes nothing.

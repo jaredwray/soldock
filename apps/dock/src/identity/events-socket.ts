@@ -24,12 +24,12 @@ export async function openEventsSocket(
 	caller: AuthContext,
 	options: { feed: boolean },
 ): Promise<Response> {
-	// The socket carries the changes of each room of the principal, so a service account with resource limits never
-	// gets one. The route and the feeds of MCP both come here.
+	// The socket carries the changes of each room of the principal, so an agent with resource limits never gets
+	// one. A new agent has limits. The route and the feeds of MCP both come here.
 	if (caller.restriction !== null) {
 		throw new OperationError(
 			"forbidden",
-			"This service account is limited to listed resources, and the events socket carries each room.",
+			"This agent is limited to listed resources, and the events socket carries each room.",
 		);
 	}
 	const open: EventsSocketOpen = { credential: credentialRef(caller), feed: options.feed };
