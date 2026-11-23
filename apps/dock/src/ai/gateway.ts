@@ -229,10 +229,10 @@ export async function chat(env: Env, request: ChatRequest, options: { test?: boo
 		return await finish(failure("timeout", { retryable: true, model }), { input: 0, output: 0 });
 	}
 	if ("unreachable" in sent) {
-		return await finish(
-			failure("http", { retryable: true, model, detail: "The request did not reach the gateway." }),
-			{ input: 0, output: 0 },
-		);
+		return await finish(failure("http", { retryable: true, model, detail: "The request did not reach the gateway." }), {
+			input: 0,
+			output: 0,
+		});
 	}
 	const { response } = sent;
 	if (!response.ok) {
