@@ -166,6 +166,8 @@ describe("the classifier stage", () => {
 			feature: "mail.auto_label",
 			resource: ada.id,
 		});
+		// The gateway log keeps the metrics, never the mail text of the prompt or the answer.
+		expect(call.headers.get("cf-aig-collect-log-payload")).toBe("false");
 
 		const needsReply = await labelOf("needs_reply");
 		expect((await threadOf("Contract")).auto_label_ids).toEqual([needsReply]);
@@ -255,6 +257,8 @@ describe("the classifier stage", () => {
 		);
 		await consumeAutoLabels(sent);
 		expect(calls).toHaveLength(2);
+		// The retry also asks the gateway to keep no body.
+		expect(calls.map((call) => call.headers.get("cf-aig-collect-log-payload"))).toEqual(["false", "false"]);
 		expect((await threadOf("Schema")).auto_label_ids).toEqual([await labelOf("needs_reply")]);
 		expect(await owner.call("ai.get_usage", {})).toMatchObject({ requests: 2, failures: 1 });
 	});

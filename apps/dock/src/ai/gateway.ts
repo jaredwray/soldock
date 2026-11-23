@@ -124,6 +124,10 @@ async function post(
 				authorization: `Bearer ${token}`,
 				"cf-aig-authorization": `Bearer ${token}`,
 				"cf-aig-metadata": metadata,
+				// The gateway keeps no request or response body: a prompt of auto labels holds mail text. Its log
+				// keeps the metadata (model, status, tokens, cost, duration). This header does not change what a
+				// Logpush job exports. Each attempt, also the retry without the schema, goes through this function.
+				"cf-aig-collect-log-payload": "false",
 				"content-type": "application/json",
 			},
 			body: JSON.stringify(body),
@@ -258,13 +262,14 @@ export async function chat(env: Env, request: ChatRequest, options: { test?: boo
 	} catch {
 		return await finish(failure("bad_response", { status: response.status, model }), { input: 0, output: 0 });
 	}
-	// A connection test proves the path to the model. An answer with no text (a reasoning model that used
-	// its tokens to reason) still proves it, but only when it has the form of an answer: a first choice with
-	// a message. Other JSON, such as an error with status 200, does not prove it.
+	// A connection test proves the path to the model. A reasoning model can use its tokens to reason and
+	// answer with no text. That still proves the path, but only for a reasoning model, and only when the
+	// answer has its form: a first choice with a message whose content is null. Other JSON does not prove it.
 	const text = answer && typeof answer === "object" ? contentOf(answer) : null;
 	const message = answer && typeof answer === "object" ? answer.choices?.[0]?.message : undefined;
-	const hasMessage = message !== null && typeof message === "object";
-	const content = text === null && test && hasMessage ? "" : text;
+	const emptyAnswer =
+		message !== null && typeof message === "object" && Object.hasOwn(message, "content") && message.content === null;
+	const content = text === null && test && emptyAnswer && aiModel(model)?.reasoning ? "" : text;
 	const inputTokens = tokenCount(answer?.usage?.prompt_tokens) ?? Math.ceil(inputChars / 4);
 	const outputTokens = tokenCount(answer?.usage?.completion_tokens) ?? estimateTokens(content ?? "");
 	if (content === null) {

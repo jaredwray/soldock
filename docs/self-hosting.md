@@ -179,8 +179,14 @@ is inbox auto labels. AI is off until an owner or an admin turns it on in **Admi
 - Only Workers AI models are on the list, so the AI stays in Cloudflare.
 - AI stops when the estimated cost of the month (UTC) reaches the budget. The estimate uses the
   published Workers AI prices. The AI Gateway dashboard is the source for billing.
-- The gateway can keep a log of each request, with the mail text of auto labels. To keep no mail text
-  in Cloudflare logs, turn off log collection in the settings of the gateway.
+- Each request asks the gateway to keep no request or response body (`cf-aig-collect-log-payload:
+  false`), so the gateway log has no mail text. It keeps the metadata: the model, the status, the
+  tokens, the cost and the duration. The usage of Admin › AI does not need the bodies.
+- The header does not change what Logpush exports. If you turn on Logpush for the gateway, examine
+  that export separately: it can hold the request and response bodies, encrypted with your key.
+- A gateway created before 24 September 2026 uses Legacy Logs. After the first deploy, send one
+  synthetic mail that gets a classifier call, and confirm that its log entry in the gateway has no
+  body.
 - The deploy creates the queue `soldock-mail-autolabel`. Migration `0028` adds the AI tables: run
   `wrangler d1 migrations apply` as for each migration.
 - For local work, put `AI_GATEWAY_TOKEN=<token>` in `apps/dock/.dev.vars`. Never commit that file.

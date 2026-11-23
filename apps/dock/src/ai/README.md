@@ -58,6 +58,10 @@ answer says only whether it exists (`token_configured`).
   authenticated gateway.
 - `cf-aig-metadata` with the feature and the mailbox id, so the gateway logs show who used AI. No
   address goes in it.
+- `cf-aig-collect-log-payload: false`, so the gateway keeps no request or response body. A prompt of
+  auto labels holds mail text. The gateway log still keeps the metadata: the model, the status, the
+  tokens, the cost and the duration. `post()` sends the header for each attempt, also for the retry
+  without the schema.
 - The body names the model as `workers-ai/<model id>`, with `temperature: 0`. A model that accepts a
   JSON schema gets `response_format`. When the gateway refuses the schema with `400`, the call goes one
   more time without it. The ledger counts the refused request as a failure.
@@ -104,7 +108,7 @@ A connection test counts for the person who ran it. A deleted mailbox shows as `
 | AI settings | D1 `ai_settings` (migration `0028`) | One row. No secret. A directory reset makes a new row with AI off |
 | Usage ledger | D1 `ai_usage` (migration `0028`) | One row for each UTC day, feature, model and resource (a mailbox id, or the id of the person who tested). Requests, failures, tokens and the cost in micro-USD. No content. The hourly cron trigger deletes days older than 400 days. A directory reset deletes it |
 | API token | Worker secret `AI_GATEWAY_TOKEN` | Set with `wrangler secret put`. Not in a backup of Asterra |
-| Prompts and answers | AI Gateway logs, in the Cloudflare account | Asterra stores neither. The gateway can keep logs of each request, with the mail text of auto labels. Turn off log collection in the gateway if you do not want this |
+| Prompts and answers | Not stored | Asterra stores neither, and each request asks AI Gateway to keep no body (`cf-aig-collect-log-payload: false`). The gateway log keeps the metadata only. The header does not change what a Logpush job of the gateway exports: an operator who turns on Logpush must examine that export separately |
 
 ## Safety
 

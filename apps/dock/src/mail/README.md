@@ -605,6 +605,8 @@ A disabled endpoint stays disabled. Delete it and create a new one.
   label (R1), or `List-Unsubscribe` to stay out of Cold pitch (R5). Such evasion only keeps mail in the
   inbox: no header can move mail out of it, because only a proved sender (internal mail, or a DMARC
   pass) skips the inbox.
+- Auto labels: the classifier request asks AI Gateway to keep no body (`cf-aig-collect-log-payload:
+  false`), so the mail text of a prompt is not in the gateway log. See the [ai module](../ai/README.md).
 - Auto labels: only mail from a proved sender (internal mail, or a DMARC pass) skips the inbox, and
   only such mail gets a label from the sender domain alone (R3, R4). A forged From address or forged
   list headers cannot hide mail from the inbox.
