@@ -1,43 +1,53 @@
 import {
+	AGENT_SCOPES,
+	type AgentResources,
 	type InputOf,
 	type OutputOf,
+	type Principal,
 	type ResourceKind,
 	type Scope,
 	SERVICE_SCOPES,
-	type ServiceResources,
 } from "@asterra/contracts";
 import type { ResourceChoice, ResourceChoices } from "./resourceChoices.ts";
 
-type Access = Pick<OutputOf<"directory.get_service_account_access">, "scopes" | "resources">;
+type Access = Pick<OutputOf<"directory.get_agent_access">, "scopes" | "resources">;
 
-/** The fields of `directory.set_service_account_access` that a save sends. */
-export type PermissionsChange = Omit<InputOf<"directory.set_service_account_access">, "principal_id">;
+/** The fields of `directory.set_agent_access` that a save sends. */
+export type PermissionsChange = Omit<InputOf<"directory.set_agent_access">, "principal_id">;
 
-/** The choices of the Permissions form of a service account, before a save. */
+/** The choices of the Permissions form of an agent or a service account, before a save. */
 export interface PermissionsDraft {
 	scopes: readonly Scope[];
-	/** True when the account is limited to the picked mailboxes, drives and rooms. */
+	/** True when the agent is limited to the picked mailboxes, drives and rooms. */
 	limited: boolean;
 	/** The picked resources, as keys of `pickKey`. */
 	picked: ReadonlySet<string>;
 }
 
 /**
+ * The scopes that the Permissions form offers: `SERVICE_SCOPES` for a service account, and `AGENT_SCOPES`
+ * for an agent. The server refuses a scope outside this list.
+ */
+export function scopesFor(principal: Pick<Principal, "kind">): readonly Scope[] {
+	return principal.kind === "service" ? SERVICE_SCOPES : AGENT_SCOPES;
+}
+
+/**
  * The key of one picked resource. The own mailbox and the own drive have the same id (the id of the
- * account). So a key has the kind too, and a selection of the own mailbox does not select the own drive.
+ * agent). So a key has the kind too, and a selection of the own mailbox does not select the own drive.
  */
 export function pickKey(kind: ResourceKind, id: string): string {
 	return `${kind}:${id}`;
 }
 
-/** The form choices that show the saved scopes and limits of the account. */
-export function draftOf(access: Access): PermissionsDraft {
+/** The form choices that show the saved scopes and limits. `offered` is the list of `scopesFor`. */
+export function draftOf(access: Access, offered: readonly Scope[]): PermissionsDraft {
 	const picked = new Set<string>();
 	for (const id of access.resources?.mailbox_ids ?? []) picked.add(pickKey("mailbox", id));
 	for (const id of access.resources?.drive_ids ?? []) picked.add(pickKey("drive", id));
 	for (const id of access.resources?.room_ids ?? []) picked.add(pickKey("room", id));
 	return {
-		scopes: SERVICE_SCOPES.filter((scope) => access.scopes.includes(scope)),
+		scopes: offered.filter((scope) => access.scopes.includes(scope)),
 		limited: access.resources !== null,
 		picked,
 	};
@@ -53,9 +63,9 @@ function sameIds(a: readonly string[], b: readonly string[]): boolean {
 }
 
 /**
- * The input fields of `directory.set_service_account_access` that the draft changes, or null when the
- * draft is the same as the saved access. A field that did not change is left out, so a save of new scopes
- * does not write the limits again.
+ * The input fields of `directory.set_agent_access` that the draft changes, or null when the draft is the
+ * same as the saved access. A field that did not change is left out, so a save of new scopes does not
+ * write the limits again.
  */
 export function permissionsChange(
 	draft: PermissionsDraft,
@@ -63,10 +73,9 @@ export function permissionsChange(
 	choices: ResourceChoices,
 ): PermissionsChange | null {
 	const change: PermissionsChange = {};
-	// The draft holds only scopes of `SERVICE_SCOPES`, which are the scopes that the operation takes.
-	if (!sameIds(draft.scopes, access.scopes))
-		change.scopes = [...draft.scopes] as NonNullable<PermissionsChange["scopes"]>;
-	const resources: ServiceResources | null = draft.limited
+	// The draft holds only scopes of `scopesFor`. The server checks the ceiling of a service account.
+	if (!sameIds(draft.scopes, access.scopes)) change.scopes = [...draft.scopes];
+	const resources: AgentResources | null = draft.limited
 		? {
 				mailbox_ids: pickedIds(draft, "mailbox", choices.mailboxes),
 				drive_ids: pickedIds(draft, "drive", choices.drives),

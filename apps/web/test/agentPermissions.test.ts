@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { draftOf, permissionsChange, pickKey } from "../src/features/admin/permissionsDraft.ts";
+import { draftOf, permissionsChange, pickKey, scopesFor } from "../src/features/admin/permissionsDraft.ts";
 import { limitText, resourceChoicesOf } from "../src/features/admin/resourceChoices.ts";
 
 const account = { id: "prn_ci", address: "ci@example.com" };
@@ -20,7 +20,7 @@ const access = {
 	resources: null,
 };
 
-describe("the limits of a service account", () => {
+describe("the limits of an agent or a service account", () => {
 	// The own mailbox and drive have the id of the account, as the server expects them.
 	it("offers the own mailbox and drive by the id of the account, then each membership", () => {
 		const choices = resourceChoicesOf(account, access);
@@ -58,11 +58,12 @@ describe("the limits of a service account", () => {
 	});
 });
 
-describe("the Permissions form of a service account", () => {
+describe("the Permissions form of an agent or a service account", () => {
 	const choices = resourceChoicesOf(account, access);
+	const serviceScopes = scopesFor({ kind: "service" });
 
 	it("sends nothing for the saved access, and only the field that changed", () => {
-		const saved = draftOf(access);
+		const saved = draftOf(access, serviceScopes);
 		expect(permissionsChange(saved, access, choices)).toBeNull();
 		// New scopes do not write the limits again.
 		expect(permissionsChange({ ...saved, scopes: ["account.read", "chat.read"] }, access, choices)).toEqual({
@@ -74,9 +75,24 @@ describe("the Permissions form of a service account", () => {
 		});
 	});
 
+	// An agent can hold the webhook scopes, and a service account cannot. A draft with the scopes of a service
+	// account drops them, and a save of only the limits then removes them from the agent.
+	it("keeps the scopes that only an agent can hold", () => {
+		const agentAccess = { ...access, scopes: ["account.read", "mail.webhooks"] };
+		const saved = draftOf(agentAccess, scopesFor({ kind: "agent" }));
+		expect(permissionsChange(saved, agentAccess, choices)).toBeNull();
+		expect(permissionsChange({ ...saved, limited: true }, agentAccess, choices)).toEqual({
+			resources: { mailbox_ids: [], drive_ids: [], room_ids: [] },
+		});
+	});
+
 	// The own mailbox and the own drive have the same id. A pick of one must not pick the other.
 	it("keeps the own mailbox and the own drive apart", () => {
-		const draft = { ...draftOf(access), limited: true, picked: new Set([pickKey("mailbox", "prn_ci")]) };
+		const draft = {
+			...draftOf(access, serviceScopes),
+			limited: true,
+			picked: new Set([pickKey("mailbox", "prn_ci")]),
+		};
 		expect(permissionsChange(draft, access, choices)).toEqual({
 			resources: { mailbox_ids: ["prn_ci"], drive_ids: [], room_ids: [] },
 		});
@@ -85,7 +101,7 @@ describe("the Permissions form of a service account", () => {
 	it("shows saved limits as picked, and sends null to remove them", () => {
 		const limited = { ...access, resources: { mailbox_ids: ["tmb_1"], drive_ids: ["prn_ci"], room_ids: ["rm_gone"] } };
 		const limitedChoices = resourceChoicesOf(account, limited);
-		const saved = draftOf(limited);
+		const saved = draftOf(limited, serviceScopes);
 		expect(saved.limited).toBe(true);
 		// The same picks in a different order are no change, also with a listed room that is not a membership.
 		expect(permissionsChange(saved, limited, limitedChoices)).toBeNull();

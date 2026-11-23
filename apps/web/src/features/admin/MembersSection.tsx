@@ -37,8 +37,9 @@ interface MembersSectionProps {
 /**
  * The directory: each person, agent and service account, in one list of cards, with a filter by kind.
  * An owner or an admin opens a card to change the account. An agent card also has the policy, the
- * connected apps, the webhooks and the API keys. A service account card has the policy, the tokens, the
- * access and the activity. A sponsor who is a member sees only the agents of that sponsor.
+ * permissions, the connected apps, the webhooks, the API keys and the access. A service account card has
+ * the policy, the permissions, the tokens, the access and the activity. A sponsor who is a member sees only
+ * the agents of that sponsor.
  */
 export function MembersSection({ me, elevated, principals, onChanged, onCreated }: MembersSectionProps) {
 	const toast = useToast();
@@ -70,7 +71,7 @@ export function MembersSection({ me, elevated, principals, onChanged, onCreated 
 					<p className="panel-heading panel-intro">
 						{elevated
 							? "The people, agents and service accounts of the organization. Open a card to change the account. An archived account cannot sign in or use a token, and it keeps its mail and files."
-							: "Set who each agent can send mail to. Manage its connected apps and its API keys. An agent can never change its own policy."}
+							: "Set who each agent can send mail to and what it can do. Manage its connected apps and its API keys. An agent can never change its own policy or permissions."}
 					</p>
 					{elevated && (
 						<button type="button" className="button button-primary" onClick={() => setAction({ kind: "create" })}>

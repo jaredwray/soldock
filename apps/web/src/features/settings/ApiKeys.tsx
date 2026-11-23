@@ -28,14 +28,20 @@ const PRIVILEGED: readonly Scope[] = [
 	"drive.webhooks",
 ];
 
-interface ApiKeyManagerProps {
+/**
+ * Where the scopes of a key come from. A key of a person has its own scopes: `allowedScopes` is the list that
+ * a new key can hold, and the form offers only the ones that this session also holds, because a credential
+ * cannot grant a scope that it does not hold. A key of an agent and a token of a service account have no
+ * scopes of their own: each one has the scopes and the limits of its agent. `scopesFrom` is then the word for
+ * the agent in the text of the form. The form offers no scopes, and a row shows none.
+ */
+type KeyScopes =
+	| { allowedScopes: readonly Scope[]; scopesFrom?: undefined }
+	| { allowedScopes?: undefined; scopesFrom: "agent" | "account" };
+
+type ApiKeyManagerProps = KeyScopes & {
 	/** The key owner. Leave it out for your own keys. */
 	principalId?: string;
-	/**
-	 * The scopes that a new key can hold, for example AGENT_SCOPES for an agent. The form offers only
-	 * the ones that this session also holds, because a credential cannot grant a scope that it does not hold.
-	 */
-	allowedScopes: readonly Scope[];
 	heading: string;
 	/** A short line under the heading. */
 	note?: string;
@@ -47,12 +53,7 @@ interface ApiKeyManagerProps {
 	people?: readonly Principal[];
 	/** Called after a key is created or revoked, so a view next to the list can load again. */
 	onChange?: () => void;
-	/**
-	 * True for a service account. Its tokens have no scopes of their own: each one has the scopes and the
-	 * limits of the account. The form then offers no scopes, and a row shows none.
-	 */
-	accountScoped?: boolean;
-}
+};
 
 /** How long the old secret works after a rotation, in minutes. */
 type OverlapChoice = "0" | "15" | "60" | "1440";
@@ -73,19 +74,21 @@ function personName(people: readonly Principal[], id: string | null): string {
 /** Lists, creates and revokes the API keys of one principal. */
 export function ApiKeyManager({
 	principalId,
-	allowedScopes,
+	allowedScopes = [],
+	scopesFrom,
 	heading,
 	note,
 	noun = "key",
 	defaultTtl = "never",
 	people,
 	onChange,
-	accountScoped = false,
 }: ApiKeyManagerProps) {
 	const headingId = useId();
 	const toast = useToast();
 	const { whoami } = useSession();
 	const offeredScopes = allowedScopes.filter((scope) => whoami.scopes.includes(scope));
+	// A key of an agent or a token of a service account has the scopes of its agent, and none of its own.
+	const ownScopes = scopesFrom === undefined;
 	const [keys, setKeys] = useState<ApiKey[] | null>(null);
 	const [error, setError] = useState<string | null>(null);
 	const [created, setCreated] = useState<CreatedApiKey | null>(null);
@@ -149,7 +152,7 @@ export function ApiKeyManager({
 							<caption className="visually-hidden">{heading}</caption>
 							<thead>
 								<tr>
-									<th scope="col">{accountScoped ? "Label" : "Label and scopes"}</th>
+									<th scope="col">{ownScopes ? "Label and scopes" : "Label"}</th>
 									<th scope="col" className="col-optional">
 										Created
 									</th>
@@ -175,7 +178,7 @@ export function ApiKeyManager({
 												)}
 											</div>
 											{key.description && <div className="row-note">{key.description}</div>}
-											{!accountScoped && <div className="row-note cell-scopes">{key.scopes.join(", ")}</div>}
+											{ownScopes && <div className="row-note cell-scopes">{key.scopes.join(", ")}</div>}
 											{people && key.revoked && key.revoked_by && (
 												<div className="row-note">Revoked by {personName(people, key.revoked_by)}</div>
 											)}
@@ -248,7 +251,7 @@ export function ApiKeyManager({
 					principalId={principalId}
 					allowedScopes={offeredScopes}
 					narrowed={offeredScopes.length < allowedScopes.length}
-					accountScoped={accountScoped}
+					scopesFrom={scopesFrom}
 					noun={noun}
 					defaultTtl={defaultTtl}
 					onCreated={(key) => {
@@ -281,8 +284,8 @@ export function ApiKeyManager({
 					}}
 				>
 					<p>
-						<strong>{rotating.label}</strong> gets a new secret. It keeps its{" "}
-						{accountScoped ? "end" : "scopes and its end"}. Change the secret in each script before the old one stops.
+						<strong>{rotating.label}</strong> gets a new secret. It keeps its {ownScopes ? "scopes and its end" : "end"}
+						. Change the secret in each script before the old one stops.
 					</p>
 					<div className="field">
 						<label htmlFor={overlapId} className="field-label">
@@ -333,7 +336,7 @@ function CreateKeyForm({
 	narrowed,
 	noun,
 	defaultTtl,
-	accountScoped,
+	scopesFrom,
 	onCreated,
 }: {
 	principalId: string | undefined;
@@ -342,8 +345,8 @@ function CreateKeyForm({
 	narrowed: boolean;
 	noun: "key" | "token";
 	defaultTtl: TtlChoice;
-	/** True for a token of a service account: it has the scopes of the account, and the form offers none. */
-	accountScoped: boolean;
+	/** Set for a key of an agent or a token of a service account: it has the scopes of its agent, and the form offers none. */
+	scopesFrom: "agent" | "account" | undefined;
 	onCreated: (key: CreatedApiKey) => void;
 }) {
 	const [label, setLabel] = useState("");
@@ -364,7 +367,7 @@ function CreateKeyForm({
 			setError(`Enter a label for the ${noun}.`);
 			return;
 		}
-		if (!accountScoped && scopes.size === 0) {
+		if (scopesFrom === undefined && scopes.size === 0) {
 			setError("Select at least one scope.");
 			return;
 		}
@@ -378,8 +381,8 @@ function CreateKeyForm({
 		try {
 			const result = await api.call("account.create_api_key", {
 				label: label.trim(),
-				// A token of a service account takes no scopes: it has the scopes of the account.
-				...(accountScoped ? {} : { scopes: allowedScopes.filter((scope) => scopes.has(scope)) }),
+				// A key of an agent or a service account takes no scopes: it has the scopes of its agent.
+				...(scopesFrom === undefined ? { scopes: allowedScopes.filter((scope) => scopes.has(scope)) } : {}),
 				...(description.trim() ? { description: description.trim() } : {}),
 				...lifetime,
 				...(principalId ? { principal_id: principalId } : {}),
@@ -468,10 +471,10 @@ function CreateKeyForm({
 					/>
 				</div>
 			)}
-			{accountScoped ? (
+			{scopesFrom !== undefined ? (
 				<p className="field-hint">
-					The {noun} has the scopes and the limits of the account. Change them under Permissions. Use one {noun} for
-					each system, so that you can rotate or revoke it alone.
+					The {noun} has the scopes and the limits of the {scopesFrom}. Change them under Permissions. Use one {noun}{" "}
+					for each system, so that you can rotate or revoke it alone.
 				</p>
 			) : (
 				<fieldset className="scope-list">

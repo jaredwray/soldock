@@ -36,7 +36,8 @@ type PageState =
 /**
  * The approval page of an OAuth request. An MCP client got only the URL of the MCP endpoint, and sent
  * the person here. The person creates a new agent with an address and scopes for the client, or
- * connects an agent that they manage, or denies the request.
+ * connects an agent that they manage, or denies the request. A connection of an agent has the scopes of
+ * the agent, so the page offers scopes only for a new agent.
  */
 export function ConnectPage({ requestId }: { requestId: string }) {
 	const { whoami } = useSession();
@@ -135,7 +136,7 @@ interface ApprovalFormProps {
 	agents: readonly Principal[];
 	domains: readonly string[];
 	canCreate: boolean;
-	/** The agent scopes that this session can grant. */
+	/** The agent scopes that this session can grant to a new agent. */
 	offered: readonly Scope[];
 	onDone: (redirectTo: string, approved: boolean) => void;
 	onGone: () => void;
@@ -168,17 +169,20 @@ function ApprovalForm({ authorization, agents, domains, canCreate, offered, onDo
 		if (mode === "new") {
 			if (!name.trim()) return setError("Enter a name for the agent.");
 			if (!EmailAddress.safeParse(address).success) return setError("Enter one address, such as agent@example.com.");
+			if (scopes.size === 0) return setError("Select at least one scope.");
 		} else if (!agentId) {
 			return setError("Select an agent.");
 		}
-		if (scopes.size === 0) return setError("Select at least one scope.");
 		await run(async () => {
 			const result = await api.call("oauth.approve_authorization", {
 				request_id: authorization.id,
+				// A new agent gets the selected scopes. A connection of an agent that exists has the scopes of the agent.
 				...(mode === "new"
-					? { new_agent: { display_name: name.trim(), address: address.trim() } }
+					? {
+							new_agent: { display_name: name.trim(), address: address.trim() },
+							scopes: offered.filter((scope) => scopes.has(scope)),
+						}
 					: { agent_id: agentId }),
-				scopes: offered.filter((scope) => scopes.has(scope)),
 			});
 			onDone(result.redirect_to, true);
 		});
@@ -318,32 +322,44 @@ function ApprovalForm({ authorization, agents, domains, canCreate, offered, onDo
 									/>
 								</div>
 							)}
-							<fieldset className="scope-list form-grid-wide">
-								<legend className="field-label">Access</legend>
-								{authorization.requested_scopes.length === 0 && (
-									<p className="field-hint">The app did not ask for scopes. Select what the agent can do.</p>
-								)}
-								{offered.map((scope) => (
-									<label key={scope} className="check-row">
-										<input
-											type="checkbox"
-											className="checkbox"
-											checked={scopes.has(scope)}
-											onChange={() => toggle(scope)}
-											disabled={busy}
-										/>
-										<span>
-											<code>{scope}</code>
-											{requested.has(scope) && <span className="chip chip-small connect-requested">Requested</span>}
-											<span className="check-hint">{SCOPES[scope]}</span>
-										</span>
-									</label>
-								))}
-							</fieldset>
-							<p className="field-hint form-grid-wide">
-								A new agent can send mail only inside this organization. Open the agent under Admin › Members to change
-								its policy.
-							</p>
+							{mode === "new" ? (
+								<>
+									<fieldset className="scope-list form-grid-wide">
+										<legend className="field-label">Access</legend>
+										{authorization.requested_scopes.length === 0 && (
+											<p className="field-hint">The app did not ask for scopes. Select what the agent can do.</p>
+										)}
+										{offered.map((scope) => (
+											<label key={scope} className="check-row">
+												<input
+													type="checkbox"
+													className="checkbox"
+													checked={scopes.has(scope)}
+													onChange={() => toggle(scope)}
+													disabled={busy}
+												/>
+												<span>
+													<code>{scope}</code>
+													{requested.has(scope) && <span className="chip chip-small connect-requested">Requested</span>}
+													<span className="check-hint">{SCOPES[scope]}</span>
+												</span>
+											</label>
+										))}
+									</fieldset>
+									<p className="field-hint form-grid-wide">
+										A new agent can send mail only inside this organization. Open the agent under Admin › Members to
+										change its policy and its permissions.
+									</p>
+								</>
+							) : (
+								<div className="form-grid-wide">
+									<p className="field-label">Access</p>
+									<p className="field-hint">
+										The app gets the permissions of the agent: its scopes and its limits. To change them, open the agent
+										under Admin › Members.
+									</p>
+								</div>
+							)}
 						</>
 					)}
 					{error && (
