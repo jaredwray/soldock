@@ -51,6 +51,7 @@ import {
 	soundListeners,
 	viewsRoom,
 } from "./socket-presence.ts";
+import { getPrincipal, type PrincipalRecord } from "./store.ts";
 
 // Each person, agent and service account has one PrincipalDO. It holds their room state, notification
 // settings, registered push devices and events sockets, and the activity log of a service account. Its
@@ -241,6 +242,17 @@ export async function endEventSockets(
 			error: error instanceof Error ? error.message : String(error),
 		});
 	}
+}
+
+/**
+ * True when an agent lost the access to post a scheduled message: the scopes and the limits of an agent can
+ * change after it scheduled the message. The send needs the access that a new schedule needs now:
+ * `chat.write`, and no limits, because a limited agent cannot schedule a message. A person keeps the access.
+ */
+function lostScheduleAccess(principal: PrincipalRecord): boolean {
+	return (
+		principal.kind === "agent" && (!principal.agent_scopes.includes("chat.write") || principal.agent_resources !== null)
+	);
 }
 
 /** The object checks the credential of a socket again when its last check is this old. */
@@ -1294,11 +1306,7 @@ export class PrincipalDO extends DurableObject<Env> {
 					}
 					continue;
 				}
-				// The scopes and the limits of an agent can change after it scheduled the message. The send needs
-				// the access that a new schedule needs now: `chat.write`, and no limits, because a limited agent
-				// cannot schedule a message.
-				const agent = checked.principal;
-				if (agent.kind === "agent" && (!agent.agent_scopes.includes("chat.write") || agent.agent_resources !== null)) {
+				if (lostScheduleAccess(checked.principal)) {
 					if (this.personal.claimScheduledForSend(item.id, item.send_at, item.text, item.body_json, now)) {
 						this.personal.markScheduledFailed(item.id, "The agent no longer has the access to post this message.");
 						events.push({ type: "chat.scheduled", scheduled_id: item.id, room_id: item.room_id });
@@ -1311,14 +1319,17 @@ export class PrincipalDO extends DurableObject<Env> {
 					display_name: checked.principal.display_name,
 				};
 			} else {
-				const principal = await this.env.DIRECTORY.prepare(
-					"SELECT id, kind, display_name FROM principals WHERE id = ? AND archived_at IS NULL AND deleted_at IS NULL",
-				)
-					.bind(item.principal_id)
-					.first<{ id: string; kind: "human" | "agent"; display_name: string }>();
-				if (!principal) {
+				// A message from before the credential binding. A deleted principal has no record.
+				const found = await getPrincipal(this.env.DIRECTORY, item.principal_id);
+				const principal = found?.archived_at === null ? found : null;
+				if (!principal || lostScheduleAccess(principal)) {
 					if (this.personal.claimScheduledForSend(item.id, item.send_at, item.text, item.body_json, now)) {
-						this.personal.markScheduledFailed(item.id, "Principal is archived or deleted.");
+						this.personal.markScheduledFailed(
+							item.id,
+							principal
+								? "The agent no longer has the access to post this message."
+								: "Principal is archived or deleted.",
+						);
 						events.push({ type: "chat.scheduled", scheduled_id: item.id, room_id: item.room_id });
 					}
 					continue;

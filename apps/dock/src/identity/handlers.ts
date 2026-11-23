@@ -536,11 +536,14 @@ export const identityHandlers: Pick<HandlerMap<CallContext>, IdentityOperation |
 		if (!newScopes && !newResources) {
 			return { principal_id: target.id, scopes: target.agent_scopes, resources: target.agent_resources };
 		}
-		const updated = await setAgentAccess(call.env.DIRECTORY, target, {
-			scopes: newScopes ? scopes : undefined,
-			resources: newResources ? input.resources : undefined,
-		});
-		if (!updated) throw new OperationError("not_found", "No agent or service account has that id.");
+		// A sponsor who is not an admin acts only while the agent still has that sponsor, in the write itself.
+		const updated = await setAgentAccess(
+			call.env.DIRECTORY,
+			target,
+			{ scopes: newScopes ? scopes : undefined, resources: newResources ? input.resources : undefined },
+			isAdmin(call.caller) ? null : call.caller.principal.id,
+		);
+		if (!updated) throw new OperationError("conflict", DIRECTORY_CHANGED);
 		// Each live connection of the agent has the access of its open. The events sockets close at once, and a
 		// room socket or a feed closes at its next check (`access_version`). A client then opens them again.
 		await endEventSockets(call.env, target.id, { agentAccess: true });

@@ -960,6 +960,31 @@ describe("OAuth connections follow their agent", () => {
 		const person = owner.call("directory.set_agent_access", { principal_id: ada.id, scopes: ["mail.read"] });
 		expect(await codeOf(person)).toBe("not_found");
 
+		// A sponsor that a parallel change replaces during the call cannot change the access: the write checks
+		// the sponsor again.
+		const raced = await withEnv(
+			{
+				DIRECTORY: racing(
+					`UPDATE principals SET sponsor_id = '${owner.id}' WHERE id = ?`,
+					bot.id,
+					"agent_scopes = CASE",
+				),
+			},
+			`/api/v1/directory/agents/${bot.id}/access`,
+			{
+				method: "POST",
+				headers: { authorization: `Bearer ${ada.key}`, "content-type": "application/json" },
+				body: JSON.stringify({ scopes: ["account.read"] }),
+			},
+		);
+		expect(raced.status).toBe(409);
+		expect((await owner.call("directory.get_agent_access", { principal_id: bot.id })).scopes).toEqual([
+			"account.read",
+			"mail.read",
+			"mail.send",
+		]);
+		await owner.call("directory.update_principal", { principal_id: bot.id, sponsor_id: ada.id });
+
 		// The sponsor, and an admin who does not sponsor the bot. Each change reaches the token.
 		expect(await set(ada.call, ["account.read"])).toEqual({
 			principal_id: bot.id,

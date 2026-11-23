@@ -339,7 +339,7 @@ describe("tokens of a service account", () => {
 	});
 
 	// A scheduled message is a lasting effect of a token. It must not post with access that the account lost.
-	it("post no scheduled message after the account loses chat.write or gets limits", async () => {
+	it("post no scheduled message after the account loses chat.write or gets limits, also without a binding", async () => {
 		const { admin, service } = await seedService(["account.read", "chat.read", "chat.write"]);
 		const token = await serviceToken(admin, service.id);
 		const { room } = await admin.call("chat.create_room", { kind: "private", name: "ci", member_ids: [service.id] });
@@ -392,6 +392,19 @@ describe("tokens of a service account", () => {
 		});
 		await fire(limited.id);
 		expect(await statusOf(limited.id)).toBe("failed");
+
+		// A message from before the credential binding has no binding. It needs the same access.
+		await admin.call("directory.set_agent_access", { principal_id: service.id, resources: null });
+		const legacy = await schedule("Build 4 passed.");
+		await runInDurableObject(principal, (_instance, state) => {
+			state.storage.sql.exec(
+				"UPDATE chat_scheduled_messages SET credential_binding_json = NULL WHERE id = ?",
+				legacy.id,
+			);
+		});
+		await setScopes(admin, service.id, ["account.read", "chat.read"]);
+		await fire(legacy.id);
+		expect(await statusOf(legacy.id)).toBe("failed");
 		expect(await texts()).toEqual(["Build 1 passed."]);
 	});
 

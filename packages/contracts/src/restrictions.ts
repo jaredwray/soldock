@@ -78,9 +78,7 @@ export const RESOURCE_RULES: Readonly<Record<string, ResourceRule>> = {
 	"chat.list_custom_emoji": NONE,
 	"chat.list_slash_commands": NONE,
 	"chat.get_presence": NONE,
-	// Personal settings of the agent. They name no room.
-	"chat.get_notification_settings": NONE,
-	"chat.set_notification_settings": NONE,
+	// The status of the agent names no room.
 	"chat.set_status": NONE,
 	// An endpoint names no resource, and the outbound policy limits its host. A subscription names the
 	// resource, so its operation has a check. A delete only removes a subscription of the caller.
@@ -227,6 +225,9 @@ export const RESOURCE_RULES: Readonly<Record<string, ResourceRule>> = {
 	"chat.list_drafts": REFUSE,
 	"chat.save_draft": REFUSE,
 	"chat.delete_draft": REFUSE,
+	// The notification settings hold the level of each room of the agent.
+	"chat.get_notification_settings": REFUSE,
+	"chat.set_notification_settings": REFUSE,
 	// A chat subscription sends the messages of each room of the agent.
 	"chat.create_webhook_subscription": REFUSE,
 };

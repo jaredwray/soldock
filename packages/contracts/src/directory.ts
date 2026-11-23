@@ -768,7 +768,7 @@ export const setAgentAccess = defineOperation({
 		/** The mailboxes, drives and rooms that the agent is limited to. Null: not limited. */
 		resources: AgentResources.nullable(),
 	}),
-	errors: ["not_found"],
+	errors: ["not_found", "conflict"],
 });
 
 export const listServiceAccountActivity = defineOperation({

@@ -221,12 +221,10 @@ describe("the resource rules of a limited agent", () => {
 		expect(of("none")).toEqual([
 			"account.whoami",
 			"chat.delete_webhook_subscription",
-			"chat.get_notification_settings",
 			"chat.get_presence",
 			"chat.list_custom_emoji",
 			"chat.list_slash_commands",
 			"chat.list_webhook_subscriptions",
-			"chat.set_notification_settings",
 			"chat.set_status",
 			"directory.get_principals",
 			"directory.list_principals",

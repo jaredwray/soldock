@@ -805,12 +805,15 @@ export async function updateOutboundPolicy(
  * Sets the scopes and the resource limits of an agent or a service account. A field that is undefined does
  * not change, and `resources: null` removes the limits. Scopes outside the ceiling of the kind are left out.
  * Each write adds one to `access_version`, so each live connection of the agent stops at its next check.
- * Returns the new record, or null when no live agent has that id.
+ * With `sponsorId`, the write matches only while that person still sponsors the agent, so a sponsor that a
+ * parallel change replaced cannot change the access. Returns the new record, or null when no live agent with
+ * that id (and that sponsor) exists.
  */
 export async function setAgentAccess(
 	db: D1Database,
 	target: Pick<PrincipalRecord, "id" | "service">,
 	changes: { scopes?: readonly Scope[] | undefined; resources?: AgentResources | null | undefined },
+	sponsorId: string | null = null,
 ): Promise<PrincipalRecord | null> {
 	const ceiling = scopeCeiling({ kind: "agent", service: target.service });
 	const scopes =
@@ -824,9 +827,9 @@ export async function setAgentAccess(
 				agent_scopes = CASE WHEN ?2 IS NULL THEN agent_scopes ELSE ?2 END,
 				agent_resources = CASE WHEN ?3 = 1 THEN ?4 ELSE agent_resources END,
 				access_version = access_version + 1
-			WHERE id = ?1 AND kind = 'agent' AND service = ?5 AND deleted_at IS NULL`,
+			WHERE id = ?1 AND kind = 'agent' AND service = ?5 AND deleted_at IS NULL AND (?6 IS NULL OR sponsor_id = ?6)`,
 		)
-		.bind(target.id, scopes, setResources, resources, target.service ? 1 : 0)
+		.bind(target.id, scopes, setResources, resources, target.service ? 1 : 0, sponsorId)
 		.run();
 	if (result.meta.changes !== 1) return null;
 	return getPrincipal(db, target.id);

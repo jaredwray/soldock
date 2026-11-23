@@ -339,7 +339,7 @@ describe("a limited service account", () => {
 describe("the limits of an agent", () => {
 	// An agent can call operations that a service account cannot: webhooks and personal Chat settings. Each one
 	// has a rule, so a limited agent cannot reach a resource outside its list through them.
-	it("limit the webhooks and the rooms of an agent, and its sponsor removes them", async () => {
+	it("limit the webhooks, the rooms and the notification settings of an agent, and its sponsor removes them", async () => {
 		const { owner, ada, bot } = await seedOrg();
 		const { room: listed } = await ada.call("chat.create_room", {
 			kind: "private",
@@ -381,6 +381,9 @@ describe("the limits of an agent", () => {
 		expect(await codeOf(level(other.id))).toBe("forbidden");
 		await level(listed.id);
 		await bot.call("chat.set_status", { status: null });
+		// The notification settings hold the level of each room, also of the rooms outside the list.
+		expect(await codeOf(bot.call("chat.get_notification_settings"))).toBe("forbidden");
+		expect(await codeOf(bot.call("chat.set_notification_settings", { sound: false }))).toBe("forbidden");
 
 		// The sponsor removes the limits, and each key of the agent reaches its memberships again.
 		expect((await setLimits(ada, bot.id, null)).resources).toBeNull();
