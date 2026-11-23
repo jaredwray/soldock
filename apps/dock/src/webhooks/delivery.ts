@@ -435,13 +435,13 @@ async function checkDelivery(
 		if (!creator.agent_scopes.includes(webhookScope(subscription.domain))) {
 			return { action: "disable_subscription", reason: "access_lost" };
 		}
-		const resource =
-			subscription.domain === "chat"
-				? { kind: "room" as const, id: roomId }
-				: { kind: subscription.domain === "mail" ? ("mailbox" as const) : ("drive" as const), id: target };
-		if (resource.id === undefined || !allowsResource(creator.agent_resources, resource.kind, resource.id)) {
+		const limits = creator.agent_resources;
+		if (subscription.domain === "chat") {
 			// A chat subscription covers each room of the agent, so an event of a room outside the list skips.
-			if (subscription.domain === "chat" && resource.id !== undefined) return { action: "skip" };
+			// It never stops the subscription. A job with no room sends only for an agent without limits.
+			const inside = roomId === undefined ? limits === null : allowsResource(limits, "room", roomId);
+			if (!inside) return { action: "skip" };
+		} else if (!allowsResource(limits, subscription.domain === "mail" ? "mailbox" : "drive", target)) {
 			return { action: "disable_subscription", reason: "access_lost" };
 		}
 	}

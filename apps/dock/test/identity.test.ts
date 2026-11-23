@@ -1290,6 +1290,12 @@ describe("directory authorization", () => {
 		expect(await denied(api(narrow.secret)("account.create_api_key", { principal_id: bot.id, label: "x" }))).toBe(
 			"forbidden",
 		);
+		// The key row of an agent stores no scopes. A rotation gives the scopes of the agent, so the narrow key
+		// cannot rotate the key. The full credential of the sponsor can.
+		expect(await denied(api(narrow.secret)("account.rotate_api_key", { key_id: api_key.id }))).toBe("forbidden");
+		expect((await api(api_key.secret)("account.whoami")).scopes).toEqual(["account.read", "mail.read"]);
+		const rotated = await ada.call("account.rotate_api_key", { key_id: api_key.id });
+		expect((await api(rotated.api_key.secret)("account.whoami")).scopes).toEqual(["account.read", "mail.read"]);
 		expect(await denied(other.call("account.create_api_key", { principal_id: bot.id, label: "x" }))).toBe("forbidden");
 		expect(await denied(other.call("account.list_api_keys", { principal_id: ada.id }))).toBe("forbidden");
 		expect(await denied(other.call("account.revoke_api_key", { key_id: api_key.id }))).toBe("forbidden");

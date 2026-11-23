@@ -432,7 +432,11 @@ MCP clients. The app has no UI-only path.
     requested scopes and `account.read` first, or each scope when the client asked for none. The app
     sends them as `scopes` with `new_agent`.
   - For an agent that exists, the page offers no scopes and sends only `agent_id`. A line tells that
-    the app gets the permissions of the agent, and that the agent card in Admin › Members changes them.
+    the app gets each permission of the agent, and that the agent card in Admin › Members changes them.
+    The page reads the selected agent (`directory.get_agent_access`) and lists each scope of the agent.
+    It marks a scope as **Requested** or **Not requested**, names the requested scopes that the agent
+    does not hold, and tells if the agent is limited to listed resources (`agentGrant` in `connect.ts`).
+    It does not make this read for a new agent. If the read fails, the page shows the error and **Try again**.
   - **Approve and connect** (`oauth.approve_authorization`) and **Deny** (`oauth.deny_authorization`)
     send the browser to the `redirect_to` of the result. A member who cannot approve sees only Deny.
   - An expired or decided request shows a message to start again in the app.

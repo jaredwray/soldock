@@ -1084,30 +1084,43 @@ describe("OAuth and webhooks", () => {
 		const { tokens, agent } = await connectNewAgent(owner);
 		await owner.call("directory.set_agent_access", {
 			principal_id: agent.id,
-			scopes: ["mail.read", "mail.webhooks", "chat.read", "chat.webhooks"],
+			scopes: ["mail.read", "mail.webhooks", "chat.read", "chat.webhooks", "drive.read", "drive.webhooks"],
 		});
 		await owner.call("directory.update_agent_policy", { principal_id: agent.id, mode: "any" });
 		const endpoint = (
 			(await callTool(tokens.access_token, "webhooks_create_endpoint", { url: "https://hooks.example.com/a" }))
 				.structuredContent as { endpoint: { id: string } }
 		).endpoint;
-		const subscribe = async (domain: "mail" | "chat") =>
+		const events = { mail: "mail.inbox.updated", chat: "chat.message.created", drive: "drive.item.created" };
+		const subscribe = async (domain: keyof typeof events) =>
 			(
 				(
 					await callTool(tokens.access_token, `${domain}_create_webhook_subscription`, {
 						endpoint_id: endpoint.id,
-						event: domain === "mail" ? "mail.inbox.updated" : "chat.message.created",
+						event: events[domain],
 					})
 				).structuredContent as { subscription: { id: string } }
 			).subscription.id;
 		const mailId = await subscribe("mail");
 		const chatId = await subscribe("chat");
+		const driveId = await subscribe("drive");
 		const mailJob = {
 			v: 1,
 			kind: "delivery",
 			webhookId: mailId,
 			mailboxId: agent.id,
 			eventId: "evt_01JC0000000000000000000000",
+			occurredAt: Date.now(),
+		};
+		// An event of the own drive of the agent. An event of a personal drive has no list of members.
+		const driveJob = {
+			v: 1,
+			kind: "drive_delivery",
+			webhookId: driveId,
+			spaceId: agent.id,
+			eventType: "drive.item.created",
+			eventId: "drv_event",
+			itemId: "itm_01AAAAAAAAAAAAAAAAAAAAAAAAAA",
 			occurredAt: Date.now(),
 		};
 		const chatJob = async (roomName: string) => {
@@ -1140,29 +1153,43 @@ describe("OAuth and webhooks", () => {
 		};
 		const listed = { room: await chatJob("Listed"), other: await chatJob("Other") };
 		const posts = receiveWebhooks();
-		await consumeWebhooks([mailJob, listed.room.job]);
-		expect(posts).toHaveLength(2);
+		await consumeWebhooks([mailJob, driveJob, listed.room.job]);
+		expect(posts).toHaveLength(3);
+		const status = async (domain: keyof typeof events) =>
+			(domain === "mail"
+				? (await owner.call("mail.list_webhook_subscriptions", { mailbox_id: agent.id })).subscriptions
+				: domain === "drive"
+					? (await owner.call("drive.list_webhook_subscriptions", { space_id: agent.id })).subscriptions
+					: (await owner.call("chat.list_webhook_subscriptions", { principal_id: agent.id })).subscriptions
+			).map((row) => [row.status, row.disabled_reason]);
 
-		// The agent gets limits: its own mailbox is not in the list, and one room is. The mail subscription
-		// stops for good. A chat subscription covers each room, so only the event of the other room is skipped.
+		// The agent gets limits: its own mailbox and one room are in the lists, and its own drive is not. The
+		// drive subscription stops for good. A chat subscription covers each room, so only the event of the
+		// other room is skipped.
+		await owner.call("directory.set_agent_access", {
+			principal_id: agent.id,
+			resources: { mailbox_ids: [agent.id], drive_ids: [], room_ids: [listed.room.room.id] },
+		});
+		await consumeWebhooks([mailJob, driveJob, listed.other.job, listed.room.job]);
+		expect(posts).toHaveLength(5);
+		expect(await status("drive")).toEqual([["disabled", "access_lost"]]);
+		expect(await status("mail")).toEqual([["active", null]]);
+		expect(await status("chat")).toEqual([["active", null]]);
+
+		// The mailbox goes out of the list: the mail subscription stops for good too.
 		await owner.call("directory.set_agent_access", {
 			principal_id: agent.id,
 			resources: { mailbox_ids: [], drive_ids: [], room_ids: [listed.room.room.id] },
 		});
 		await consumeWebhooks([mailJob, listed.other.job, listed.room.job]);
-		expect(posts).toHaveLength(3);
-		const status = async (domain: "mail" | "chat") =>
-			(domain === "mail"
-				? (await owner.call("mail.list_webhook_subscriptions", { mailbox_id: agent.id })).subscriptions
-				: (await owner.call("chat.list_webhook_subscriptions", { principal_id: agent.id })).subscriptions
-			).map((row) => [row.status, row.disabled_reason]);
+		expect(posts).toHaveLength(6);
 		expect(await status("mail")).toEqual([["disabled", "access_lost"]]);
 		expect(await status("chat")).toEqual([["active", null]]);
 
 		// The agent loses chat.webhooks: the chat subscription stops too.
 		await owner.call("directory.set_agent_access", { principal_id: agent.id, scopes: ["chat.read"] });
 		await consumeWebhooks([listed.room.job]);
-		expect(posts).toHaveLength(3);
+		expect(posts).toHaveLength(6);
 		expect(await status("chat")).toEqual([["disabled", "access_lost"]]);
 	});
 

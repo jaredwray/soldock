@@ -2,10 +2,12 @@ import {
 	AGENT_SCOPES,
 	ApiError,
 	EmailAddress,
+	isScope,
 	type OAuthAuthorization,
 	type Principal,
 	SCOPES,
 	type Scope,
+	scopeDescription,
 } from "@asterra/contracts";
 import { type FormEvent, useCallback, useEffect, useId, useState } from "react";
 import { api, errorMessage } from "../../lib/api.ts";
@@ -17,8 +19,9 @@ import { listAllPrincipals } from "../../lib/usePrincipals.ts";
 import { INBOX_PATH } from "../../routes.ts";
 import { BrandMark } from "../../shell/BrandMark.tsx";
 import { PageHeader } from "../../shell/PageHeader.tsx";
+import { useAgentAccess } from "../admin/useAgentAccess.ts";
 import { isOrgAdmin, useSession } from "../auth/session.tsx";
-import { agentNameFromClient, defaultScopes, suggestedAddress } from "./connect.ts";
+import { agentGrant, agentNameFromClient, defaultScopes, suggestedAddress } from "./connect.ts";
 
 type PageState =
 	| { status: "loading" }
@@ -37,7 +40,8 @@ type PageState =
  * The approval page of an OAuth request. An MCP client got only the URL of the MCP endpoint, and sent
  * the person here. The person creates a new agent with an address and scopes for the client, or
  * connects an agent that they manage, or denies the request. A connection of an agent has the scopes of
- * the agent, so the page offers scopes only for a new agent.
+ * the agent, so the page offers scopes only for a new agent. For an agent that exists, it shows the scopes
+ * and the limits that the app gets.
  */
 export function ConnectPage({ requestId }: { requestId: string }) {
 	const { whoami } = useSession();
@@ -352,13 +356,10 @@ function ApprovalForm({ authorization, agents, domains, canCreate, offered, onDo
 									</p>
 								</>
 							) : (
-								<div className="form-grid-wide">
-									<p className="field-label">Access</p>
-									<p className="field-hint">
-										The app gets the permissions of the agent: its scopes and its limits. To change them, open the agent
-										under Admin › Members.
-									</p>
-								</div>
+								// The key gives a new part to each agent, so the part never shows the access of a different agent.
+								agentId && (
+									<AgentGrantSummary key={agentId} agentId={agentId} requested={authorization.requested_scopes} />
+								)
 							)}
 						</>
 					)}
@@ -379,6 +380,87 @@ function ApprovalForm({ authorization, agents, domains, canCreate, offered, onDo
 					</div>
 				</form>
 			</div>
+		</section>
+	);
+}
+
+/**
+ * What the app gets from an agent that exists: each scope of the agent and its limits, next to the request
+ * of the app. The person who approves is the sponsor, an owner or an admin, so `directory.get_agent_access`
+ * lets them read it. The page shows this part only for an agent that exists, never for a new agent.
+ */
+function AgentGrantSummary({ agentId, requested }: { agentId: string; requested: readonly string[] }) {
+	const { access, error, reload } = useAgentAccess(agentId);
+	const titleId = useId();
+	// An answer for a different agent is too old to show.
+	const loaded = access?.principal_id === agentId ? access : null;
+	const grant = loaded && agentGrant(requested, loaded.scopes);
+	return (
+		<section className="form-grid-wide" aria-labelledby={titleId}>
+			<h3 id={titleId} className="field-label">
+				Access
+			</h3>
+			<p className="field-hint">
+				The app gets each permission of the agent, also a permission that it did not ask for. To change the permissions,
+				open the agent under Admin › Members.
+			</p>
+			{!loaded && !error && (
+				<p className="list-state" role="status">
+					<span className="spinner" aria-hidden="true" />
+					Loading the permissions of the agent…
+				</p>
+			)}
+			{!loaded && error && (
+				<div role="alert">
+					<p className="form-error">
+						The permissions of the agent did not load, so this page cannot show what the app gets. {error}
+					</p>
+					<button type="button" className="button" onClick={reload}>
+						Try again
+					</button>
+				</div>
+			)}
+			{loaded && grant && (
+				<div role="status">
+					{grant.held.length === 0 ? (
+						<p className="field-hint">The agent holds no scopes.</p>
+					) : (
+						<ul className="scope-list connect-scopes" aria-label="Scopes of the agent">
+							{grant.held.map(({ scope, requested: asked }) => (
+								<li key={scope} className="connect-scope">
+									<span>
+										<code>{scope}</code>
+										{asked ? (
+											<span className="chip chip-small connect-requested">Requested</span>
+										) : (
+											grant.asked && <span className="chip chip-small connect-requested">Not requested</span>
+										)}
+										{isScope(scope) && <span className="check-hint">{scopeDescription(scope, "agent")}</span>}
+									</span>
+								</li>
+							))}
+						</ul>
+					)}
+					{!grant.asked && <p className="field-hint">The app did not ask for scopes.</p>}
+					{grant.missing.length > 0 && (
+						<p className="field-hint">
+							The agent does not hold these requested scopes, so the app does not get them:{" "}
+							{grant.missing.map((scope, index) => (
+								<span key={scope}>
+									{index > 0 && ", "}
+									<code>{scope}</code>
+								</span>
+							))}
+							.
+						</p>
+					)}
+					<p className="field-hint">
+						{loaded.resources === null
+							? "The agent has no resource limits: the app reaches each mailbox, drive and room of the agent."
+							: `The agent is limited to listed resources: ${loaded.resources.mailbox_ids.length} mailboxes, ${loaded.resources.drive_ids.length} drives and ${loaded.resources.room_ids.length} rooms.`}
+					</p>
+				</div>
+			)}
 		</section>
 	);
 }
