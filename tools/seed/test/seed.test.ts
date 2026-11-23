@@ -1,12 +1,4 @@
-import {
-	AGENT_SCOPES,
-	ALL_SCOPES,
-	ApiError,
-	type OperationName,
-	operations,
-	type Scope,
-	SetupInput,
-} from "@asterra/contracts";
+import { ALL_SCOPES, ApiError, type OperationName, operations, type Scope, SetupInput } from "@asterra/contracts";
 import { describe, expect, it } from "vitest";
 import { localOrigin, type SeedApi, SeedStop } from "../src/api.ts";
 import { runSeed } from "../src/run.ts";
@@ -48,12 +40,13 @@ function fakeAsterra(options: { ownerExists?: boolean } = {}) {
 	}
 
 	const outputs: Partial<Record<OperationName, (input: Record<string, unknown>) => unknown>> = {
-		// As the server: a new agent gets a first key, and a new person gets none.
+		// As the server: a new agent gets the scopes of the call and a first key with them, and a new person gets
+		// no key.
 		"directory.create_principal": (input) => {
 			const kind = input.kind as "human" | "agent";
 			return {
 				principal: principal(kind, input.address as string),
-				api_key: kind === "agent" ? key(kind, AGENT_SCOPES) : null,
+				api_key: kind === "agent" ? key(kind, (input.scopes as Scope[] | undefined) ?? []) : null,
 			};
 		},
 		"account.create_api_key": (input) => {

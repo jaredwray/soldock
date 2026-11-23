@@ -3982,7 +3982,7 @@ export class ChatRoomDO extends DurableObject<Env> {
 				socket.serializeAttachment({ ...current, checkedAt } satisfies SocketState);
 			} else if (check === "renew") {
 				ended++;
-				this.end(socket, CHAT_SOCKET_CLOSE.reconnect, "The access token stopped. Open a new socket with a new token.");
+				this.end(socket, CHAT_SOCKET_CLOSE.reconnect, "Authenticate again: open a new socket.");
 			} else if (check === "ended") {
 				ended++;
 				this.end(socket, CHAT_SOCKET_CLOSE.ended, "The credential stopped.");

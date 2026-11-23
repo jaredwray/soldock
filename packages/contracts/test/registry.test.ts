@@ -180,18 +180,18 @@ describe("the resource registry", () => {
 	});
 });
 
-// The resource limits of a service account. The invoker refuses a limited account for each
+// The resource limits of an agent or a service account. The invoker refuses a limited agent for each
 // operation without a rule, and each rule must name each input field that names a mailbox, a drive or a room.
-describe("the resource rules of a limited service account", () => {
-	const serviceOps = operationList.filter((op) => op.callers.includes("service"));
+describe("the resource rules of a limited agent", () => {
+	const agentOps = operationList.filter((op) => op.callers.includes("agent") || op.callers.includes("service"));
 	const RESOURCE_FIELD = /^(mailbox_id|space_id|drive_id|room_id)$|_(space|room|mailbox|drive)_id$/;
 
-	it("gives each operation that a service account can call one rule, and no other operation a rule", () => {
-		expect(Object.keys(RESOURCE_RULES).sort()).toEqual(serviceOps.map((op) => op.name).sort());
+	it("gives each operation that an agent or a service account can call one rule, and no other operation a rule", () => {
+		expect(Object.keys(RESOURCE_RULES).sort()).toEqual(agentOps.map((op) => op.name).sort());
 	});
 
 	it("names in each check only input fields, and each field that names a resource", () => {
-		for (const op of serviceOps) {
+		for (const op of agentOps) {
 			const rule = RESOURCE_RULES[op.name];
 			const fields = Object.keys(shape(op.input));
 			const named = fields.filter((field) => RESOURCE_FIELD.test(field));
@@ -220,12 +220,23 @@ describe("the resource rules of a limited service account", () => {
 				.sort();
 		expect(of("none")).toEqual([
 			"account.whoami",
+			"chat.delete_webhook_subscription",
+			"chat.get_notification_settings",
 			"chat.get_presence",
 			"chat.list_custom_emoji",
 			"chat.list_slash_commands",
+			"chat.list_webhook_subscriptions",
+			"chat.set_notification_settings",
+			"chat.set_status",
 			"directory.get_principals",
 			"directory.list_principals",
 			"directory.list_team_mailboxes",
+			"drive.delete_webhook_subscription",
+			"mail.delete_webhook_subscription",
+			"webhooks.create_endpoint",
+			"webhooks.delete_endpoint",
+			"webhooks.list_endpoints",
+			"webhooks.update_endpoint",
 		]);
 		expect(of("filter")).toEqual(["chat.list_rooms", "drive.list_shared_drives", "mail.list_mailboxes"]);
 	});
@@ -236,7 +247,7 @@ describe("the resource rules of a limited service account", () => {
 			id: "prn_self",
 			restriction: { mailbox_ids: ["prn_self", "x"], drive_ids: ["prn_self", "x"], room_ids: ["x"] },
 		};
-		for (const op of serviceOps) {
+		for (const op of agentOps) {
 			const rule = RESOURCE_RULES[op.name];
 			if (rule?.mode === "check") {
 				expect(resourceRefusal(op.name, {}, caller), op.name).not.toBeNull();
@@ -258,8 +269,8 @@ describe("the resource rules of a limited service account", () => {
 			// An account without limits is never refused.
 			expect(resourceRefusal(op.name, {}, { id: "prn_self", restriction: null })).toBeNull();
 		}
-		// An operation without a rule is refused for a limited account.
-		expect(resourceRefusal("webhooks.create_endpoint", {}, all)).not.toBeNull();
+		// An operation without a rule is refused for a limited agent.
+		expect(resourceRefusal("directory.create_service_account", {}, all)).not.toBeNull();
 	});
 
 	it("makes each MCP resource kind say how a limited account treats it", () => {

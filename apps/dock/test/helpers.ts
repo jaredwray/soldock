@@ -7,6 +7,7 @@ import {
 } from "cloudflare:test";
 import { env, exports } from "cloudflare:workers";
 import {
+	AGENT_SCOPES,
 	ALL_SCOPES,
 	ApiError,
 	CHAT_SOCKET_PROTOCOL,
@@ -142,14 +143,18 @@ export async function setupOwner(address = "owner@dock.test"): Promise<Actor> {
 }
 
 /**
- * Creates a principal as `admin` and returns it with a key. An agent gets its first key. A person gets
- * no key at creation, so `admin` then creates a key with every human scope for the person.
+ * Creates a principal as `admin` and returns it with a key. An agent gets its first key, and each agent scope
+ * when the input names no scopes. A person gets no key at creation, so `admin` then creates a key with every
+ * human scope for the person.
  */
 export async function createActor(
 	admin: Actor,
 	input: InputOf<"directory.create_principal">,
 ): Promise<Actor & { sponsorId: string | null }> {
-	const { principal, api_key: firstKey } = await admin.call("directory.create_principal", input);
+	const { principal, api_key: firstKey } = await admin.call(
+		"directory.create_principal",
+		input.kind === "agent" && input.scopes === undefined ? { ...input, scopes: [...AGENT_SCOPES] } : input,
+	);
 	const secret =
 		firstKey?.secret ??
 		(

@@ -1,11 +1,11 @@
 import {
+	type AgentResources,
 	holdsOperationScopes,
 	type Operation,
 	type OperationName,
 	type Operations,
 	type PrincipalKind,
 	resourceRefusal,
-	type ServiceResources,
 } from "@asterra/contracts";
 import { z } from "zod";
 import { audit } from "../log/log.ts";
@@ -18,10 +18,10 @@ export interface Caller {
 	scopes: ReadonlySet<string>;
 	credential: string;
 	/**
-	 * The mailboxes, drives and rooms that the service account of the caller is limited to, or null. The invoker
+	 * The mailboxes, drives and rooms that the agent or the service account of the caller is limited to, or null. The invoker
 	 * refuses each call that names a resource outside the list, before the handler runs.
 	 */
-	restriction: ServiceResources | null;
+	restriction: AgentResources | null;
 }
 
 /** The name of each caller kind at the start of an error text. */

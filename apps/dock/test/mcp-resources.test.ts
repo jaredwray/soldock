@@ -146,11 +146,8 @@ describe("MCP resources", () => {
 		});
 
 		// A credential without mail.read sees no inbox. It still sees the drive templates of drive.read.
-		const { api_key } = await owner.call("account.create_api_key", {
-			principal_id: bot.id,
-			label: "Drive only",
-			scopes: ["drive.read"],
-		});
+		await owner.call("directory.set_agent_access", { principal_id: bot.id, scopes: ["drive.read"] });
+		const api_key = { secret: bot.key };
 		expect((await modern(api_key.secret, "resources/list")).body?.result).toMatchObject({ resources: [] });
 		expect((await modern(api_key.secret, "resources/templates/list")).body?.result).toMatchObject({
 			resourceTemplates: [
@@ -485,11 +482,7 @@ describe("MCP subscriptions/listen", () => {
 		const { owner, ada, bot } = await seedOrg();
 		const { room } = await ada.call("chat.create_room", { kind: "private", name: "Launch", member_ids: [bot.id] });
 		// The stream has its own key. The end of that key ends the stream, which shows each notification that waits.
-		const { api_key } = await owner.call("account.create_api_key", {
-			principal_id: bot.id,
-			label: "Stream",
-			scopes: ["chat.read"],
-		});
+		const { api_key } = await owner.call("account.create_api_key", { principal_id: bot.id, label: "Stream" });
 		const stream = await listen(api_key.secret, [ADDRESSED]);
 		expect(await stream.next()).toMatchObject({
 			method: "notifications/subscriptions/acknowledged",
@@ -594,11 +587,7 @@ describe("MCP subscriptions/listen", () => {
 	// A long-lived stream must not outlive the access that opened it.
 	it("ends when the caller loses a mailbox or its credential, and after its longest life", async () => {
 		const { owner, bot, support } = await seedTeams();
-		const { api_key: second } = await owner.call("account.create_api_key", {
-			principal_id: bot.id,
-			label: "Second",
-			scopes: ["mail.read"],
-		});
+		const { api_key: second } = await owner.call("account.create_api_key", { principal_id: bot.id, label: "Second" });
 		// Only the clock is fake: the stream checks its age and its access against Date.now().
 		vi.useFakeTimers({ toFake: ["Date"] });
 		const team = await listen(bot.key, [inbox(support.id)]);
@@ -652,8 +641,8 @@ describe("MCP subscriptions/listen", () => {
 		}
 		// The first account loses mail.read. The second gets limits without its own mailbox. The third gets one
 		// more scope, which takes nothing away.
-		const set = (input: Parameters<typeof owner.call<"directory.set_service_account_access">>[1]) =>
-			owner.call("directory.set_service_account_access", input);
+		const set = (input: Parameters<typeof owner.call<"directory.set_agent_access">>[1]) =>
+			owner.call("directory.set_agent_access", input);
 		await set({ principal_id: unscoped.id, scopes: ["account.read"] });
 		await set({ principal_id: limited.id, resources: { mailbox_ids: [], drive_ids: [], room_ids: [] } });
 		await set({ principal_id: steady.id, scopes: ["account.read", "mail.read", "chat.read"] });

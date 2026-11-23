@@ -93,12 +93,7 @@ describe("the notice before a token ends", () => {
 		const revoked = await token(admin, service.id, 30, "revoked");
 		await admin.call("account.revoke_api_key", { key_id: revoked.id });
 		await ada.call("account.create_api_key", { label: "person", scopes: ["account.read"], expires_in_days: 30 });
-		await ada.call("account.create_api_key", {
-			principal_id: bot.id,
-			label: "agent",
-			scopes: ["account.read"],
-			expires_in_days: 30,
-		});
+		await ada.call("account.create_api_key", { principal_id: bot.id, label: "agent", expires_in_days: 30 });
 		await runScheduled(env, revoked.end - 6 * DAY);
 		for (const label of ["revoked", "person", "agent"]) expect(await notices(owner, label), label).toEqual([]);
 		// A token of an archived account gets none. An expired token gets none.
