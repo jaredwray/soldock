@@ -82,17 +82,19 @@ SDK. Protocol 2026-07-28 has no sessions, so a hand-written server stays small.
 - `tools/list` lists only the tools that the credential can call (caller kind and scopes). A call
   to another tool gets JSON-RPC error `-32602`. A token of a service account sees only the tools
   whose callers name `"service"`, and each of its calls goes into the activity log of the account,
-  with the surface `mcp`. A service account with resource limits also does not see a tool without a rule or with
-  the rule `refuse`, nor the resource kinds `chat.rooms` and `chat.addressed`, nor a resource outside its
-  list ([identity](../identity/README.md#resource-limits-of-a-service-account)).
+  with the surface `mcp`. An agent or a service account with resource limits also does not see a tool
+  without a rule or with the rule `refuse`, nor the resource kinds `chat.rooms` and `chat.addressed`, nor a
+  resource outside its list. This applies to an API key and to an OAuth connection of the agent
+  ([identity](../identity/README.md#resource-limits-of-an-agent)).
 - The instructions name each scope that the credential does not hold, with the number of its
-  tools (`missingScopes` of `identity`). They also tell how to get the scope:
-  - An OAuth connection: the sponsor, an owner or an admin opens the agent in Admin › Members
-    and adds the scope (`oauth.add_grant_scopes`). The connection stays.
-  - An API key: its scopes do not change, so the key holder needs a new key. For an agent, its
-    sponsor, an owner or an admin creates the key.
+  tools (`missingScopes` of `identity`). They also tell how to get the scope (`addScopeHint`):
+  - An API key or an OAuth connection of an agent: the scopes are on the agent, not on the key or the
+    connection. The sponsor, an owner or an admin adds the scope to the agent in Admin › Members
+    (`directory.set_agent_access`). The key or the connection stays, and gets the scope.
   - A token of a service account: the scopes are on the account. An owner or an admin adds the scope to
-    the account in Admin › Members (`directory.set_service_account_access`). The token stays.
+    the account in Admin › Members (`directory.set_agent_access`). The token stays.
+  - An API key of a person: its scopes do not change, so the person creates a key with more scopes in
+    Settings.
 
   `account_whoami` names the tools of each missing scope (`missing_scopes`). A credential that
   holds each scope of its kind gets no such sentence.
@@ -192,10 +194,12 @@ A modern client sends `subscriptions/listen` with the resource URIs in
 - The stream checks its age before each notification and at each keep-alive. When the last access
   check is older than one minute, it authenticates the credential again and asks the change feed of
   each resource kind again first, with all of its resources in one call. So a lost access stops the
-  notifications within about one minute. An owner or an admin can change the scopes and the resource
-  limits of a service account while a stream is open. So the check also reads each watched URI again
-  with the new scopes and limits (`resolveUri`), and the stream ends when one of them no longer names a
-  resource that the credential can read.
+  notifications within about one minute. The sponsor of an agent, an owner or an admin can change the
+  scopes and the resource limits of an agent or a service account while a stream is open. So the check
+  also reads each watched URI again with the new scopes and limits (`resolveUri`), and the stream ends
+  when one of them no longer names a resource that the credential can read. The change also closes a
+  feed on the object of the agent (`chat.rooms`, `chat.addressed`) at once with `reconnect`, and a feed of
+  a room at its next check. A feed that stops ends the stream, and the client opens a new one.
 - Subrequest budget of one stream. When it opens: one D1 query for all team mailboxes, one D1 query
   for all chat rooms, and one socket for each mailbox, each room and `chat.rooms` (at most 100). Each later access
   check makes at most five D1 calls: the credential, the principal, the last-use time of the

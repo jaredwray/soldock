@@ -125,6 +125,8 @@ A sponsor cannot subscribe to a shared drive only because an agent belongs to it
 The sponsor, an owner or an admin can list and delete the subscriptions of an agent.
 A [service account](../identity/README.md#service-accounts) has no webhooks: its tokens hold no webhook scope, and its sponsor cannot subscribe for it.
 A delivery to a subscription for a service account stops with `access_lost`.
+An agent holds its scopes and its resource limits, not its key or its OAuth connection ([Access of an agent](../identity/README.md#access-of-an-agent)).
+A limited agent cannot create a chat subscription, because it covers each room. A mail or a drive subscription must name a listed mailbox or drive.
 A manager of a shared drive, an owner or an admin can list and delete each subscription of that drive.
 Only the creator can delete a subscription of their own mailbox or their own drive.
 The web app does not list endpoints on Settings.
@@ -151,6 +153,16 @@ HTTP 410, a revoked endpoint credential, or a refused outbound policy also disab
 A lost target, or a revoked subscription credential, disables that subscription only.
 Mail still joins a new event to a retry that waits. That join stays on one mail subscription.
 An archived creator gets no POST. The endpoint stays active.
+
+When the creator is an agent, the consumer also reads the access of the agent again before each POST (`checkDelivery`).
+The scopes and the limits of the agent can change after the create.
+
+- The agent must hold the webhook scope of the product (`webhookScope`). If it does not, the subscription stops with `access_lost`.
+- A mail subscription needs its mailbox, and a drive subscription its drive, inside the limits of the agent. If not, the subscription stops with `access_lost`.
+- A chat event needs its room inside the limits of the agent. An event of a different room sends no POST, and the subscription stays active, because it covers each room.
+- A subscription that a person creates, also for an agent that the person sponsors, does not get these checks.
+
+This also applies to MCP Events. `events/subscribe` does not check the limits of the agent, so these checks stop each POST outside the limits.
 
 The header `webhook-id` is `<event id>_<subscription id>`. A retry keeps that id.
 The signature is Standard Webhooks. See [Mail](../mail/README.md#webhooks) for the steps.
