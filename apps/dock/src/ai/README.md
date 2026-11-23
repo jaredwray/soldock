@@ -109,9 +109,9 @@ A connection test counts for the person who ran it. A deleted mailbox shows as `
 
 | State | Where | Notes |
 | --- | --- | --- |
-| AI settings | D1 `ai_settings` (migration `0028`) | One row. No secret. A directory reset makes a new row with AI off |
+| AI settings | D1 `ai_settings` (migration `0028`) | One row. It holds the API token of the settings (see the API token row). A directory reset makes a new row with AI off |
 | Usage ledger | D1 `ai_usage` (migration `0028`) | One row for each UTC day, feature, model and resource (a mailbox id, or the id of the person who tested). Requests, failures, tokens and the cost in micro-USD. No content. The hourly cron trigger deletes days older than 400 days. A directory reset deletes it |
-| API token | D1 `ai_settings.api_token`, or the Worker secret `AI_GATEWAY_TOKEN` | Entered in Admin › AI, or set with `wrangler secret put`. Never in an answer or a log. A backup of D1 holds the token of the settings, so a backup must be kept as a secret. A directory reset deletes it |
+| API token | D1 `ai_settings.api_token`, or the Worker secret `AI_GATEWAY_TOKEN` | Entered in Admin › AI, or set with `wrangler secret put`. Never in an answer or a log. A backup of D1 holds the token of the settings: keep a backup of D1 as a secret. A directory reset deletes it |
 | Prompts and answers | Not stored | Asterra stores neither, and each request asks AI Gateway to keep no body (`cf-aig-collect-log-payload: false`). The gateway log keeps the metadata only. The header does not change what a Logpush job of the gateway exports: an operator who turns on Logpush must examine that export separately |
 
 ## Safety
@@ -122,6 +122,9 @@ A connection test counts for the person who ran it. A deleted mailbox shows as `
   hold `directory.write`, and the operations refuse them, so no agent can change the AI policy or the
   budget.
 - The token is write-only: no answer and no log contains it. Only owners and admins can save or remove it.
+- An owner or an admin can set the account ID, the gateway ID and the token in one change. Thus an admin
+  credential can send the prompts of auto labels, with mail text, to a different Cloudflare account. Treat
+  admin credentials as you treat the mail. Each change of the token gets an audit line.
 - The budget bounds what inbound mail can cost: a hostile sender can send much mail, but the calls stop
   at the budget, and rules decide most bulk mail with no call.
 

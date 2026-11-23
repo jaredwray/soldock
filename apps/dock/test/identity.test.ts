@@ -224,7 +224,7 @@ describe("first-run setup", () => {
 		});
 		const oldToken = await owner.call("account.create_api_key", { principal_id: old.principal.id, label: "ci" });
 		// The AI settings belong to the old organization, and the ledger names its mailboxes.
-		await enableAi(owner);
+		await enableAi(owner, { api_token: "old-org-token_0123456789-abcdef" });
 		await env.DIRECTORY.prepare(
 			"INSERT INTO ai_usage (day, feature, model, resource_id, requests, cost_micro_usd) VALUES ('2026-01-01', 'mail.auto_label', 'm', ?, 1, 5)",
 		)
@@ -252,7 +252,12 @@ describe("first-run setup", () => {
 			mail_domains: ["dock.test", "new.example", "second.test"],
 		});
 		expect(await env.DIRECTORY.prepare("SELECT COUNT(*) AS count FROM principals").first("count")).toBe(1);
-		expect(await api(result.api_key.secret)("ai.get_settings")).toMatchObject({ enabled: false, account_id: null });
+		// The token of the old organization goes too: only the Worker secret of the test is left.
+		expect(await api(result.api_key.secret)("ai.get_settings")).toMatchObject({
+			enabled: false,
+			account_id: null,
+			token_source: "secret",
+		});
 		expect(await env.DIRECTORY.prepare("SELECT COUNT(*) AS count FROM ai_usage").first("count")).toBe(0);
 		// The fresh directory has the columns of 0024 and 0026: a service account with scopes, and a key with
 		// an end.

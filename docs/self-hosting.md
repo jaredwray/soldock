@@ -159,10 +159,10 @@ is inbox auto labels. AI is off until an owner or an admin turns it on in **Admi
 2. In the settings of the gateway, turn on **Authenticated Gateway**.
 3. Create an API token with the permissions **Workers AI: Read** and **AI Gateway: Run**, for your
    account only.
-4. In **Admin › AI**, enter the account ID, the gateway ID and the API token. Save, then select
-   **Test connection**.
-5. Allow the models, choose the model of **Inbox auto labels**, set the monthly budget, and turn on AI.
-6. Each person turns on auto labels for their mailbox in Mail, with the spark button next to
+4. In **Admin › AI**, enter the account ID, the gateway ID and the API token. Save the settings.
+5. Select **Test connection**.
+6. Allow the models, choose the model of **Inbox auto labels**, set the monthly budget, and turn on AI.
+7. Each person turns on auto labels for their mailbox in Mail, with the spark button next to
    **Labels**.
 
 - Asterra keeps the token in the AI settings in D1, as it keeps the signing secrets of webhooks. No API

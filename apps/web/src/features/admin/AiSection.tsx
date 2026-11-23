@@ -253,6 +253,7 @@ export function AiSection() {
 											<button
 												type="button"
 												className="button button-small"
+												aria-label="Replace the API token"
 												onClick={() => setReplacingToken(true)}
 												disabled={busy}
 											>
@@ -261,6 +262,7 @@ export function AiSection() {
 											<button
 												type="button"
 												className="button button-small"
+												aria-label="Remove the API token"
 												onClick={() => change({ removeToken: true })}
 												disabled={busy}
 											>
@@ -274,7 +276,7 @@ export function AiSection() {
 									id={ids.token}
 									className="input input-mono"
 									type="password"
-									autoComplete="off"
+									autoComplete="new-password"
 									autoCapitalize="none"
 									spellCheck={false}
 									placeholder={saved.token_source === "settings" ? "Paste the new token" : "Paste the token"}
@@ -283,6 +285,21 @@ export function AiSection() {
 									aria-describedby={ids.tokenHint}
 									disabled={busy}
 								/>
+							)}
+							{replacingToken && (
+								<div>
+									<button
+										type="button"
+										className="button button-small"
+										onClick={() => {
+											setReplacingToken(false);
+											change({ token: "" });
+										}}
+										disabled={busy}
+									>
+										Keep the saved token
+									</button>
+								</div>
 							)}
 							<p id={ids.tokenHint} className="field-hint">
 								{saved.token_source === "secret"

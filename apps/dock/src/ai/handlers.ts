@@ -21,11 +21,11 @@ export const aiHandlers: Pick<HandlerMap<CallContext>, AiOperation> = {
 	async "ai.update_settings"(call, input) {
 		requireAdmin(call, "change the AI settings");
 		// The patch goes on the newest settings, so a change by another admin at the same time stays.
-		const next = await updateConfig(call.env.DIRECTORY, input);
+		const { config: next, previous } = await updateConfig(call.env.DIRECTORY, input);
 		auditOk(call, "ai.update_settings", next.enabled ? "on" : "off");
 		// A change of the token gets its own audit line. The line never holds the token.
-		if (input.api_token !== undefined) {
-			auditOk(call, "ai.update_settings", input.api_token === null ? "api_token_removed" : "api_token_set");
+		if (next.apiToken !== previous.apiToken) {
+			auditOk(call, "ai.update_settings", next.apiToken === null ? "api_token_removed" : "api_token_set");
 		}
 		return toSettingsOutput(call.env, next);
 	},

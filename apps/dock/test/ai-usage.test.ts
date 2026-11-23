@@ -23,7 +23,7 @@ beforeEach(async () => {
 	({ owner, ada, bot } = await seedOrg());
 	await env.DIRECTORY.prepare("DELETE FROM ai_usage").run();
 	await env.DIRECTORY.prepare(
-		"UPDATE ai_settings SET enabled = 0, account_id = NULL, gateway_id = NULL, allowed_models = '[]', monthly_budget_micro_usd = 10000000, auto_label_enabled = 0, auto_label_model = NULL",
+		"UPDATE ai_settings SET enabled = 0, account_id = NULL, gateway_id = NULL, allowed_models = '[]', monthly_budget_micro_usd = 10000000, auto_label_enabled = 0, auto_label_model = NULL, api_token = NULL",
 	).run();
 });
 

@@ -18,11 +18,11 @@ test("an admin connects the AI Gateway and turns on inbox auto labels", async ({
 		const page = await admin.newPage();
 		await page.goto("/admin/ai");
 		await expect(page.getByRole("heading", { name: "AI", level: 1 })).toBeVisible();
-		await expect(page.getByLabel("API token")).toHaveValue("");
+		await expect(page.getByLabel("API token", { exact: true })).toHaveValue("");
 
 		await page.getByLabel("Cloudflare account ID").fill("0123456789abcdef0123456789abcdef");
 		await page.getByLabel("AI Gateway ID").fill("asterra-e2e");
-		await page.getByLabel("API token").fill("e2e-token_0123456789-abcdefgh");
+		await page.getByLabel("API token", { exact: true }).fill("e2e-token_0123456789-abcdefgh");
 		await page.getByRole("checkbox", { name: /Llama 3\.3 70B/ }).check();
 		await turnOn(page.getByRole("switch", { name: "Use AI in this organization" }));
 		await turnOn(page.getByRole("switch", { name: "Inbox auto labels" }));
@@ -41,12 +41,12 @@ test("an admin connects the AI Gateway and turns on inbox auto labels", async ({
 		await expect(page.getByLabel("Monthly budget (USD)")).toHaveValue("25");
 		// The token is saved, and the page never shows it again.
 		await expect(page.getByText("A token is saved. Asterra never shows it again.")).toBeVisible();
-		await expect(page.getByLabel("API token")).toHaveCount(0);
+		await expect(page.getByLabel("API token", { exact: true })).toHaveCount(0);
 		await expect(page.locator("body")).not.toContainText("e2e-token_0123456789-abcdefgh");
 		// Remove it: the status says why AI makes no calls, and the rules of auto labels still apply.
-		await page.getByRole("button", { name: "Remove", exact: true }).click();
+		await page.getByRole("button", { name: "Remove the API token" }).click();
 		await page.getByRole("button", { name: "Save AI settings" }).click();
-		await expect(page.getByLabel("API token")).toHaveValue("");
+		await expect(page.getByLabel("API token", { exact: true })).toHaveValue("");
 		await expect(page.getByRole("status").filter({ hasText: "No API token is saved" })).toBeVisible();
 		// The test makes no AI call: the usage of the month shows its empty state.
 		await expect(page.getByRole("heading", { name: /^Usage in / })).toBeVisible();

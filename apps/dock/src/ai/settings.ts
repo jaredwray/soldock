@@ -191,7 +191,10 @@ const UPDATE_ATTEMPTS = 5;
  * settings again and applies the patch again, so two changes at the same time both stay. Throws
  * `invalid` as `applyPatch` does, and `conflict` when each attempt lost.
  */
-export async function updateConfig(db: D1Database, patch: ConfigPatch): Promise<AiConfig> {
+export async function updateConfig(
+	db: D1Database,
+	patch: ConfigPatch,
+): Promise<{ config: AiConfig; previous: AiConfig }> {
 	for (let attempt = 0; attempt < UPDATE_ATTEMPTS; attempt++) {
 		const { config, updatedAt } = await readVersioned(db);
 		const next = applyPatch(config, patch);
@@ -226,7 +229,7 @@ export async function updateConfig(db: D1Database, patch: ConfigPatch): Promise<
 						)
 						.bind(...values, now, updatedAt)
 						.run();
-		if ((result.meta.changes ?? 0) > 0) return next;
+		if ((result.meta.changes ?? 0) > 0) return { config: next, previous: config };
 	}
 	throw new OperationError("conflict", "Other changes of the AI settings came at the same time. Try again.");
 }

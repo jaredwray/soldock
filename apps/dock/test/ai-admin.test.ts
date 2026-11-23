@@ -16,6 +16,7 @@ import {
 	mcp,
 	ORIGIN,
 	PASSWORD,
+	request,
 	seedOrg,
 	withEnv,
 } from "./helpers.ts";
@@ -40,7 +41,7 @@ beforeEach(async () => {
 	});
 	await env.DIRECTORY.prepare("DELETE FROM ai_usage").run();
 	await env.DIRECTORY.prepare(
-		"UPDATE ai_settings SET enabled = 0, account_id = NULL, gateway_id = NULL, allowed_models = '[]', monthly_budget_micro_usd = 10000000, auto_label_enabled = 0, auto_label_model = NULL",
+		"UPDATE ai_settings SET enabled = 0, account_id = NULL, gateway_id = NULL, allowed_models = '[]', monthly_budget_micro_usd = 10000000, auto_label_enabled = 0, auto_label_model = NULL, api_token = NULL",
 	).run();
 });
 
@@ -192,11 +193,17 @@ describe("the AI settings", () => {
 
 	it("keep an API token from Admin, use it before the Worker secret, and never return it", async () => {
 		const token = "settings-token_0123456789-abcdef";
-		const saved = await enableAi(owner, { api_token: token });
-		expect(saved).toMatchObject({ token_configured: true, token_source: "settings", ready: true });
-		expect(JSON.stringify(saved)).not.toContain(token);
+		// Each line that the Worker writes in this test: no line may hold the token.
+		const spies = [vi.spyOn(console, "log"), vi.spyOn(console, "warn"), vi.spyOn(console, "error")];
+		const lines = () => spies.flatMap((spy) => spy.mock.calls.map((args) => args.map(String).join(" ")));
+		await enableAi(owner);
+
+		// Saved through MCP: the answer says where the token comes from, never the token.
+		const viaMcp = await callTool(owner.key, "ai_update_settings", { api_token: token });
+		expect(viaMcp.structuredContent).toMatchObject({ token_configured: true, token_source: "settings", ready: true });
+		expect(JSON.stringify(viaMcp)).not.toContain(token);
 		expect(JSON.stringify(await owner.call("ai.get_settings"))).not.toContain(token);
-		expect(JSON.stringify((await callTool(owner.key, "ai_get_settings")).structuredContent)).not.toContain(token);
+		expect(JSON.stringify(await callTool(owner.key, "ai_get_settings"))).not.toContain(token);
 		// A later change that does not name the token keeps it.
 		expect(await owner.call("ai.update_settings", { monthly_budget_usd: 20 })).toMatchObject({
 			token_source: "settings",
@@ -212,13 +219,30 @@ describe("the AI settings", () => {
 		});
 		expect(await res.json()).toMatchObject({ token_configured: true, token_source: "settings", ready: true });
 
-		// Null removes it: the Worker secret is in use again.
+		// A value that could break a header is refused, and the error does not repeat it.
+		const bad = `${token} x`;
+		const refused = await request("/api/v1/ai/settings", {
+			method: "POST",
+			headers: { authorization: `Bearer ${owner.key}`, origin: ORIGIN, "content-type": "application/json" },
+			body: JSON.stringify({ api_token: bad }),
+		});
+		expect(refused.status).toBe(400);
+		expect(await refused.text()).not.toContain(token);
+		const refusedMcp = await callTool(owner.key, "ai_update_settings", { api_token: bad });
+		expect(refusedMcp.isError).toBe(true);
+		expect(JSON.stringify(refusedMcp)).not.toContain(token);
+
+		// Null removes it: the Worker secret is in use again. A second removal changes nothing.
 		expect(await owner.call("ai.update_settings", { api_token: null })).toMatchObject({ token_source: "secret" });
-		// A value that could break a header is refused.
-		const refused = await owner
-			.call("ai.update_settings", { api_token: "a token with spaces in it" })
-			.catch((e: unknown) => e);
-		expect(refused).toMatchObject({ code: "invalid" });
+		await owner.call("ai.update_settings", { api_token: null });
+
+		const written = lines();
+		expect(written.filter((line) => line.includes(token))).toEqual([]);
+		const targets = written
+			.filter((line) => line.startsWith("{") && line.includes('"audit":true'))
+			.map((line) => (JSON.parse(line) as { target?: string }).target);
+		expect(targets.filter((target) => target === "api_token_set")).toHaveLength(1);
+		expect(targets.filter((target) => target === "api_token_removed")).toHaveLength(1);
 	});
 });
 
