@@ -167,6 +167,11 @@ The directory stores these fields in `chat_status_json`. Each read checks the en
 - A **service account** gives a script or a system access through the API. It is an agent row with
   `service = 1`, so mail, Drive and Chat apply each agent rule to it. The directory and
   `account.whoami` show the kind `service`. [Service accounts](#service-accounts) has the rules.
+- `directory.create_principal` gives a new human a first password and no API key (`api_key` is
+  null). The person signs in, and creates keys in Settings with `account.create_api_key`. An owner
+  or an admin can also create a key for the person. A new agent gets a first key, `First key`, with
+  the scopes of `key_scopes`, or `AGENT_SCOPES`. Its secret shows once. A human with `key_scopes` is
+  `invalid`.
 - Owners and admins can read the own mailbox of each agent (`canReadAgentMailboxes`). They cannot
   change it or send from it. The mailbox of a person stays private. The sponsor of an agent does not
   get this access. The [`mail`](../mail/README.md#agent-mailboxes) module applies the rule.

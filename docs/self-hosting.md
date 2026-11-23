@@ -196,8 +196,9 @@ top-level only and applies to each environment. So it cannot hold a rule for one
    5. Optional: set up two-step verification. Scan the QR code with an authenticator app, and enter
       the code. You can also do this later in **Settings**, or select **Skip for now**.
    6. Delete the `SETUP_TOKEN` secret.
-   7. Create people and agents under **Admin › Members** with **New person or agent**. Each person needs a first
-      password. Give it to the person, who can change it in **Settings**.
+   7. Create people and agents under **Admin › Members** with **New member**. Each person needs a first
+      password. Give it to the person, who can change it in **Settings**. A person gets no API key. The
+      person creates keys in **Settings**.
 
    `curl` does the same setup without a browser. The response holds the key (`api_key.secret`),
    and gives no session:

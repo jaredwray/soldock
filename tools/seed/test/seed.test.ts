@@ -34,17 +34,33 @@ function fakeAsterra(options: { ownerExists?: boolean } = {}) {
 	let counter = 0;
 	const id = (prefix: string) => `${prefix}_${String(++counter).padStart(26, "0")}`;
 
+	function key(kind: "human" | "agent", scopes: readonly Scope[]) {
+		const secret = `secret-${id("key")}`;
+		callers.set(secret, { kind, scopes });
+		return { secret };
+	}
+
 	function principal(kind: "human" | "agent", address: string) {
 		addresses.add(address);
-		const secret = `secret-${id("key")}`;
-		callers.set(secret, { kind, scopes: kind === "agent" ? AGENT_SCOPES : ALL_SCOPES });
 		const principalId = id("prn");
 		kinds.set(principalId, kind);
-		return { principal: { id: principalId }, api_key: { secret } };
+		return { id: principalId };
 	}
 
 	const outputs: Partial<Record<OperationName, (input: Record<string, unknown>) => unknown>> = {
-		"directory.create_principal": (input) => principal(input.kind as "human" | "agent", input.address as string),
+		// As the server: a new agent gets a first key, and a new person gets none.
+		"directory.create_principal": (input) => {
+			const kind = input.kind as "human" | "agent";
+			return {
+				principal: principal(kind, input.address as string),
+				api_key: kind === "agent" ? key(kind, AGENT_SCOPES) : null,
+			};
+		},
+		"account.create_api_key": (input) => {
+			const kind = kinds.get(input.principal_id as string);
+			if (!kind) problems.push("account.create_api_key: the principal is not one that Asterra returned");
+			return { api_key: key(kind ?? "human", input.scopes as Scope[]) };
+		},
 		"directory.create_team_mailbox": (input) => {
 			addresses.add(input.address as string);
 			return { team_mailbox: { id: id("tmb") } };
@@ -84,7 +100,7 @@ function fakeAsterra(options: { ownerExists?: boolean } = {}) {
 			if (options.ownerExists) throw new ApiError(409, { code: "conflict" });
 			const parsed = SetupInput.safeParse(input);
 			if (!parsed.success) problems.push(`setup: ${parsed.error.message}`);
-			return principal("human", input.address) as never;
+			return { principal: principal("human", input.address), api_key: key("human", ALL_SCOPES) } as never;
 		},
 		async call(apiKey, name, input) {
 			calls.push({ name, input: input as Record<string, unknown> });
@@ -123,6 +139,7 @@ describe("runSeed", () => {
 		expect(new Set(asterra.calls.map((call) => call.name))).toEqual(
 			new Set([
 				"directory.create_principal",
+				"account.create_api_key",
 				"directory.create_team_mailbox",
 				"mail.create_label",
 				"mail.list_threads",
