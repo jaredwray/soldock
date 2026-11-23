@@ -18,6 +18,7 @@ import {
 	type MailAction,
 	modifyThreads,
 } from "./actions.ts";
+import { removesAutoLabel } from "./autoLabels.ts";
 import { type Draft, forwardDraft, replyDraft } from "./compose.ts";
 import { useThread, useThreadList } from "./data.ts";
 import type { ReplyMode } from "./MessageCard.tsx";
@@ -137,6 +138,14 @@ export function MailPane(props: MailPaneProps) {
 			return labelIds === null || changesLabels(labelIds, change);
 		});
 		const openLabels = threadId && ids.includes(threadId) ? labelsOf(threadId) : null;
+		// A person who removes a label that auto labels applied corrects them. Say that they learn from it.
+		const corrects = removesAutoLabel(
+			[
+				...threads.filter((item) => ids.includes(item.id)),
+				...(openThread && ids.includes(openThread.id) ? [openThread] : []),
+			],
+			change.remove,
+		);
 		list.patch(ids, change, view);
 		if (openThread && ids.includes(openThread.id)) thread.patch(change);
 		if (threadId && ids.includes(threadId)) {
@@ -149,6 +158,7 @@ export function MailPane(props: MailPaneProps) {
 		try {
 			await modifyThreads(mailboxId, ids, change);
 			const notice = actionNotice(action, ids.length);
+			if (corrects) toast({ message: "Label removed. Auto labels learn from this." });
 			if (notice) {
 				toast(
 					changed.length > 0
@@ -334,6 +344,9 @@ export function MailPane(props: MailPaneProps) {
 						labelsById={labelsById}
 						onReply={reply}
 						onRetry={() => void thread.retry()}
+						onRemoveLabel={
+							readOnly || !openThread ? undefined : (labelId) => void run({ unlabel: labelId }, [openThread.id])
+						}
 					/>
 				)}
 			</div>

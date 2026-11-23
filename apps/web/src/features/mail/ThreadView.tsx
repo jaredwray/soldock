@@ -1,9 +1,10 @@
 import type { Label, Message } from "@asterra/contracts";
 import { useEffect, useRef } from "react";
 import { Icon } from "../../lib/icons.tsx";
+import { AUTO_MARK_TEXT, AUTO_MARK_TITLE } from "./autoLabels.ts";
 import type { ThreadState } from "./data.ts";
 import { MessageCard, type ReplyMode } from "./MessageCard.tsx";
-import { labelChipName } from "./views.ts";
+import { isUserLabelId, labelChipName } from "./views.ts";
 
 interface ThreadViewProps {
 	state: ThreadState;
@@ -11,9 +12,11 @@ interface ThreadViewProps {
 	labelsById: ReadonlyMap<string, Label>;
 	onReply: (message: Message, mode: ReplyMode) => void;
 	onRetry: () => void;
+	/** Removes a user label from the thread. Absent in a mailbox that the person can only read. */
+	onRemoveLabel?: ((labelId: string) => void) | undefined;
 }
 
-export function ThreadView({ state, myAddress, labelsById, onReply, onRetry }: ThreadViewProps) {
+export function ThreadView({ state, myAddress, labelsById, onReply, onRetry, onRemoveLabel }: ThreadViewProps) {
 	const headingRef = useRef<HTMLHeadingElement>(null);
 	const threadId = state.thread?.id ?? null;
 
@@ -49,7 +52,7 @@ export function ThreadView({ state, myAddress, labelsById, onReply, onRetry }: T
 	const lastIndex = thread.messages.length - 1;
 	const chips = thread.label_ids.flatMap((id) => {
 		const name = labelChipName(id, labelsById);
-		return name ? [{ id, name }] : [];
+		return name ? [{ id, name, auto: thread.auto_label_ids.includes(id) }] : [];
 	});
 
 	return (
@@ -61,8 +64,25 @@ export function ThreadView({ state, myAddress, labelsById, onReply, onRetry }: T
 				{chips.length > 0 && (
 					<ul className="chips" aria-label="Labels">
 						{chips.map((chip) => (
-							<li key={chip.id} className="chip mail-chip">
+							<li
+								key={chip.id}
+								className={chip.auto ? "chip mail-chip chip-auto" : "chip mail-chip"}
+								title={chip.auto ? AUTO_MARK_TITLE : undefined}
+							>
+								{chip.auto && <Icon name="sparks" size={12} className="auto-mark" />}
 								{chip.name}
+								{chip.auto && <span className="visually-hidden">{AUTO_MARK_TEXT}</span>}
+								{onRemoveLabel && isUserLabelId(chip.id) && (
+									<button
+										type="button"
+										className="chip-remove"
+										aria-label={`Remove the label ${chip.name}`}
+										title="Remove the label"
+										onClick={() => onRemoveLabel(chip.id)}
+									>
+										<Icon name="close" size={12} />
+									</button>
+								)}
 							</li>
 						))}
 					</ul>

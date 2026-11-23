@@ -4858,3 +4858,507 @@ fieldset {
 		bottom: calc(68px + env(safe-area-inset-bottom));
 	}
 }
+
+/* --- Admin › AI ------------------------------------------------------------------------------ */
+
+.switch-row {
+	display: flex;
+	align-items: flex-start;
+	gap: 12px;
+}
+
+.switch-text {
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+	min-width: 0;
+}
+
+.switch-label {
+	font-weight: 500;
+}
+
+.switch:disabled {
+	opacity: 0.5;
+	cursor: not-allowed;
+}
+
+.switch:focus-visible {
+	outline: 2px solid var(--focus);
+	outline-offset: 2px;
+}
+
+.notice-ok,
+.notice-warning,
+.notice-error {
+	display: flex;
+	align-items: flex-start;
+	gap: 8px;
+}
+
+.notice-icon {
+	flex: none;
+	margin-top: 2px;
+}
+
+.notice-icon-ok {
+	color: var(--positive);
+}
+
+.notice-warning {
+	border-color: var(--warning-border);
+	background: var(--warning-soft);
+}
+
+.notice-error {
+	border-color: var(--negative-border);
+	background: var(--negative-soft);
+}
+
+.notice-icon-error {
+	color: var(--negative);
+}
+
+.ai-fieldset {
+	display: flex;
+	flex-direction: column;
+	gap: 12px;
+	width: 100%;
+}
+
+.ai-fieldset .field {
+	max-width: 400px;
+}
+
+.ai-fieldset .panel-title {
+	margin-bottom: 0;
+}
+
+.ai-test {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 8px 12px;
+}
+
+.ai-test-result {
+	margin: 0;
+	color: var(--muted-foreground);
+	font-size: 13px;
+}
+
+.ai-test-icon {
+	vertical-align: -2px;
+}
+
+.ai-test-icon-ok {
+	color: var(--positive);
+}
+
+.ai-test-icon-failed {
+	color: var(--negative);
+}
+
+.ai-chip {
+	margin-left: 6px;
+	margin-right: 0;
+}
+
+.form-actions {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
+}
+
+.ai-month-nav {
+	display: flex;
+	gap: 6px;
+}
+
+.ai-usage {
+	display: flex;
+	flex-direction: column;
+	gap: 12px;
+	transition: opacity 0.15s ease;
+}
+
+/* A new load keeps the frame of the last one, with less contrast. */
+.ai-usage-loading {
+	opacity: 0.6;
+}
+
+.ai-usage > .notice {
+	margin: 0;
+}
+
+.ai-tiles {
+	display: grid;
+	grid-template-columns: 2fr 1fr 1fr;
+	gap: 12px;
+}
+
+.ai-tile {
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+	min-width: 0;
+	padding: 16px 20px;
+	border: 1px solid var(--border);
+	border-radius: var(--radius);
+	background: var(--surface);
+}
+
+.ai-tile-label {
+	color: var(--muted-foreground);
+	font-size: 13px;
+}
+
+.ai-tile-value {
+	font-size: 24px;
+	font-variant-numeric: tabular-nums;
+	font-weight: 600;
+}
+
+.ai-tile-of {
+	color: var(--muted-foreground);
+	font-size: 14px;
+	font-weight: 400;
+}
+
+.ai-tile-note {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	color: var(--muted-foreground);
+	font-size: 13px;
+}
+
+/* The meter: the track is a light step of the color of the fill, so the state reads on the whole bar. */
+.ai-meter {
+	--meter: var(--link);
+	position: relative;
+	height: 8px;
+	margin: 6px 0 2px;
+	overflow: hidden;
+	border-radius: 999px;
+	background: color-mix(in srgb, var(--meter) 18%, var(--background));
+}
+
+.ai-meter-fill {
+	display: block;
+	height: 100%;
+	border-radius: 999px;
+	background: var(--meter);
+}
+
+.ai-budget-near .ai-meter {
+	--meter: var(--warning);
+}
+
+.ai-budget-stopped .ai-meter {
+	--meter: var(--negative);
+}
+
+.ai-budget-near .ai-tile-note,
+.ai-budget-stopped .ai-tile-note {
+	color: var(--foreground);
+	font-weight: 500;
+}
+
+.ai-note-icon-near {
+	color: var(--warning);
+}
+
+.ai-note-icon-stopped {
+	color: var(--negative);
+}
+
+.ai-chart {
+	margin: 0;
+}
+
+.ai-chart-head {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 12px;
+	margin-bottom: 12px;
+}
+
+.ai-chart-head .panel-title {
+	margin: 0;
+}
+
+.ai-columns-wrap {
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+}
+
+.ai-axis-max {
+	color: var(--muted-foreground);
+	font-size: 12px;
+	font-variant-numeric: tabular-nums;
+}
+
+/* One column for each day, from one baseline. The gap between columns is the surface. */
+.ai-columns {
+	position: relative;
+	display: flex;
+	align-items: flex-end;
+	gap: 2px;
+	height: 140px;
+	margin: 0;
+	padding: 0;
+	border-bottom: 1px solid var(--border);
+	list-style: none;
+}
+
+.ai-column {
+	display: flex;
+	flex: 1 1 0;
+	min-width: 0;
+	height: 100%;
+}
+
+/* The hit target is the whole height of the day, not only the painted bar. */
+.ai-column-hit {
+	display: flex;
+	flex: 1;
+	align-items: flex-end;
+	justify-content: center;
+	min-width: 0;
+	padding: 0;
+	border: 0;
+	background: transparent;
+	cursor: default;
+}
+
+.ai-column-bar {
+	display: block;
+	width: 100%;
+	max-width: 24px;
+	border-radius: 4px 4px 0 0;
+	background: var(--link);
+}
+
+.ai-column-active .ai-column-bar,
+.ai-column-hit:hover > .ai-column-bar {
+	background: color-mix(in srgb, var(--link) 75%, var(--background));
+}
+
+.ai-column-hit:focus-visible {
+	outline: 2px solid var(--focus);
+	outline-offset: 1px;
+}
+
+.ai-tooltip {
+	position: absolute;
+	bottom: calc(100% + 6px);
+	z-index: 2;
+	display: flex;
+	flex-direction: column;
+	padding: 6px 10px;
+	transform: translateX(-50%);
+	border: 1px solid var(--border);
+	border-radius: var(--radius-sm);
+	background: var(--popover);
+	box-shadow: var(--shadow-menu);
+	font-size: 12px;
+	white-space: nowrap;
+	pointer-events: none;
+}
+
+.ai-tooltip strong {
+	font-size: 14px;
+	font-variant-numeric: tabular-nums;
+}
+
+.ai-tooltip span {
+	color: var(--muted-foreground);
+}
+
+.ai-axis {
+	display: flex;
+	justify-content: space-between;
+	gap: 8px;
+	color: var(--muted-foreground);
+	font-size: 12px;
+	font-variant-numeric: tabular-nums;
+}
+
+.ai-ranked-grid {
+	display: grid;
+	grid-template-columns: 1fr;
+	gap: 12px;
+}
+
+.ai-ranked-title {
+	padding-top: 14px;
+	font-size: 14px;
+	font-weight: 600;
+}
+
+.ai-ranked-bar-cell {
+	width: 30%;
+	vertical-align: middle;
+}
+
+.ai-ranked-track {
+	display: block;
+	height: 6px;
+	overflow: hidden;
+	border-radius: 999px;
+	background: color-mix(in srgb, var(--link) 14%, var(--background));
+}
+
+.ai-ranked-bar {
+	display: block;
+	height: 100%;
+	border-radius: 999px;
+	background: var(--link);
+}
+
+.cell-number {
+	font-variant-numeric: tabular-nums;
+	text-align: right;
+	white-space: nowrap;
+}
+
+.table th.cell-number {
+	text-align: right;
+}
+
+@media (max-width: 900px) {
+	.ai-tiles {
+		grid-template-columns: 1fr 1fr;
+	}
+
+	.ai-tile-wide {
+		grid-column: 1 / -1;
+	}
+}
+
+@media (max-width: 600px) {
+	.ai-ranked-bar-cell {
+		display: none;
+	}
+
+	.ai-axis span:nth-child(2) {
+		display: none;
+	}
+}
+
+/* --- Auto labels in Mail ---------------------------------------------------------------------- */
+
+/* The heading of the labels: the auto-label button goes next to the new-label button, at the right. */
+.nav-heading-action {
+	margin-left: auto;
+}
+
+/* A label that auto labels applied: a small spark before its name. */
+.chip-auto,
+.thread-label-auto {
+	gap: 4px;
+}
+
+.auto-mark {
+	flex: none;
+	color: var(--muted-foreground);
+}
+
+.thread-label-auto {
+	display: inline-flex;
+	align-items: center;
+}
+
+.chip-remove {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 16px;
+	height: 16px;
+	margin: 0 -3px 0 4px;
+	padding: 0;
+	border: 0;
+	border-radius: 4px;
+	background: transparent;
+	color: var(--muted-foreground);
+	cursor: pointer;
+}
+
+.chip-remove:hover {
+	background: var(--hover);
+	color: var(--foreground);
+}
+
+.chip-remove:focus-visible {
+	outline: 2px solid var(--focus);
+	outline-offset: 1px;
+}
+
+.auto-labels {
+	display: flex;
+	flex-direction: column;
+	gap: 16px;
+}
+
+.auto-labels > .notice {
+	margin: 0;
+}
+
+.auto-labels .dialog-section {
+	margin: 0;
+}
+
+.auto-label-list {
+	margin: 0;
+	padding: 0;
+	list-style: none;
+}
+
+.auto-label-row {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: flex-start;
+	gap: 4px 16px;
+	padding: 6px 0;
+	border-bottom: 1px solid var(--border);
+}
+
+.auto-label-row:last-child {
+	border-bottom: 0;
+}
+
+.auto-label-row > .check-row:first-child {
+	flex: 1 1 320px;
+	min-width: 0;
+}
+
+.auto-label-skip {
+	flex: none;
+	font-size: 13px;
+	white-space: nowrap;
+}
+
+.auto-label-form {
+	display: flex;
+	flex-direction: column;
+	align-items: flex-start;
+	gap: 12px;
+	margin-top: 12px;
+}
+
+.auto-label-form .field {
+	width: 100%;
+}
+
+.auto-label-form textarea {
+	resize: vertical;
+}
+
+.auto-label-run {
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+}

@@ -11,6 +11,7 @@ import { PageHeader } from "../../shell/PageHeader.tsx";
 import { isOrgAdmin, useSession } from "../auth/session.tsx";
 import { SecretDialog } from "../settings/SecretDialog.tsx";
 import { AdminSidebar, defaultSection, isAdminOnly, sectionIcon, sectionTitle } from "./AdminSidebar.tsx";
+import { AiSection } from "./AiSection.tsx";
 import { ChatAdminSection } from "./ChatAdminSection.tsx";
 import { MailDomainsCard } from "./MailDomainsCard.tsx";
 import { MembersSection } from "./MembersSection.tsx";
@@ -164,6 +165,8 @@ export function AdminPage({ section: routeSection, navOpen, onCloseNav }: AdminP
 				return <ChatAdminSection principals={principals} />;
 			case "domains":
 				return <MailDomainsCard />;
+			case "ai":
+				return <AiSection />;
 		}
 	}
 }

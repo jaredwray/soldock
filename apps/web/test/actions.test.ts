@@ -54,6 +54,7 @@ describe("actions", () => {
 			starred: false,
 			has_attachments: false,
 			label_ids: ["INBOX", "UNREAD"],
+			auto_label_ids: [],
 			last_message_at: "2026-11-02T10:00:00.000Z",
 			untrusted: false,
 		};
