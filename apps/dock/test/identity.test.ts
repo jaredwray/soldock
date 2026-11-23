@@ -929,6 +929,15 @@ describe("directory authorization", () => {
 		const eve = await owner.call("directory.create_principal", person);
 		expect(eve.api_key).toBeNull();
 		expect((await owner.call("account.list_api_keys", { principal_id: eve.principal.id })).api_keys).toEqual([]);
+		// The person signs in with the first password and creates a key in that session.
+		const created = await request("/api/v1/account/api-keys", {
+			method: "POST",
+			headers: { cookie: await signIn(person.address), origin: ORIGIN, "content-type": "application/json" },
+			body: JSON.stringify({ label: "Laptop", scopes: ["account.read"] }),
+		});
+		expect(created.ok).toBe(true);
+		const { api_key } = (await created.json()) as { api_key: { secret: string } };
+		expect((await api(api_key.secret)("account.whoami")).principal.id).toBe(eve.principal.id);
 		const agent = await owner.call("directory.create_principal", {
 			kind: "agent",
 			display_name: "Helper",

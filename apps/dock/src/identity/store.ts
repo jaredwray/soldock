@@ -591,7 +591,7 @@ export interface CreatePrincipalOptions {
 }
 
 /**
- * Creates a principal, its primary address and a first API key in one transaction. With
+ * Creates a principal, its primary address and, with a key, a first API key in one transaction. With
  * `onlyIfEmpty`, the transaction writes nothing when the directory already has a principal, so two
  * concurrent first-run setups cannot both create an owner. Returns null in that case. Without a key
  * (`null`), the principal gets no API key: a person that an admin creates signs in with a password, a
