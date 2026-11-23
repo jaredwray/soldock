@@ -100,8 +100,8 @@ each OAuth connection of the agent has them. A key or a connection is only a cre
 - **Live sockets.** The events sockets of the agent close at once with code `4001`. Each other socket and
   feed closes with `4001` within one minute. Open them again: the new socket has the new access.
 - **Remove a scope.** You can remove a scope too. A webhook or an MCP Events subscription of the agent
-  stops when the agent loses the webhook scope of its product, or when its mailbox or drive is outside
-  the limits. A scheduled chat message of the agent fails when the agent loses `chat.write` or gets
+  stops when the agent loses the webhook scope of its product. It also stops when its mailbox or drive
+  is outside the limits. A scheduled chat message of the agent fails when the agent loses `chat.write` or gets
   limits.
 - **Access.** **Access** on the card shows what the agent can reach, and its live API keys
   (`directory.get_agent_access`). **Apps connected as …** lists its OAuth connections.
@@ -115,8 +115,9 @@ each OAuth connection of the agent has them. A key or a connection is only a cre
 the agent. An empty list allows nothing of that product, and `null` removes the limits. A limited agent
 gets `403` for a call that names a resource outside its lists. The lists of mailboxes, shared drives and
 rooms show only the listed ones. A limited agent cannot open a room, start a direct message, use the
-personal views of Chat, create a chat webhook or open `/ws/events`. MCP shows only the tools and
-resources that the agent can use.
+personal views of Chat or its notification settings, create a chat webhook, or open `/ws/events`. An
+MCP event needs a listed mailbox, drive or room: a chat event needs `room_id`. MCP shows only the tools
+and resources that the agent can use.
 
 ## Service accounts
 

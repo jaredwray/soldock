@@ -18,7 +18,7 @@ The domains in this document are the domains of this instance. On your own insta
 domains.
 
 The development environment is also the project's own Asterra instance: the team uses it for its mail on
-`soldock.org`. So its data stays from one deploy to the next. The D1 migrations keep the data, and a
+`soldock.org`. So its data stays from one deploy to the next. The D1 migrations only add, and a
 deploy never deletes a mailbox. Each Worker serves only its custom domain. `workers.dev` and Preview
 URLs are off, because each one is a second origin with the same data.
 
@@ -327,12 +327,15 @@ scopes.
 
 What the migration does:
 
-- It renames `principals.service_scopes` to `agent_scopes`, and `service_resources` to
-  `agent_resources`. A service account keeps its scopes and its limits.
-- Each agent gets each scope of its live API keys (not revoked and not expired), of its live OAuth
-  connections (not revoked, and the refresh token did not expire), and of its approved OAuth codes that
-  a client did not use yet. So no client of the agent loses a scope. A key or a connection with fewer
-  scopes then gets the scopes of the other live credentials of its agent.
+- It adds `principals.agent_scopes` and `agent_resources`, and copies the scopes and the limits of each
+  service account into them. A service account keeps its scopes and its limits. `service_scopes` and
+  `service_resources` stay for the old Worker, and the new Worker does not read them.
+- Each agent gets each scope of these credentials, so no client of the agent loses a scope:
+  - its live API keys (not revoked and not expired)
+  - its live OAuth connections (not revoked, and the refresh token did not expire)
+  - its approved OAuth codes that a client did not use yet
+- A key or a connection with fewer scopes then gets the scopes of the other live credentials of its
+  agent.
 - An agent gets no limits.
 - An agent without a live credential has no scope. Its sponsor, an owner or an admin sets its scopes
   before a client connects or uses a new key.
@@ -347,7 +350,8 @@ What changes for a client that calls the API:
   (`POST /api/v1/directory/agents/{principal_id}/access`), and `directory.get_service_account_access` is
   now `directory.get_agent_access` (`GET` on the same path). They work for an agent and for a service
   account. The sponsor of an agent, an owner or an admin calls them. For a service account, only an
-  owner or an admin calls them. The `tokens` of `directory.get_agent_access` lists live API keys only.
+  owner or an admin calls them. A sponsor that a parallel change replaced gets `conflict`. The `tokens`
+  of `directory.get_agent_access` lists live API keys only.
 - `directory.create_principal` has no `key_scopes`. An agent needs `scopes`, and the first key of the
   agent has no scopes of its own. A person with `scopes` gets `invalid`.
 - `account.create_api_key` refuses `scopes` for a key of an agent (`invalid`). A key of a person still
@@ -359,16 +363,16 @@ What changes for a client that calls the API:
 - In the contracts, `ServiceResources` is now `AgentResources`, `SERVICE_RESOURCE_LIMITS` is now
   `AGENT_RESOURCE_LIMITS`, and `SERVICE_ACCESS_LIMITS` is now `AGENT_ACCESS_LIMITS`.
 - A change of the scopes or the limits closes the sockets of each key and each OAuth token of the agent
-  with code `4001` (`reconnect`), not `4003` (`ended`). The events sockets close at once, and each other
-  socket at its next check. This also applies to a token of a service account. A client opens a new
-  socket with the same credential.
+  with code `4001` (`reconnect`). The events sockets close at once, and each other socket at its next
+  check. A client opens a new socket with the same credential. A token of a service account also gets
+  `4001` now, not `4003` (`ended`).
 
-A rollback to a Worker from before this migration is not supported. That Worker reads the old column
-names, so it cannot read a principal. Fix a problem with a new deploy.
-
-The deploy applies the D1 migrations before it deploys the new Worker. The old Worker cannot read a
-principal after this migration, so each request that needs a principal fails until the new Worker runs.
-Keep the time between the two steps short.
+The migration only adds, so the old Worker keeps working between the migration and the deploy, with the
+scopes of each key and each connection. A key, a connection or an agent that the old Worker creates in
+that time has no scope on the agent after the deploy: set the scopes of the agent. A change of the access
+of a service account that the old Worker saves in that time is lost. A rollback to a Worker from before
+this migration is not supported: it gives each key of an agent its old scopes, and a new key none. Fix a
+problem with a new deploy.
 
 ### Recover a sign-in
 

@@ -162,7 +162,7 @@ The scopes and the limits of the agent can change after the create.
 - A chat event needs its room inside the limits of the agent. An event of a different room sends no POST, and the subscription stays active, because it covers each room.
 - A subscription that a person creates, also for an agent that the person sponsors, does not get these checks.
 
-This also applies to MCP Events. `events/subscribe` does not check the limits of the agent, so these checks stop each POST outside the limits.
+These checks also apply to MCP Events. `events/subscribe` applies the limits of the agent before it stores a subscription (see [MCP Events](#mcp-events)), and these checks are a second guard.
 
 The header `webhook-id` is `<event id>_<subscription id>`. A retry keeps that id.
 The signature is Standard Webhooks. See [Mail](../mail/README.md#webhooks) for the steps.
@@ -199,6 +199,11 @@ retries and the rules that disable an endpoint are those of each webhook. These 
 - **Access.** The credential needs the webhook scope of the product. The target rules are those of the
   subscription operations. The outbound policy of an agent must allow the host of the URL. The
   default policy `internal-only` allows no host, so a sponsor adds the host first.
+- **Resource limits.** `events/subscribe` does not go through the invoker, so it applies the resource
+  limits of an agent itself, before the Mail or the Drive hook records events for the target. An event of
+  a mailbox or a drive outside the list gets `forbidden`. A chat event of a limited agent needs a listed
+  `room_id`: without a room, it covers each room of the agent
+  ([identity](../identity/README.md#resource-limits-of-an-agent)).
 - **Secret.** The client gives it: `whsec_` and the base64 of 24 to 64 bytes. No result shows it.
 - **Callback URL.** The URL has the rules of each webhook URL (`url.ts`): `https`, the default port, a
   public host name, no IP address, no user name and not the host of the deployment. Each POST refuses

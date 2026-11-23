@@ -194,12 +194,12 @@ A modern client sends `subscriptions/listen` with the resource URIs in
 - The stream checks its age before each notification and at each keep-alive. When the last access
   check is older than one minute, it authenticates the credential again and asks the change feed of
   each resource kind again first, with all of its resources in one call. So a lost access stops the
-  notifications within about one minute. The sponsor of an agent, an owner or an admin can change the
-  scopes and the resource limits of an agent or a service account while a stream is open. So the check
+  notifications within about one minute. The scopes and the resource limits of an agent or a service
+  account can change while a stream is open. So the check
   also reads each watched URI again with the new scopes and limits (`resolveUri`), and the stream ends
   when one of them no longer names a resource that the credential can read. The change also closes a
-  feed on the object of the agent (`chat.rooms`, `chat.addressed`) at once with `reconnect`, and a feed of
-  a room at its next check. A feed that stops ends the stream, and the client opens a new one.
+  feed on the object of the agent (`chat.rooms`, `chat.addressed`) at once with `reconnect`. A feed of a
+  room closes at its next check. A feed that stops ends the stream, and the client opens a new one.
 - Subrequest budget of one stream. When it opens: one D1 query for all team mailboxes, one D1 query
   for all chat rooms, and one socket for each mailbox, each room and `chat.rooms` (at most 100). Each later access
   check makes at most five D1 calls: the credential, the principal, the last-use time of the
@@ -232,6 +232,9 @@ webhook delivery of that integration. It has no polling, no stream and no replay
   for the caller sends the event. A refresh without `filter` keeps a filter that the client set. Each
   other subscription gets the default of the caller. Each chat POST has `reason`, `author_id` and `version` in `data`. See
   [Chat events](../webhooks/README.md#chat-events).
+- An agent with resource limits can subscribe only to a listed mailbox, drive or room. A chat event of
+  such an agent needs `room_id`. Each other subscription gets `-32603` with `forbidden`
+  ([webhooks](../webhooks/README.md#mcp-events)).
 - Errors: params that are not valid, an unknown event and an event without its scope get `-32602`.
   A callback URL that is not accepted gets `-32015` with `data.reason`: `invalid_url`,
   `challenge_failed`, `timeout` or `unreachable`. Each other refusal gets `-32603` with the error
