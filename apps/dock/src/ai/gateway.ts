@@ -259,9 +259,12 @@ export async function chat(env: Env, request: ChatRequest, options: { test?: boo
 		return await finish(failure("bad_response", { status: response.status, model }), { input: 0, output: 0 });
 	}
 	// A connection test proves the path to the model. An answer with no text (a reasoning model that used
-	// its tokens to reason) still proves it.
+	// its tokens to reason) still proves it, but only when it has the form of an answer: a first choice with
+	// a message. Other JSON, such as an error with status 200, does not prove it.
 	const text = answer && typeof answer === "object" ? contentOf(answer) : null;
-	const content = text === null && test && answer && typeof answer === "object" ? "" : text;
+	const message = answer && typeof answer === "object" ? answer.choices?.[0]?.message : undefined;
+	const hasMessage = message !== null && typeof message === "object";
+	const content = text === null && test && hasMessage ? "" : text;
 	const inputTokens = tokenCount(answer?.usage?.prompt_tokens) ?? Math.ceil(inputChars / 4);
 	const outputTokens = tokenCount(answer?.usage?.completion_tokens) ?? estimateTokens(content ?? "");
 	if (content === null) {

@@ -238,6 +238,13 @@ describe("the connection test", () => {
 		expect(result).toMatchObject({ ok: true, status: 200 });
 		// The test does not stop at the budget, so it does not get the 1,200 tokens of a feature call.
 		expect(calls.map((call) => call.body.max_tokens)).toEqual([64]);
+		// Other JSON with status 200, such as an error, is not an answer, so it proves nothing.
+		vi.restoreAllMocks();
+		fakeGateway(() => Response.json({ error: "the model is not available" }));
+		expect(await owner.call("ai.test_connection", { model: "@cf/openai/gpt-oss-120b" })).toMatchObject({
+			ok: false,
+			reason: "bad_response",
+		});
 	});
 
 	it("sends nothing without a gateway or without the token", async () => {
