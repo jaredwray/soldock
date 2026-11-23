@@ -935,7 +935,7 @@ export async function autoLabelOutbox(mailboxId: string): Promise<{ message_seq:
 export async function consumeAutoLabels(
 	jobs: unknown[],
 	attempts = 1,
-	overrides: { AI_GATEWAY_TOKEN?: string | undefined } = {},
+	overrides: { AI_GATEWAY_TOKEN?: string | undefined; DIRECTORY?: D1Database } = {},
 ) {
 	const batch = createMessageBatch(
 		"soldock-mail-autolabel",

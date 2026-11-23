@@ -303,6 +303,32 @@ describe("the classifier stage", () => {
 		expect(await autoLabelOutbox(grace.id)).toEqual([]);
 	});
 
+	it("makes no call when the mailbox is deleted while its job reads the message", async () => {
+		const sent = await deliver({ subject: "Late delete", text: "A question?" });
+		// The directory finds the mailbox for the first check, and the delete commits before the second one.
+		let lookups = 0;
+		const directory = new Proxy(env.DIRECTORY, {
+			get(target, property) {
+				if (property === "prepare") {
+					return (query: string) => {
+						const statement = target.prepare(query);
+						if (!query.includes("'personal' AS kind")) return statement;
+						lookups += 1;
+						return lookups === 1 ? statement : target.prepare("SELECT NULL AS id WHERE ? IS NULL AND 0");
+					};
+				}
+				const value = Reflect.get(target, property);
+				return typeof value === "function" ? value.bind(target) : value;
+			},
+		});
+		const calls = fakeGateway(() => answer([{ key: "needs_reply", confidence: 0.9 }]));
+		const result = await consumeAutoLabels(sent, 1, { DIRECTORY: directory });
+		expect(calls).toHaveLength(0);
+		expect(result.explicitAcks).toHaveLength(1);
+		expect(await autoLabelOutbox(ada.id)).toEqual([]);
+		expect(lookups).toBe(2);
+	});
+
 	it("does the work of a job once, though the queue delivers it two times", async () => {
 		const sent = await deliver({ subject: "Twice", text: "Can we meet?" });
 		const calls = fakeGateway(() => answer([{ key: "needs_reply", confidence: 0.9 }]));

@@ -45,17 +45,22 @@ export async function handleAutoLabelBatch(batch: MessageBatch<unknown>, env: En
 			const box = mailboxStub(env, job.mailboxId);
 			// A job can wait in the queue while a person deletes the account or the team mailbox. The mail of a
 			// deleted mailbox never goes to the gateway.
-			if (!(await getMailbox(env.DIRECTORY, job.mailboxId))) {
+			const dropIfGone = async (): Promise<boolean> => {
+				if (await getMailbox(env.DIRECTORY, job.mailboxId)) return false;
 				log("info", "auto label job dropped: the mailbox is gone", { mailboxId: job.mailboxId });
 				await box.finishAutoLabel(job.messageId);
 				message.ack();
-				continue;
-			}
+				return true;
+			};
+			if (await dropIfGone()) continue;
 			const context = await box.autoLabelJob(job.messageId);
 			if (!context) {
 				message.ack();
 				continue;
 			}
+			// The delete can come while the mailbox reads the message. Ask the directory again just before the
+			// mail leaves the Worker.
+			if (await dropIfGone()) continue;
 			const prompt = buildMessages(context.prompt, newNonce());
 			const result = await chat(env, {
 				feature: "mail.auto_label",
