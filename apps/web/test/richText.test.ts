@@ -145,6 +145,7 @@ describe("textToDoc", () => {
 			date: "2026-11-02T10:00:00.000Z",
 			received_at: "2026-11-02T10:00:01.000Z",
 			label_ids: ["INBOX"],
+			auto_label_ids: [],
 			snippet: "Hello",
 			origin: "internal",
 			untrusted: false,

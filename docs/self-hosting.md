@@ -150,6 +150,43 @@ It encrypts the message location and the unread count for the device.
 A failed request gets up to five retries. An HTTP 404 or 410 removes that subscription.
 The job and the push service each have a time limit of one hour from the original message.
 
+## AI
+
+Asterra uses Workers AI through Cloudflare AI Gateway, in your own Cloudflare account. The first feature
+is inbox auto labels. AI is off until an owner or an admin turns it on in **Admin › AI**.
+
+1. In the Cloudflare dashboard, open **AI › AI Gateway**. Create a gateway, for example `asterra`.
+2. In the settings of the gateway, turn on **Authenticated Gateway**.
+3. Create an API token with the permissions **Workers AI: Read** and **AI Gateway: Run**, for your
+   account only.
+4. In **Admin › AI**, enter the account ID, the gateway ID and the API token. Save the settings.
+5. Select **Test connection**.
+6. Allow the models, choose the model of **Inbox auto labels**, set the monthly budget, and turn on AI.
+7. Each person turns on auto labels for their mailbox in Mail, with the spark button next to
+   **Labels**.
+
+- Asterra keeps the token in the AI settings in D1, as it keeps the signing secrets of webhooks. No API
+  answer and no log contains it. Admin › AI shows only that a token is saved, with **Replace** and
+  **Remove**. Without a token, AI makes no calls, and auto labels use their rules only.
+- To keep the token out of D1, set it as the Worker secret `AI_GATEWAY_TOKEN` instead
+  (`wrangler secret put AI_GATEWAY_TOKEN`, and again with `--env development`). A token saved in
+  Admin › AI wins over the secret.
+- Only Workers AI models are on the list, so the AI stays in Cloudflare.
+- AI stops when the estimated cost of the month (UTC) reaches the budget. The estimate uses the
+  published Workers AI prices. The AI Gateway dashboard is the source for billing.
+- Each request asks the gateway to keep no request or response body (`cf-aig-collect-log-payload:
+  false`), so the gateway log has no mail text. It keeps the metadata: the model, the status, the
+  tokens, the cost and the duration. The usage of Admin › AI does not need the bodies.
+- The header does not change what Logpush exports. If you turn on Logpush for the gateway, examine
+  that export separately: it can hold the request and response bodies, encrypted with your key.
+- A gateway created before 24 September 2026 uses Legacy Logs. After the first deploy, send one
+  synthetic mail that gets a classifier call, and confirm that its log entry in the gateway has no
+  body.
+- The deploy creates the queue `soldock-mail-autolabel`. Migration `0028` adds the AI tables: run
+  `wrangler d1 migrations apply` as for each migration.
+- For local work, enter a token in Admin › AI of `wrangler dev`, or put `AI_GATEWAY_TOKEN=<token>` in
+  `apps/dock/.dev.vars`. Never commit that file.
+
 ## Mail
 
 The dock Worker receives mail through Email Routing and sends mail through Email Service. Do these
@@ -387,7 +424,7 @@ and no shared drive until a manager adds them to its limits. No migration is nec
 
 ### Scopes of a member of a team mailbox
 
-Migration `0028_mailbox_member_scopes.sql` adds the scopes of each member of a team mailbox: `mail.read`,
+Migration `0029_mailbox_member_scopes.sql` adds the scopes of each member of a team mailbox: `mail.read`,
 `mail.modify` and `mail.send`. An owner or an admin sets them under **Admin › Shared mailboxes**, for a
 person, an agent and a service account.
 

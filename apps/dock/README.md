@@ -66,24 +66,27 @@ The entire backend as one deployable Worker (modular monolith): `fetch`, `email`
 - Any other path is served by static assets (the `apps/web` build), which fall back to `index.html`
   for SPA routes. In production, browser navigations go to the assets, and the Worker does not run.
 - `email` accepts mail for known addresses and rejects other mail at SMTP time. `queue` consumes
-  `soldock-mail-inbound`, `soldock-webhooks`, `soldock-chat-push` and `soldock-chat-previews`,
-  and acknowledges batches of other queues.
+  `soldock-mail-inbound`, `soldock-webhooks`, `soldock-chat-push`, `soldock-chat-previews` and
+  `soldock-mail-autolabel`, and acknowledges batches of other queues.
   `scheduled` runs once an hour (`triggers.crons` in `wrangler.jsonc`, which each env inherits) and calls
   `runScheduled` ([`src/scheduled.ts`](src/scheduled.ts)): today, the notice before a token of a service
-  account ends ([`identity`](src/identity/README.md#notice-before-a-token-ends)).
+  account ends ([`identity`](src/identity/README.md#notice-before-a-token-ends)), and the cleanup of AI
+  usage older than 400 days ([`ai`](src/ai/README.md#data-inventory)).
 
 ## Bindings
 
 | Binding | Type | Use |
 | --- | --- | --- |
 | `ASSETS` | Static assets | The SPA (`../web/dist`) |
-| `DIRECTORY` | D1 `soldock-directory` | Principals (with password hashes and TOTP secrets), addresses, API keys, sessions, OAuth clients, requests and grants, mail domains, the room index of Chat, the index of the shared drives of Drive, and the webhooks of Mail and Chat |
+| `DIRECTORY` | D1 `soldock-directory` | Principals (with password hashes and TOTP secrets), addresses, API keys, sessions, OAuth clients, requests and grants, mail domains, the room index of Chat, the index of the shared drives of Drive, the webhooks of Mail and Chat, and the AI settings and usage ledger |
 | `BLOBS` | R2 `soldock-blobs` | Raw MIME of each message, the bytes and the small picture of each version of each Drive file, the parts of an upload in progress, the images of docs, and the pictures of link previews of Chat |
 | `MAIL_INBOUND`, `MAIL_INBOUND_DLQ` | Queue producers | Inbound jobs and their dead letters. The Worker consumes `soldock-mail-inbound` |
 | `WEBHOOKS`, `WEBHOOKS_DLQ` | Queue producers | Webhook events of mailboxes and chat rooms, one POST job for each webhook, and their dead letters. The Worker consumes `soldock-webhooks` |
 | `CHAT_PUSH` | Queue producer | Recipient groups and one delivery job per eligible device. The consumer checks current access before each attempt |
 | `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`, `VAPID_SUBJECT` | Worker secrets | The VAPID key pair and contact address for browser push. See [Web Push setup](../../docs/self-hosting.md#web-push) |
 | `CHAT_PREVIEWS` | Queue producer | The jobs of link previews of Chat: a room id and a message id. The Worker consumes `soldock-chat-previews`. The room sends a job again without a result, so the queue has no dead letter queue |
+| `MAIL_AUTOLABEL` | Queue producer | The jobs of the classifier of auto labels: a mailbox id and a message id. The Worker consumes `soldock-mail-autolabel`. The mailbox sends a job again without a result, so the queue has no dead letter queue. See [auto labels](src/mail/README.md#auto-labels) |
+| `AI_GATEWAY_TOKEN` | Worker secret (optional) | The Cloudflare API token for Workers AI through AI Gateway, when it is not saved in Admin › AI. A token of the settings wins. Never in an answer. See [AI setup](../../docs/self-hosting.md#ai) |
 | `EMAIL` | `send_email` | Outbound mail through Email Service |
 | `MAILBOX` | Durable Object `MailboxDO` (SQLite) | One mailbox for each principal and each team mailbox. It also accepts the hibernatable watch sockets of MCP subscriptions |
 | `DRIVE_SPACE` | Durable Object `DriveSpaceDO` (SQLite) | One drive for each principal, and one for each shared drive |
@@ -128,6 +131,8 @@ with injected inbound mail.
 | Inbound jobs | [`mail`](src/mail/README.md) | Queues `soldock-mail-inbound` and `soldock-mail-inbound-dlq` |
 | Webhooks (URL, signing secret, creator, credential, delivery state) | [`mail`](src/mail/README.md#webhooks) | D1 `DIRECTORY`, table `webhooks` |
 | Webhook events and jobs | [`mail`](src/mail/README.md#webhooks) | `MailboxDO` table `event_outbox`; queues `soldock-webhooks` and `soldock-webhooks-dlq` |
+| Auto labels (marks, header signals, settings, corrections, classifier outbox) | [`mail`](src/mail/README.md#auto-labels) | `MailboxDO` SQLite; queue `soldock-mail-autolabel` |
+| AI settings and usage ledger | [`ai`](src/ai/README.md#data-inventory) | D1 `DIRECTORY`, tables `ai_settings` (with the API token) and `ai_usage`; optional Worker secret `AI_GATEWAY_TOKEN` |
 | Drives (items, versions, grants, search index, stars, shared-with-me index, outbox, idempotency keys, and the members of a shared drive) | [`drive`](src/drive/README.md) | `DriveSpaceDO` SQLite |
 | The index of the shared drives (a copy for the lists) | [`drive`](src/drive/README.md#the-index-in-d1) | D1 `DIRECTORY`, tables `shared_drives` and `shared_drive_members` |
 | File bytes | [`drive`](src/drive/README.md) | R2 `BLOBS`, `drive/<space id>/<item id>/<version id>`, and the small picture with `.thumb-<id>` |

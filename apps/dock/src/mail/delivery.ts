@@ -1,4 +1,5 @@
-import { addressTag } from "../identity/index.ts";
+import { autoLabelActive } from "../ai/index.ts";
+import { addressTag, getMailbox } from "../identity/index.ts";
 import { sha256Hex } from "../platform/index.ts";
 import { composeMessage } from "./mime/compose.ts";
 import { parseMail } from "./mime/parse.ts";
@@ -54,6 +55,8 @@ export async function deliverStoredRaw(
 	const parsed = await parseMail(input.bytes, { authservId: authservId(env) });
 	// A DMARC failure on mail from the internet goes to Spam. Internal mail has no such header.
 	const spam = input.origin === "external" && parsed.authentication?.dmarc === "fail";
+	// One read of the AI settings. The mailbox applies auto labels only when its own setting is on too.
+	const owner = !spam && (await autoLabelActive(env)) ? await getMailbox(env.DIRECTORY, input.mailboxId) : null;
 	return mailboxStub(env, input.mailboxId).deliver({
 		contentHash: input.contentHash,
 		rawKey: input.rawKey,
@@ -63,6 +66,7 @@ export async function deliverStoredRaw(
 		parsed,
 		spam,
 		tag: input.tag,
+		autoLabel: owner ? { ownerAddress: owner.address } : null,
 	});
 }
 
@@ -111,4 +115,13 @@ export async function deliverSystemNotice(
 		attachments: [],
 	});
 	return deliverInternal(env, notice.to.mailboxId, notice.to.address, new TextEncoder().encode(raw));
+}
+
+/**
+ * Turns off auto labels in a mailbox and empties its classifier outbox, when its principal is deleted. A job
+ * that waits in the queue then gets nothing from the mailbox, so no mail of the deleted mailbox goes to the
+ * gateway.
+ */
+export async function closeAutoLabels(env: Pick<Env, "MAILBOX">, mailboxId: string): Promise<void> {
+	await mailboxStub(env, mailboxId).closeAutoLabels();
 }

@@ -8,4 +8,9 @@ interface Env {
 	VAPID_PRIVATE_KEY?: string;
 	/** A mailto or https contact address for the push service. */
 	VAPID_SUBJECT?: string;
+	/**
+	 * The Cloudflare API token for Workers AI through AI Gateway, when an owner or an admin did not save one in
+	 * Admin › AI. A token of the settings wins. It is never in an API answer or in a log.
+	 */
+	AI_GATEWAY_TOKEN?: string;
 }

@@ -4,6 +4,7 @@ import { participantsLabel, shortDate } from "../../lib/format.ts";
 import { Icon } from "../../lib/icons.tsx";
 import { Link } from "../../lib/router.tsx";
 import { isAgentMailbox, type MailView, threadPath } from "../../routes.ts";
+import { AUTO_MARK_TEXT, AUTO_MARK_TITLE } from "./autoLabels.ts";
 import type { ListState } from "./data.ts";
 import { useMailboxId, useReadOnlyMailbox } from "./mailbox.tsx";
 import { isUserLabelId } from "./views.ts";
@@ -206,11 +207,20 @@ function ThreadRow({
 					{userLabels.length > 0 && (
 						<span className="thread-labels">
 							<span className="visually-hidden">Labels: </span>
-							{userLabels.slice(0, 2).map((label) => (
-								<span key={label.id} className="thread-label" title={label.name}>
-									{label.name}
-								</span>
-							))}
+							{userLabels.slice(0, 2).map((label) => {
+								const auto = thread.auto_label_ids.includes(label.id);
+								return (
+									<span
+										key={label.id}
+										className={auto ? "thread-label thread-label-auto" : "thread-label"}
+										title={auto ? `${label.name} – ${AUTO_MARK_TITLE}` : label.name}
+									>
+										{auto && <Icon name="sparks" size={11} className="auto-mark" />}
+										{label.name}
+										{auto && <span className="visually-hidden">{AUTO_MARK_TEXT}</span>}
+									</span>
+								);
+							})}
 							{userLabels.length > 2 && (
 								<span
 									className="thread-label"

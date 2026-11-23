@@ -4,5 +4,5 @@
 -- A member from before this migration keeps the three scopes: each member could read the mailbox, change it and
 -- send from it. The deploy applies the migrations while the Worker from before runs. That Worker does not name
 -- the column in its insert, so a member that it adds gets the default too.
--- The statement markers let a fresh reset replay this file without a SQL parser.
+-- The file has one statement, so a fresh reset replays it without a statement marker.
 ALTER TABLE team_mailbox_members ADD COLUMN scopes TEXT NOT NULL DEFAULT '["mail.read","mail.modify","mail.send"]';

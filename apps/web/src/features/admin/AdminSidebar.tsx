@@ -13,6 +13,7 @@ const SECTIONS: Record<AdminSection, { title: string; icon: IconName; adminOnly:
 	"shared-drives": { title: "Shared drives", icon: "allMail", adminOnly: true },
 	chat: { title: "Chat", icon: "chat", adminOnly: true },
 	domains: { title: "Email domains", icon: "external", adminOnly: true },
+	ai: { title: "AI", icon: "sparks", adminOnly: true },
 };
 
 /** A member who sponsors an agent sees only those agents. The section title says so. */

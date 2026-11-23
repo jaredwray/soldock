@@ -1,9 +1,44 @@
 import { EmailMessage } from "cloudflare:email";
 import { DurableObject } from "cloudflare:workers";
-import { MAIL_LIMITS, type MailSettings, WEBHOOK_LIMITS } from "@asterra/contracts";
+import {
+	AUTO_LABEL_LIMITS,
+	AUTO_LABELS,
+	type AutoLabelSettings,
+	MAIL_LIMITS,
+	type MailSettings,
+	WEBHOOK_LIMITS,
+} from "@asterra/contracts";
 import { addressTag, getMailbox, getPrincipal } from "../identity/index.ts";
 import { log, newId } from "../platform/index.ts";
 import type { WebhookEventJob } from "../webhooks/index.ts";
+import type { AutoLabelJob } from "./autolabel/consumer.ts";
+import type { PromptInput } from "./autolabel/prompt.ts";
+import { PROMPT_CORRECTIONS } from "./autolabel/prompt.ts";
+import {
+	type Decision,
+	decide,
+	type LabelDef,
+	type LabelPick,
+	type MailFacts,
+	resolvePicks,
+} from "./autolabel/rules.ts";
+import { readSignals } from "./autolabel/signals.ts";
+import {
+	AUTO_LABEL_ENABLED_KEY,
+	AUTO_LABEL_INITIALIZED_KEY,
+	AUTOLABEL_MIGRATION,
+	autoKeyOfLabel,
+	correctionsOfSender,
+	enableBuiltin,
+	enabledLabelDefs,
+	ensureUserLabel,
+	exampleCorrections,
+	messageFacts,
+	readFacts,
+	recordCorrection,
+	type StoreRefusal,
+	settingsView,
+} from "./autolabel/store.ts";
 import { deliverInternal, mailboxIdOfRawKey } from "./delivery.ts";
 import type { AttachmentMeta, AuthenticationResults, MailAddress, ParsedMail } from "./mime/parse.ts";
 import { deniedOutboundAddresses, outboundMode, outboundPolicyDenial } from "./outbound.ts";
@@ -49,6 +84,12 @@ export interface DeliverInput {
 	 * because earlier callers do not send it.
 	 */
 	tag?: string | null;
+	/**
+	 * Set when the organization lets auto labels run. The mailbox applies them when its own setting is on.
+	 * The address is the address of the mailbox, for the facts of the rules. Optional, because earlier
+	 * callers do not send it.
+	 */
+	autoLabel?: { ownerAddress: string } | null;
 }
 
 export interface SendInput {
@@ -109,6 +150,8 @@ export interface StoredMessage {
 	attachments: (AttachmentMeta & { index: number })[];
 	authentication: AuthenticationResults | null;
 	labels: string[];
+	/** The ids in `labels` that auto labels applied. */
+	autoLabels: string[];
 	delivery: DeliveryRecord[] | null;
 	sentBy: SentBy | null;
 }
@@ -120,6 +163,8 @@ export interface ThreadSummaryRecord {
 	participants: MailAddress[];
 	messageCount: number;
 	labels: string[];
+	/** The ids in `labels` that auto labels applied to each message of the thread that has them. */
+	autoLabels: string[];
 	hasAttachments: boolean;
 	untrusted: boolean;
 	lastMessageAt: number;
@@ -298,7 +343,43 @@ const MIGRATIONS: string[][] = [
 		)
 		WHERE newest = 1`,
 	],
+	// Auto labels: marks, signals, settings, corrections and the classifier outbox (autolabel/store.ts).
+	AUTOLABEL_MIGRATION,
 ];
+
+/** The sends of one message to the classifier queue. A send that gets no result is repeated after `AUTOLABEL_RESEND_MS`. */
+const AUTOLABEL_MAX_SENDS = 3;
+const AUTOLABEL_RESEND_MS = 15 * 60 * 1000;
+const AUTOLABEL_BATCH = 25;
+/** The meta key that holds the id of this mailbox for the classifier jobs. The object does not know its own id. */
+const AUTO_LABEL_MAILBOX_KEY = "auto_label_mailbox_id";
+const AUTO_LABELS_ORDER = AUTO_LABELS.map((label) => label.key);
+/** The folded names of the built-in auto labels. A custom auto label cannot take one. */
+const AUTO_LABELS_NAMES = new Set(AUTO_LABELS.map((label) => foldLabelName(label.name)));
+
+/** A refusal thrown inside a transaction, so the transaction rolls back. */
+class AutoLabelRefusal extends Error {
+	readonly refusal: Refusal;
+
+	constructor(refusal: Refusal) {
+		super(refusal.error.message);
+		this.refusal = refusal;
+	}
+}
+
+/** What the classifier needs for one message. Null when the message needs no classifier. */
+export interface AutoLabelContext {
+	prompt: PromptInput;
+	decision: Pick<Decision, "candidates" | "needsReplyStrict">;
+}
+
+/** The result of `runAutoLabels`. */
+export interface AutoLabelRun {
+	messages: number;
+	labeled_by_rules: number;
+	queued: number;
+	dry_run: boolean;
+}
 
 const MAX_TEXT_BYTES = 256 * 1024;
 /**
@@ -468,8 +549,9 @@ export class MailboxDO extends DurableObject<Env> {
 	/** True when the outbox or the event outbox has a row. */
 	private hasPendingWork(): boolean {
 		return (
-			(this.one<{ n: number }>("SELECT (SELECT COUNT(*) FROM outbox) + (SELECT COUNT(*) FROM event_outbox) AS n")?.n ??
-				0) > 0
+			(this.one<{ n: number }>(
+				"SELECT (SELECT COUNT(*) FROM outbox) + (SELECT COUNT(*) FROM event_outbox) + (SELECT COUNT(*) FROM autolabel_outbox) AS n",
+			)?.n ?? 0) > 0
 		);
 	}
 
@@ -519,7 +601,10 @@ export class MailboxDO extends DurableObject<Env> {
 			return { status: "duplicate", messageId: existing.id, threadId: existing.thread_id };
 		}
 		const labels = [...(input.spam ? ["SPAM", "UNREAD"] : ["INBOX", "UNREAD"]), ...(tagLabel ? [tagLabel] : [])];
+		const autoLabel = !input.spam && input.autoLabel && this.autoLabelsOn() ? input.autoLabel : null;
 		let eventAt: number | null = null;
+		let inInbox = !input.spam;
+		let classify = false;
 		const stored = this.ctx.storage.transactionSync(() => {
 			const inserted = this.insertMessage({
 				id: newId("msg"),
@@ -535,11 +620,18 @@ export class MailboxDO extends DurableObject<Env> {
 				subjectFallback: !input.spam,
 				sentBy: null,
 			});
+			if (autoLabel) {
+				// The rule stage runs in the transaction of the message, so mail that skips the inbox never shows there.
+				const outcome = this.autoLabelAtDelivery(inserted.seq, autoLabel.ownerAddress, { mayArchive: true });
+				if (outcome === "archived") inInbox = false;
+				if (outcome === "queued") classify = true;
+			}
 			this.bump();
-			if (!input.spam) eventAt = this.queueInboxEvent();
+			if (inInbox) eventAt = this.queueInboxEvent();
 			return inserted;
 		});
-		if (!input.spam) this.signalInbox();
+		if (inInbox) this.signalInbox();
+		if (classify) await this.alarmBy(Date.now());
 		if (eventAt !== null) await this.alarmBy(eventAt);
 		return { status: "delivered", messageId: stored.id, threadId: stored.threadId };
 	}
@@ -697,8 +789,8 @@ export class MailboxDO extends DurableObject<Env> {
 			`INSERT INTO messages (id, thread_id, content_hash, raw_key, origin, message_id_header, subject, from_name,
 				from_addr, to_json, cc_json, bcc_json, reply_to_json, to_text, cc_text, bcc_text, participants, sent_date,
 				internal_date, snippet, text_body, html_body, body_truncated, size, has_attachments, attachments_json,
-				attachment_names, auth_json, sent_by_json)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING seq`,
+				attachment_names, auth_json, sent_by_json, signals_json)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING seq`,
 			m.id,
 			threadId,
 			m.contentHash,
@@ -728,6 +820,7 @@ export class MailboxDO extends DurableObject<Env> {
 			attachments.map((a) => a.filename).join(" "),
 			parsed.authentication ? JSON.stringify(parsed.authentication) : null,
 			m.sentBy ? JSON.stringify(m.sentBy) : null,
+			m.origin === "sent" ? null : JSON.stringify(parsed.signals),
 		)?.seq as number;
 		const refs = [...new Set([...parsed.references, ...(parsed.inReplyTo ? [parsed.inReplyTo] : [])])];
 		refs.forEach((ref, position) => {
@@ -967,10 +1060,12 @@ export class MailboxDO extends DurableObject<Env> {
 			"SELECT from_name, from_addr, snippet, origin, has_attachments FROM messages WHERE thread_id = ? ORDER BY internal_date, seq",
 			threadId,
 		);
-		const labels = this.all<{ label_id: string }>(
-			"SELECT DISTINCT ml.label_id FROM message_labels ml JOIN messages m ON m.seq = ml.message_seq WHERE m.thread_id = ?",
+		const labelRows = this.all<{ label_id: string; all_auto: number }>(
+			`SELECT ml.label_id, MIN(ml.auto IS NOT NULL) AS all_auto FROM message_labels ml
+			JOIN messages m ON m.seq = ml.message_seq WHERE m.thread_id = ? GROUP BY ml.label_id`,
 			threadId,
-		).map((row) => row.label_id);
+		);
+		const labels = labelRows.map((row) => row.label_id);
 		const participants = new Map<string, MailAddress>();
 		for (const message of messages) {
 			if (message.from_addr && !participants.has(message.from_addr)) {
@@ -984,6 +1079,7 @@ export class MailboxDO extends DurableObject<Env> {
 			participants: [...participants.values()].slice(0, 5),
 			messageCount: messages.length,
 			labels,
+			autoLabels: labelRows.filter((row) => row.all_auto === 1).map((row) => row.label_id),
 			hasAttachments: messages.some((message) => message.has_attachments === 1),
 			untrusted: messages.some((message) => message.origin === "external"),
 			lastMessageAt: lastDate,
@@ -1038,13 +1134,16 @@ export class MailboxDO extends DurableObject<Env> {
 		return this.toStored(row, row, this.labelsOf("m.seq = ?", row.seq), this.deliveryOf("m.seq = ?", row.seq));
 	}
 
-	private labelsOf(where: string, value: SqlStorageValue): Map<number, string[]> {
-		const labels = new Map<number, string[]>();
-		for (const row of this.all<{ message_seq: number; label_id: string }>(
-			`SELECT ml.message_seq, ml.label_id FROM message_labels ml JOIN messages m ON m.seq = ml.message_seq WHERE ${where}`,
+	private labelsOf(where: string, value: SqlStorageValue): Map<number, { all: string[]; auto: string[] }> {
+		const labels = new Map<number, { all: string[]; auto: string[] }>();
+		for (const row of this.all<{ message_seq: number; label_id: string; auto: string | null }>(
+			`SELECT ml.message_seq, ml.label_id, ml.auto FROM message_labels ml JOIN messages m ON m.seq = ml.message_seq WHERE ${where}`,
 			value,
 		)) {
-			labels.set(row.message_seq, [...(labels.get(row.message_seq) ?? []), row.label_id]);
+			const entry = labels.get(row.message_seq) ?? { all: [], auto: [] };
+			entry.all.push(row.label_id);
+			if (row.auto !== null) entry.auto.push(row.label_id);
+			labels.set(row.message_seq, entry);
 		}
 		return labels;
 	}
@@ -1075,7 +1174,7 @@ export class MailboxDO extends DurableObject<Env> {
 	private toStored(
 		row: MessageMetaRow,
 		body: { text_body: string | null; html_body: string | null } | null,
-		labels: Map<number, string[]>,
+		labels: Map<number, { all: string[]; auto: string[] }>,
 		delivery: Map<number, DeliveryRecord[]>,
 	): StoredMessage {
 		return {
@@ -1098,7 +1197,8 @@ export class MailboxDO extends DurableObject<Env> {
 			omitted: body === null,
 			attachments: JSON.parse(row.attachments_json) as StoredMessage["attachments"],
 			authentication: row.auth_json ? (JSON.parse(row.auth_json) as AuthenticationResults) : null,
-			labels: labels.get(row.seq) ?? [],
+			labels: labels.get(row.seq)?.all ?? [],
+			autoLabels: labels.get(row.seq)?.auto ?? [],
 			delivery: row.origin === "sent" ? (delivery.get(row.seq) ?? []) : null,
 			sentBy: row.sent_by_json ? (JSON.parse(row.sent_by_json) as SentBy) : null,
 		};
@@ -1224,6 +1324,8 @@ export class MailboxDO extends DurableObject<Env> {
 		this.ctx.storage.transactionSync(() => {
 			this.sql.exec("DELETE FROM message_labels WHERE label_id = ?", id);
 			this.sql.exec("DELETE FROM labels WHERE id = ?", id);
+			// An auto label without its user label cannot apply. A built-in one is off until a person turns it on again.
+			this.sql.exec("DELETE FROM auto_labels WHERE label_id = ?", id);
 			this.bump();
 		});
 		return { deleted: true };
@@ -1234,6 +1336,11 @@ export class MailboxDO extends DurableObject<Env> {
 		add: string[];
 		remove: string[];
 		dryRun: boolean;
+		/**
+		 * True when a person makes the change. A person who removes an auto label, or adds one, corrects auto
+		 * labels, and the mailbox learns from it. A change by an agent or a service account teaches nothing.
+		 */
+		learn?: boolean;
 	}): { threads_changed: number; messages_changed: number; dry_run: boolean } | Refusal {
 		for (const label of [...params.add, ...params.remove]) {
 			if (!this.one("SELECT 1 AS found FROM labels WHERE id = ?", label)) {
@@ -1263,8 +1370,23 @@ export class MailboxDO extends DurableObject<Env> {
 			}
 			if (changed) threadsChanged++;
 		}
-		if (!params.dryRun && changes.length > 0) {
+		const learning = !params.dryRun && params.learn === true && this.autoLabelsOn();
+		const corrections = learning ? this.correctionsOfChange(threadIds, params.add, params.remove) : [];
+		// A person who adds a label that auto labels applied confirms it: the mark goes.
+		const confirm = learning ? params.add.filter((label) => autoKeyOfLabel(this.sql, label) !== null) : [];
+		if (!params.dryRun && (changes.length > 0 || corrections.length > 0 || confirm.length > 0)) {
 			this.ctx.storage.transactionSync(() => {
+				const now = Date.now();
+				for (const correction of corrections) recordCorrection(this.sql, { ...correction, now });
+				for (const label of confirm) {
+					for (const threadId of threadIds) {
+						this.sql.exec(
+							"UPDATE message_labels SET auto = NULL WHERE label_id = ? AND message_seq IN (SELECT seq FROM messages WHERE thread_id = ?)",
+							label,
+							threadId,
+						);
+					}
+				}
 				for (const change of changes) {
 					for (const label of change.add) {
 						this.sql.exec(
@@ -1281,6 +1403,543 @@ export class MailboxDO extends DurableObject<Env> {
 			});
 		}
 		return { threads_changed: threadsChanged, messages_changed: changes.length, dry_run: params.dryRun };
+	}
+
+	// --- Auto labels ------------------------------------------------------------------------------
+
+	/** True when the members of this mailbox turned on auto labels. */
+	private autoLabelsOn(): boolean {
+		return this.meta(AUTO_LABEL_ENABLED_KEY) === "1";
+	}
+
+	/** Removes the Needs reply label from each message of a thread. */
+	private clearNeedsReply(threadId: string): void {
+		// Only while the auto label is on. A person who turned it off uses the label by hand.
+		const row = this.one<{ label_id: string }>(
+			"SELECT label_id FROM auto_labels WHERE key = 'needs_reply' AND enabled = 1",
+		);
+		if (!row) return;
+		this.sql.exec(
+			"DELETE FROM message_labels WHERE label_id = ? AND message_seq IN (SELECT seq FROM messages WHERE thread_id = ?)",
+			row.label_id,
+			threadId,
+		);
+	}
+
+	/** True when the mailbox sent a message in the thread of this message after it arrived. */
+	private repliedAfter(seq: number): boolean {
+		return (
+			this.one(
+				`SELECT 1 AS found FROM messages m JOIN messages s ON s.thread_id = m.thread_id
+				WHERE m.seq = ? AND s.origin = 'sent' AND s.seq > m.seq LIMIT 1`,
+				seq,
+			) !== null
+		);
+	}
+
+	/**
+	 * The corrections that a change by a person makes: a removed label that auto labels applied, or an added
+	 * label that is an auto label. The sender is the sender of the newest message that arrived in the thread.
+	 */
+	private correctionsOfChange(
+		threadIds: string[],
+		add: string[],
+		remove: string[],
+	): { sender: string; labelKey: string; action: "add" | "remove"; subject: string }[] {
+		const out: { sender: string; labelKey: string; action: "add" | "remove"; subject: string }[] = [];
+		for (const threadId of threadIds) {
+			const latest = this.one<{ from_addr: string | null; subject: string }>(
+				`SELECT from_addr, subject FROM messages WHERE thread_id = ? AND origin != 'sent'
+				ORDER BY internal_date DESC, seq DESC LIMIT 1`,
+				threadId,
+			);
+			if (!latest?.from_addr) continue;
+			for (const label of remove) {
+				const auto = autoKeyOfLabel(this.sql, label);
+				if (!auto) continue;
+				const marked = this.one(
+					`SELECT 1 AS found FROM message_labels ml JOIN messages m ON m.seq = ml.message_seq
+					WHERE m.thread_id = ? AND ml.label_id = ? AND ml.auto IS NOT NULL LIMIT 1`,
+					threadId,
+					label,
+				);
+				if (marked)
+					out.push({ sender: latest.from_addr, labelKey: auto.key, action: "remove", subject: latest.subject });
+			}
+			for (const label of add) {
+				const auto = autoKeyOfLabel(this.sql, label);
+				if (!auto?.enabled) continue;
+				// A label that a person applied to each message before teaches nothing new.
+				const missing = this.one(
+					`SELECT 1 AS found FROM messages m WHERE m.thread_id = ? AND NOT EXISTS (
+						SELECT 1 FROM message_labels ml WHERE ml.message_seq = m.seq AND ml.label_id = ? AND ml.auto IS NULL
+					) LIMIT 1`,
+					threadId,
+					label,
+				);
+				if (missing) out.push({ sender: latest.from_addr, labelKey: auto.key, action: "add", subject: latest.subject });
+			}
+		}
+		return out;
+	}
+
+	/** The rule decision for a stored message, with the facts of `facts`. */
+	private decideFor(
+		seq: number,
+		facts: MailFacts,
+		defs: LabelDef[],
+	): { decision: Decision; sender: string | null } | null {
+		const row = this.one<{ from_addr: string | null; signals_json: string | null }>(
+			"SELECT from_addr, signals_json FROM messages WHERE seq = ?",
+			seq,
+		);
+		if (!row) return null;
+		return {
+			sender: row.from_addr,
+			decision: decide({
+				signals: readSignals(row.signals_json),
+				facts,
+				enabled: defs,
+				corrections: correctionsOfSender(this.sql, row.from_addr),
+				sender: row.from_addr,
+			}),
+		};
+	}
+
+	/**
+	 * Adds the auto labels `keys` to one message with the mark `source`, and records that auto labels
+	 * examined it. With `mayArchive`, a label that skips the inbox removes INBOX. Returns true when INBOX went.
+	 */
+	private applyAutoLabelKeys(
+		seq: number,
+		keys: string[],
+		source: "rule" | "sender" | "model",
+		defs: LabelDef[],
+		archive: boolean,
+	): boolean {
+		const byKey = new Map(defs.map((def) => [def.key, def]));
+		for (const key of keys) {
+			const def = byKey.get(key);
+			if (!def) continue;
+			this.sql.exec(
+				"INSERT OR IGNORE INTO message_labels (message_seq, label_id, auto) VALUES (?, ?, ?)",
+				seq,
+				def.labelId,
+				source,
+			);
+		}
+		this.sql.exec("UPDATE messages SET auto_labeled_at = ? WHERE seq = ?", Date.now(), seq);
+		if (!archive) return false;
+		return (
+			this.sql.exec("DELETE FROM message_labels WHERE message_seq = ? AND label_id = 'INBOX'", seq).rowsWritten > 0
+		);
+	}
+
+	/**
+	 * The rule stage for one message, inside the caller's transaction. A final decision applies its labels
+	 * at once. An open one puts the message in the classifier outbox. With `mayArchive`, a rule label that
+	 * skips the inbox removes INBOX (only for new mail: a run never moves mail).
+	 */
+	private autoLabelAtDelivery(
+		seq: number,
+		ownerAddress: string,
+		options: { mayArchive: boolean },
+	): "none" | "labeled" | "archived" | "queued" {
+		const defs = enabledLabelDefs(this.sql);
+		const facts = messageFacts(this.sql, seq, ownerAddress);
+		if (defs.length === 0 || !facts) return "none";
+		const decided = this.decideFor(seq, facts, defs);
+		if (!decided) return "none";
+		const { decision } = decided;
+		if (decision.final) {
+			const keys = decision.labels.map((label) => label.key);
+			const source = decision.labels.some((label) => label.source === "sender") ? "sender" : "rule";
+			// Only mail from a proved sender skips the inbox. A forged sender cannot hide mail there.
+			const skip =
+				options.mayArchive && facts.authenticated && keys.some((key) => defs.find((def) => def.key === key)?.skipInbox);
+			const archived = this.applyAutoLabelKeys(seq, keys, source, defs, skip);
+			return archived ? "archived" : keys.length > 0 ? "labeled" : "none";
+		}
+		// The row keeps `mayArchive`, so the classifier stage of a run does not move mail out of the inbox.
+		this.sql.exec(
+			"INSERT OR REPLACE INTO autolabel_outbox (message_seq, sends, next_attempt_at, facts_json, may_archive) VALUES (?, 0, ?, ?, ?)",
+			seq,
+			Date.now(),
+			JSON.stringify(facts),
+			options.mayArchive ? 1 : 0,
+		);
+		return "queued";
+	}
+
+	/** The auto-label settings of the mailbox. */
+	autoLabelSettings(): Pick<AutoLabelSettings, "enabled" | "labels"> {
+		return settingsView(this.sql, this.autoLabelsOn());
+	}
+
+	/** Runs `change` in one transaction. A refusal that it throws rolls back each write. */
+	private changeAutoLabels(mailboxId: string, change: () => void): Refusal | null {
+		try {
+			this.ctx.storage.transactionSync(() => {
+				this.setMeta(AUTO_LABEL_MAILBOX_KEY, mailboxId);
+				change();
+				this.bump();
+			});
+			return null;
+		} catch (error) {
+			if (error instanceof AutoLabelRefusal) return error.refusal;
+			throw error;
+		}
+	}
+
+	updateAutoLabels(
+		mailboxId: string,
+		patch: {
+			enabled?: boolean | undefined;
+			labels?:
+				| {
+						key: string;
+						enabled?: boolean | undefined;
+						skip_inbox?: boolean | undefined;
+						description?: string | undefined;
+				  }[]
+				| undefined;
+		},
+	): Pick<AutoLabelSettings, "enabled" | "labels"> | Refusal {
+		const refusal = this.changeAutoLabels(mailboxId, () => {
+			const now = Date.now();
+			const check = (result: StoreRefusal | null) => {
+				if (result) throw new AutoLabelRefusal(result);
+			};
+			if (patch.enabled === true && this.meta(AUTO_LABEL_INITIALIZED_KEY) === null) {
+				// The first time, each built-in label is on.
+				for (const label of AUTO_LABELS_ORDER) check(enableBuiltin(this.sql, label, now));
+				this.setMeta(AUTO_LABEL_INITIALIZED_KEY, "1");
+			}
+			if (patch.enabled !== undefined) this.setMeta(AUTO_LABEL_ENABLED_KEY, patch.enabled ? "1" : "0");
+			for (const entry of patch.labels ?? []) {
+				const custom = entry.key.startsWith("alb_");
+				const row = this.one<{ kind: string }>("SELECT kind FROM auto_labels WHERE key = ?", entry.key);
+				if (custom && row?.kind !== "custom") {
+					check({ error: { code: "not_found", message: `No custom auto label has the id ${entry.key}.` } });
+				}
+				if (!custom && entry.description !== undefined) {
+					check({ error: { code: "invalid", message: "A built-in auto label has a fixed description." } });
+				}
+				if (!custom && entry.enabled === true) check(enableBuiltin(this.sql, entry.key, now));
+				else if (entry.enabled !== undefined) {
+					this.sql.exec("UPDATE auto_labels SET enabled = ? WHERE key = ?", entry.enabled ? 1 : 0, entry.key);
+				}
+				if (entry.skip_inbox !== undefined || entry.description !== undefined) {
+					if (!this.one("SELECT 1 AS found FROM auto_labels WHERE key = ?", entry.key)) {
+						check({ error: { code: "invalid", message: `Turn on the auto label ${entry.key} first.` } });
+					}
+					if (entry.skip_inbox !== undefined) {
+						this.sql.exec("UPDATE auto_labels SET skip_inbox = ? WHERE key = ?", entry.skip_inbox ? 1 : 0, entry.key);
+					}
+					if (entry.description !== undefined) {
+						this.sql.exec("UPDATE auto_labels SET description = ? WHERE key = ?", entry.description, entry.key);
+					}
+				}
+			}
+		});
+		return refusal ?? this.autoLabelSettings();
+	}
+
+	createAutoLabel(
+		mailboxId: string,
+		input: { name: string; description: string; skipInbox: boolean },
+	): Pick<AutoLabelSettings, "enabled" | "labels"> | Refusal {
+		const refusal = this.changeAutoLabels(mailboxId, () => {
+			const count = this.one<{ n: number }>("SELECT COUNT(*) AS n FROM auto_labels WHERE kind = 'custom'")?.n ?? 0;
+			if (count >= AUTO_LABEL_LIMITS.custom) {
+				throw new AutoLabelRefusal({
+					error: {
+						code: "invalid",
+						message: `A mailbox can have at most ${AUTO_LABEL_LIMITS.custom} custom auto labels.`,
+					},
+				});
+			}
+			const folded = foldLabelName(input.name);
+			if (AUTO_LABELS_NAMES.has(folded)) {
+				throw new AutoLabelRefusal({
+					error: { code: "conflict", message: `"${input.name}" is the name of a built-in auto label.` },
+				});
+			}
+			const ensured = ensureUserLabel(this.sql, input.name, Date.now());
+			if ("error" in ensured) throw new AutoLabelRefusal(ensured);
+			if (this.one("SELECT 1 AS found FROM auto_labels WHERE label_id = ?", ensured.id)) {
+				throw new AutoLabelRefusal({
+					error: { code: "conflict", message: `An auto label named "${input.name}" exists.` },
+				});
+			}
+			this.sql.exec(
+				"INSERT INTO auto_labels (key, kind, label_id, description, enabled, skip_inbox, created_at) VALUES (?, 'custom', ?, ?, 1, ?, ?)",
+				newId("alb"),
+				ensured.id,
+				input.description,
+				input.skipInbox ? 1 : 0,
+				Date.now(),
+			);
+		});
+		return refusal ?? this.autoLabelSettings();
+	}
+
+	/** Deletes a custom auto label. Its user label and its messages stay, without the auto mark. */
+	deleteAutoLabel(mailboxId: string, key: string): { deleted: true } | Refusal {
+		const row = this.one<{ label_id: string }>(
+			"SELECT label_id FROM auto_labels WHERE key = ? AND kind = 'custom'",
+			key,
+		);
+		if (!row) return { error: { code: "not_found", message: "No custom auto label has that id." } };
+		const refusal = this.changeAutoLabels(mailboxId, () => {
+			this.sql.exec("DELETE FROM auto_labels WHERE key = ?", key);
+			this.sql.exec("UPDATE message_labels SET auto = NULL WHERE label_id = ?", row.label_id);
+			this.sql.exec("DELETE FROM label_corrections WHERE label_key = ?", key);
+		});
+		return refusal ?? { deleted: true };
+	}
+
+	/**
+	 * Applies auto labels to the newest inbox messages that auto labels did not examine. Rules apply at once,
+	 * the rest go to the classifier outbox. A run never removes INBOX.
+	 */
+	async runAutoLabels(
+		mailboxId: string,
+		ownerAddress: string,
+		limit: number,
+		dryRun: boolean,
+	): Promise<AutoLabelRun | Refusal> {
+		if (!this.autoLabelsOn()) {
+			return { error: { code: "conflict", message: "Auto labels are off in this mailbox. Turn them on first." } };
+		}
+		const seqs = this.all<{ seq: number }>(
+			`SELECT m.seq FROM messages m
+			JOIN message_labels inbox ON inbox.message_seq = m.seq AND inbox.label_id = 'INBOX'
+			WHERE m.origin != 'sent' AND m.auto_labeled_at IS NULL
+			AND NOT EXISTS (SELECT 1 FROM autolabel_outbox o WHERE o.message_seq = m.seq)
+			AND NOT EXISTS (SELECT 1 FROM message_labels x WHERE x.message_seq = m.seq AND x.label_id IN ('SPAM', 'TRASH'))
+			ORDER BY m.internal_date DESC, m.seq DESC LIMIT ?`,
+			limit,
+		).map((row) => row.seq);
+		if (dryRun) return { messages: seqs.length, labeled_by_rules: 0, queued: 0, dry_run: true };
+		let labeled = 0;
+		let queued = 0;
+		this.ctx.storage.transactionSync(() => {
+			this.setMeta(AUTO_LABEL_MAILBOX_KEY, mailboxId);
+			for (const seq of seqs) {
+				const outcome = this.autoLabelAtDelivery(seq, ownerAddress, { mayArchive: false });
+				if (outcome === "labeled") labeled++;
+				if (outcome === "queued") queued++;
+				if (outcome === "none") this.sql.exec("UPDATE messages SET auto_labeled_at = ? WHERE seq = ?", Date.now(), seq);
+			}
+			this.bump();
+		});
+		if (queued > 0) await this.alarmBy(Date.now());
+		return { messages: seqs.length, labeled_by_rules: labeled, queued, dry_run: false };
+	}
+
+	/**
+	 * What the classifier needs for one message in the outbox, or null when the message needs no classifier
+	 * call: it is not in the outbox, auto labels are off, it moved to spam or trash, or the rules decide now
+	 * (for example after a new correction). In the last two cases the message leaves the outbox here.
+	 */
+	autoLabelJob(messageId: string): AutoLabelContext | null {
+		const row = this.one<{
+			seq: number;
+			from_name: string | null;
+			from_addr: string | null;
+			subject: string;
+			text_body: string | null;
+			html_body: string | null;
+			attachments_json: string;
+			signals_json: string | null;
+			facts_json: string;
+			may_archive: number;
+		}>(
+			`SELECT m.seq, m.from_name, m.from_addr, m.subject, m.text_body, m.html_body, m.attachments_json, m.signals_json,
+				o.facts_json, o.may_archive
+			FROM autolabel_outbox o JOIN messages m ON m.seq = o.message_seq WHERE m.id = ?`,
+			messageId,
+		);
+		if (!row) return null;
+		const defs = enabledLabelDefs(this.sql);
+		const facts = readFacts(row.facts_json);
+		const decided = this.decideFor(row.seq, facts, defs);
+		const gone = this.one(
+			"SELECT 1 AS found FROM message_labels WHERE message_seq = ? AND label_id IN ('SPAM', 'TRASH')",
+			row.seq,
+		);
+		if (!this.autoLabelsOn() || defs.length === 0 || !decided || gone || decided.decision.final) {
+			this.ctx.storage.transactionSync(() => {
+				if (decided?.decision.final && this.autoLabelsOn() && !gone) {
+					const keys = decided.decision.labels.map((label) => label.key);
+					const source = decided.decision.labels.some((label) => label.source === "sender") ? "sender" : "rule";
+					this.applyAutoLabelKeys(
+						row.seq,
+						keys,
+						source,
+						defs,
+						row.may_archive === 1 &&
+							facts.authenticated &&
+							keys.some((key) => defs.find((d) => d.key === key)?.skipInbox),
+					);
+				} else {
+					this.sql.exec("UPDATE messages SET auto_labeled_at = ? WHERE seq = ?", Date.now(), row.seq);
+				}
+				this.sql.exec("DELETE FROM autolabel_outbox WHERE message_seq = ?", row.seq);
+				this.bump();
+			});
+			return null;
+		}
+		// The mailbox answered in the thread after this message, so the message does not need a reply any more.
+		const candidates = this.repliedAfter(row.seq)
+			? decided.decision.candidates.filter((key) => key !== "needs_reply")
+			: decided.decision.candidates;
+		if (candidates.length === 0) {
+			this.finishAutoLabel(messageId);
+			return null;
+		}
+		const attachments = (JSON.parse(row.attachments_json) as { filename: string; mimeType: string }[]).map((a) => ({
+			filename: a.filename,
+			mimeType: a.mimeType,
+		}));
+		return {
+			prompt: {
+				facts,
+				signals: readSignals(row.signals_json),
+				from: row.from_addr ? { name: row.from_name, address: row.from_addr } : null,
+				subject: row.subject,
+				text: row.text_body ?? (row.html_body ? htmlToText(row.html_body) : ""),
+				attachments,
+				labels: defs.filter((def) => candidates.includes(def.key)),
+				corrections: exampleCorrections(this.sql, row.from_addr, PROMPT_CORRECTIONS),
+			},
+			decision: { candidates, needsReplyStrict: decided.decision.needsReplyStrict },
+		};
+	}
+
+	/**
+	 * Applies the picks of the classifier to a message in the outbox, and takes it out of the outbox. Only
+	 * the candidates of the rules count (`resolvePicks`), so an answer can only choose labels that are on in
+	 * this mailbox. A second call for the same message does nothing. Returns the label ids that it applied.
+	 */
+	applyAutoLabels(messageId: string, picks: LabelPick[]): { applied: string[]; archived: boolean } {
+		const row = this.one<{ seq: number; facts_json: string; may_archive: number }>(
+			`SELECT m.seq, o.facts_json, o.may_archive FROM autolabel_outbox o JOIN messages m ON m.seq = o.message_seq
+			WHERE m.id = ?`,
+			messageId,
+		);
+		if (!row) return { applied: [], archived: false };
+		const defs = enabledLabelDefs(this.sql);
+		// A person can move the message to Spam or Trash while the classifier works. It gets no label then.
+		const gone = this.one(
+			"SELECT 1 AS found FROM message_labels WHERE message_seq = ? AND label_id IN ('SPAM', 'TRASH')",
+			row.seq,
+		);
+		const facts = readFacts(row.facts_json);
+		const decided = this.autoLabelsOn() && !gone ? this.decideFor(row.seq, facts, defs) : null;
+		// A reply from the mailbox can come while the classifier works. `send()` removed Needs reply then, and
+		// a late answer of the classifier must not add it again.
+		const replied = this.repliedAfter(row.seq);
+		const resolved =
+			decided && !decided.decision.final
+				? resolvePicks(
+						picks,
+						{
+							...decided.decision,
+							candidates: decided.decision.candidates.filter((key) => !replied || key !== "needs_reply"),
+						},
+						defs,
+					)
+				: { keys: decided?.decision.labels.map((label) => label.key) ?? [], skipInbox: false };
+		const source = decided && !decided.decision.final ? "model" : "rule";
+		let archived = false;
+		this.ctx.storage.transactionSync(() => {
+			archived = this.applyAutoLabelKeys(
+				row.seq,
+				resolved.keys,
+				source,
+				defs,
+				row.may_archive === 1 && facts.authenticated && resolved.skipInbox,
+			);
+			this.sql.exec("DELETE FROM autolabel_outbox WHERE message_seq = ?", row.seq);
+			this.bump();
+		});
+		const byKey = new Map(defs.map((def) => [def.key, def.labelId]));
+		return { applied: resolved.keys.flatMap((key) => byKey.get(key) ?? []), archived };
+	}
+
+	/**
+	 * Turns off auto labels and empties the classifier outbox. The Worker calls it when it deletes the
+	 * principal of this mailbox: from then on, `autoLabelJob` gives nothing to a job that waits in the queue,
+	 * so no mail of the deleted mailbox goes to the gateway. Only a call that already read its message can
+	 * still finish.
+	 */
+	closeAutoLabels(): void {
+		this.ctx.storage.transactionSync(() => {
+			this.setMeta(AUTO_LABEL_ENABLED_KEY, "0");
+			this.sql.exec("DELETE FROM autolabel_outbox");
+		});
+	}
+
+	/** Takes a message out of the classifier outbox with no label: AI cannot take the call. */
+	finishAutoLabel(messageId: string): void {
+		const row = this.one<{ seq: number }>(
+			"SELECT m.seq FROM autolabel_outbox o JOIN messages m ON m.seq = o.message_seq WHERE m.id = ?",
+			messageId,
+		);
+		if (!row) return;
+		this.ctx.storage.transactionSync(() => {
+			this.sql.exec("UPDATE messages SET auto_labeled_at = ? WHERE seq = ?", Date.now(), row.seq);
+			this.sql.exec("DELETE FROM autolabel_outbox WHERE message_seq = ?", row.seq);
+		});
+	}
+
+	/**
+	 * Puts the due messages of the classifier outbox on the queue soldock-mail-autolabel, with ids only. A
+	 * message whose result does not come is sent again after `AUTOLABEL_RESEND_MS`, up to
+	 * `AUTOLABEL_MAX_SENDS` times. Then it leaves the outbox with no label.
+	 */
+	private async drainAutoLabels(): Promise<void> {
+		const now = Date.now();
+		const due = this.all<{ message_seq: number; sends: number; id: string | null }>(
+			`SELECT o.message_seq, o.sends, m.id FROM autolabel_outbox o LEFT JOIN messages m ON m.seq = o.message_seq
+			WHERE o.next_attempt_at <= ? ORDER BY o.next_attempt_at LIMIT ?`,
+			now,
+			AUTOLABEL_BATCH,
+		);
+		const mailboxId = this.meta(AUTO_LABEL_MAILBOX_KEY);
+		for (const row of due) {
+			if (this.meta("delivery_pause")) return;
+			if (row.id === null || mailboxId === null || row.sends >= AUTOLABEL_MAX_SENDS) {
+				if (row.id !== null && row.sends >= AUTOLABEL_MAX_SENDS) {
+					log("warn", "auto label gave up: no result from the classifier", { sends: row.sends });
+				}
+				this.ctx.storage.transactionSync(() => {
+					this.sql.exec("UPDATE messages SET auto_labeled_at = ? WHERE seq = ?", now, row.message_seq);
+					this.sql.exec("DELETE FROM autolabel_outbox WHERE message_seq = ?", row.message_seq);
+				});
+				continue;
+			}
+			const job: AutoLabelJob = { v: 1, mailboxId, messageId: row.id };
+			try {
+				await this.env.MAIL_AUTOLABEL.send(job);
+				this.sql.exec(
+					"UPDATE autolabel_outbox SET sends = sends + 1, next_attempt_at = ? WHERE message_seq = ?",
+					Date.now() + AUTOLABEL_RESEND_MS,
+					row.message_seq,
+				);
+			} catch (error) {
+				log("warn", "auto label job could not be queued; retrying", {
+					error: error instanceof Error ? error.message : String(error),
+				});
+				this.sql.exec(
+					"UPDATE autolabel_outbox SET next_attempt_at = ? WHERE message_seq = ?",
+					Date.now() + backoff(row.sends + 1),
+					row.message_seq,
+				);
+			}
+		}
 	}
 
 	// --- Sending --------------------------------------------------------------------------------
@@ -1337,6 +1996,8 @@ export class MailboxDO extends DurableObject<Env> {
 				sentBy: input.sentBy,
 			});
 			this.recordRecipients([...input.parsed.to, ...input.parsed.cc, ...input.bcc], input.internalDate);
+			// A reply answers the thread, so its Needs reply label goes.
+			if (this.autoLabelsOn()) this.clearNeedsReply(stored.threadId);
 			const recipients: DeliveryRecord[] = [];
 			for (const recipient of input.recipients) {
 				const status = recipient.self ? "delivered" : "queued";
@@ -1403,11 +2064,13 @@ export class MailboxDO extends DurableObject<Env> {
 		// Events first: each one is one quick queue send, and a slow outbox must not delay them.
 		await this.drainEvents();
 		await this.drainOutbox();
+		await this.drainAutoLabels();
 		if (this.meta("delivery_pause")) return;
 		const next =
 			this.one<{ at: number | null }>(
 				`SELECT MIN(at) AS at FROM (SELECT MIN(next_attempt_at) AS at FROM outbox
-				UNION ALL SELECT MIN(next_attempt_at) FROM event_outbox)`,
+				UNION ALL SELECT MIN(next_attempt_at) FROM event_outbox
+				UNION ALL SELECT MIN(next_attempt_at) FROM autolabel_outbox)`,
 			)?.at ?? null;
 		if (next !== null) await this.ctx.storage.setAlarm(Math.max(next, Date.now()));
 	}
@@ -1444,6 +2107,9 @@ export class MailboxDO extends DurableObject<Env> {
 			);
 			this.sql.exec("DELETE FROM outbox");
 			this.sql.exec("DELETE FROM event_outbox");
+			this.sql.exec("DELETE FROM autolabel_outbox");
+			// The mail of the old organization never goes to the classifier again.
+			this.setMeta(AUTO_LABEL_ENABLED_KEY, "0");
 			this.sql.exec("DELETE FROM meta WHERE key IN (?, ?)", EVENTS_MAILBOX_KEY, EVENTS_LAST_KEY);
 			this.bump();
 		});

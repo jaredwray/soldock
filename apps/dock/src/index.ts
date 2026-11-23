@@ -3,7 +3,13 @@
 import { createApp } from "./app.ts";
 import { CHAT_PREVIEW_QUEUE, CHAT_PUSH_QUEUE, handleChatPushBatch, handleLinkPreviewBatch } from "./chat/index.ts";
 import { events, handlers, watchers } from "./handlers.ts";
-import { handleEmail, handleInboundBatch, MAIL_INBOUND_QUEUE } from "./mail/index.ts";
+import {
+	handleAutoLabelBatch,
+	handleEmail,
+	handleInboundBatch,
+	MAIL_AUTOLABEL_QUEUE,
+	MAIL_INBOUND_QUEUE,
+} from "./mail/index.ts";
 import { log } from "./platform/index.ts";
 import { isWorkerPath } from "./routes.ts";
 import { runScheduled } from "./scheduled.ts";
@@ -47,6 +53,10 @@ export default {
 		}
 		if (batch.queue === CHAT_PUSH_QUEUE) {
 			await handleChatPushBatch(batch, env);
+			return;
+		}
+		if (batch.queue === MAIL_AUTOLABEL_QUEUE) {
+			await handleAutoLabelBatch(batch, env);
 			return;
 		}
 		// A queue without a consumer here. Acknowledge so nothing redelivers forever.

@@ -1,6 +1,6 @@
 # End-to-end tests
 
-> Status: **started**. The harness runs on each pull request. The Chat flows of layer 2, the files of a chat message, the search of Chat, the webhook check boxes, the reload after a deploy, the images of a doc, the download of a doc, a paste of Markdown into a doc, the service accounts of Admin, a new person or agent in Admin and the member scopes of a shared mailbox have tests.
+> Status: **started**. The harness runs on each pull request. The Chat flows of layer 2, the files of a chat message, the search of Chat, the webhook check boxes, the reload after a deploy, the images of a doc, the download of a doc, a paste of Markdown into a doc, the service accounts of Admin, a new person or agent in Admin, the member scopes of a shared mailbox, Admin › AI and inbox auto labels have tests.
 > The run after a deploy, and the other flows below, are not built yet.
 
 Playwright tests run in two places, both in GitHub Actions:
@@ -50,6 +50,8 @@ pnpm e2e
 | [`tests/docsDownload.spec.ts`](tests/docsDownload.spec.ts) | The **Download** menu of a doc names the format. The browser gets a file with the name `<name>.md`, the type `text/markdown` and the Markdown of the doc |
 | [`tests/docsImages.spec.ts`](tests/docsImages.spec.ts) | A dropped image file shows, goes into the doc and stays after a reload. The image toolbar: the layout, the side, the size, the alt text, the caption, Undo and **Remove image**. A corner changes the size. The crop dialog with the keyboard. A pasted picture, and a picture in pasted HTML. A picture with a web address goes through the server, and a failure removes it. **Insert image** from this computer and from Drive. A file that is not an image. A viewer. A copy of an image from one doc to a different doc. The doc is not saved while an image uploads |
 | [`tests/docsMarkdown.spec.ts`](tests/docsMarkdown.spec.ts) | Pasted Markdown gets its formats, and the doc saves them. One Undo gives the text back, and a second Undo removes the paste. A paste with Shift keeps the text. A copy of a Markdown file from VS Code gets its formats. A paste into a code block keeps the text |
+| [`tests/aiAdmin.spec.ts`](tests/aiAdmin.spec.ts) | An admin connects the AI Gateway in **Admin › AI**, allows a model, turns on AI and inbox auto labels, and sets the budget. The values stay after a reload. Without the token, the page says that AI makes no calls. A member has no AI section |
+| [`tests/autoLabels.spec.ts`](tests/autoLabels.spec.ts) | A person turns on auto labels for their mailbox. A calendar invitation gets **Meeting** from the rules, with the auto mark in the list and in the thread. The person removes the label from the thread, and a toast says that auto labels learn from it |
 | [`tests/newVersion.spec.ts`](tests/newVersion.spec.ts) | A page chunk that a deploy removed: the page reloads one time and shows Drive of the new version. A person who goes back to Mail before the version check ends stays on Mail, and the reload waits until Drive shows again. A page chunk that does not load in the current version: the page asks for a reload, and does not reload by itself |
 
 The first flows to cover, because they are tested by hand only:

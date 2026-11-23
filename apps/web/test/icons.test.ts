@@ -6,6 +6,7 @@ import { Icon, type IconName } from "../src/lib/icons.tsx";
 // The Iconoir file of each icon. The files in src/lib/iconoir are copies from iconoir 7.12.1.
 const FILES: Record<IconName, string> = {
 	menu: "menu",
+	sparks: "sparks",
 	search: "search",
 	star: "star",
 	archive: "archive",

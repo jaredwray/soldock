@@ -35,6 +35,8 @@ interface SidebarProps {
 	open: boolean;
 	onCompose: () => void;
 	onNewLabel: () => void;
+	/** Opens the auto-label settings of the open mailbox. */
+	onAutoLabels: () => void;
 	onDeleteLabel: (label: Label) => void;
 	onClose: () => void;
 }
@@ -55,6 +57,7 @@ export function Sidebar({
 	open,
 	onCompose,
 	onNewLabel,
+	onAutoLabels,
 	onDeleteLabel,
 	onClose,
 }: SidebarProps) {
@@ -85,6 +88,7 @@ export function Sidebar({
 			nested={nested}
 			editable={canModify}
 			onNewLabel={onNewLabel}
+			onAutoLabels={onAutoLabels}
 			onDeleteLabel={onDeleteLabel}
 		/>
 	);
@@ -215,6 +219,7 @@ function MailboxContents({
 	nested,
 	editable,
 	onNewLabel,
+	onAutoLabels,
 	onDeleteLabel,
 }: {
 	mailboxId: string | null;
@@ -227,6 +232,7 @@ function MailboxContents({
 	/** True when the person can add and delete labels here. */
 	editable: boolean;
 	onNewLabel?: () => void;
+	onAutoLabels?: () => void;
 	onDeleteLabel?: (label: Label) => void;
 }) {
 	const byId = new Map((labels ?? []).map((label) => [label.id, label]));
@@ -260,6 +266,17 @@ function MailboxContents({
 			</ul>
 			<div className={nested ? "nav-section nav-section-nested" : "nav-section"}>
 				<Heading className="nav-heading">Labels</Heading>
+				{editable && onAutoLabels && (
+					<button
+						type="button"
+						className="icon-button icon-button-small nav-heading-action"
+						aria-label="Auto labels"
+						title="Auto labels"
+						onClick={onAutoLabels}
+					>
+						<Icon name="sparks" size={15} />
+					</button>
+				)}
 				{editable && onNewLabel && (
 					<button
 						type="button"

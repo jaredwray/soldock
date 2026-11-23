@@ -6,6 +6,7 @@ import { useToast } from "../../lib/toast.tsx";
 import { useOnChange } from "../../lib/useOnChange.ts";
 import { isAgentMailbox, type MailView, viewPath } from "../../routes.ts";
 import { useSession } from "../auth/session.tsx";
+import { AutoLabelsDialog } from "./AutoLabelsDialog.tsx";
 import type { SendResult } from "./Composer.tsx";
 import { Composer, usePreloadComposer } from "./ComposerLoader.tsx";
 import { type Draft, newDraft } from "./compose.ts";
@@ -18,7 +19,12 @@ import { ShortcutHelp } from "./ShortcutHelp.tsx";
 import { Sidebar } from "./Sidebar.tsx";
 import { viewQuery, viewTitle } from "./views.ts";
 
-type MailDialog = { type: "help" } | { type: "new-label" } | { type: "delete-label"; label: Label } | null;
+type MailDialog =
+	| { type: "help" }
+	| { type: "new-label" }
+	| { type: "auto-labels" }
+	| { type: "delete-label"; label: Label }
+	| null;
 
 interface MailAppProps {
 	route: { mailboxId: string | null; view: MailView; threadId: string | null };
@@ -83,7 +89,7 @@ export function MailApp({ route, mailboxes, expandedMailboxes, onSetExpanded, na
 
 	const compose = useCallback(
 		(next?: Draft) => {
-			// Nobody sends from the mailbox of an agent except the agent. A member of a shared mailbox needs mail.send.
+			// Nobody sends from the mailbox of an agent except the agent.
 			if (!rights.send) return;
 			closeNavRef.current();
 			setDraft(next ?? newDraft());
@@ -124,6 +130,7 @@ export function MailApp({ route, mailboxes, expandedMailboxes, onSetExpanded, na
 						open={navOpen}
 						onCompose={() => compose()}
 						onNewLabel={() => setDialog({ type: "new-label" })}
+						onAutoLabels={() => setDialog({ type: "auto-labels" })}
 						onDeleteLabel={(label) => setDialog({ type: "delete-label", label })}
 						onClose={onCloseNav}
 					/>
@@ -153,6 +160,9 @@ export function MailApp({ route, mailboxes, expandedMailboxes, onSetExpanded, na
 						/>
 					)}
 					{dialog?.type === "help" && <ShortcutHelp onClose={() => setDialog(null)} />}
+					{dialog?.type === "auto-labels" && (
+						<AutoLabelsDialog team={mailboxId !== null} onClose={() => setDialog(null)} onChanged={onChanged} />
+					)}
 					{dialog?.type === "new-label" && (
 						<NewLabelDialog
 							onClose={() => setDialog(null)}

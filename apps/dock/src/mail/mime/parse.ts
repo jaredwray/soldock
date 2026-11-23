@@ -1,4 +1,5 @@
 import PostalMime, { type Address as PostalAddress } from "postal-mime";
+import { extractSignals, type MailSignals } from "../autolabel/signals.ts";
 
 export interface MailAddress {
 	name: string | null;
@@ -35,6 +36,8 @@ export interface ParsedMail {
 	html: string | null;
 	attachments: AttachmentMeta[];
 	authentication: AuthenticationResults | null;
+	/** Flags from the headers and the parts, for the rules of auto labels. */
+	signals: MailSignals;
 }
 
 /** Threading needs the root and the recent references. Long chains keep the first and the last ones. */
@@ -132,6 +135,7 @@ export async function parseMail(raw: Uint8Array | ArrayBuffer, options: { authse
 			inline: attachment.disposition === "inline" || attachment.related === true,
 		})),
 		authentication: readAuthenticationResults(email.headers, options.authservId),
+		signals: extractSignals(email.headers, email.attachments, flatten(email.from)[0]?.address ?? null),
 	};
 }
 

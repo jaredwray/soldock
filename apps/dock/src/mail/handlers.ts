@@ -6,6 +6,7 @@ import {
 	mailboxMemberScopes,
 	operations,
 } from "@asterra/contracts";
+import { autoLabelUnavailableReason } from "../ai/index.ts";
 import {
 	agentMailboxes,
 	agentMailboxFor,
@@ -43,6 +44,11 @@ type MailOperation =
 	| "mail.list_mailboxes"
 	| "mail.get_settings"
 	| "mail.update_settings"
+	| "mail.get_auto_labels"
+	| "mail.update_auto_labels"
+	| "mail.create_auto_label"
+	| "mail.delete_auto_label"
+	| "mail.run_auto_labels"
 	| "mail.get_profile"
 	| "mail.list_labels"
 	| "mail.create_label"
@@ -176,6 +182,7 @@ async function toMessage(stored: StoredMessage): Promise<Message> {
 		date: iso(stored.sentDate),
 		received_at: iso(stored.internalDate),
 		label_ids: stored.labels,
+		auto_label_ids: stored.autoLabels,
 		snippet: stored.snippet,
 		origin: stored.origin,
 		untrusted: stored.origin === "external",
@@ -278,6 +285,52 @@ export const mailHandlers: Pick<HandlerMap<CallContext>, MailOperation> = {
 		return mailboxStub(call.env, call.caller.id).updateSettings(input);
 	},
 
+	async "mail.get_auto_labels"(call, input) {
+		const { record, box } = await openMailbox(call, input.mailbox_id, "mail.get_auto_labels");
+		const [settings, reason] = await Promise.all([box.autoLabelSettings(), autoLabelUnavailableReason(call.env)]);
+		auditAgentRead(call, record, "mail.get_auto_labels", record.id);
+		return { mailbox_id: record.id, ...settings, available: reason === null, unavailable_reason: reason };
+	},
+
+	async "mail.update_auto_labels"(call, input) {
+		const { record, box } = await openMailbox(call, input.mailbox_id, "mail.update_auto_labels");
+		const settings = accept(await box.updateAutoLabels(record.id, { enabled: input.enabled, labels: input.labels }));
+		auditOk(call, record, "mail.update_auto_labels", record.id);
+		const reason = await autoLabelUnavailableReason(call.env);
+		return { mailbox_id: record.id, ...settings, available: reason === null, unavailable_reason: reason };
+	},
+
+	async "mail.create_auto_label"(call, input) {
+		const { record, box } = await openMailbox(call, input.mailbox_id, "mail.create_auto_label");
+		const settings = accept(
+			await box.createAutoLabel(record.id, {
+				name: input.name,
+				description: input.description,
+				skipInbox: input.skip_inbox,
+			}),
+		);
+		auditOk(call, record, "mail.create_auto_label", record.id);
+		const reason = await autoLabelUnavailableReason(call.env);
+		return { mailbox_id: record.id, ...settings, available: reason === null, unavailable_reason: reason };
+	},
+
+	async "mail.delete_auto_label"(call, input) {
+		const { record, box } = await openMailbox(call, input.mailbox_id, "mail.delete_auto_label");
+		const result = accept(await box.deleteAutoLabel(record.id, input.auto_label_id));
+		auditOk(call, record, "mail.delete_auto_label", input.auto_label_id);
+		return result;
+	},
+
+	async "mail.run_auto_labels"(call, input) {
+		const { record, box } = await openMailbox(call, input.mailbox_id, "mail.run_auto_labels");
+		if ((await autoLabelUnavailableReason(call.env)) !== null) {
+			throw new OperationError("conflict", "An owner or an admin must turn on AI and inbox auto labels first.");
+		}
+		const result = accept(await box.runAutoLabels(record.id, record.address, input.limit, input.dry_run));
+		if (!input.dry_run) auditOk(call, record, "mail.run_auto_labels", record.id);
+		return result;
+	},
+
 	async "mail.get_profile"(call, input) {
 		const { record, box } = await openMailbox(call, input.mailbox_id, "mail.get_profile");
 		const profile = await box.profile();
@@ -345,6 +398,7 @@ export const mailHandlers: Pick<HandlerMap<CallContext>, MailOperation> = {
 				starred: thread.labels.includes("STARRED"),
 				has_attachments: thread.hasAttachments,
 				label_ids: thread.labels,
+				auto_label_ids: thread.autoLabels,
 				last_message_at: iso(thread.lastMessageAt),
 				untrusted: thread.untrusted,
 			})),
@@ -358,10 +412,15 @@ export const mailHandlers: Pick<HandlerMap<CallContext>, MailOperation> = {
 		if (!thread) throw new OperationError("not_found", "No thread has that id.");
 		auditAgentRead(call, record, "mail.get_thread", input.thread_id);
 		const messages = await Promise.all(thread.messages.map(toMessage));
+		const labelIds = [...new Set(messages.flatMap((m) => m.label_ids))];
 		return {
 			id: thread.id,
 			subject: thread.subject,
-			label_ids: [...new Set(messages.flatMap((m) => m.label_ids))],
+			label_ids: labelIds,
+			// A label of the thread is an auto label when auto labels applied it to each message that has it.
+			auto_label_ids: labelIds.filter((id) =>
+				messages.every((m) => !m.label_ids.includes(id) || m.auto_label_ids.includes(id)),
+			),
 			untrusted: messages.some((m) => m.untrusted),
 			messages,
 		};
@@ -383,6 +442,8 @@ export const mailHandlers: Pick<HandlerMap<CallContext>, MailOperation> = {
 				add: input.add_label_ids,
 				remove: input.remove_label_ids,
 				dryRun: input.dry_run,
+				// Auto labels learn from the changes of a person only.
+				learn: call.caller.kind === "human",
 			}),
 		);
 		if (!input.dry_run) auditOk(call, record, "mail.modify_threads", input.thread_ids.join(","));
