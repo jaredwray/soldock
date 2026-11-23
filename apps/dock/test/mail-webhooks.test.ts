@@ -754,9 +754,10 @@ describe("the webhook migration", () => {
 		const scope = `${domain}.webhooks` as const;
 		const { api_key: narrow } = await ada.call("account.create_api_key", { label: "narrow", scopes: ["mail.read"] });
 		const withoutNewScope = `json_remove(scopes, (SELECT '$[' || key || ']' FROM json_each(scopes) WHERE value = '${scope}'))`;
-		await env.DIRECTORY.prepare(`UPDATE api_keys SET scopes = ${withoutNewScope} WHERE principal_id IN (?, ?)`)
-			.bind(owner.id, bot.id)
+		await env.DIRECTORY.prepare(`UPDATE api_keys SET scopes = ${withoutNewScope} WHERE principal_id = ?`)
+			.bind(owner.id)
 			.run();
+		await owner.call("directory.set_agent_access", { principal_id: bot.id, scopes: ["account.read", "mail.read"] });
 		const list = domain === "mail" ? "mail.list_webhook_subscriptions" : "chat.list_webhook_subscriptions";
 		expect(await codeOf(owner.call(list))).toBe("forbidden");
 
@@ -767,8 +768,8 @@ describe("the webhook migration", () => {
 		}
 		expect((await owner.call("account.whoami")).scopes).toContain(scope);
 		expect((await owner.call(list)).subscriptions).toEqual([]);
-		// An agent key and a narrow key keep their scopes.
-		expect((await bot.call("account.whoami")).scopes).not.toContain(scope);
+		// An agent and a narrow key keep their scopes.
+		expect((await bot.call("account.whoami")).scopes).toEqual(["account.read", "mail.read"]);
 		const stored = await env.DIRECTORY.prepare("SELECT scopes FROM api_keys WHERE id = ?")
 			.bind(narrow.id)
 			.first("scopes");

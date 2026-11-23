@@ -1,41 +1,45 @@
 import {
+	AGENT_RESOURCE_LIMITS,
 	type OutputOf,
 	type Principal,
 	type ResourceKind,
 	type Scope,
-	SERVICE_RESOURCE_LIMITS,
-	SERVICE_SCOPE_DESCRIPTIONS,
-	SERVICE_SCOPES,
+	scopeDescription,
 } from "@asterra/contracts";
 import { type FormEvent, useId, useState } from "react";
 import { api, errorMessage } from "../../lib/api.ts";
 import { useToast } from "../../lib/toast.tsx";
-import { draftOf, type PermissionsDraft, permissionsChange, pickedIds, pickKey } from "./permissionsDraft.ts";
+import {
+	draftOf,
+	type PermissionsDraft,
+	permissionsChange,
+	pickedIds,
+	pickKey,
+	scopesFor,
+} from "./permissionsDraft.ts";
 import { type ResourceChoice, resourceChoicesOf } from "./resourceChoices.ts";
+import type { AgentAccess } from "./useAgentAccess.ts";
 
-type Access = OutputOf<"directory.get_service_account_access">;
-
-const DESCRIPTIONS: Partial<Record<Scope, string>> = SERVICE_SCOPE_DESCRIPTIONS;
-
-interface ServiceAccountPermissionsProps {
-	account: Principal;
-	/** The access of the account. Null until its first read. */
-	access: Access | null;
+interface AgentPermissionsProps {
+	/** An agent or a service account. */
+	agent: Principal;
+	/** The access of the agent. Null until its first read. */
+	access: AgentAccess | null;
 	/** True when the read of the access failed. The Access part shows the reason and "Try again". */
 	failed: boolean;
 	/**
 	 * Called after a save with the saved scopes and limits. The card shows them at once, and loads the access
 	 * again.
 	 */
-	onSaved: (saved: OutputOf<"directory.set_service_account_access">) => void;
+	onSaved: (saved: OutputOf<"directory.set_agent_access">) => void;
 }
 
 /**
- * The permissions of a service account (`directory.set_service_account_access`): its scopes, and an
- * optional limit to listed mailboxes, drives and rooms. Each token of the account has these permissions.
- * A token has none of its own.
+ * The permissions of an agent or a service account (`directory.set_agent_access`): its scopes, and an
+ * optional limit to listed mailboxes, drives and rooms. Each API key and each OAuth connection of an
+ * agent, and each token of a service account, has these permissions. A key has none of its own.
  */
-export function ServiceAccountPermissions({ account, access, failed, onSaved }: ServiceAccountPermissionsProps) {
+export function AgentPermissions({ agent, access, failed, onSaved }: AgentPermissionsProps) {
 	const toast = useToast();
 	// The unsaved choices. Null: the form shows the saved access. A new read keeps unsaved choices.
 	const [edited, setEdited] = useState<PermissionsDraft | null>(null);
@@ -43,6 +47,10 @@ export function ServiceAccountPermissions({ account, access, failed, onSaved }: 
 	const [error, setError] = useState<string | null>(null);
 	const limitHintId = useId();
 	const headingId = useId();
+	const service = agent.kind === "service";
+	// The word for the agent in the text: a service account is an "account".
+	const noun = service ? "account" : "agent";
+	const offered = scopesFor(agent);
 
 	if (access === null) {
 		return (
@@ -60,13 +68,13 @@ export function ServiceAccountPermissions({ account, access, failed, onSaved }: 
 			</section>
 		);
 	}
-	const choices = resourceChoicesOf(account, access);
-	const draft = edited ?? draftOf(access);
+	const choices = resourceChoicesOf(agent, access);
+	const draft = edited ?? draftOf(access, offered);
 	const change = permissionsChange(draft, access, choices);
 
 	function toggleScope(scope: Scope) {
 		const has = draft.scopes.includes(scope);
-		const scopes = SERVICE_SCOPES.filter((item) => (item === scope ? !has : draft.scopes.includes(item)));
+		const scopes = offered.filter((item) => (item === scope ? !has : draft.scopes.includes(item)));
 		setEdited({ ...draft, scopes });
 	}
 
@@ -84,8 +92,8 @@ export function ServiceAccountPermissions({ account, access, failed, onSaved }: 
 		setBusy(true);
 		setError(null);
 		try {
-			const saved = await api.call("directory.set_service_account_access", { principal_id: account.id, ...change });
-			toast({ message: `Permissions of ${account.display_name} saved.` });
+			const saved = await api.call("directory.set_agent_access", { principal_id: agent.id, ...change });
+			toast({ message: `Permissions of ${agent.display_name} saved.` });
 			// The card gets the saved values before the draft goes away. So the form never shows the values of
 			// before the save, also when the next read of the access is slow or fails.
 			onSaved(saved);
@@ -101,11 +109,11 @@ export function ServiceAccountPermissions({ account, access, failed, onSaved }: 
 	function pickList(kind: ResourceKind, legend: string, product: string, list: readonly ResourceChoice[]) {
 		const count = pickedIds(draft, kind, list).length;
 		// The server takes at most this many ids of one kind. A full list stops a further selection.
-		const max = SERVICE_RESOURCE_LIMITS.perKind;
+		const max = AGENT_RESOURCE_LIMITS.perKind;
 		return (
 			<fieldset className="scope-list">
 				<legend className="field-label">{legend}</legend>
-				{list.length === 0 && <p className="field-hint">The account is a member of none.</p>}
+				{list.length === 0 && <p className="field-hint">The {noun} is a member of none.</p>}
 				{list.map((choice) => {
 					const key = pickKey(kind, choice.id);
 					const checked = draft.picked.has(key);
@@ -122,7 +130,11 @@ export function ServiceAccountPermissions({ account, access, failed, onSaved }: 
 						</label>
 					);
 				})}
-				{count === 0 && <p className="field-hint">With none selected, the account reaches nothing of {product}.</p>}
+				{count === 0 && (
+					<p className="field-hint">
+						With none selected, the {noun} reaches nothing of {product}.
+					</p>
+				)}
 				{list.length > max && (
 					<p className="field-hint">
 						{count} of at most {max} selected.
@@ -138,12 +150,13 @@ export function ServiceAccountPermissions({ account, access, failed, onSaved }: 
 				Permissions
 			</h2>
 			<p className="field-hint">
-				The scopes say what the account can do. Each token of the account has them. A change applies to each token at
-				its next call.
+				{service
+					? "The scopes say what the account can do. Each token of the account has them. A change applies to each token at its next call."
+					: "The scopes say what the agent can do. Each API key and each connected app of the agent has them. A change applies to each one at its next call."}
 			</p>
 			<fieldset className="scope-list">
 				<legend className="field-label">Scopes</legend>
-				{SERVICE_SCOPES.map((scope) => (
+				{offered.map((scope) => (
 					<label key={scope} className="check-row">
 						<input
 							type="checkbox"
@@ -154,7 +167,7 @@ export function ServiceAccountPermissions({ account, access, failed, onSaved }: 
 						/>
 						<span>
 							<code>{scope}</code>
-							<span className="check-hint">{DESCRIPTIONS[scope]}</span>
+							<span className="check-hint">{scopeDescription(scope, service ? "service" : "agent")}</span>
 						</span>
 					</label>
 				))}
@@ -169,10 +182,10 @@ export function ServiceAccountPermissions({ account, access, failed, onSaved }: 
 						aria-describedby={limitHintId}
 						disabled={busy}
 					/>
-					<span>Limit this account to specific mailboxes, drives and rooms</span>
+					<span>Limit this {noun} to specific mailboxes, drives and rooms</span>
 				</label>
 				<p id={limitHintId} className="field-hint">
-					Without a limit, the account reaches each mailbox, drive and room that it is a member of. With a limit, it
+					Without a limit, the {noun} reaches each mailbox, drive and room that it is a member of. With a limit, it
 					reaches only the selected ones, and it cannot use the views that read across rooms.
 				</p>
 			</div>

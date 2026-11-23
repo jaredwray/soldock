@@ -441,38 +441,36 @@ describe("OAuth approval", () => {
 			scopes: ["mail.read"],
 		});
 		expect(await codeOf(newAgent)).toBe("forbidden");
-		const notSponsored = ada.call("oauth.approve_authorization", {
-			request_id: requestId,
-			agent_id: other.id,
-			scopes: ["mail.read"],
-		});
+		const notSponsored = ada.call("oauth.approve_authorization", { request_id: requestId, agent_id: other.id });
 		expect(await codeOf(notSponsored)).toBe("forbidden");
 
+		await ada.call("directory.set_agent_access", { principal_id: bot.id, scopes: ["account.read", "mail.read"] });
 		const cookie = await signIn(ada.address, PASSWORD);
 		const res = await request(`/api/v1/oauth/authorizations/${requestId}/approve`, {
 			method: "POST",
 			headers: { cookie, origin: ORIGIN, "content-type": "application/json" },
-			body: JSON.stringify({ request_id: requestId, agent_id: bot.id, scopes: ["account.read", "mail.read"] }),
+			body: JSON.stringify({ request_id: requestId, agent_id: bot.id }),
 		});
 		expect(res.status).toBe(200);
 		const { redirect_to } = (await res.json()) as { redirect_to: string };
 		const tokens = (await (await exchange(clientId, redirect_to, verifier)).json()) as Tokens;
-		expect(await api(tokens.access_token)("account.whoami")).toMatchObject({ principal: { id: bot.id } });
+		// The connection is only a credential of the agent: it has the scopes of the agent.
+		expect(tokens.scope).toBe("account.read mail.read");
+		expect(await api(tokens.access_token)("account.whoami")).toMatchObject({
+			principal: { id: bot.id },
+			scopes: ["account.read", "mail.read"],
+		});
 		expect((await ada.call("oauth.list_grants", { principal_id: bot.id })).grants).toHaveLength(1);
 		expect(await codeOf(ada.call("oauth.list_grants", { principal_id: other.id }))).toBe("forbidden");
 	});
 
-	it("refuses an agent, a narrow key, and a scope that an agent cannot hold", async () => {
+	it("refuses an agent, a narrow key, scopes for an agent that exists, and a scope that an agent cannot hold", async () => {
 		const { owner, bot } = await seedOrg();
 		const { requestId } = await startAuthorization(await registerClient());
 		expect(await codeOf(bot.call("oauth.get_authorization", { request_id: requestId }))).toBe("forbidden");
 		const { tokens, agent } = await connectNewAgent(owner);
 		// An agent that connected with OAuth cannot approve more connections, also not for itself.
-		const self = api(tokens.access_token)("oauth.approve_authorization", {
-			request_id: requestId,
-			agent_id: agent.id,
-			scopes: ["mail.read"],
-		});
+		const self = api(tokens.access_token)("oauth.approve_authorization", { request_id: requestId, agent_id: agent.id });
 		expect(await codeOf(self)).toBe("forbidden");
 
 		const { api_key } = await owner.call("account.create_api_key", {
@@ -486,18 +484,27 @@ describe("OAuth approval", () => {
 			scopes: ["mail.read"],
 		});
 		expect(await codeOf(create)).toBe("forbidden");
-		const wider = narrow("oauth.approve_authorization", {
+		// The connection gives each scope of the bot, and the narrow key does not hold mail.send.
+		const wider = narrow("oauth.approve_authorization", { request_id: requestId, agent_id: bot.id });
+		expect(await codeOf(wider)).toBe("forbidden");
+		// A connection has no scopes of its own. A new agent holds only agent scopes.
+		const own = owner.call("oauth.approve_authorization", {
 			request_id: requestId,
 			agent_id: bot.id,
-			scopes: ["mail.send"],
+			scopes: ["mail.read"],
 		});
-		expect(await codeOf(wider)).toBe("forbidden");
+		expect(await codeOf(own)).toBe("invalid");
 		const keys = owner.call("oauth.approve_authorization", {
 			request_id: requestId,
-			agent_id: bot.id,
+			new_agent: { display_name: "Keys", address: "keys@dock.test" },
 			scopes: ["account.keys" as "mail.read"],
 		});
 		expect(await codeOf(keys)).toBe("invalid");
+		const none = owner.call("oauth.approve_authorization", {
+			request_id: requestId,
+			new_agent: { display_name: "None", address: "none@dock.test" },
+		});
+		expect(await codeOf(none)).toBe("invalid");
 		const both = owner.call("oauth.approve_authorization", {
 			request_id: requestId,
 			agent_id: bot.id,
@@ -747,7 +754,6 @@ describe("OAuth tokens", () => {
 		const { redirect_to } = await owner.call("oauth.approve_authorization", {
 			request_id: requestId,
 			agent_id: agent.id,
-			scopes: ["mail.read"],
 		});
 		expect((await exchange(clientId, redirect_to, verifier)).status).toBe(200);
 		expect((await owner.call("oauth.list_grants", { principal_id: agent.id })).grants).toMatchObject([
@@ -763,11 +769,7 @@ describe("OAuth tokens", () => {
 		expect((await mcp(tokens.access_token, "tools/list")).status).toBe(401);
 		expect(await (await refresh(clientId, tokens.refresh_token)).json()).toMatchObject({ error: "invalid_grant" });
 		const { requestId } = await startAuthorization(clientId);
-		const approval = owner.call("oauth.approve_authorization", {
-			request_id: requestId,
-			agent_id: agent.id,
-			scopes: ["mail.read"],
-		});
+		const approval = owner.call("oauth.approve_authorization", { request_id: requestId, agent_id: agent.id });
 		expect(await codeOf(approval)).toBe("invalid");
 		await owner.call("directory.restore_principal", { principal_id: agent.id });
 		expect((await mcp(tokens.access_token, "tools/list")).status).toBe(200);
@@ -819,7 +821,7 @@ describe("OAuth and the state of Chat", () => {
 	});
 });
 
-describe("OAuth scope changes", () => {
+describe("OAuth connections follow their agent", () => {
 	const instructions = async (token: string) => {
 		const { body } = await mcp(token, "initialize", {
 			protocolVersion: "2025-06-18",
@@ -829,9 +831,9 @@ describe("OAuth scope changes", () => {
 		return ((body?.result ?? {}) as { instructions?: string }).instructions ?? "";
 	};
 
-	// A grant keeps the scopes of its approval. A scope that a later release adds, such as mail.webhooks,
-	// must reach a connection without a new approval, and the agent must learn what it does not hold.
-	it("tells the agent which scopes it lacks, and the sponsor adds one without a new approval", async () => {
+	// A connection has the scopes of its agent. A scope that the sponsor adds to the agent, or removes from it,
+	// reaches the token that the client holds at its next request, and the agent learns what it does not hold.
+	it("tells the agent which scopes it lacks, and a change of the agent reaches the token without a new approval", async () => {
 		const owner = await setupOwner();
 		const { clientId, agent, tokens } = await connectNewAgent(owner);
 		const agentApi = api(tokens.access_token);
@@ -850,78 +852,72 @@ describe("OAuth scope changes", () => {
 		});
 		const before = await instructions(tokens.access_token);
 		expect(before).toContain("mail.webhooks (7 tools)");
-		expect(before).toContain("Admin › Members");
+		expect(before).toContain("The scopes are on this agent, not on this key or connection.");
 		expect(toolNames((await mcp(tokens.access_token, "tools/list")).body)).not.toContain(
 			"mail_create_webhook_subscription",
 		);
 
-		const [grant] = (await owner.call("oauth.list_grants", { principal_id: agent.id })).grants;
-		const grantId = grant?.id ?? "";
-		const added = await owner.call("oauth.add_grant_scopes", { grant_id: grantId, scopes: ["mail.webhooks"] });
-		expect(added.grant.scopes).toEqual(["account.read", "mail.read", "mail.webhooks", "chat.read"]);
-
-		// The token that the client holds gets the new tools at once: no refresh and no new approval.
-		expect(toolNames((await mcp(tokens.access_token, "tools/list")).body)).toContain(
-			"mail_create_webhook_subscription",
-		);
-		expect((await agentApi("account.whoami")).missing_scopes.map((missing) => missing.scope)).not.toContain(
-			"mail.webhooks",
-		);
-		expect(await instructions(tokens.access_token)).not.toContain("mail.webhooks (");
-		const refreshed = (await (await refresh(clientId, tokens.refresh_token)).json()) as Tokens;
-		expect(refreshed.scope.split(" ")).toContain("mail.webhooks");
-
-		// A scope that the connection holds already changes nothing. A person's key can call it over MCP too.
-		const again = await callTool(owner.key, "oauth_add_grant_scopes", {
-			grant_id: grantId,
-			scopes: ["mail.webhooks", "mail.read"],
+		// Parity: the owner changes the agent through MCP. The scope list replaces the list of the agent.
+		const set = await callTool(owner.key, "directory_set_agent_access", {
+			principal_id: agent.id,
+			scopes: ["account.read", "mail.webhooks", "chat.read"],
 		});
-		expect(again.isError).toBeUndefined();
-		expect(again.structuredContent).toMatchObject({ grant: { scopes: added.grant.scopes } });
+		expect(set.structuredContent).toEqual({
+			principal_id: agent.id,
+			scopes: ["account.read", "mail.webhooks", "chat.read"],
+			resources: null,
+		});
+		// The token that the client holds gets the new access at once: no refresh and no new approval.
+		const tools = toolNames((await mcp(tokens.access_token, "tools/list")).body);
+		expect(tools).toContain("mail_create_webhook_subscription");
+		expect(tools).not.toContain("mail_list_threads");
+		expect(await codeOf(agentApi("mail.list_threads", {}))).toBe("forbidden");
+		expect((await agentApi("account.whoami")).scopes).toEqual(["account.read", "mail.webhooks", "chat.read"]);
+		expect(await instructions(tokens.access_token)).not.toContain("mail.webhooks (");
+		expect((await owner.call("oauth.list_grants", { principal_id: agent.id })).grants[0]?.scopes).toEqual([
+			"account.read",
+			"mail.webhooks",
+			"chat.read",
+		]);
+		const refreshed = (await (await refresh(clientId, tokens.refresh_token)).json()) as Tokens;
+		expect(refreshed.scope).toBe("account.read mail.webhooks chat.read");
 	});
 
-	// A change that lands during the call must win. Else a parallel add loses its scope, a revoked
-	// connection gets wider, or a restore gives an archived agent more than a person approved.
-	it.each([
-		{
-			change: "another add",
-			sql: `UPDATE oauth_grants SET scopes = '["account.read","mail.read","mail.send","chat.read"]' WHERE id = ?`,
-			on: "grant",
-			scopes: ["account.read", "mail.read", "mail.send", "chat.read"],
-		},
-		{
-			change: "a revoke",
-			sql: "UPDATE oauth_grants SET revoked_at = '2026-01-01T00:00:00.000Z' WHERE id = ?",
-			on: "grant",
-			scopes: ["account.read", "mail.read", "chat.read"],
-		},
-		{
-			change: "an archive of the agent",
-			sql: "UPDATE principals SET archived_at = '2026-01-01T00:00:00.000Z' WHERE id = ?",
-			on: "agent",
-			scopes: ["account.read", "mail.read", "chat.read"],
-		},
-	])("refuses an add when $change lands during the call", async ({ sql, on, scopes }) => {
+	// An open socket has the access of its open. A change of the agent closes it, and the client opens a new
+	// one with the same token: the code is reconnect, not ended.
+	it("closes the sockets of a connection when its agent gets new access, and the token opens new ones", async () => {
 		const owner = await setupOwner();
-		const { agent } = await connectNewAgent(owner);
-		const [grant] = (await owner.call("oauth.list_grants", { principal_id: agent.id })).grants;
-		const grantId = grant?.id ?? "";
-		const res = await withEnv(
-			{ DIRECTORY: racing(sql, on === "grant" ? grantId : agent.id, "UPDATE oauth_grants SET scopes") },
-			`/api/v1/oauth/grants/${grantId}/scopes`,
-			{
-				method: "POST",
-				headers: { authorization: `Bearer ${owner.key}`, "content-type": "application/json" },
-				body: JSON.stringify({ grant_id: grantId, scopes: ["mail.webhooks"] }),
-			},
+		const { agent, tokens } = await connectNewAgent(owner);
+		const { room } = await owner.call("chat.create_room", { kind: "private", name: "Runbook", member_ids: [agent.id] });
+		const events = readSocket(
+			await request(EVENTS_SOCKET_PATH, { headers: { upgrade: "websocket", ...bearer(tokens.access_token) } }),
 		);
-		expect(res.status).toBe(409);
-		expect((await owner.call("oauth.list_grants", { principal_id: agent.id })).grants[0]?.scopes).toEqual(scopes);
+		expect(await events.next()).toMatchObject({ type: "hello" });
+		const roomSocket = await connectRoomSocket(room.id, bearer(tokens.access_token));
+		vi.useFakeTimers({ toFake: ["Date"] });
+		await owner.call("directory.set_agent_access", {
+			principal_id: agent.id,
+			resources: { mailbox_ids: [], drive_ids: [], room_ids: [room.id] },
+		});
+		expect(await events.next()).toEqual({ closed: EVENTS_SOCKET_CLOSE.reconnect });
+		vi.setSystemTime(Date.now() + SOCKET_RECHECK_MS);
+		await owner.call("chat.post_message", { room_id: room.id, text: "Deploy 42 is done." });
+		expect(await roomSocket.next()).toEqual({ closed: CHAT_SOCKET_CLOSE.reconnect });
+		vi.useRealTimers();
+		// The same token opens the listed room again. The agent is limited now, so the events socket, which
+		// carries each room, is refused.
+		const again = await connectRoomSocket(room.id, bearer(tokens.access_token));
+		const next = await owner.call("chat.post_message", { room_id: room.id, text: "Deploy 43 is done." });
+		expect(await again.next()).toEqual({ type: "message", message: next.message });
+		const refused = await request(EVENTS_SOCKET_PATH, {
+			headers: { upgrade: "websocket", ...bearer(tokens.access_token) },
+		});
+		expect(refused.status).toBe(403);
 	});
 
-	// An agent cannot change its own access. A person adds only scopes that they hold, to a live
-	// connection of an active agent that they manage: as its sponsor, or as an owner or an admin.
-	it("lets only a person who manages the agent add a scope that they hold, to a live connection", async () => {
+	// An agent cannot change its own access. A person changes it only with scopes that they hold, for an agent
+	// that they manage: as its sponsor, or as an owner or an admin.
+	it("lets only a person who manages the agent change its access, with scopes that they hold", async () => {
 		const { owner, ada, bot } = await seedOrg();
 		const grace = await createActor(owner, {
 			kind: "human",
@@ -930,56 +926,78 @@ describe("OAuth scope changes", () => {
 			password: PASSWORD,
 		});
 		// Ada sponsors the bot, and she connects an app to it. She is a member, not an admin.
+		await ada.call("directory.set_agent_access", { principal_id: bot.id, scopes: ["account.read", "mail.read"] });
 		const clientId = await registerClient();
 		const { requestId, verifier } = await startAuthorization(clientId);
-		const { redirect_to } = await ada.call("oauth.approve_authorization", {
-			request_id: requestId,
-			agent_id: bot.id,
-			scopes: ["account.read", "mail.read"],
-		});
+		const { redirect_to } = await ada.call("oauth.approve_authorization", { request_id: requestId, agent_id: bot.id });
 		const tokens = (await (await exchange(clientId, redirect_to, verifier)).json()) as Tokens;
-		const [grant] = (await ada.call("oauth.list_grants", { principal_id: bot.id })).grants;
-		const grantId = grant?.id ?? "";
-		const add = (caller: (typeof ada)["call"], scopes: ("mail.send" | "mail.webhooks" | "chat.read")[]) =>
-			caller("oauth.add_grant_scopes", { grant_id: grantId, scopes });
+		const set = (caller: (typeof ada)["call"], scopes: ("account.read" | "mail.read" | "mail.send")[]) =>
+			caller("directory.set_agent_access", { principal_id: bot.id, scopes });
 
-		expect(await codeOf(add(api(tokens.access_token), ["mail.send"]))).toBe("forbidden");
-		expect(await codeOf(add(bot.call, ["mail.send"]))).toBe("forbidden");
+		expect(await codeOf(set(api(tokens.access_token), ["account.read", "mail.send"]))).toBe("forbidden");
+		expect(await codeOf(set(bot.call, ["account.read", "mail.send"]))).toBe("forbidden");
 		// Grace is a member who does not sponsor the bot.
-		expect(await codeOf(add(grace.call, ["mail.send"]))).toBe("forbidden");
+		expect(await codeOf(set(grace.call, ["account.read", "mail.send"]))).toBe("forbidden");
+		expect(await codeOf(grace.call("directory.get_agent_access", { principal_id: bot.id }))).toBe("forbidden");
 		const { api_key } = await ada.call("account.create_api_key", {
 			label: "narrow",
-			scopes: ["account.keys", "mail.read"],
+			scopes: ["directory.write", "account.read", "mail.read"],
 		});
-		expect(await codeOf(add(api(api_key.secret), ["mail.send"]))).toBe("forbidden");
-		const keys = ada.call("oauth.add_grant_scopes", { grant_id: grantId, scopes: ["account.keys" as "mail.read"] });
+		expect(await codeOf(set(api(api_key.secret), ["account.read", "mail.send"]))).toBe("forbidden");
+		// The narrow key also cannot remove the limits for a scope that it does not hold.
+		await owner.call("directory.set_agent_access", {
+			principal_id: bot.id,
+			scopes: ["account.read", "mail.read", "mail.send"],
+			resources: { mailbox_ids: [bot.id], drive_ids: [], room_ids: [] },
+		});
+		const unlimit = api(api_key.secret)("directory.set_agent_access", { principal_id: bot.id, resources: null });
+		expect(await codeOf(unlimit)).toBe("forbidden");
+		const keys = ada.call("directory.set_agent_access", {
+			principal_id: bot.id,
+			scopes: ["account.keys" as "mail.read"],
+		});
 		expect(await codeOf(keys)).toBe("invalid");
+		const person = owner.call("directory.set_agent_access", { principal_id: ada.id, scopes: ["mail.read"] });
+		expect(await codeOf(person)).toBe("not_found");
 
-		// The sponsor, and an admin who does not sponsor the bot.
-		expect((await add(ada.call, ["mail.send"])).grant.scopes).toEqual(["account.read", "mail.read", "mail.send"]);
-		expect((await add(owner.call, ["mail.webhooks"])).grant.scopes).toEqual([
+		// A sponsor that a parallel change replaces during the call cannot change the access: the write checks
+		// the sponsor again.
+		const raced = await withEnv(
+			{
+				DIRECTORY: racing(
+					`UPDATE principals SET sponsor_id = '${owner.id}' WHERE id = ?`,
+					bot.id,
+					"agent_scopes = CASE",
+				),
+			},
+			`/api/v1/directory/agents/${bot.id}/access`,
+			{
+				method: "POST",
+				headers: { authorization: `Bearer ${ada.key}`, "content-type": "application/json" },
+				body: JSON.stringify({ scopes: ["account.read"] }),
+			},
+		);
+		expect(raced.status).toBe(409);
+		expect((await owner.call("directory.get_agent_access", { principal_id: bot.id })).scopes).toEqual([
 			"account.read",
 			"mail.read",
 			"mail.send",
-			"mail.webhooks",
 		]);
+		await owner.call("directory.update_principal", { principal_id: bot.id, sponsor_id: ada.id });
 
-		// An archived agent gets nothing more until a restore, as in oauth.approve_authorization.
-		await owner.call("directory.archive_principal", { principal_id: bot.id });
-		expect(await codeOf(add(ada.call, ["chat.read"]))).toBe("invalid");
-		await owner.call("directory.restore_principal", { principal_id: bot.id });
-
-		// An expired or revoked connection stays ended. The app must connect again, and a person approves it again.
-		const past = new Date(Date.now() - 1000).toISOString();
-		await env.DIRECTORY.prepare("UPDATE oauth_grants SET refresh_expires_at = ? WHERE id = ?")
-			.bind(past, grantId)
-			.run();
-		const ended = { code: "conflict", message: expect.stringContaining("revoked or expired") };
-		await expect(add(ada.call, ["chat.read"])).rejects.toMatchObject(ended);
-		await ada.call("oauth.revoke_grant", { grant_id: grantId });
-		await expect(add(ada.call, ["chat.read"])).rejects.toMatchObject(ended);
-		const unknown = ada.call("oauth.add_grant_scopes", { grant_id: `grt_${"0".repeat(26)}`, scopes: ["chat.read"] });
-		expect(await codeOf(unknown)).toBe("not_found");
+		// The sponsor, and an admin who does not sponsor the bot. Each change reaches the token.
+		expect(await set(ada.call, ["account.read"])).toEqual({
+			principal_id: bot.id,
+			scopes: ["account.read"],
+			resources: { mailbox_ids: [bot.id], drive_ids: [], room_ids: [] },
+		});
+		expect((await api(tokens.access_token)("account.whoami")).scopes).toEqual(["account.read"]);
+		await owner.call("directory.set_agent_access", { principal_id: bot.id, scopes: ["account.read", "chat.read"] });
+		expect((await api(tokens.access_token)("account.whoami")).scopes).toEqual(["account.read", "chat.read"]);
+		expect((await ada.call("directory.get_agent_access", { principal_id: bot.id })).scopes).toEqual([
+			"account.read",
+			"chat.read",
+		]);
 	});
 });
 
@@ -1059,6 +1077,122 @@ describe("OAuth and webhooks", () => {
 		expect(listed).toMatchObject([{ endpoint: { status: "disabled", disabled_reason: "credential_revoked" } }]);
 	});
 
+	// The scopes and the limits of an agent can change after it made a subscription. A delivery needs the
+	// access that a new subscription needs now.
+	it("stops the webhook of an agent that loses the webhook scope or the resource of the event", async () => {
+		const owner = await setupOwner();
+		const { tokens, agent } = await connectNewAgent(owner);
+		await owner.call("directory.set_agent_access", {
+			principal_id: agent.id,
+			scopes: ["mail.read", "mail.webhooks", "chat.read", "chat.webhooks", "drive.read", "drive.webhooks"],
+		});
+		await owner.call("directory.update_agent_policy", { principal_id: agent.id, mode: "any" });
+		const endpoint = (
+			(await callTool(tokens.access_token, "webhooks_create_endpoint", { url: "https://hooks.example.com/a" }))
+				.structuredContent as { endpoint: { id: string } }
+		).endpoint;
+		const events = { mail: "mail.inbox.updated", chat: "chat.message.created", drive: "drive.item.created" };
+		const subscribe = async (domain: keyof typeof events) =>
+			(
+				(
+					await callTool(tokens.access_token, `${domain}_create_webhook_subscription`, {
+						endpoint_id: endpoint.id,
+						event: events[domain],
+					})
+				).structuredContent as { subscription: { id: string } }
+			).subscription.id;
+		const mailId = await subscribe("mail");
+		const chatId = await subscribe("chat");
+		const driveId = await subscribe("drive");
+		const mailJob = {
+			v: 1,
+			kind: "delivery",
+			webhookId: mailId,
+			mailboxId: agent.id,
+			eventId: "evt_01JC0000000000000000000000",
+			occurredAt: Date.now(),
+		};
+		// An event of the own drive of the agent. An event of a personal drive has no list of members.
+		const driveJob = {
+			v: 1,
+			kind: "drive_delivery",
+			webhookId: driveId,
+			spaceId: agent.id,
+			eventType: "drive.item.created",
+			eventId: "drv_event",
+			itemId: "itm_01AAAAAAAAAAAAAAAAAAAAAAAAAA",
+			occurredAt: Date.now(),
+		};
+		const chatJob = async (roomName: string) => {
+			const { room } = await owner.call("chat.create_room", {
+				kind: "private",
+				name: roomName,
+				member_ids: [agent.id],
+			});
+			const { message } = await owner.call("chat.post_message", { room_id: room.id, text: "Wake up" });
+			const membershipId = await runInDurableObject(
+				env.CHAT_ROOM.get(env.CHAT_ROOM.idFromName(room.id)),
+				(_instance, state) =>
+					state.storage.sql
+						.exec<{ membership_id: string }>("SELECT membership_id FROM members WHERE principal_id = ?", agent.id)
+						.one().membership_id,
+			);
+			const job = {
+				v: 1,
+				kind: "chat_delivery",
+				webhookId: chatId,
+				mailboxId: agent.id,
+				roomId: room.id,
+				eventId: message.id,
+				messageId: message.id,
+				eventType: "chat.message.created",
+				occurredAt: Date.now(),
+				membershipId,
+			};
+			return { room, job };
+		};
+		const listed = { room: await chatJob("Listed"), other: await chatJob("Other") };
+		const posts = receiveWebhooks();
+		await consumeWebhooks([mailJob, driveJob, listed.room.job]);
+		expect(posts).toHaveLength(3);
+		const status = async (domain: keyof typeof events) =>
+			(domain === "mail"
+				? (await owner.call("mail.list_webhook_subscriptions", { mailbox_id: agent.id })).subscriptions
+				: domain === "drive"
+					? (await owner.call("drive.list_webhook_subscriptions", { space_id: agent.id })).subscriptions
+					: (await owner.call("chat.list_webhook_subscriptions", { principal_id: agent.id })).subscriptions
+			).map((row) => [row.status, row.disabled_reason]);
+
+		// The agent gets limits: its own mailbox and one room are in the lists, and its own drive is not. The
+		// drive subscription stops for good. A chat subscription covers each room, so only the event of the
+		// other room is skipped.
+		await owner.call("directory.set_agent_access", {
+			principal_id: agent.id,
+			resources: { mailbox_ids: [agent.id], drive_ids: [], room_ids: [listed.room.room.id] },
+		});
+		await consumeWebhooks([mailJob, driveJob, listed.other.job, listed.room.job]);
+		expect(posts).toHaveLength(5);
+		expect(await status("drive")).toEqual([["disabled", "access_lost"]]);
+		expect(await status("mail")).toEqual([["active", null]]);
+		expect(await status("chat")).toEqual([["active", null]]);
+
+		// The mailbox goes out of the list: the mail subscription stops for good too.
+		await owner.call("directory.set_agent_access", {
+			principal_id: agent.id,
+			resources: { mailbox_ids: [], drive_ids: [], room_ids: [listed.room.room.id] },
+		});
+		await consumeWebhooks([mailJob, listed.other.job, listed.room.job]);
+		expect(posts).toHaveLength(6);
+		expect(await status("mail")).toEqual([["disabled", "access_lost"]]);
+		expect(await status("chat")).toEqual([["active", null]]);
+
+		// The agent loses chat.webhooks: the chat subscription stops too.
+		await owner.call("directory.set_agent_access", { principal_id: agent.id, scopes: ["chat.read"] });
+		await consumeWebhooks([listed.room.job]);
+		expect(posts).toHaveLength(6);
+		expect(await status("chat")).toEqual([["disabled", "access_lost"]]);
+	});
+
 	// A dot of ChatGPT connects with OAuth. Its access token changes each hour, and its subscription of
 	// MCP Events lives a day, so the connection, not the token, must name the subscription.
 	it("binds a subscription of MCP Events to its OAuth connection", async () => {
@@ -1098,11 +1232,7 @@ describe("OAuth and webhooks", () => {
 
 		// A second connection of the same agent has its own subscription, and cannot stop the first one.
 		const second = await startAuthorization(clientId, scopes.join(" "));
-		const again = await owner.call("oauth.approve_authorization", {
-			request_id: second.requestId,
-			agent_id: agent.id,
-			scopes: [...scopes],
-		});
+		const again = await owner.call("oauth.approve_authorization", { request_id: second.requestId, agent_id: agent.id });
 		const others = (await (await exchange(clientId, again.redirect_to, second.verifier)).json()) as Tokens;
 		expect((await mcp(others.access_token, "events/unsubscribe", params)).body?.result).toEqual({});
 		expect(await idOf(others.access_token)).not.toBe(id);

@@ -90,6 +90,7 @@ describe("team mailboxes in the directory", () => {
 					kind: "agent",
 					display_name: "Support Bot",
 					address: "support@dock.test",
+					scopes: ["account.read"],
 				}),
 			),
 		).toBe("conflict");

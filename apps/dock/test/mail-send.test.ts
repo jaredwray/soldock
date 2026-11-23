@@ -4,7 +4,6 @@ import { ApiError } from "@asterra/contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	type Actor,
-	api,
 	callTool,
 	createActor,
 	drainOutbox,
@@ -600,12 +599,8 @@ describe("agent outbound policy", () => {
 	});
 
 	it("needs the mail.send scope", async () => {
-		const { api_key } = await ada.call("account.create_api_key", {
-			principal_id: bot.id,
-			label: "read only",
-			scopes: ["mail.read"],
-		});
-		expect(await code(api(api_key.secret)("mail.send", { to: ["ada@dock.test"], text: "x" }))).toBe("forbidden");
+		await ada.call("directory.set_agent_access", { principal_id: bot.id, scopes: ["mail.read"] });
+		expect(await code(bot.call("mail.send", { to: ["ada@dock.test"], text: "x" }))).toBe("forbidden");
 	});
 });
 

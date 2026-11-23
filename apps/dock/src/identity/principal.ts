@@ -51,6 +51,7 @@ import {
 	soundListeners,
 	viewsRoom,
 } from "./socket-presence.ts";
+import { getPrincipal, type PrincipalRecord } from "./store.ts";
 
 // Each person, agent and service account has one PrincipalDO. It holds their room state, notification
 // settings, registered push devices and events sockets, and the activity log of a service account. Its
@@ -222,8 +223,8 @@ export const EVENTS_SOCKET_HEADER = "x-soldock-events-socket";
 export type EndedCredential =
 	| { kind: CredentialRef["kind"]; id: string }
 	| { grantId: string }
-	/** Each API key of the principal: the scopes or the limits of a service account changed. */
-	| { apiKeys: true };
+	/** Each API key and each OAuth token of the principal: the scopes or the limits of an agent changed. */
+	| { agentAccess: true };
 
 /**
  * Tells the object of a principal that a credential stopped, so its events sockets close at once. A
@@ -241,6 +242,17 @@ export async function endEventSockets(
 			error: error instanceof Error ? error.message : String(error),
 		});
 	}
+}
+
+/**
+ * True when an agent lost the access to post a scheduled message: the scopes and the limits of an agent can
+ * change after it scheduled the message. The send needs the access that a new schedule needs now:
+ * `chat.write`, and no limits, because a limited agent cannot schedule a message. A person keeps the access.
+ */
+function lostScheduleAccess(principal: PrincipalRecord): boolean {
+	return (
+		principal.kind === "agent" && (!principal.agent_scopes.includes("chat.write") || principal.agent_resources !== null)
+	);
 }
 
 /** The object checks the credential of a socket again when its last check is this old. */
@@ -992,20 +1004,25 @@ export class PrincipalDO extends DurableObject<Env> {
 
 	/**
 	 * Closes each socket of a credential that stopped, with `ended`: a session that signed out, a
-	 * revoked key, each token of a revoked OAuth connection, or each key of a service account whose scopes
-	 * or limits changed. Returns the number of closed sockets.
+	 * revoked key, or each token of a revoked OAuth connection. For an agent whose scopes or limits changed,
+	 * it closes each socket of a key or an OAuth token with `reconnect`: the credential still works, and the
+	 * client opens a new socket with the new access. Returns the number of closed sockets.
 	 */
 	endSockets(match: EndedCredential): number {
 		let ended = 0;
 		for (const socket of this.ctx.getWebSockets()) {
 			const credential = (socket.deserializeAttachment() as EventsSocketState | null)?.credential;
 			if (!credential) continue;
+			if ("agentAccess" in match) {
+				if (credential.kind !== "api_key" && credential.kind !== "oauth") continue;
+				this.end(socket, EVENTS_SOCKET_CLOSE.reconnect, "The access of the agent changed. Open a new socket.");
+				ended += 1;
+				continue;
+			}
 			const hit =
-				"apiKeys" in match
-					? credential.kind === "api_key"
-					: "grantId" in match
-						? credential.grantId === match.grantId
-						: credential.kind === match.kind && credential.id === match.id;
+				"grantId" in match
+					? credential.grantId === match.grantId
+					: credential.kind === match.kind && credential.id === match.id;
 			if (!hit) continue;
 			this.end(socket, EVENTS_SOCKET_CLOSE.ended, "The credential stopped.");
 			ended += 1;
@@ -1289,16 +1306,9 @@ export class PrincipalDO extends DurableObject<Env> {
 					}
 					continue;
 				}
-				// The scopes and the limits of a service account can change after it scheduled the message. The
-				// send needs the access that a new schedule needs now: `chat.write`, and no limits, because a
-				// limited account cannot schedule a message.
-				const account = checked.principal;
-				if (account.service && (!account.service_scopes.includes("chat.write") || account.service_resources !== null)) {
+				if (lostScheduleAccess(checked.principal)) {
 					if (this.personal.claimScheduledForSend(item.id, item.send_at, item.text, item.body_json, now)) {
-						this.personal.markScheduledFailed(
-							item.id,
-							"The service account no longer has the access to post this message.",
-						);
+						this.personal.markScheduledFailed(item.id, "The agent no longer has the access to post this message.");
 						events.push({ type: "chat.scheduled", scheduled_id: item.id, room_id: item.room_id });
 					}
 					continue;
@@ -1309,14 +1319,17 @@ export class PrincipalDO extends DurableObject<Env> {
 					display_name: checked.principal.display_name,
 				};
 			} else {
-				const principal = await this.env.DIRECTORY.prepare(
-					"SELECT id, kind, display_name FROM principals WHERE id = ? AND archived_at IS NULL AND deleted_at IS NULL",
-				)
-					.bind(item.principal_id)
-					.first<{ id: string; kind: "human" | "agent"; display_name: string }>();
-				if (!principal) {
+				// A message from before the credential binding. A deleted principal has no record.
+				const found = await getPrincipal(this.env.DIRECTORY, item.principal_id);
+				const principal = found?.archived_at === null ? found : null;
+				if (!principal || lostScheduleAccess(principal)) {
 					if (this.personal.claimScheduledForSend(item.id, item.send_at, item.text, item.body_json, now)) {
-						this.personal.markScheduledFailed(item.id, "Principal is archived or deleted.");
+						this.personal.markScheduledFailed(
+							item.id,
+							principal
+								? "The agent no longer has the access to post this message."
+								: "Principal is archived or deleted.",
+						);
 						events.push({ type: "chat.scheduled", scheduled_id: item.id, room_id: item.room_id });
 					}
 					continue;
@@ -1513,11 +1526,7 @@ export class PrincipalDO extends DurableObject<Env> {
 				if (waits) this.end(socket, EVENTS_SOCKET_CLOSE.reconnect, "The access check failed. Open a new socket.");
 			} else if (check === "renew") {
 				ended += 1;
-				this.end(
-					socket,
-					EVENTS_SOCKET_CLOSE.reconnect,
-					"The access token stopped. Open a new socket with a new token.",
-				);
+				this.end(socket, EVENTS_SOCKET_CLOSE.reconnect, "Authenticate again: open a new socket.");
 			} else if (check === "ended") {
 				ended += 1;
 				this.end(socket, EVENTS_SOCKET_CLOSE.ended, "The credential stopped.");

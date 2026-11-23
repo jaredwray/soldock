@@ -1,8 +1,10 @@
-import { OAUTH_LIMITS, type Scope } from "@asterra/contracts";
+import { AGENT_SCOPES, OAUTH_LIMITS, type Scope } from "@asterra/contracts";
 import { newId, randomToken, sha256Hex } from "../platform/index.ts";
 import { getPrincipal, type PrincipalRecord } from "./store.ts";
 
-// The OAuth tables of the directory (migration 0007). Only the SHA-256 of a code or a token is stored.
+// The OAuth tables of the directory (migration 0007). Only the SHA-256 of a code or a token is stored. A grant
+// is only a credential of its agent: it has the scopes of the agent (migration 0027), and the scopes of the
+// grant row (`oauth_grants.scopes`, `oauth_requests.granted_scopes`) are not read.
 
 /** The prefix of each OAuth access token, so secret scanners and people can recognize one. */
 export const ACCESS_TOKEN_PREFIX = "sdo_";
@@ -54,7 +56,6 @@ export interface RedeemedCode {
 	redirect_uri: string;
 	code_challenge: string;
 	principal_id: string;
-	scopes: Scope[];
 	approved_by: string;
 }
 
@@ -63,6 +64,7 @@ export interface OAuthGrantRecord {
 	client_id: string;
 	client_name: string;
 	principal_id: string;
+	/** The scopes of the agent of the grant at the read. A grant has no scopes of its own. */
 	scopes: Scope[];
 	created_by: string;
 	created_at: string;
@@ -83,19 +85,32 @@ interface ClientRow extends Omit<OAuthClientRecord, "redirect_uris"> {
 }
 
 interface GrantRow extends Omit<OAuthGrantRecord, "scopes"> {
-	scopes: string;
+	agent_scopes: string | null;
+	agent_service: number;
 }
 
-const GRANT_SELECT = `SELECT g.id, g.client_id, c.name AS client_name, g.principal_id, g.scopes, g.created_by,
-	g.created_at, g.last_used_at, g.revoked_at, g.refresh_expires_at
-	FROM oauth_grants g JOIN oauth_clients c ON c.id = g.client_id`;
+/** A grant with the scopes of its agent. The principal row stays after a delete, so the join keeps each grant. */
+const GRANT_SELECT = `SELECT g.id, g.client_id, c.name AS client_name, g.principal_id, p.agent_scopes,
+	p.service AS agent_service, g.created_by, g.created_at, g.last_used_at, g.revoked_at, g.refresh_expires_at
+	FROM oauth_grants g JOIN oauth_clients c ON c.id = g.client_id JOIN principals p ON p.id = g.principal_id`;
 
 function toClient(row: ClientRow): OAuthClientRecord {
 	return { ...row, redirect_uris: JSON.parse(row.redirect_uris) as string[] };
 }
 
-function toGrant(row: GrantRow): OAuthGrantRecord {
-	return { ...row, scopes: JSON.parse(row.scopes) as Scope[] };
+/**
+ * A grant with the agent scopes of its agent. A service account never connects through OAuth, so its grant
+ * has no scope. Stored text that is not a list gives no scope.
+ */
+function toGrant({ agent_scopes, agent_service, ...row }: GrantRow): OAuthGrantRecord {
+	let stored: unknown = null;
+	try {
+		stored = agent_scopes === null ? null : JSON.parse(agent_scopes);
+	} catch {
+		// Not JSON. The grant has no scope.
+	}
+	const list = Array.isArray(stored) && agent_service !== 1 ? stored : [];
+	return { ...row, scopes: AGENT_SCOPES.filter((scope) => list.includes(scope)) };
 }
 
 function isoAfter(now: number, ms: number): string {
@@ -241,7 +256,6 @@ export function approveStatement(
 	approval: {
 		requestId: string;
 		principalId: string;
-		scopes: readonly Scope[];
 		approvedBy: string;
 		codeHash: string;
 		codeExpiresAt: string;
@@ -257,7 +271,8 @@ export function approveStatement(
 		)
 		.bind(
 			approval.principalId,
-			JSON.stringify(approval.scopes),
+			// The grant gets the scopes of the agent: the request stores none.
+			"[]",
 			approval.approvedBy,
 			approval.codeHash,
 			approval.codeExpiresAt,
@@ -287,7 +302,7 @@ export async function redeemCode(db: D1Database, code: string): Promise<Redeemed
 	const row = await db
 		.prepare(
 			`UPDATE oauth_requests SET used_at = ? WHERE code_hash = ? AND used_at IS NULL AND code_expires_at > ?
-			RETURNING id, client_id, redirect_uri, code_challenge, principal_id, granted_scopes, approved_by`,
+			RETURNING id, client_id, redirect_uri, code_challenge, principal_id, approved_by`,
 		)
 		.bind(now, hash, now)
 		.first<{
@@ -296,7 +311,6 @@ export async function redeemCode(db: D1Database, code: string): Promise<Redeemed
 			redirect_uri: string;
 			code_challenge: string;
 			principal_id: string;
-			granted_scopes: string;
 			approved_by: string;
 		}>();
 	if (!row) {
@@ -320,7 +334,6 @@ export async function redeemCode(db: D1Database, code: string): Promise<Redeemed
 		redirect_uri: row.redirect_uri,
 		code_challenge: row.code_challenge,
 		principal_id: row.principal_id,
-		scopes: JSON.parse(row.granted_scopes) as Scope[],
 		approved_by: row.approved_by,
 	};
 }
@@ -362,7 +375,8 @@ export async function createGrant(db: D1Database, redeemed: RedeemedCode): Promi
 				id,
 				redeemed.client_id,
 				redeemed.principal_id,
-				JSON.stringify(redeemed.scopes),
+				// A grant has the scopes of its agent. The column keeps an empty list.
+				"[]",
 				redeemed.approved_by,
 				nowIso,
 				tokens.access_hash,
@@ -473,30 +487,6 @@ export async function listGrants(db: D1Database, principalId: string): Promise<O
 		.bind(principalId)
 		.all<GrantRow>();
 	return results.map(toGrant);
-}
-
-/**
- * Replaces the scopes of a live grant, but only while the grant still holds `before` and its principal
- * is not archived. So a parallel change, revoke or archive is never lost. Each write of `scopes` is the
- * `JSON.stringify` of a list, so the compare of the text is exact. Returns false when the grant ended
- * or changed. The next request of its access token uses the new scopes, because `authenticate` reads
- * them from the grant.
- */
-export async function setGrantScopes(
-	db: D1Database,
-	id: string,
-	before: readonly Scope[],
-	after: readonly Scope[],
-): Promise<boolean> {
-	const result = await db
-		.prepare(
-			`UPDATE oauth_grants SET scopes = ?1
-			WHERE id = ?2 AND scopes = ?3 AND revoked_at IS NULL AND refresh_expires_at > ?4
-			AND EXISTS (SELECT 1 FROM principals WHERE id = oauth_grants.principal_id AND archived_at IS NULL)`,
-		)
-		.bind(JSON.stringify(after), id, JSON.stringify(before), new Date().toISOString())
-		.run();
-	return result.meta.changes === 1;
 }
 
 /** Revokes a grant: its access token and its refresh tokens stop at once. */

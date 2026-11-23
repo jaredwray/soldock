@@ -13,6 +13,7 @@ import directoryOrderMigration from "../migrations/0019_directory_order.sql?raw"
 import serviceAccountMigration from "../migrations/0024_service_accounts.sql?raw";
 import serviceTokenMigration from "../migrations/0025_service_tokens.sql?raw";
 import serviceAccessMigration from "../migrations/0026_service_access.sql?raw";
+import agentAccessMigration from "../migrations/0027_agent_access.sql?raw";
 import { matchTotp, totpCode } from "../src/identity/totp.ts";
 import legacyDirectory from "./fixtures/directory-v1.sql?raw";
 import {
@@ -941,9 +942,75 @@ describe("directory upgrade", () => {
 			["prn_new", [], null],
 			["prn_ops", ["account.read", "mail.send"], null],
 		]);
+		// Before 0027, each key and each OAuth connection of an agent had its own scopes. The bot has two live
+		// keys (one with a scope outside the agent ceiling), a revoked key, a live connection and an expired one.
+		// A new agent of an approval just before the migration has only its code, which a client did not use yet.
+		// A used code and an expired code give nothing.
+		const botSecret = `sdk_${"b".repeat(43)}`;
+		await run([
+			`INSERT INTO api_keys (id, principal_id, key_hash, label, scopes, created_by, created_at)
+				VALUES ('key_bot_a', 'prn_bot', '${await hash(botSecret)}', 'A', '["mail.read","account.read"]', 'prn_owner', '${at}')`,
+			`INSERT INTO api_keys (id, principal_id, key_hash, label, scopes, created_by, created_at)
+				VALUES ('key_bot_b', 'prn_bot', '${await hash("bot-b")}', 'B', '["account.keys","mail.read"]', 'prn_owner', '${at}')`,
+			`INSERT INTO api_keys (id, principal_id, key_hash, label, scopes, created_by, created_at, revoked_at)
+				VALUES ('key_bot_c', 'prn_bot', '${await hash("bot-c")}', 'C', '["mail.send"]', 'prn_owner', '${at}', '${at}')`,
+			`INSERT INTO oauth_clients (id, name, uri, redirect_uris, created_at, last_used_at)
+				VALUES ('ocl_upgrade', 'Client', NULL, '["https://client.example/cb"]', '${at}', '${at}')`,
+			`INSERT INTO oauth_grants (id, client_id, principal_id, scopes, created_by, created_at, access_hash,
+					access_expires_at, refresh_hash, refresh_expires_at)
+				VALUES ('grt_live', 'ocl_upgrade', 'prn_bot', '["chat.read"]', 'prn_owner', '${at}', 'a1', '${at}', 'r1',
+					'2999-01-01T00:00:00.000Z')`,
+			`INSERT INTO oauth_grants (id, client_id, principal_id, scopes, created_by, created_at, access_hash,
+					access_expires_at, refresh_hash, refresh_expires_at)
+				VALUES ('grt_old', 'ocl_upgrade', 'prn_bot', '["drive.write"]', 'prn_owner', '${at}', 'a2', '${at}', 'r2',
+					'2026-02-01T00:00:00.000Z')`,
+			`INSERT INTO principals (id, kind, display_name, sponsor_id, outbound_mode, created_at)
+				VALUES ('prn_fresh', 'agent', 'Fresh', 'prn_owner', 'internal-only', '${at}')`,
+			`INSERT INTO addresses VALUES ('fresh@dock.test', 'prn_fresh', 1, '${at}')`,
+			...[
+				["oar_open", "prn_fresh", '["mail.read"]', "c1", "2999-01-01T00:00:00.000Z", "NULL"],
+				["oar_used", "prn_fresh", '["mail.send"]', "c2", "2999-01-01T00:00:00.000Z", `'${at}'`],
+				["oar_late", "prn_fresh", '["chat.read"]', "c3", "2026-02-01T00:00:00.000Z", "NULL"],
+			].map(
+				([id, principal, granted, code, end, used]) =>
+					`INSERT INTO oauth_requests (id, client_id, redirect_uri, code_challenge, scopes, created_at, expires_at,
+						principal_id, granted_scopes, approved_by, code_hash, code_expires_at, used_at)
+					VALUES ('${id}', 'ocl_upgrade', 'https://client.example/cb', 'x', '[]', '${at}', '${end}', '${principal}',
+						'${granted}', 'prn_owner', '${code}', '${end}', ${used})`,
+			),
+		]);
+		await run(agentAccessMigration.split("--> statement-breakpoint"));
+		// 0027 gives an agent each scope of its live keys and live connections. A revoked key and an expired
+		// connection give nothing. A service account keeps its scopes and limits in the renamed columns.
+		const bot = await db
+			.prepare("SELECT agent_scopes, agent_resources FROM principals WHERE id = 'prn_bot'")
+			.first<{ agent_scopes: string; agent_resources: string | null }>();
+		expect([sorted(bot?.agent_scopes ?? null), bot?.agent_resources]).toEqual([
+			["account.keys", "account.read", "chat.read", "mail.read"],
+			null,
+		]);
+		const fresh = await db
+			.prepare("SELECT agent_scopes FROM principals WHERE id = 'prn_fresh'")
+			.first<string>("agent_scopes");
+		expect(sorted(fresh)).toEqual(["mail.read"]);
+		// The migration only adds: the Worker from before still reads its columns until the deploy.
+		const ops = await db
+			.prepare("SELECT agent_scopes, service_scopes FROM principals WHERE id = 'prn_ops'")
+			.first<{ agent_scopes: string; service_scopes: string }>();
+		expect([sorted(ops?.agent_scopes ?? null), sorted(ops?.service_scopes ?? null)]).toEqual([
+			["account.read", "mail.send"],
+			["account.read", "mail.send"],
+		]);
+		// A key from before the migration works with the scopes of its agent. The Worker leaves out the scope
+		// outside the agent ceiling.
+		expect(await api(botSecret)("account.whoami")).toMatchObject({
+			principal: { id: "prn_bot", kind: "agent" },
+			scopes: ["account.read", "mail.read", "chat.read"],
+			resources: null,
+		});
 		// An account can have at most 20 ids of one kind. Big has 25 rooms, so its stored limits are not valid:
 		// it reaches nothing, never each room, until an admin saves new limits.
-		expect(await api(key)("directory.get_service_account_access", { principal_id: BIG })).toMatchObject({
+		expect(await api(key)("directory.get_agent_access", { principal_id: BIG })).toMatchObject({
 			scopes: ["chat.read"],
 			resources: { mailbox_ids: [], drive_ids: [], room_ids: [] },
 		});
@@ -964,6 +1031,7 @@ describe("directory upgrade", () => {
 		// 0024 keeps each agent an agent and each key without an end.
 		expect((await owner("directory.list_principals", { kind: "agent" })).principals).toMatchObject([
 			{ id: "prn_bot", kind: "agent", sponsor_id: "prn_owner", description: null, created_by: null },
+			{ id: "prn_fresh", kind: "agent" },
 		]);
 		expect((await owner("directory.list_principals", { kind: "human" })).principals).toMatchObject([
 			{ id: "prn_owner", kind: "human" },
@@ -1020,10 +1088,10 @@ describe("directory authorization", () => {
 		await admin.call("directory.create_principal", input);
 	});
 
-	it("gives a new person no API key, and a new agent a first key with the selected scopes", async () => {
+	it("gives a new person no API key, and a new agent its scopes and a first key", async () => {
 		const owner = await setupOwner();
 		const person = { kind: "human", display_name: "Eve", address: "eve@dock.test", password: PASSWORD } as const;
-		expect(await denied(owner.call("directory.create_principal", { ...person, key_scopes: ["mail.read"] }))).toBe(
+		expect(await denied(owner.call("directory.create_principal", { ...person, scopes: ["mail.read"] }))).toBe(
 			"invalid",
 		);
 		const eve = await owner.call("directory.create_principal", person);
@@ -1042,10 +1110,18 @@ describe("directory authorization", () => {
 			kind: "agent",
 			display_name: "Helper",
 			address: "helper@dock.test",
-			key_scopes: ["mail.read"],
+			scopes: ["account.read", "mail.read"],
 		});
-		expect(agent.api_key).toMatchObject({ label: "First key", scopes: ["mail.read"] });
+		// The first key is only a credential: it has the scopes of the agent.
+		expect(agent.api_key).toMatchObject({ label: "First key", scopes: ["account.read", "mail.read"] });
 		expect((await owner.call("account.list_api_keys", { principal_id: agent.principal.id })).api_keys).toHaveLength(1);
+		expect((await api(agent.api_key?.secret ?? "")("account.whoami")).scopes).toEqual(["account.read", "mail.read"]);
+		// An agent needs scopes.
+		expect(
+			await denied(
+				owner.call("directory.create_principal", { kind: "agent", display_name: "Bare", address: "bare@dock.test" }),
+			),
+		).toBe("invalid");
 	});
 
 	it("gives a new agent a human sponsor and the internal-only policy, and validates the address", async () => {
@@ -1054,6 +1130,7 @@ describe("directory authorization", () => {
 			kind: "agent",
 			display_name: "Helper",
 			address: "helper@dock.test",
+			scopes: ["account.read"],
 		});
 		expect(principal).toMatchObject({
 			kind: "agent",
@@ -1081,6 +1158,7 @@ describe("directory authorization", () => {
 					display_name: "Z",
 					address: "z@dock.test",
 					password: PASSWORD,
+					scopes: ["account.read"],
 				}),
 			),
 		).toBe("invalid");
@@ -1091,6 +1169,7 @@ describe("directory authorization", () => {
 					display_name: "Y",
 					address: "y@dock.test",
 					sponsor_id: principal.id,
+					scopes: ["account.read"],
 				}),
 			),
 		).toBe("invalid");
@@ -1187,7 +1266,7 @@ describe("directory authorization", () => {
 		).toEqual({ outbound_mode: "any", outbound_allowlist: "[]" });
 	});
 
-	it("lets the sponsor manage an agent's keys within agent scopes, and nobody else but admins", async () => {
+	it("lets the sponsor manage an agent's keys, which have the scopes of the agent, and nobody else but admins", async () => {
 		const { ada, bot, owner } = await seedOrg();
 		const other = await createActor(owner, {
 			kind: "human",
@@ -1195,20 +1274,29 @@ describe("directory authorization", () => {
 			address: "bob@dock.test",
 			password: PASSWORD,
 		});
-		const { api_key } = await ada.call("account.create_api_key", {
-			principal_id: bot.id,
-			label: "reader",
-			scopes: ["mail.read"],
-		});
-		expect(api_key.principal_id).toBe(bot.id);
+		await ada.call("directory.set_agent_access", { principal_id: bot.id, scopes: ["account.read", "mail.read"] });
+		const { api_key } = await ada.call("account.create_api_key", { principal_id: bot.id, label: "reader" });
+		expect(api_key).toMatchObject({ principal_id: bot.id, scopes: ["account.read", "mail.read"] });
+		expect((await api(api_key.secret)("account.whoami")).scopes).toEqual(["account.read", "mail.read"]);
+		// A key of an agent is only a credential: it takes no scopes of its own.
 		expect(
-			await denied(
-				ada.call("account.create_api_key", { principal_id: bot.id, label: "x", scopes: ["directory.write"] }),
-			),
+			await denied(ada.call("account.create_api_key", { principal_id: bot.id, label: "x", scopes: ["mail.read"] })),
 		).toBe("invalid");
-		expect(
-			await denied(other.call("account.create_api_key", { principal_id: bot.id, label: "x", scopes: ["mail.read"] })),
-		).toBe("forbidden");
+		// A narrow key cannot mint a key of an agent that holds more than the narrow key.
+		const { api_key: narrow } = await ada.call("account.create_api_key", {
+			label: "narrow",
+			scopes: ["account.keys", "mail.read"],
+		});
+		expect(await denied(api(narrow.secret)("account.create_api_key", { principal_id: bot.id, label: "x" }))).toBe(
+			"forbidden",
+		);
+		// The key row of an agent stores no scopes. A rotation gives the scopes of the agent, so the narrow key
+		// cannot rotate the key. The full credential of the sponsor can.
+		expect(await denied(api(narrow.secret)("account.rotate_api_key", { key_id: api_key.id }))).toBe("forbidden");
+		expect((await api(api_key.secret)("account.whoami")).scopes).toEqual(["account.read", "mail.read"]);
+		const rotated = await ada.call("account.rotate_api_key", { key_id: api_key.id });
+		expect((await api(rotated.api_key.secret)("account.whoami")).scopes).toEqual(["account.read", "mail.read"]);
+		expect(await denied(other.call("account.create_api_key", { principal_id: bot.id, label: "x" }))).toBe("forbidden");
 		expect(await denied(other.call("account.list_api_keys", { principal_id: ada.id }))).toBe("forbidden");
 		expect(await denied(other.call("account.revoke_api_key", { key_id: api_key.id }))).toBe("forbidden");
 		// An admin manages other people's keys, but never the owner's: that would let it act as the owner.
@@ -1430,15 +1518,11 @@ describe("a bounded read of the directory", () => {
 		expect(await denied(owner.call("directory.get_principals", { ids: Array(101).fill(ada.id).join(",") }))).toBe(
 			"invalid",
 		);
-		// The read needs directory.read, for a key of a person and for a key of an agent.
-		for (const actor of [owner, ada]) {
-			const { api_key } = await actor.call("account.create_api_key", {
-				principal_id: actor === ada ? bot.id : undefined,
-				label: "No directory",
-				scopes: ["account.read"],
-			});
-			expect(await denied(api(api_key.secret)("directory.get_principals", { ids: ada.id }))).toBe("forbidden");
-		}
+		// The read needs directory.read, for a key of a person and for an agent.
+		const { api_key } = await owner.call("account.create_api_key", { label: "No directory", scopes: ["account.read"] });
+		expect(await denied(api(api_key.secret)("directory.get_principals", { ids: ada.id }))).toBe("forbidden");
+		await ada.call("directory.set_agent_access", { principal_id: bot.id, scopes: ["account.read"] });
+		expect(await denied(bot.call("directory.get_principals", { ids: ada.id }))).toBe("forbidden");
 	});
 
 	// The admin link of the web app asks "does this person sponsor an agent" on each page. It must not read
@@ -1492,6 +1576,7 @@ describe("a bounded read of the directory", () => {
 			display_name: "Billing Bot",
 			address: "bot@dock.test",
 			sponsor_id: ada.principal.id,
+			scopes: ["account.read"],
 		});
 		const people = 40;
 		for (let index = 0; index < people; index++) {

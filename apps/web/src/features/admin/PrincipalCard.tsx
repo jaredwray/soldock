@@ -24,8 +24,9 @@ interface PrincipalCardProps {
 
 /**
  * One person, agent or service account, as a card that opens. An owner or an admin changes the account
- * in the card. An agent card also has the policy, the connected apps, the webhooks and the API keys. A
- * service account card has the policy, the tokens, the access and the activity.
+ * in the card. An agent card also has the policy, the permissions, the connected apps, the webhooks, the API
+ * keys and the access. A service account card has the policy, the permissions, the tokens, the access and
+ * the activity.
  */
 export function PrincipalCard({
 	principal,

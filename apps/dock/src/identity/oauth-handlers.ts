@@ -12,24 +12,20 @@ import {
 	type OAuthGrantRecord,
 	type OAuthRequestRecord,
 	revokeGrant,
-	setGrantScopes,
 } from "./oauth-store.ts";
 import { redirectHost, redirectWith } from "./oauth-urls.ts";
 import { toPrincipalOutput } from "./output.ts";
 import { endEventSockets } from "./principal.ts";
-import { assertPrimaryAddress, createPrincipal, domainOf, getPrincipal, mailDomains, scopeCeiling } from "./store.ts";
+import { assertPrimaryAddress, createPrincipal, domainOf, getPrincipal, mailDomains } from "./store.ts";
 
 type OAuthOperation =
 	| "oauth.get_authorization"
 	| "oauth.approve_authorization"
 	| "oauth.deny_authorization"
 	| "oauth.list_grants"
-	| "oauth.revoke_grant"
-	| "oauth.add_grant_scopes";
+	| "oauth.revoke_grant";
 
 const GONE = "This request expired, or somebody approved or denied it. Start the connection again in the app.";
-const ENDED =
-	"This connection is revoked or expired. Connect the app again, and approve it with the scopes that it needs.";
 
 function toAuthorizationOutput(request: OAuthRequestRecord): OAuthAuthorization {
 	return {
@@ -106,7 +102,9 @@ export const oauthHandlers: Pick<HandlerMap<CallContext>, OAuthOperation> = {
 				throw new OperationError("invalid", "The address must use a saved mail domain. Check Admin settings.");
 			}
 			assertPrimaryAddress(input.new_agent.address);
-			const scopes = grantableScopes(call.caller, { kind: "agent", service: false }, input.scopes);
+			// The scopes of the new agent. Each key and connection of the agent has them. The contract makes a new
+			// agent send scopes.
+			const scopes = grantableScopes(call.caller, { kind: "agent", service: false }, input.scopes ?? []);
 			const { code, approval } = await approvalAt();
 			// The request must still wait, and the approver, who becomes the sponsor, must still be active.
 			const created = await createPrincipal(
@@ -119,12 +117,13 @@ export const oauthHandlers: Pick<HandlerMap<CallContext>, OAuthOperation> = {
 					sponsor_id: call.caller.principal.id,
 					password_hash: null,
 					created_by: call.caller.principal.id,
+					agent_scopes: scopes,
 				},
 				null,
 				{
 					pendingRequest: { id: request.id, now: approval.now },
 					liveSponsorId: call.caller.principal.id,
-					afterCreate: (principalId) => [approveStatement(call.env.DIRECTORY, { ...approval, principalId, scopes })],
+					afterCreate: (principalId) => [approveStatement(call.env.DIRECTORY, { ...approval, principalId })],
 				},
 			);
 			if (!created) throw new OperationError("conflict", `${GONE} A directory reset can also cause this.`);
@@ -142,9 +141,11 @@ export const oauthHandlers: Pick<HandlerMap<CallContext>, OAuthOperation> = {
 				"Only the sponsor of the agent, an owner or an admin can connect an app to it.",
 			);
 		}
-		const scopes = grantableScopes(call.caller, agent, input.scopes);
+		// The connection is only a credential of the agent: its tokens give each scope of the agent. So the
+		// credential of the approver must hold each one, as for a new key of the agent.
+		grantableScopes(call.caller, agent, agent.agent_scopes);
 		const { code, approval } = await approvalAt();
-		const statement = approveStatement(call.env.DIRECTORY, { ...approval, principalId: agent.id, scopes });
+		const statement = approveStatement(call.env.DIRECTORY, { ...approval, principalId: agent.id });
 		if ((await statement.run()).meta.changes !== 1) throw new OperationError("conflict", GONE);
 		auditOk(call, "oauth.approve_authorization", `${request.id}:${agent.id}`);
 		return { principal: toPrincipalOutput(agent), redirect_to: codeRedirect(request, code.code) };
@@ -171,38 +172,5 @@ export const oauthHandlers: Pick<HandlerMap<CallContext>, OAuthOperation> = {
 		await endEventSockets(call.env, grant.principal_id, { grantId: grant.id });
 		auditOk(call, "oauth.revoke_grant", grant.id);
 		return { revoked: true };
-	},
-
-	// Add only: a narrower grant would also need a new check of the scopes of each open socket and
-	// webhook. A revoke stops all of them, so a person removes a scope with a revoke and a new approval.
-	async "oauth.add_grant_scopes"(call, input) {
-		const grant = await getGrant(call.env.DIRECTORY, input.grant_id);
-		if (!grant) throw new OperationError("not_found", "No OAuth connection has that id.");
-		const principal = await credentialOwner(call, grant.principal_id);
-		// The rule of oauth.approve_authorization: a restore must not give more than a person approved
-		// while the agent was active.
-		if (principal.archived_at !== null) {
-			throw new OperationError("invalid", "This agent is archived. Restore it first.");
-		}
-		const requested = grantableScopes(call.caller, principal, input.scopes);
-		if (grant.revoked_at !== null || Date.parse(grant.refresh_expires_at) <= Date.now()) {
-			throw new OperationError("conflict", ENDED);
-		}
-		const added = requested.filter((scope) => !grant.scopes.includes(scope));
-		if (added.length === 0) return { grant: toGrantOutput(grant) };
-		// The order of the ceiling, so each grant lists its scopes in the same order. A stored scope outside
-		// the ceiling stays at the end: this operation never removes a scope, and authenticate ignores it.
-		const ceiling = scopeCeiling(principal);
-		const scopes = [
-			...ceiling.filter((scope) => grant.scopes.includes(scope) || added.includes(scope)),
-			...grant.scopes.filter((scope) => !ceiling.includes(scope)),
-		];
-		if (!(await setGrantScopes(call.env.DIRECTORY, grant.id, grant.scopes, scopes))) {
-			throw new OperationError("conflict", "The connection changed or ended. Load it again, then try again.");
-		}
-		auditOk(call, "oauth.add_grant_scopes", `${grant.id}:${added.join(",")}`);
-		const updated = await getGrant(call.env.DIRECTORY, grant.id);
-		if (!updated) throw new Error(`grant ${grant.id} missing after update`);
-		return { grant: toGrantOutput(updated) };
 	},
 };

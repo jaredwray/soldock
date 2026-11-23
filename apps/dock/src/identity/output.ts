@@ -26,19 +26,16 @@ export function toPrincipalOutput(record: PrincipalRecord): Principal {
 }
 
 /**
- * `owner` is the principal of the key. A token of a service account has no scopes of its own, so it
- * shows the scopes of its account.
+ * `owner` is the principal of the key. A key of an agent or a service account has no scopes of its own, so
+ * it shows the scopes of its agent.
  */
-export function toApiKeyOutput(
-	record: ApiKeyRecord,
-	owner: Pick<PrincipalRecord, "service" | "service_scopes">,
-): ApiKey {
+export function toApiKeyOutput(record: ApiKeyRecord, owner: Pick<PrincipalRecord, "kind" | "agent_scopes">): ApiKey {
 	return {
 		id: record.id,
 		principal_id: record.principal_id,
 		label: record.label,
 		description: record.description,
-		scopes: owner.service ? owner.service_scopes : record.scopes,
+		scopes: owner.kind === "agent" ? owner.agent_scopes : record.scopes,
 		created_by: record.created_by,
 		created_at: record.created_at,
 		last_used_at: record.last_used_at,

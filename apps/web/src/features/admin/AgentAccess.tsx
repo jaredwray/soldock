@@ -1,9 +1,8 @@
-import type { OutputOf, Principal } from "@asterra/contracts";
+import type { Principal } from "@asterra/contracts";
 import { useId } from "react";
 import { expiryPhrase } from "../settings/ttl.ts";
 import { limitText, resourceChoicesOf, roomLabel } from "./resourceChoices.ts";
-
-type Access = OutputOf<"directory.get_service_account_access">;
+import type { AgentAccess as Access } from "./useAgentAccess.ts";
 
 const ROOM_KINDS: Record<string, string> = {
 	public: "Public room",
@@ -12,9 +11,10 @@ const ROOM_KINDS: Record<string, string> = {
 	group_dm: "Group message",
 };
 
-interface ServiceAccountAccessProps {
-	account: Principal;
-	/** The access of the account. Null until its first read. The card reads it for this part and for Permissions. */
+interface AgentAccessProps {
+	/** An agent or a service account. */
+	agent: Principal;
+	/** The access of the agent. Null until its first read. The card reads it for this part and for Permissions. */
 	access: Access | null;
 	/** Why the last read failed, or null. */
 	error: string | null;
@@ -22,12 +22,15 @@ interface ServiceAccountAccessProps {
 }
 
 /**
- * What a service account can reach (`directory.get_service_account_access`): its limits, its own mailbox
- * and drive, the team mailboxes, shared drives and rooms that it is a member of, and its live tokens. The
- * scopes of the account decide what it can do with each of them.
+ * What an agent or a service account can reach (`directory.get_agent_access`): its limits, its own mailbox
+ * and drive, the team mailboxes, shared drives and rooms that it is a member of, and its live API keys (the
+ * tokens of a service account). The scopes of the agent decide what it can do with each of them.
  */
-export function ServiceAccountAccess({ account, access, error, onRetry }: ServiceAccountAccessProps) {
+export function AgentAccess({ agent, access, error, onRetry }: AgentAccessProps) {
 	const headingId = useId();
+	const service = agent.kind === "service";
+	// The word for the agent in the text: a service account is an "account".
+	const noun = service ? "account" : "agent";
 
 	return (
 		<section aria-labelledby={headingId}>
@@ -35,7 +38,7 @@ export function ServiceAccountAccess({ account, access, error, onRetry }: Servic
 				Access
 			</h2>
 			<p className="field-hint">
-				The scopes of the account decide what it can do. Membership and shares decide where, inside its limits.
+				The scopes of the {noun} decide what it can do. Membership and shares decide where, inside its limits.
 			</p>
 			{error && (
 				<div className="form-error" role="alert">
@@ -48,10 +51,14 @@ export function ServiceAccountAccess({ account, access, error, onRetry }: Servic
 			{access === null && !error && <p className="panel-empty">Loading the access…</p>}
 			{access && (
 				<dl className="access-list">
-					<dt>Live tokens</dt>
+					<dt>{service ? "Live tokens" : "Live API keys"}</dt>
 					<dd>
 						{access.tokens.length === 0 ? (
-							<span className="muted">No live token. The account cannot call the API.</span>
+							<span className="muted">
+								{service
+									? "No live token. The account cannot call the API."
+									: "None. This list does not show the apps that connect with OAuth."}
+							</span>
 						) : (
 							<ul>
 								{access.tokens.map((token) => (
@@ -65,13 +72,13 @@ export function ServiceAccountAccess({ account, access, error, onRetry }: Servic
 					<dt>Limits</dt>
 					<dd>
 						{access.resources === null ? (
-							<span className="muted">None. The account reaches each membership below.</span>
+							<span className="muted">None. The {noun} reaches each membership below.</span>
 						) : (
-							<>Only: {limitText(access.resources, resourceChoicesOf(account, access))}</>
+							<>Only: {limitText(access.resources, resourceChoicesOf(agent, access))}</>
 						)}
 					</dd>
 					<dt>Own mailbox and drive</dt>
-					<dd>{account.address}</dd>
+					<dd>{agent.address}</dd>
 					<dt>Team mailboxes</dt>
 					<dd>
 						{access.team_mailboxes.length === 0 ? (
@@ -135,7 +142,7 @@ export function ServiceAccountAccess({ account, access, error, onRetry }: Servic
 							</ul>
 						)}
 						{access.chat_rooms_truncated && (
-							<p className="field-hint">The account is in more rooms. The list shows the first ones by name.</p>
+							<p className="field-hint">The {noun} is in more rooms. The list shows the first ones by name.</p>
 						)}
 					</dd>
 				</dl>

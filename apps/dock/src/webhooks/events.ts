@@ -2,6 +2,7 @@
 // A subscription of MCP Events is one endpoint and one subscription. The consumer of the webhook queue
 // sends its events, with the checks and the retries of each webhook.
 import {
+	allowsResource,
 	type ChatWebhookFilter,
 	defaultChatWebhookFilter,
 	MCP_EVENT_LIMITS,
@@ -259,6 +260,23 @@ export function createEventSubscriptions(prepare: EventTargetHooks = {}): EventS
 		const db = call.env.DIRECTORY;
 		const { principal } = call.caller;
 		const targetId = await creatableTarget(call, args.targetId, event.domain);
+		// This path does not go through the invoker, so it applies the resource limits of an agent here, before
+		// a product records events for the target. A chat event without a room covers each room of the agent.
+		const { restriction } = call.caller;
+		if (restriction !== null) {
+			const allowed =
+				event.domain === "chat"
+					? args.roomId !== null && allowsResource(restriction, "room", args.roomId)
+					: allowsResource(restriction, event.domain === "mail" ? "mailbox" : "drive", targetId);
+			if (!allowed) {
+				throw new OperationError(
+					"forbidden",
+					event.domain === "chat"
+						? "This agent is limited to listed rooms. Name a listed room in arguments.room_id."
+						: "This agent is limited to listed mailboxes and drives, and the event names a resource outside its list.",
+				);
+			}
+		}
 		if (args.roomId !== null) {
 			// The index is a copy. The room object decides again before each POST.
 			const member = await db

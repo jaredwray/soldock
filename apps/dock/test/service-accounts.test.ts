@@ -81,7 +81,7 @@ async function serviceToken(
 
 /** Sets the scopes of the service account, as an admin does. Each token of the account gets them. */
 async function setScopes(admin: Actor, serviceId: string, scopes: Scope[]) {
-	await admin.call("directory.set_service_account_access", { principal_id: serviceId, scopes: scopes as never });
+	await admin.call("directory.set_agent_access", { principal_id: serviceId, scopes: scopes as never });
 }
 
 /** Moves the end of a key into the past, as when its lifetime ends. */
@@ -116,7 +116,7 @@ describe("service accounts", () => {
 		});
 		expect((await admin.call("account.list_api_keys", { principal_id: service.id })).api_keys).toEqual([]);
 		// The account has the scopes of its creation, and no limits.
-		expect(await admin.call("directory.get_service_account_access", { principal_id: service.id })).toMatchObject({
+		expect(await admin.call("directory.get_agent_access", { principal_id: service.id })).toMatchObject({
 			scopes: ["account.read", "chat.read"],
 			resources: null,
 			tokens: [],
@@ -277,35 +277,31 @@ describe("tokens of a service account", () => {
 		await first.call("mail.list_threads", {});
 		expect(await codeOf(second.call("chat.list_rooms", {}))).toBe("forbidden");
 
-		// Only owners and admins change the access, and only of a service account.
+		// Only owners and admins change the access of a service account: not its sponsor. A person has none.
 		const change = { principal_id: service.id, scopes: ["account.read" as const, "chat.read" as const] };
 		for (const caller of [ada, bot, first]) {
-			expect(await codeOf(caller.call("directory.set_service_account_access", change))).toBe("forbidden");
+			expect(await codeOf(caller.call("directory.set_agent_access", change))).toBe("forbidden");
 		}
-		expect(await codeOf(admin.call("directory.set_service_account_access", { ...change, principal_id: bot.id }))).toBe(
+		expect(await codeOf(admin.call("directory.set_agent_access", { ...change, principal_id: ada.id }))).toBe(
 			"not_found",
 		);
 		// The list has only scopes that a service account can hold, and the call needs a field to change.
 		expect(
-			await codeOf(
-				admin.call("directory.set_service_account_access", { ...change, scopes: ["account.keys" as never] }),
-			),
+			await codeOf(admin.call("directory.set_agent_access", { ...change, scopes: ["account.keys" as never] })),
 		).toBe("invalid");
-		expect(await codeOf(admin.call("directory.set_service_account_access", { principal_id: service.id }))).toBe(
-			"invalid",
-		);
+		expect(await codeOf(admin.call("directory.set_agent_access", { principal_id: service.id }))).toBe("invalid");
 		// A key with directory.write cannot give the account a scope that the key does not hold.
 		const writer = await admin.call("account.create_api_key", {
 			label: "writer",
 			scopes: ["directory.write", "account.read"],
 		});
 		const asWriter = api(writer.api_key.secret);
-		expect(await codeOf(asWriter("directory.set_service_account_access", change))).toBe("forbidden");
+		expect(await codeOf(asWriter("directory.set_agent_access", change))).toBe("forbidden");
 		// The limits say where each scope applies. So the same key cannot change the limits of an account that
 		// has mail.read, which the key does not hold.
 		expect(
 			await codeOf(
-				asWriter("directory.set_service_account_access", {
+				asWriter("directory.set_agent_access", {
 					principal_id: service.id,
 					resources: { mailbox_ids: [], drive_ids: [], room_ids: [] },
 				}),
@@ -313,7 +309,7 @@ describe("tokens of a service account", () => {
 		).toBe("forbidden");
 
 		// The owner changes the scopes through MCP: the operation has REST and MCP.
-		const viaMcp = await callTool(owner.key, "directory_set_service_account_access", change);
+		const viaMcp = await callTool(owner.key, "directory_set_agent_access", change);
 		expect(viaMcp.isError).toBeFalsy();
 		expect(viaMcp.structuredContent).toEqual({
 			principal_id: service.id,
@@ -335,7 +331,7 @@ describe("tokens of a service account", () => {
 		await vi.waitFor(async () => {
 			const page = await admin.call("directory.list_service_account_activity", { principal_id: service.id });
 			expect(page.entries.map((entry) => [entry.operation, entry.surface, entry.actor_id])).toContainEqual([
-				"directory.set_service_account_access",
+				"directory.set_agent_access",
 				"admin",
 				owner.id,
 			]);
@@ -343,7 +339,7 @@ describe("tokens of a service account", () => {
 	});
 
 	// A scheduled message is a lasting effect of a token. It must not post with access that the account lost.
-	it("post no scheduled message after the account loses chat.write or gets limits", async () => {
+	it("post no scheduled message after the account loses chat.write or gets limits, also without a binding", async () => {
 		const { admin, service } = await seedService(["account.read", "chat.read", "chat.write"]);
 		const token = await serviceToken(admin, service.id);
 		const { room } = await admin.call("chat.create_room", { kind: "private", name: "ci", member_ids: [service.id] });
@@ -390,12 +386,25 @@ describe("tokens of a service account", () => {
 		// message of before the limits does not post.
 		await setScopes(admin, service.id, ["account.read", "chat.read", "chat.write"]);
 		const limited = await schedule("Build 3 passed.");
-		await admin.call("directory.set_service_account_access", {
+		await admin.call("directory.set_agent_access", {
 			principal_id: service.id,
 			resources: { mailbox_ids: [], drive_ids: [], room_ids: [room.id] },
 		});
 		await fire(limited.id);
 		expect(await statusOf(limited.id)).toBe("failed");
+
+		// A message from before the credential binding has no binding. It needs the same access.
+		await admin.call("directory.set_agent_access", { principal_id: service.id, resources: null });
+		const legacy = await schedule("Build 4 passed.");
+		await runInDurableObject(principal, (_instance, state) => {
+			state.storage.sql.exec(
+				"UPDATE chat_scheduled_messages SET credential_binding_json = NULL WHERE id = ?",
+				legacy.id,
+			);
+		});
+		await setScopes(admin, service.id, ["account.read", "chat.read"]);
+		await fire(legacy.id);
+		expect(await statusOf(legacy.id)).toBe("failed");
 		expect(await texts()).toEqual(["Build 1 passed."]);
 	});
 
@@ -431,7 +440,7 @@ describe("tokens of a service account", () => {
 					.bind(service.id)
 					.first<{ access_version: number }>()
 			)?.access_version;
-		await admin.call("directory.set_service_account_access", {
+		await admin.call("directory.set_agent_access", {
 			principal_id: service.id,
 			scopes: ["chat.read", "account.read"],
 			resources: null,
@@ -439,14 +448,15 @@ describe("tokens of a service account", () => {
 		expect(await version()).toBe(0);
 		expect(await checkCredentials(env.DIRECTORY, before)).toEqual(["live"]);
 
-		// A change of the limits closes the events socket at once, and ends the reference of the room socket.
-		await admin.call("directory.set_service_account_access", {
+		// A change of the limits closes the events socket at once, and the reference of the room socket must open
+		// again. The token still works, so the code tells the client to open a new socket, not to stop.
+		await admin.call("directory.set_agent_access", {
 			principal_id: service.id,
 			resources: { mailbox_ids: [], drive_ids: [], room_ids: [room.id] },
 		});
 		expect(await version()).toBe(1);
-		expect(await events.next()).toEqual({ closed: EVENTS_SOCKET_CLOSE.ended });
-		expect(await checkCredentials(env.DIRECTORY, before)).toEqual(["ended"]);
+		expect(await events.next()).toEqual({ closed: EVENTS_SOCKET_CLOSE.reconnect });
+		expect(await checkCredentials(env.DIRECTORY, before)).toEqual(["renew"]);
 		// A new socket has the number of the new access, and is live.
 		await open();
 		const after = (await refsOf()).filter((ref) => ref.av !== undefined);
@@ -1192,7 +1202,7 @@ describe("the access of a service account", () => {
 		await ada.call("drive.trash_items", { item_ids: [trashed.id] });
 
 		const access = await vi.waitFor(async () => {
-			const result = await admin.call("directory.get_service_account_access", { principal_id: service.id });
+			const result = await admin.call("directory.get_agent_access", { principal_id: service.id });
 			expect(result.shared_drives).toHaveLength(1);
 			expect(result.chat_rooms).toHaveLength(2);
 			return result;
@@ -1214,7 +1224,7 @@ describe("the access of a service account", () => {
 			scopes: ["mail.read", "chat.read"],
 			resources: null,
 		});
-		const viaMcp = await callTool(admin.key, "directory_get_service_account_access", { principal_id: service.id });
+		const viaMcp = await callTool(admin.key, "directory_get_agent_access", { principal_id: service.id });
 		expect(viaMcp.structuredContent).toEqual(access);
 	});
 
@@ -1222,11 +1232,9 @@ describe("the access of a service account", () => {
 		const { admin, ada, bot, service } = await seedService();
 		const token = await serviceToken(admin, service.id);
 		const input = { principal_id: service.id };
-		expect(await codeOf(ada.call("directory.get_service_account_access", input))).toBe("forbidden");
-		expect(await codeOf(bot.call("directory.get_service_account_access", input))).toBe("forbidden");
-		expect(await codeOf(token.call("directory.get_service_account_access", input))).toBe("forbidden");
-		expect(await codeOf(admin.call("directory.get_service_account_access", { principal_id: ada.id }))).toBe(
-			"not_found",
-		);
+		expect(await codeOf(ada.call("directory.get_agent_access", input))).toBe("forbidden");
+		expect(await codeOf(bot.call("directory.get_agent_access", input))).toBe("forbidden");
+		expect(await codeOf(token.call("directory.get_agent_access", input))).toBe("forbidden");
+		expect(await codeOf(admin.call("directory.get_agent_access", { principal_id: ada.id }))).toBe("not_found");
 	});
 });

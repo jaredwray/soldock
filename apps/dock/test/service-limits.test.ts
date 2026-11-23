@@ -1,6 +1,6 @@
 import { runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
-import { EVENTS_SOCKET_PATH, type ServiceResources } from "@asterra/contracts";
+import { type AgentResources, EVENTS_SOCKET_PATH } from "@asterra/contracts";
 import { describe, expect, it, vi } from "vitest";
 import {
 	type Actor,
@@ -19,11 +19,11 @@ import {
 	upgradeRoomSocket,
 } from "./helpers.ts";
 
-// A service account can name the mailboxes, drives and rooms that it reaches, on top of its memberships.
-// Each token of the account has these limits. The invoker refuses each call outside the list, before the
-// handler runs.
+// An agent or a service account can name the mailboxes, drives and rooms that it reaches, on top of its
+// memberships. Each key and each OAuth connection of the agent has these limits. The invoker refuses each call
+// outside the list, before the handler runs.
 
-const NONE: ServiceResources = { mailbox_ids: [], drive_ids: [], room_ids: [] };
+const NONE: AgentResources = { mailbox_ids: [], drive_ids: [], room_ids: [] };
 
 /** The result of a JSON-RPC answer of /mcp. */
 function resultOf<T>(answer: { body: Record<string, unknown> | null }): T {
@@ -89,22 +89,22 @@ async function seed() {
 }
 
 /** Sets the limits of the service account, as an admin does. Null removes them. */
-async function setLimits(by: Actor, serviceId: string, resources: Partial<ServiceResources> | null) {
-	return by.call("directory.set_service_account_access", {
+async function setLimits(by: Actor, serviceId: string, resources: Partial<AgentResources> | null) {
+	return by.call("directory.set_agent_access", {
 		principal_id: serviceId,
 		resources: resources === null ? null : { ...NONE, ...resources },
 	});
 }
 
 /** Limits the service account to these resources, and gives a token of it. Each token of the account has the limits. */
-async function limited(admin: Actor, serviceId: string, resources: Partial<ServiceResources>) {
+async function limited(admin: Actor, serviceId: string, resources: Partial<AgentResources>) {
 	const access = await setLimits(admin, serviceId, resources);
 	const { api_key } = await admin.call("account.create_api_key", { principal_id: serviceId, label: "limited" });
 	return { key: api_key.secret, keyId: api_key.id, call: api(api_key.secret), resources: access.resources };
 }
 
 describe("the limits of a service account", () => {
-	it("are set by owners and admins, for a service account only, with ids that the account can use", async () => {
+	it("are set by owners and admins, for an agent or a service account, with ids that the account can use", async () => {
 		const { owner, admin, ada, bot, service, t1, d1, r1 } = await seed();
 		// A token from before the limits gets them too: a token has no limits of its own.
 		const early = await admin.call("account.create_api_key", { principal_id: service.id, label: "early" });
@@ -117,10 +117,12 @@ describe("the limits of a service account", () => {
 			scopes: expect.arrayContaining(["account.read", "chat.write"]),
 			resources: { ...NONE, drive_ids: [service.id] },
 		});
-		// The sponsor gets no right. A person and an agent have no limits, and a token takes none of its own.
+		// The sponsor of a service account gets no right. A person has no limits, and a token takes none of its own.
 		expect(await codeOf(setLimits(ada, service.id, NONE))).toBe("forbidden");
 		expect(await codeOf(setLimits(admin, ada.id, NONE))).toBe("not_found");
-		expect(await codeOf(setLimits(admin, bot.id, NONE))).toBe("not_found");
+		// An agent can have limits too: its sponsor or an admin sets them.
+		expect((await setLimits(ada, bot.id, NONE)).resources).toEqual(NONE);
+		expect((await bot.call("account.whoami")).resources).toEqual(NONE);
 		expect(
 			await codeOf(
 				admin.call("account.create_api_key", { principal_id: service.id, label: "x", resources: NONE } as never),
@@ -324,12 +326,68 @@ describe("a limited service account", () => {
 		// Stored limits that are not valid give an account that reaches nothing, never an account without limits.
 		await setLimits(admin, service.id, { mailbox_ids: [service.id] });
 		await fresh("mail.list_threads", {});
-		await env.DIRECTORY.prepare("UPDATE principals SET service_resources = '{bad' WHERE id = ?").bind(service.id).run();
+		await env.DIRECTORY.prepare("UPDATE principals SET agent_resources = '{bad' WHERE id = ?").bind(service.id).run();
 		expect(await codeOf(fresh("mail.list_threads", {}))).toBe("forbidden");
 		// Stored scopes that are not valid give an account without a scope.
 		await setLimits(admin, service.id, null);
 		await fresh("mail.list_threads", {});
-		await env.DIRECTORY.prepare("UPDATE principals SET service_scopes = '{bad' WHERE id = ?").bind(service.id).run();
+		await env.DIRECTORY.prepare("UPDATE principals SET agent_scopes = '{bad' WHERE id = ?").bind(service.id).run();
 		expect(await codeOf(fresh("mail.list_threads", {}))).toBe("forbidden");
+	});
+});
+
+describe("the limits of an agent", () => {
+	// An agent can call operations that a service account cannot: webhooks and personal Chat settings. Each one
+	// has a rule, so a limited agent cannot reach a resource outside its list through them.
+	it("limit the webhooks, the rooms and the notification settings of an agent, and its sponsor removes them", async () => {
+		const { owner, ada, bot } = await seedOrg();
+		const { room: listed } = await ada.call("chat.create_room", {
+			kind: "private",
+			name: "Listed",
+			member_ids: [bot.id],
+		});
+		const { room: other } = await ada.call("chat.create_room", {
+			kind: "private",
+			name: "Other",
+			member_ids: [bot.id],
+		});
+		const { team_mailbox: team } = await owner.call("directory.create_team_mailbox", {
+			display_name: "Support",
+			address: "support@dock.test",
+			member_ids: [bot.id],
+		});
+		await owner.call("directory.update_agent_policy", { principal_id: bot.id, mode: "any" });
+		const { endpoint } = await bot.call("webhooks.create_endpoint", { url: "https://hooks.example.com/a" });
+		await setLimits(ada, bot.id, { mailbox_ids: [team.id], room_ids: [listed.id] });
+
+		// The endpoint names no resource. A mail subscription needs a listed mailbox: the own mailbox is not.
+		expect((await bot.call("webhooks.list_endpoints")).endpoints).toHaveLength(1);
+		const mail = (mailbox_id?: string) =>
+			bot.call("mail.create_webhook_subscription", {
+				endpoint_id: endpoint.id,
+				event: "mail.inbox.updated",
+				...(mailbox_id ? { mailbox_id } : {}),
+			});
+		expect(await codeOf(mail())).toBe("forbidden");
+		expect((await mail(team.id)).subscription.mailbox_id).toBe(team.id);
+		// A chat subscription sends the messages of each room, so a limited agent cannot make one.
+		const chat = bot.call("chat.create_webhook_subscription", {
+			endpoint_id: endpoint.id,
+			event: "chat.message.created",
+		});
+		expect(await codeOf(chat)).toBe("forbidden");
+		// The level of a room needs a listed room. The personal settings name no room.
+		const level = (room_id: string) => bot.call("chat.set_room_notification_level", { room_id, level: "mentions" });
+		expect(await codeOf(level(other.id))).toBe("forbidden");
+		await level(listed.id);
+		await bot.call("chat.set_status", { status: null });
+		// The notification settings hold the level of each room, also of the rooms outside the list.
+		expect(await codeOf(bot.call("chat.get_notification_settings"))).toBe("forbidden");
+		expect(await codeOf(bot.call("chat.set_notification_settings", { sound: false }))).toBe("forbidden");
+
+		// The sponsor removes the limits, and each key of the agent reaches its memberships again.
+		expect((await setLimits(ada, bot.id, null)).resources).toBeNull();
+		await level(other.id);
+		expect((await mail()).subscription.mailbox_id).toBe(bot.id);
 	});
 });

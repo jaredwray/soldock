@@ -1,39 +1,39 @@
 import { z } from "./zod.ts";
 
-// The resource limits of a service account. An account can name the mailboxes, the drives and the rooms
-// that it can reach, on top of its memberships. Each token of the account has the same limits. Each
-// operation that a service account can call has one rule here, and the invoker applies it to a limited
-// account before the handler runs. An operation without a rule is refused for a limited account, so a new
+// The resource limits of an agent or a service account. An agent can name the mailboxes, the drives and the
+// rooms that it can reach, on top of its memberships. Each API key and each OAuth connection of the agent has
+// the same limits. Each operation that an agent can call has one rule here, and the invoker applies it to a
+// limited agent before the handler runs. An operation without a rule is refused for a limited agent, so a new
 // operation cannot bypass a limit.
 
-export const SERVICE_RESOURCE_LIMITS = {
-	/** The ids of one kind (mailboxes, drives or rooms) that one service account can name, at most. */
+export const AGENT_RESOURCE_LIMITS = {
+	/** The ids of one kind (mailboxes, drives or rooms) that one agent can name, at most. */
 	perKind: 20,
 } as const;
 
 const ResourceIds = z
 	.array(z.string().min(1).max(64))
-	.max(SERVICE_RESOURCE_LIMITS.perKind)
+	.max(AGENT_RESOURCE_LIMITS.perKind)
 	.refine((ids) => new Set(ids).size === ids.length, "must not name an id two times");
 
 /**
- * The limits of a service account. Each list is the complete list of that product: an empty list allows
- * nothing of it. The own mailbox and the own drive of the account have the id of the account, and a list
- * names them like each other id. Null on an account: not limited.
+ * The limits of an agent or a service account. Each list is the complete list of that product: an empty list
+ * allows nothing of it. The own mailbox and the own drive of the agent have the id of the agent, and a list
+ * names them like each other id. Null on an agent: not limited.
  */
-export const ServiceResources = z.strictObject({
+export const AgentResources = z.strictObject({
 	mailbox_ids: ResourceIds,
 	drive_ids: ResourceIds,
 	room_ids: ResourceIds,
 });
-export type ServiceResources = z.infer<typeof ServiceResources>;
+export type AgentResources = z.infer<typeof AgentResources>;
 
 export type ResourceKind = "mailbox" | "drive" | "room";
 
 /**
  * One input field that names a resource. `absent` says what a call without the field means: `own` is the
  * own mailbox or drive of the caller, `none` names no resource, and `refuse` refuses the call for a limited
- * account. `value: "own"` means that each value comes from the own drive of the caller (for example the files
+ * agent. `value: "own"` means that each value comes from the own drive of the caller (for example the files
  * of a chat message), so any value needs the own drive in the list.
  */
 export interface ResourceField {
@@ -44,11 +44,11 @@ export interface ResourceField {
 }
 
 /**
- * How an operation treats a limited service account.
+ * How an operation treats a limited agent or service account.
  * - `none`: the operation names no mailbox, drive or room. Its scope decides.
- * - `filter`: a list. The handler leaves out each resource that the account does not name.
+ * - `filter`: a list. The handler leaves out each resource that the agent does not name.
  * - `check`: each field must name a resource of the list.
- * - `refuse`: the operation is not open to a limited account: it reads or writes state across rooms, or makes
+ * - `refuse`: the operation is not open to a limited agent: it reads or writes state across rooms, or makes
  *   a resource that the list cannot name yet.
  */
 export type ResourceRule =
@@ -69,7 +69,7 @@ const IN_MAILBOX = check(MAILBOX);
 const IN_SPACE = check(SPACE);
 const IN_ROOM = check(ROOM);
 
-/** The rule of each operation that a service account can call. The registry test keeps it complete. */
+/** The rule of each operation that an agent can call. The registry test keeps it complete. */
 export const RESOURCE_RULES: Readonly<Record<string, ResourceRule>> = {
 	"account.whoami": NONE,
 	"directory.list_principals": NONE,
@@ -78,6 +78,18 @@ export const RESOURCE_RULES: Readonly<Record<string, ResourceRule>> = {
 	"chat.list_custom_emoji": NONE,
 	"chat.list_slash_commands": NONE,
 	"chat.get_presence": NONE,
+	// The status of the agent names no room.
+	"chat.set_status": NONE,
+	// An endpoint names no resource, and the outbound policy limits its host. A subscription names the
+	// resource, so its operation has a check. A delete only removes a subscription of the caller.
+	"webhooks.create_endpoint": NONE,
+	"webhooks.list_endpoints": NONE,
+	"webhooks.update_endpoint": NONE,
+	"webhooks.delete_endpoint": NONE,
+	"mail.delete_webhook_subscription": NONE,
+	"drive.delete_webhook_subscription": NONE,
+	"chat.list_webhook_subscriptions": NONE,
+	"chat.delete_webhook_subscription": NONE,
 
 	"mail.list_mailboxes": FILTER,
 	"drive.list_shared_drives": FILTER,
@@ -94,6 +106,10 @@ export const RESOURCE_RULES: Readonly<Record<string, ResourceRule>> = {
 	"mail.send": IN_MAILBOX,
 	"mail.suggest_recipients": IN_MAILBOX,
 	"mail.get_attachment": IN_MAILBOX,
+	"mail.create_webhook_subscription": IN_MAILBOX,
+	// Without mailbox_id, the list has the subscriptions of the caller in each mailbox: the own mailbox must be
+	// in the list.
+	"mail.list_webhook_subscriptions": IN_MAILBOX,
 
 	"drive.get_about": IN_SPACE,
 	// The shared and the starred views read items of other drives. The handler leaves out each drive that
@@ -141,6 +157,8 @@ export const RESOURCE_RULES: Readonly<Record<string, ResourceRule>> = {
 	"sheets.move_tab": IN_SPACE,
 	"sheets.duplicate_tab": IN_SPACE,
 	"sheets.delete_tab": IN_SPACE,
+	"drive.create_webhook_subscription": IN_SPACE,
+	"drive.list_webhook_subscriptions": IN_SPACE,
 
 	"chat.get_room": IN_ROOM,
 	"chat.update_room": IN_ROOM,
@@ -175,6 +193,8 @@ export const RESOURCE_RULES: Readonly<Record<string, ResourceRule>> = {
 	"chat.invoke_slash_command": IN_ROOM,
 	"chat.trigger_card_action": IN_ROOM,
 	"chat.list_card_actions": IN_ROOM,
+	"chat.list_incoming_webhooks": IN_ROOM,
+	"chat.set_room_notification_level": IN_ROOM,
 
 	// A new room, or a direct message, is outside the list. The personal views of Chat (threads, activity,
 	// sections, saved messages, scheduled messages, reminders and drafts) read and write state across rooms,
@@ -205,43 +225,47 @@ export const RESOURCE_RULES: Readonly<Record<string, ResourceRule>> = {
 	"chat.list_drafts": REFUSE,
 	"chat.save_draft": REFUSE,
 	"chat.delete_draft": REFUSE,
+	// The notification settings hold the level of each room of the agent.
+	"chat.get_notification_settings": REFUSE,
+	"chat.set_notification_settings": REFUSE,
+	// A chat subscription sends the messages of each room of the agent.
+	"chat.create_webhook_subscription": REFUSE,
 };
 
-/** The rule of an operation for a limited account, or undefined when it has none: then the call is refused. */
+/** The rule of an operation for a limited agent, or undefined when it has none: then the call is refused. */
 export function resourceRuleOf(operationName: string): ResourceRule | undefined {
 	return Object.hasOwn(RESOURCE_RULES, operationName) ? RESOURCE_RULES[operationName] : undefined;
 }
 
-const LISTS: Record<ResourceKind, keyof ServiceResources> = {
+const LISTS: Record<ResourceKind, keyof AgentResources> = {
 	mailbox: "mailbox_ids",
 	drive: "drive_ids",
 	room: "room_ids",
 };
 
 /**
- * The ids of one kind that an account with these limits can reach, or null for no limits. A list
+ * The ids of one kind that an agent with these limits can reach, or null for no limits. A list
  * operation gives these ids to its query, so its page and its cursor never name a resource outside them.
  */
-export function listedIds(restriction: ServiceResources | null, kind: ResourceKind): readonly string[] | null {
+export function listedIds(restriction: AgentResources | null, kind: ResourceKind): readonly string[] | null {
 	return restriction === null ? null : restriction[LISTS[kind]];
 }
 
-/** True when an account with these limits can reach the resource. An account without limits (null) can. */
-export function allowsResource(restriction: ServiceResources | null, kind: ResourceKind, id: string): boolean {
+/** True when an agent with these limits can reach the resource. An agent without limits (null) can. */
+export function allowsResource(restriction: AgentResources | null, kind: ResourceKind, id: string): boolean {
 	return restriction === null || restriction[LISTS[kind]].includes(id);
 }
 
-const NOT_OPEN =
-	"This service account is limited to listed mailboxes, drives and rooms, and this operation is not open to it.";
+const NOT_OPEN = "This agent is limited to listed mailboxes, drives and rooms, and this operation is not open to it.";
 
 /**
- * Why a limited account cannot make this call, or null when it can. `input` is the validated input. An
- * account without limits always can. An operation without a rule, and an operation with the rule `refuse`, refuse.
+ * Why a limited agent cannot make this call, or null when it can. `input` is the validated input. An
+ * agent without limits always can. An operation without a rule, and an operation with the rule `refuse`, refuse.
  */
 export function resourceRefusal(
 	operationName: string,
 	input: unknown,
-	caller: { id: string; restriction: ServiceResources | null },
+	caller: { id: string; restriction: AgentResources | null },
 ): string | null {
 	const { restriction } = caller;
 	if (restriction === null) return null;
@@ -254,22 +278,21 @@ export function resourceRefusal(
 		const absent =
 			value === undefined || value === null || value === "" || (Array.isArray(value) && value.length === 0);
 		if (absent) {
-			if (field.absent === "refuse")
-				return `This service account is limited, and ${field.field} must name a listed resource.`;
+			if (field.absent === "refuse") return `This agent is limited, and ${field.field} must name a listed resource.`;
 			if (field.absent === "own" && !allowsResource(restriction, field.resource, caller.id)) {
-				return `This service account is limited, and its list does not name its own ${field.resource}.`;
+				return `This agent is limited, and its list does not name its own ${field.resource}.`;
 			}
 			continue;
 		}
 		if (field.value === "own") {
 			if (!allowsResource(restriction, field.resource, caller.id)) {
-				return `This service account is limited, and ${field.field} needs its own ${field.resource} in its list.`;
+				return `This agent is limited, and ${field.field} needs its own ${field.resource} in its list.`;
 			}
 			continue;
 		}
 		const ids = typeof value === "string" ? [value] : Array.isArray(value) ? value : null;
 		if (!ids?.every((id) => typeof id === "string" && allowsResource(restriction, field.resource, id))) {
-			return `This service account is limited, and ${field.field} names a ${field.resource} that its list does not name.`;
+			return `This agent is limited, and ${field.field} names a ${field.resource} that its list does not name.`;
 		}
 	}
 	return null;

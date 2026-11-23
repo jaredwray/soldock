@@ -71,6 +71,7 @@ export {
 export { ApiError, type ClientOptions, createClient, type FetchLike } from "./client.ts";
 export { Address, EmailAddress, prefixedId, Timestamp } from "./common.ts";
 export {
+	AGENT_ACCESS_LIMITS,
 	AllowlistEntry,
 	API_KEY_LIMITS,
 	API_KEY_TTL_DAYS,
@@ -83,7 +84,6 @@ export {
 	DisplayName,
 	OutboundPolicy,
 	Principal,
-	SERVICE_ACCESS_LIMITS,
 	SERVICE_ACTIVITY_LIMITS,
 	ServiceActivityEntry,
 } from "./directory.ts";
@@ -208,6 +208,8 @@ export {
 	templateVars,
 } from "./resources.ts";
 export {
+	AGENT_RESOURCE_LIMITS,
+	AgentResources,
 	allowsResource,
 	listedIds,
 	RESOURCE_RULES,
@@ -216,8 +218,6 @@ export {
 	type ResourceRule,
 	resourceRefusal,
 	resourceRuleOf,
-	SERVICE_RESOURCE_LIMITS,
-	ServiceResources,
 } from "./restrictions.ts";
 export {
 	AGENT_SCOPES,

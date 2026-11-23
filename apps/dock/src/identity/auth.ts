@@ -55,6 +55,18 @@ export function readCookie(request: Request, name: string): string | null {
 }
 
 /**
+ * The scopes that a credential of this principal holds. A key or an OAuth connection of an agent or a service
+ * account is only a credential: it has the scopes of the agent, so a change of the agent applies to the next
+ * call of each credential. A key of a person has its own scopes (`own`). The ceiling of the kind applies
+ * again here, so a stored list with a wider scope still cannot exceed it.
+ */
+function credentialScopes(principal: PrincipalRecord, own: readonly Scope[]): Scope[] {
+	const ceiling = new Set<Scope>(scopeCeiling(principal));
+	const scopes = principal.kind === "agent" ? principal.agent_scopes : own;
+	return scopes.filter((scope) => ceiling.has(scope));
+}
+
+/**
  * Finds the principal of a request. A bearer token comes first: an API key or an OAuth access token.
  * An archived principal is not authenticated, with any credential. A deleted principal has no record.
  * When a request has an Authorization header that is not a live token, the request is not
@@ -80,7 +92,8 @@ export async function authenticate(
 			// A service account never connects through OAuth. The approval refuses it, and this is a second guard.
 			if (!granted || granted.principal.archived_at !== null || granted.principal.service) return null;
 			waitUntil(touchGrant(env.DIRECTORY, granted.grant));
-			const ceiling = new Set<Scope>(scopeCeiling(granted.principal));
+			// An OAuth connection is only a credential of its agent: the scopes and the limits are those of the
+			// agent, so a change of the agent applies to the next request of each access token.
 			return {
 				id: granted.principal.id,
 				principal: granted.principal,
@@ -88,11 +101,11 @@ export async function authenticate(
 				credential: "oauth",
 				keyId: null,
 				keyGeneration: null,
-				restriction: null,
+				restriction: granted.principal.agent_resources,
 				grantId: granted.grant.id,
 				sessionHash: null,
 				accessHash: await sha256Hex(match[1]),
-				scopes: new Set(granted.grant.scopes.filter((scope) => ceiling.has(scope))),
+				scopes: new Set(credentialScopes(granted.principal, [])),
 			};
 		}
 		const found = await findApiKey(env.DIRECTORY, match[1]);
@@ -101,12 +114,6 @@ export async function authenticate(
 			return null;
 		}
 		waitUntil(touchApiKey(env.DIRECTORY, found.key));
-		// The ceiling applies again here, so a key row with a wider scope list still cannot exceed it.
-		const ceiling = new Set<Scope>(scopeCeiling(found.principal));
-		// A token of a service account is only a credential: the scopes and the limits are those of the account,
-		// so a change of the account applies to the next call of each token. A key of a person or an agent has
-		// its own scopes and no limits.
-		const scopes = found.principal.service ? found.principal.service_scopes : found.key.scopes;
 		return {
 			id: found.principal.id,
 			principal: found.principal,
@@ -114,11 +121,11 @@ export async function authenticate(
 			credential: "api_key",
 			keyId: found.key.id,
 			keyGeneration: found.generation,
-			restriction: found.principal.service_resources,
+			restriction: found.principal.agent_resources,
 			grantId: null,
 			sessionHash: null,
 			accessHash: null,
-			scopes: new Set(scopes.filter((scope) => ceiling.has(scope))),
+			scopes: new Set(credentialScopes(found.principal, found.key.scopes)),
 		};
 	}
 	if (!options.allowSession) return null;

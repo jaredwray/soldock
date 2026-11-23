@@ -110,11 +110,12 @@ A room is one `ChatRoomDO`. The id of the room names the object.
 - A [service account](../identity/README.md#service-accounts) is an agent here: a member, an author
   and a mention show the kind `agent`. It can hold `chat.read` and `chat.write`, and not
   `chat.webhooks`. Push, notification settings and a status are not open to it.
-- A service account with resource limits opens the socket of a listed room only, gets no events
-  socket, and sees only its listed rooms in `chat.list_rooms`
-  ([identity](../identity/README.md#resource-limits-of-a-service-account)). Both views give the ids of the list to
+- An agent or a service account with resource limits opens the socket of a listed room only, gets no
+  events socket, and sees only its listed rooms in `chat.list_rooms`
+  ([identity](../identity/README.md#resource-limits-of-an-agent)). A limited agent cannot read or change
+  its notification settings, because `room_levels` holds the level of each of its rooms. Both views give the ids of the list to
   their query, so `next_cursor` never names a different room. While the first fill of the `PrincipalDO` is not
-  complete, the joined view of a limited account asks only its listed rooms that the object does not have
+  complete, the joined view of a limited agent asks only its listed rooms that the object does not have
   (at most 20 calls), and gives no cursor to the place of the fill. A room membership that a different principal changes for a service account is an entry in its
   activity log: `admin` for an owner or an admin, and `member` for each other principal. A delete of a
   room, and an owner that an admin assigns, are entries too.
@@ -699,6 +700,10 @@ A socket stays open after its request. It must not outlive the access that opene
 - An OAuth access token lasts one hour, so each socket of an OAuth client closes in that time. While
   the connection works, the close code is `reconnect`: the client gets a new token and opens a new
   socket. A revoked connection gets `ended`.
+- A change of the scopes or the limits of an agent (`directory.set_agent_access`) changes its
+  `access_version`. Each socket of an API key or an OAuth token of the agent then closes at its next
+  check with `reconnect`. The credential still works, and the new socket has the new access
+  ([identity](../identity/README.md#access-of-an-agent)).
 - If the check fails, those sockets close with the code `reconnect`. The Worker then authenticates
   each new socket.
 - A socket lives one hour at most (`SOCKET_MAX_MS`). The room closes it at the next event after
@@ -710,7 +715,7 @@ A socket stays open after its request. It must not outlive the access that opene
 
 | Close code | Meaning | What the client does |
 | --- | --- | --- |
-| `4001` (`reconnect`) | The Worker must authenticate the credential again: the socket is one hour old, the check failed, or an OAuth access token stopped while its connection works | Opens a new socket. An OAuth client uses its new token |
+| `4001` (`reconnect`) | The Worker must authenticate the credential again: the socket is one hour old, the check failed, an OAuth access token stopped while its connection works, or the scopes or the limits of the agent of a key or a token changed | Opens a new socket. An OAuth client uses its new token |
 | `4002` (`replaced`) | The member opened more than 8 sockets to the room (`CHAT_LIMITS.socketsPerMember`), and this one is the oldest | Opens no new socket for this one |
 | `4003` (`ended`) | The credential stopped and cannot be renewed, or the principal is not a member now | Opens no new socket with this credential |
 | `1008` | The client sent an unknown frame | Use the frames in [Socket events](#socket-events) |
@@ -809,6 +814,8 @@ It has no message text. The URI is `asterra://chat/<room_id>/messages`.
 A receiver uses `reason` to decide if it reads the message. The [shared webhook module](../webhooks/README.md#chat-events) has the rules of the reasons and of the filter.
 The receiver reads the room with its own credential.
 Each delivery checks the membership again, so a stale index gives no access.
+For a subscription that an agent created, each delivery also needs `chat.webhooks` on the agent, and the room inside the limits of the agent.
+A limited agent cannot create a chat subscription, because a subscription covers each room ([identity](../identity/README.md#resource-limits-of-an-agent)).
 A deleted message can still notify a `chat.message.deleted` subscription.
 The [shared webhook module](../webhooks/README.md) defines the signature, the retries and the credential checks.
 
@@ -1181,7 +1188,7 @@ reference to their bytes.
 - **Pins and forwarding**: room members pin up to 50 messages (`chat.pin_message`, `chat.unpin_message`, `chat.list_pins`). `chat.forward_message` copies a message into a target room where the caller can post. Forwarding from a private room omits `source_room_name`. Forwarding an untrusted message preserves `untrusted: true`.
 - **Structured cards and actions**: messages can include up to 5 structured cards (`ChatCard`) with fields and action buttons. `chat.trigger_card_action` records the button click in `card_actions` (using the button's defined value, with optional `idempotency_key`), broadcasts a `card_action` event on the room socket, and notifies the author's activity feed. `chat.list_card_actions` lists clicks newest first.
 - **Archive, delete, posting rules, and retention**: room owners manage their own rooms, and organization admins can also manage public rooms: `chat.archive_room`, `chat.unarchive_room`, `chat.delete_room` (full human credential required, supports `dry_run`, and org admins can also delete 0-member orphaned private rooms), `chat.set_posting_rules` (`members`, `owners_only`, `allowlist`), and `chat.set_room_retention` (supports `dry_run` and alarm-driven pruning with delete events). Direct messages refuse these operations. Archived rooms are read-only.
-- **Personal views in `PrincipalDO`**: each principal owns its activity feed (`chat.list_activity`, `chat.mark_activity_read`), custom sidebar sections (`chat.list_sections`, `chat.create_section`, `chat.update_section`, `chat.delete_section`, `chat.set_room_section`), saved messages (`chat.save_message`, `chat.unsave_message`, `chat.list_saved_messages`), synced drafts (`chat.save_draft`, `chat.delete_draft`, `chat.list_drafts`), scheduled messages (`chat.schedule_message`, `chat.list_scheduled_messages`, `chat.update_scheduled_message`, `chat.cancel_scheduled_message`), and reminders (`chat.create_reminder`, `chat.list_reminders`, `chat.complete_reminder`, `chat.delete_reminder`). The `PrincipalDO` alarm checks credential validity before it delivers due scheduled messages, bounds retries, and fires due reminders into `chat_activity`.
+- **Personal views in `PrincipalDO`**: each principal owns its activity feed (`chat.list_activity`, `chat.mark_activity_read`), custom sidebar sections (`chat.list_sections`, `chat.create_section`, `chat.update_section`, `chat.delete_section`, `chat.set_room_section`), saved messages (`chat.save_message`, `chat.unsave_message`, `chat.list_saved_messages`), synced drafts (`chat.save_draft`, `chat.delete_draft`, `chat.list_drafts`), scheduled messages (`chat.schedule_message`, `chat.list_scheduled_messages`, `chat.update_scheduled_message`, `chat.cancel_scheduled_message`), and reminders (`chat.create_reminder`, `chat.list_reminders`, `chat.complete_reminder`, `chat.delete_reminder`). The `PrincipalDO` alarm checks credential validity before it delivers due scheduled messages, bounds retries, and fires due reminders into `chat_activity`. A due message of an agent or a service account fails when the agent no longer holds `chat.write` or has resource limits, also a message from before the credential binding ([identity](../identity/README.md#access-of-an-agent)).
 - **Custom emoji**: org owners and admins upload raster images (PNG, JPEG, GIF, WebP; up to 256 KiB; SVG refused) with `chat.create_custom_emoji`, list them with `chat.list_custom_emoji`, and delete them with `chat.delete_custom_emoji`. Members download images at `GET /dl/chat/emoji/{name}` and use `:name:` in messages and reactions.
 - **Incoming webhooks**: room owners and org owners/admins (humans only) manage per-room incoming webhooks (`chat.create_incoming_webhook`, `chat.list_incoming_webhooks`, `chat.delete_incoming_webhook`). `POST /hooks/chat/{webhook_id}` verifies the HMAC-SHA256 signature, ±300 second timestamp window, and replay key, validates cards against `CardsInput`, posts the message, and marks it `untrusted: true`. Incoming webhooks still post when a room has `owners_only` or `allowlist` posting rules, because a room owner or org admin created the webhook for automated posts.
 - **Slash commands**: org owners and admins (humans only) manage commands (`chat.create_slash_command`, `chat.list_slash_commands`, `chat.delete_slash_command`). Commands use a strict allowlist: safe read-only `GET` operations (excluding sensitive and admin endpoints) plus `chat.post_message` pinned to the invoking room. `chat.invoke_slash_command` checks room membership, renders the template, and runs the operation under the caller's own credential.

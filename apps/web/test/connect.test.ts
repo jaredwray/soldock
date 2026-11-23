@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { agentNameFromClient, defaultScopes, suggestedAddress } from "../src/features/connect/connect.ts";
+import { agentGrant, agentNameFromClient, defaultScopes, suggestedAddress } from "../src/features/connect/connect.ts";
 
 describe("the first values of the OAuth approval page", () => {
 	// The server refuses a display name with quotes, angle brackets or control characters.
@@ -24,5 +24,26 @@ describe("the first values of the OAuth approval page", () => {
 		]);
 		expect(defaultScopes([], ["mail.read", "mail.send"])).toEqual(["mail.read", "mail.send"]);
 		expect(defaultScopes(["drive.write"], ["mail.read"])).toEqual(["mail.read"]);
+	});
+
+	// A connection of an agent that exists has each scope of the agent, not only the requested scopes.
+	it("marks the scopes of an agent that the app did not ask for, and the requested scopes that the agent lacks", () => {
+		expect(
+			agentGrant(["mail.read", "openid", "drive.write", "mail.read"], ["account.read", "mail.read", "mail.send"]),
+		).toEqual({
+			held: [
+				{ scope: "account.read", requested: false },
+				{ scope: "mail.read", requested: true },
+				{ scope: "mail.send", requested: false },
+			],
+			missing: ["drive.write"],
+			asked: true,
+		});
+		// A request with no scope of Asterra: no scope of the agent is more than the request.
+		expect(agentGrant(["openid"], ["mail.read"])).toEqual({
+			held: [{ scope: "mail.read", requested: false }],
+			missing: [],
+			asked: false,
+		});
 	});
 });

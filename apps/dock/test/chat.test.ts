@@ -810,17 +810,11 @@ describe("the scopes of a key", () => {
 		expect(await codeOf(api(mailOnly.secret)("chat.list_messages", { room_id: room.id }))).toBe("forbidden");
 		expect(await codeOf(api(mailOnly.secret)("chat.list_replies", thread))).toBe("forbidden");
 
-		// An agent key can hold the two Chat scopes, and a narrower agent key has the same limit.
-		const { api_key: agentReader } = await ada.call("account.create_api_key", {
-			principal_id: bot.id,
-			label: "agent read",
-			scopes: ["chat.read"],
-		});
+		// An agent can hold the two Chat scopes, and an agent with only chat.read has the same limit on each key.
+		await ada.call("directory.set_agent_access", { principal_id: bot.id, scopes: ["chat.read"] });
 		await ada.call("chat.add_members", { room_id: room.id, principal_ids: [bot.id] });
-		expect((await api(agentReader.secret)("chat.list_messages", { room_id: room.id })).messages).toHaveLength(1);
-		expect(await codeOf(api(agentReader.secret)("chat.post_message", { room_id: room.id, text: "Hi" }))).toBe(
-			"forbidden",
-		);
+		expect((await bot.call("chat.list_messages", { room_id: room.id })).messages).toHaveLength(1);
+		expect(await codeOf(bot.call("chat.post_message", { room_id: room.id, text: "Hi" }))).toBe("forbidden");
 	});
 });
 

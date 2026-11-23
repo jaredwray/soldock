@@ -1,4 +1,5 @@
 import {
+	allowsResource,
 	CHAT_EVENT_REASONS,
 	CHAT_LIMITS,
 	CHAT_WEBHOOK_EVENTS,
@@ -11,6 +12,7 @@ import {
 	resources,
 	WEBHOOK_EVENT_TYPE,
 	WEBHOOK_LIMITS,
+	webhookScope,
 } from "@asterra/contracts";
 import {
 	credentialState,
@@ -397,12 +399,16 @@ function sameCredential(endpoint: EndpointRow, subscription: SubscriptionRow): b
 	);
 }
 
-/** The access of the creator now. A lost target stops that subscription. A dead credential stops the endpoint. */
+/**
+ * The access of the creator now. A lost target stops that subscription. A dead credential stops the endpoint.
+ * `roomId` is the room of a chat event.
+ */
 async function checkDelivery(
 	db: D1Database,
 	endpoint: EndpointRow,
 	subscription: SubscriptionRow,
 	memberIds: string[] | undefined,
+	roomId: string | undefined,
 ): Promise<DeliveryCheck> {
 	const endpointState = await credentialState(db, {
 		principalId: endpoint.created_by,
@@ -422,6 +428,23 @@ async function checkDelivery(
 	}
 	const creator = endpointState.principal;
 	const target = subscription.target_id;
+	// The scopes and the limits of an agent can change after it made the subscription. A delivery needs the
+	// access that a new subscription needs now: the webhook scope of the domain, and the resource of the event
+	// inside the limits of the agent. A limited agent gets no event of a room outside its list.
+	if (creator.kind === "agent") {
+		if (!creator.agent_scopes.includes(webhookScope(subscription.domain))) {
+			return { action: "disable_subscription", reason: "access_lost" };
+		}
+		const limits = creator.agent_resources;
+		if (subscription.domain === "chat") {
+			// A chat subscription covers each room of the agent, so an event of a room outside the list skips.
+			// It never stops the subscription. A job with no room sends only for an agent without limits.
+			const inside = roomId === undefined ? limits === null : allowsResource(limits, "room", roomId);
+			if (!inside) return { action: "skip" };
+		} else if (!allowsResource(limits, subscription.domain === "mail" ? "mailbox" : "drive", target)) {
+			return { action: "disable_subscription", reason: "access_lost" };
+		}
+	}
 	if (memberIds !== undefined) {
 		if (!memberIds.includes(creator.id)) return { action: "disable_subscription", reason: "access_lost" };
 	} else if (subscription.domain === "drive" && target.startsWith("drv_")) {
@@ -467,7 +490,8 @@ async function deliver(env: Env, job: DeliveryJob): Promise<void> {
 	if (pair.endpoint.protocol === "mcp_events" && job.occurredAt < Date.parse(pair.subscription.created_at)) return;
 	if (job.kind === "delivery" && attempt === 1 && joinsWaitingRetry(pair.subscription, job.eventId, Date.now())) return;
 	const memberIds = job.kind === "drive_delivery" ? job.memberIds : undefined;
-	const check = await checkDelivery(db, pair.endpoint, pair.subscription, memberIds);
+	const roomId = job.kind === "chat_delivery" ? job.roomId : undefined;
+	const check = await checkDelivery(db, pair.endpoint, pair.subscription, memberIds, roomId);
 	if (check.action === "skip") return;
 	if (check.action === "disable_endpoint") {
 		await disableEndpoint(db, pair.endpoint, check.reason);
