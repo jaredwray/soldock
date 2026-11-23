@@ -288,6 +288,7 @@ export {
 	TotpCode,
 } from "./signin.ts";
 export {
+	AgentAccessChange,
 	MAILBOX_MEMBER_SCOPES,
 	type MailboxMemberScope,
 	mailboxMemberScopes,

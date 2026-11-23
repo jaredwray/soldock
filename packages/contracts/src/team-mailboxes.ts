@@ -57,9 +57,19 @@ export type TeamMailbox = z.infer<typeof TeamMailbox>;
 
 const ADMIN_ONLY = "Owners and admins only.";
 
-/** What a new membership changes on an agent or a service account. */
+/** What a membership changes on an agent or a service account. */
 const AGENT_MEMBER =
-	"An agent or a service account also gets each scope of its membership that it does not hold, and the mailbox goes into its resource limits when it has limits. So it can use the mailbox at once. Your credential must hold each scope that the agent gets.";
+	"An agent or a service account also gets each scope of its membership that it does not hold. The mailbox goes into its resource limits when it has limits. So it can use the mailbox at once. agent_access_changes has these changes. Your credential must hold each scope of the membership of an agent.";
+
+/** What a call changed on an agent or a service account, for its membership of a team mailbox. */
+export const AgentAccessChange = z.object({
+	principal_id: z.string(),
+	/** The scopes that the agent got on its account. They also apply to its own mailbox. */
+	scopes_added: z.array(z.string()),
+	/** True when the call added the mailbox to the resource limits of the agent. */
+	limits_widened: z.boolean(),
+});
+export type AgentAccessChange = z.infer<typeof AgentAccessChange>;
 
 export const listTeamMailboxes = defineOperation({
 	name: "directory.list_team_mailboxes",
@@ -95,7 +105,11 @@ export const createTeamMailbox = defineOperation({
 		address: EmailAddress,
 		member_ids: z.array(PrincipalId).max(TEAM_MAILBOX_LIMITS.members).default([]),
 	}),
-	output: z.object({ team_mailbox: TeamMailbox }),
+	output: z.object({
+		team_mailbox: TeamMailbox,
+		/** The change of each agent and each service account of the first members that got new access. */
+		agent_access_changes: z.array(AgentAccessChange),
+	}),
 	errors: ["conflict", "not_found"],
 });
 
@@ -123,6 +137,7 @@ export const addTeamMailboxMember = defineOperation({
 		ADMIN_ONLY,
 		"scopes says what the member can do in this mailbox: mail.read, mail.modify and mail.send. A new member without scopes gets the three.",
 		"For a principal that is a member, scopes replaces the scopes of the membership. Without scopes, the membership does not change.",
+		"Each call for an agent is the decision that the agent can use the mailbox with the scopes of its membership, also a call that removes a scope.",
 		"The member can use the mailbox at once, with each credential that holds the scopes.",
 		AGENT_MEMBER,
 		"An agent can never add itself. The outbound policy of an agent also applies to mail that it sends from a team mailbox.",
@@ -139,8 +154,8 @@ export const addTeamMailboxMember = defineOperation({
 	}),
 	output: z.object({
 		team_mailbox: TeamMailbox,
-		/** The scopes that the call added to the agent or the service account. Empty for a person. */
-		agent_scopes_added: z.array(z.string()),
+		/** The change of the agent or the service account. Empty for a person, and when the agent had the access. */
+		agent_access_changes: z.array(AgentAccessChange),
 	}),
 	errors: ["not_found"],
 });

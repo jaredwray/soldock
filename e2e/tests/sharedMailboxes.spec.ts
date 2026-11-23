@@ -68,7 +68,10 @@ test("an admin sets what a person and an agent can do in a shared mailbox, and t
 		await selectCandidate(page, card, agentName);
 		await card.getByRole("button", { name: "Add member" }).click();
 		await expect(
-			page.getByText(`${agentName} now also holds mail.read, mail.modify, mail.send.`, { exact: false }),
+			page.getByText(
+				`${agentName} now also holds mail.read, mail.modify, mail.send, and has this mailbox in its limits now.`,
+				{ exact: false },
+			),
 		).toBeVisible();
 		const access = await admin.request.get(`/api/v1/directory/agents/${agent.id}/access`);
 		expect(await access.json()).toMatchObject({

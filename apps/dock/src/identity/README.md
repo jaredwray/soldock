@@ -737,7 +737,8 @@ drives get the same model later.
   nothing: it does not give the three again. A membership has at least one scope. A remove takes the
   access away.
 - A call in the mailbox needs its scope in the credential and in the membership. A member with only
-  `mail.send` sends from the address and reads nothing. A lost scope ends at the next call, because
+  `mail.send` sends from the address and reads nothing. A reply reads the message that it answers, so
+  `mail.send` with `reply_to_message_id` also needs `mail.read` in the membership. A lost scope ends at the next call, because
   `teamMailboxFor` reads D1 on each call.
 - `team_mailbox_members.scopes` stores them as a JSON list (migration `0029`). A member from before the
   migration has the three: each member could read the mailbox, change it and send from it. A stored value
@@ -746,9 +747,15 @@ drives get the same model later.
   `mail.list_mailboxes` and `directory.get_agent_access` show the scopes of the membership.
 - **An agent or a service account gets the access with the membership.** Only an owner or an admin adds a
   member, so the add is the decision. The agent gets each scope of the membership that it does not hold
-  (`agent_scopes_added` of the result), and the mailbox goes into its limits when it has limits
+  (`scopes_added` in `agent_access_changes` of the result), and the mailbox goes into its limits when it
+  has limits (`limits_widened`)
   (`agentWidening`). So it can use the mailbox at once, with each key and each connection.
   - The scopes of an agent apply to its own mailbox too. An admin who wants less gives fewer `scopes`.
+    `directory.create_team_mailbox` and `directory.add_team_mailbox_member` return each change in
+    `agent_access_changes`, and the web app shows it, so no agent gets a scope without a notice.
+  - Each call for a member that is an agent is the decision that the agent can use the mailbox with the
+    scopes of its membership. This includes a call that removes a scope, and a membership from before this
+    rule that the limits did not name. So the settings of the mailbox show what the agent can do.
   - No escalation: the credential of the call must hold each scope of the membership of an agent
     (`grantableScopes`). A narrow key with `directory.write` cannot give a scope that it does not hold.
     A refused call writes nothing. A person needs no check: a key of a person has its own scopes.

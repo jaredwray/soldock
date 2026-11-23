@@ -14,7 +14,7 @@ import { useToast } from "../../lib/toast.tsx";
 import { principalOption } from "../../lib/usePrincipals.ts";
 import { TargetWebhooks } from "../settings/TargetWebhooks.tsx";
 import { AdminCard } from "./AdminCard.tsx";
-import { MAILBOX_SCOPE_NAMES, memberScopes, scopesText, toggleMemberScope } from "./mailboxScopes.ts";
+import { accessChangeText, MAILBOX_SCOPE_NAMES, memberScopes, scopesText, toggleMemberScope } from "./mailboxScopes.ts";
 
 // The UI says "shared mailbox". The operations and the mail paths keep the name "team mailbox".
 
@@ -141,12 +141,6 @@ function MembersPart({ mailbox, principals, onChanged }: PartProps & { principal
 			.map((principal) => ({ principal, scopes: memberScopes(member.scopes) })),
 	);
 
-	/** The text for the scopes that an agent or a service account got on its account. */
-	function grantedText(principal: Principal, added: readonly string[]): string {
-		const scopes = memberScopes(added);
-		return scopes.length === 0 ? "" : ` ${principal.display_name} now also holds ${scopes.join(", ")}.`;
-	}
-
 	/** Sets what a member can do in the mailbox. The change applies at the next call of the member. */
 	async function setScopes(principal: Principal, scopes: MailboxMemberScope[]) {
 		setBusy(true);
@@ -159,7 +153,7 @@ function MembersPart({ mailbox, principals, onChanged }: PartProps & { principal
 			});
 			onChanged(result.team_mailbox);
 			toast({
-				message: `${principal.display_name} can now ${scopesText(scopes)} in ${mailbox.display_name}.${grantedText(principal, result.agent_scopes_added)}`,
+				message: `${principal.display_name} can now ${scopesText(scopes)} in ${mailbox.display_name}.${accessChangeText(principal.display_name, result.agent_access_changes)}`,
 			});
 		} catch (caught) {
 			setError(errorMessage(caught));
@@ -189,7 +183,7 @@ function MembersPart({ mailbox, principals, onChanged }: PartProps & { principal
 			setNewScopes([...MAILBOX_MEMBER_SCOPES]);
 			onChanged(result.team_mailbox);
 			toast({
-				message: `${principal.display_name} can now ${scopesText(newScopes)} in ${mailbox.display_name}.${grantedText(principal, result.agent_scopes_added)}`,
+				message: `${principal.display_name} can now ${scopesText(newScopes)} in ${mailbox.display_name}.${accessChangeText(principal.display_name, result.agent_access_changes)}`,
 			});
 		} catch (caught) {
 			setError(errorMessage(caught));

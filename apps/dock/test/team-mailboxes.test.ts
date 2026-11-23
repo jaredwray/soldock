@@ -282,6 +282,9 @@ describe("the scopes of a member of a team mailbox", () => {
 					add_label_ids: ["STARRED"],
 				});
 			expect(thread?.subject).toBe("Order 42");
+			const [message] = (
+				await member.call("mail.get_thread", { mailbox_id: support.id, thread_id: thread?.id as string })
+			).messages;
 			expect(await code(change())).toBe("forbidden");
 			expect(await code(member.call("mail.create_label", { mailbox_id: support.id, name: "Later" }))).toBe("forbidden");
 			expect(await code(send(member, support.id))).toBe("forbidden");
@@ -291,6 +294,18 @@ describe("the scopes of a member of a team mailbox", () => {
 			expect((await send(member, support.id)).message_id).toEqual(expect.any(String));
 			expect(await code(read(member))).toBe("forbidden");
 			expect(await code(member.call("mail.get_profile", { mailbox_id: support.id }))).toBe("forbidden");
+			// A reply puts the subject and the references of its message into the new message. Without
+			// mail.read, a reply would show mail that the member cannot read.
+			expect(
+				await code(
+					member.call("mail.send", {
+						mailbox_id: support.id,
+						to: [member.address],
+						text: "What is this?",
+						reply_to_message_id: message?.id as string,
+					}),
+				),
+			).toBe("forbidden");
 
 			await setScopes(support.id, member, ["mail.read", "mail.modify"]);
 			expect(await change()).toMatchObject({ dry_run: false });
@@ -352,7 +367,10 @@ describe("an agent in a team mailbox", () => {
 		const support = await createSupport([]);
 		const add = { mailbox_id: support.id, principal_id: agent.id };
 		const added = await owner.call("directory.add_team_mailbox_member", add);
-		expect(added.agent_scopes_added).toEqual(["mail.modify", "mail.send"]);
+		// The result tells the admin what the agent got: the scopes also apply to the own mailbox of the agent.
+		expect(added.agent_access_changes).toEqual([
+			{ principal_id: agent.id, scopes_added: ["mail.modify", "mail.send"], limits_widened: true },
+		]);
 		expect(await access(agent.id)).toMatchObject({
 			scopes: ["account.read", "mail.read", "mail.modify", "mail.send"],
 			resources: { mailbox_ids: [agent.id, support.id], drive_ids: [agent.id], room_ids: [] },
@@ -362,18 +380,42 @@ describe("an agent in a team mailbox", () => {
 		const sent = await agent.call("mail.send", { mailbox_id: support.id, to: ["owner@dock.test"], text: "Hi" });
 		expect(sent.message_id).toEqual(expect.any(String));
 		// A second call has nothing to add. A person gets no scopes.
-		expect((await owner.call("directory.add_team_mailbox_member", add)).agent_scopes_added).toEqual([]);
+		expect((await owner.call("directory.add_team_mailbox_member", add)).agent_access_changes).toEqual([]);
 		const person = await owner.call("directory.add_team_mailbox_member", { ...add, principal_id: ada.id });
-		expect(person.agent_scopes_added).toEqual([]);
+		expect(person.agent_access_changes).toEqual([]);
 
-		// The first members of a new mailbox get the same. An agent without limits stays without limits.
-		const { team_mailbox: sales } = await owner.call("directory.create_team_mailbox", {
+		// The first members of a new mailbox get the same, and the result names each change. The agent holds
+		// the scopes now, so it gets only the mailbox in its limits. An agent without limits stays without
+		// limits, and the bot holds each scope: it has no change.
+		const { team_mailbox: sales, agent_access_changes: changes } = await owner.call("directory.create_team_mailbox", {
 			display_name: "Sales",
 			address: "sales@dock.test",
 			member_ids: [agent.id, bot.id],
 		});
+		expect(changes).toEqual([{ principal_id: agent.id, scopes_added: [], limits_widened: true }]);
 		expect((await access(agent.id)).resources?.mailbox_ids).toEqual([agent.id, support.id, sales.id]);
 		expect((await access(bot.id)).resources).toBeNull();
+	});
+
+	// The settings of the mailbox show the scopes of each member. A membership from before this rule can be
+	// outside the limits of its agent. Each call for that member, also one that removes a scope, makes the
+	// settings true, and the result says that the limits changed.
+	it("puts the mailbox into the limits at each call for the member, and says so in the result", async () => {
+		const agent = await newAgent();
+		const support = await createSupport([]);
+		await env.DIRECTORY.prepare(
+			"INSERT INTO team_mailbox_members (mailbox_id, principal_id, added_by, created_at) VALUES (?, ?, ?, ?)",
+		)
+			.bind(support.id, agent.id, owner.id, new Date().toISOString())
+			.run();
+		expect(await code(agent.call("mail.list_threads", { mailbox_id: support.id }))).toBe("forbidden");
+		const narrowed = await owner.call("directory.add_team_mailbox_member", {
+			mailbox_id: support.id,
+			principal_id: agent.id,
+			scopes: ["mail.read"],
+		});
+		expect(narrowed.agent_access_changes).toEqual([{ principal_id: agent.id, scopes_added: [], limits_widened: true }]);
+		expect((await agent.call("mail.list_threads", { mailbox_id: support.id })).threads).toEqual([]);
 	});
 
 	// A narrow key with directory.write must not give an agent a scope that the key does not hold.
@@ -710,33 +752,42 @@ describe("mail in a team mailbox", () => {
 	});
 
 	// A send writes the message to R2 before the mailbox stores it. A removal in that time must stop the send.
-	it("refuses a send when the member is removed while the send is in progress", async () => {
+	it("refuses a send when the member is removed, or loses mail.send, while the send is in progress", async () => {
 		const support = await createSupport();
-		const blobs = new Proxy(env.BLOBS, {
-			get(target, property) {
-				if (property === "put") {
-					return async (...args: Parameters<R2Bucket["put"]>) => {
-						await owner.call("directory.remove_team_mailbox_member", { mailbox_id: support.id, principal_id: ada.id });
-						return target.put(...args);
-					};
-				}
-				const value = Reflect.get(target, property);
-				return typeof value === "function" ? value.bind(target) : value;
-			},
-		});
-		const res = await (worker as unknown as Required<Pick<ExportedHandler<Env>, "fetch">>).fetch(
-			new Request(`${ORIGIN}/api/v1/mail/messages`, {
-				method: "POST",
-				headers: { authorization: `Bearer ${ada.key}`, "content-type": "application/json" },
-				body: JSON.stringify({ mailbox_id: support.id, to: ["cy@customer.example"], text: "Too late" }),
-			}),
-			{ ...env, BLOBS: blobs } as unknown as Env,
-			createExecutionContext(),
-		);
-		expect(res.status).toBe(403);
-		expect(await subjects(bot, support.id, "in:anywhere")).toEqual([]);
-		// The raw message of the refused send does not stay in R2.
-		expect((await env.BLOBS.list({ prefix: `mail/raw/${support.id}/` })).objects).toEqual([]);
+		const member = { mailbox_id: support.id, principal_id: ada.id };
+		const changes = [
+			() => owner.call("directory.add_team_mailbox_member", { ...member, scopes: ["mail.read"] }),
+			() => owner.call("directory.remove_team_mailbox_member", member),
+		];
+		for (const change of changes) {
+			const blobs = new Proxy(env.BLOBS, {
+				get(target, property) {
+					if (property === "put") {
+						return async (...args: Parameters<R2Bucket["put"]>) => {
+							await change();
+							return target.put(...args);
+						};
+					}
+					const value = Reflect.get(target, property);
+					return typeof value === "function" ? value.bind(target) : value;
+				},
+			});
+			const res = await (worker as unknown as Required<Pick<ExportedHandler<Env>, "fetch">>).fetch(
+				new Request(`${ORIGIN}/api/v1/mail/messages`, {
+					method: "POST",
+					headers: { authorization: `Bearer ${ada.key}`, "content-type": "application/json" },
+					body: JSON.stringify({ mailbox_id: support.id, to: ["cy@customer.example"], text: "Too late" }),
+				}),
+				{ ...env, BLOBS: blobs } as unknown as Env,
+				createExecutionContext(),
+			);
+			expect(res.status).toBe(403);
+			expect(await subjects(bot, support.id, "in:anywhere")).toEqual([]);
+			// The raw message of the refused send does not stay in R2.
+			expect((await env.BLOBS.list({ prefix: `mail/raw/${support.id}/` })).objects).toEqual([]);
+			// The member can send again for the next change.
+			await owner.call("directory.add_team_mailbox_member", { ...member, scopes: ALL });
+		}
 	});
 
 	// The members share the key store of the mailbox. The key of one member must not block or answer another.

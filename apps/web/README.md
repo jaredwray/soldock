@@ -406,7 +406,8 @@ MCP clients. The app has no UI-only path.
         `mailboxScopes.ts`).
       - **The new member can** has the same three check boxes for a new member. Each one is on at the start.
       - The rule is the same for a person, an agent and a service account. The toast names the scopes that
-        an agent or a service account got on its account (`agent_scopes_added`).
+        an agent or a service account got on its account, and says when the mailbox went into its limits
+        (`agent_access_changes`, `accessChangeText`). The toast of a new shared mailbox names them too.
     - **Webhooks of …**, each webhook that gets the mail event of the shared mailbox (`mail.list_webhook_subscriptions`).
       **Edit events** opens the check box of that event. An owner or an admin can clear it
       (`mail.delete_webhook_subscription`), for example when the mailbox reaches its limit of active subscriptions.

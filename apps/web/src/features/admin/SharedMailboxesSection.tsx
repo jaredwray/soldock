@@ -5,6 +5,7 @@ import { Dialog } from "../../lib/Dialog.tsx";
 import { Icon } from "../../lib/icons.tsx";
 import { kindTag } from "../../lib/principalKind.ts";
 import { useToast } from "../../lib/toast.tsx";
+import { accessChangeText } from "./mailboxScopes.ts";
 import { byName, SharedMailboxPanel } from "./SharedMailboxPanel.tsx";
 
 // The UI says "shared mailbox". The operations and the mail paths keep the name "team mailbox".
@@ -137,7 +138,14 @@ function CreateSharedMailboxDialog({ principals, onClose, onCreated }: CreatePro
 				member_ids: [...memberIds],
 			});
 			onCreated(result.team_mailbox);
-			toast({ message: `Shared mailbox ${result.team_mailbox.display_name} created.` });
+			// The toast names each agent that got scopes on its account: they also apply to its own mailbox.
+			const changed = result.agent_access_changes
+				.map((change) => {
+					const agent = principals.find((principal) => principal.id === change.principal_id);
+					return accessChangeText(agent?.display_name ?? "An agent", [change]);
+				})
+				.join("");
+			toast({ message: `Shared mailbox ${result.team_mailbox.display_name} created.${changed}` });
 		} catch (caught) {
 			setError(errorMessage(caught));
 			setBusy(false);
@@ -200,7 +208,10 @@ function CreateSharedMailboxDialog({ principals, onClose, onCreated }: CreatePro
 								</span>
 							</label>
 						))}
-						<p className="field-hint">You can also add and remove members later.</p>
+						<p className="field-hint">
+							Each member can read the mailbox, change it and send from it. An agent or a service account also gets
+							these scopes on its account. You can change what a member can do, and add and remove members, later.
+						</p>
 					</fieldset>
 					{error && (
 						<p className="form-error form-grid-wide" role="alert">

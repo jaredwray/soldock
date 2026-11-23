@@ -1,5 +1,6 @@
 import {
 	AGENT_RESOURCE_LIMITS,
+	type AgentAccessChange,
 	type AgentResources,
 	ALL_SCOPES,
 	API_KEY_LIMITS,
@@ -225,7 +226,8 @@ function agentNoun(agent: Pick<PrincipalRecord, "service">): string {
  * Refuses a membership of a team mailbox that the caller cannot give to an agent or a service account. The
  * agent gets each scope of the membership, so the credential of the call must hold each one
  * (`grantableScopes`): a narrow key with `directory.write` cannot give a scope that it does not hold. The
- * limits of an agent take the mailbox too, and the list of one kind has a most. `mailboxId` is undefined for
+ * limits of an agent take the mailbox too, and they have place for a fixed number of mailboxes
+ * (`assertPlaceInLimits`). `mailboxId` is undefined for
  * a mailbox that does not exist yet. A person needs no check: a key of a person has its own scopes.
  */
 function assertAgentMembership(
@@ -288,6 +290,15 @@ async function afterWidening(call: CallContext, widening: MemberWidening): Promi
 	const limits = resources === null ? "no limits" : "limits";
 	auditOk(call, "directory.set_agent_access", `${agent.id}:${scopes.join(",")}:${limits}`);
 	recordServiceChange(call, agent, "directory.set_agent_access");
+}
+
+/** The change of an agent, as the result of an operation gives it. */
+function toAccessChange(widening: MemberWidening): AgentAccessChange {
+	return {
+		principal_id: widening.agent.id,
+		scopes_added: widening.added,
+		limits_widened: widening.resources !== widening.agent.agent_resources,
+	};
 }
 
 /** The tries of a write that a parallel change of the access of an agent made match nothing. */
@@ -809,10 +820,9 @@ export const identityHandlers: Pick<HandlerMap<CallContext>, IdentityOperation |
 			if (mailbox.member_ids.includes(member.id))
 				recordServiceChange(call, member, "directory.add_team_mailbox_member");
 		}
-		for (const widening of widenings) {
-			if (mailbox.member_ids.includes(widening.agent.id)) await afterWidening(call, widening);
-		}
-		return { team_mailbox: mailbox };
+		const widened = widenings.filter(({ agent }) => mailbox.member_ids.includes(agent.id));
+		for (const widening of widened) await afterWidening(call, widening);
+		return { team_mailbox: mailbox, agent_access_changes: widened.map(toAccessChange) };
 	},
 
 	async "directory.update_team_mailbox"(call, input) {
@@ -864,7 +874,7 @@ export const identityHandlers: Pick<HandlerMap<CallContext>, IdentityOperation |
 			recordServiceChange(call, member, "directory.add_team_mailbox_member");
 		}
 		if (widening) await afterWidening(call, widening);
-		return { team_mailbox: after, agent_scopes_added: widening?.added ?? [] };
+		return { team_mailbox: after, agent_access_changes: widening ? [toAccessChange(widening)] : [] };
 	},
 
 	async "directory.remove_team_mailbox_member"(call, input) {

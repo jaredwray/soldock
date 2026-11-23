@@ -2,6 +2,7 @@ import {
 	allowsResource,
 	MAIL_LIMITS,
 	MAILBOX_MEMBER_SCOPES,
+	type MailboxMemberScope,
 	type Message,
 	mailboxMemberScopes,
 	operations,
@@ -82,10 +83,15 @@ function ownMailbox(call: CallContext): MailboxRecord {
  *
  * In a team mailbox, the membership has scopes too. The call needs each mail scope of its operation in the
  * membership (`mailboxMemberScopes`). The contract of the operation names them, so a handler cannot ask for
- * a different scope than the invoker did.
+ * a different scope than the invoker did. `also` names a scope that one input of the operation needs more.
  */
-async function openMailbox(call: CallContext, mailboxId: string | undefined, operation: MailOperation) {
-	const needed = mailboxMemberScopes(operations[operation].scopes);
+async function openMailbox(
+	call: CallContext,
+	mailboxId: string | undefined,
+	operation: MailOperation,
+	also: readonly MailboxMemberScope[] = [],
+) {
+	const needed = [...new Set([...mailboxMemberScopes(operations[operation].scopes), ...also])];
 	let record: MailboxRecord;
 	if (mailboxId === undefined || mailboxId === call.caller.id) record = ownMailbox(call);
 	else if (isTeamMailboxId(mailboxId)) {
@@ -451,7 +457,14 @@ export const mailHandlers: Pick<HandlerMap<CallContext>, MailOperation> = {
 	},
 
 	async "mail.send"(call, input) {
-		const { record, box } = await openMailbox(call, input.mailbox_id, "mail.send");
+		// A reply reads the message that it answers: its subject and its references go into the new message.
+		// So a member of a team mailbox needs mail.read for a reply, or a send would show mail that it cannot read.
+		const { record, box } = await openMailbox(
+			call,
+			input.mailbox_id,
+			"mail.send",
+			input.reply_to_message_id ? ["mail.read"] : [],
+		);
 		// The idempotency key is bound to the request, so a reused key with another message is a conflict.
 		const { idempotency_key: _key, ...request } = input;
 		const requestHash = await sha256Hex(JSON.stringify(request));

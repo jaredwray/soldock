@@ -371,11 +371,13 @@ agent and a service account.
   `forbidden`, and the text names the scope.
 - **An agent or a service account gets the scopes on its account too.** When you add it with a scope that
   it does not hold, it gets that scope, and the mailbox goes into its limits. So you do not open
-  **Admin › Members** for a second change. The scope also applies to its own mailbox. The result has the
-  new scopes in `agent_scopes_added`.
+  **Admin › Members** for a second change. The scope also applies to its own mailbox. The result has each
+  change in `agent_access_changes`, and the web app shows it. This applies to each call for the member,
+  also a call that removes a scope.
 - The credential that adds an agent must hold each scope that the membership gives. A narrow API key with
   `directory.write` cannot give `mail.send` when it does not hold `mail.send`.
-- A member with only `mail.send` does not see the mailbox in the web app, and cannot watch its inbox.
+- A member with only `mail.send` does not see the mailbox in the web app, and cannot watch its inbox. A
+  reply (`reply_to_message_id`) reads the message that it answers, so it also needs `mail.read`.
 
 - The members share the threads, the labels and the read state. A change by one member shows for
   each member.
