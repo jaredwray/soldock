@@ -163,12 +163,13 @@ describe("who can use the auto-label settings", () => {
 
 	it("lets an agent read its own settings, never change them, and hides the change tools", async () => {
 		expect((await bot.call("mail.get_auto_labels")).mailbox_id).toBe(bot.id);
+		// Each call starts when the loop gets to it, so no refusal waits without a handler.
 		for (const call of [
-			bot.call("mail.update_auto_labels", { enabled: true }),
-			bot.call("mail.create_auto_label", { name: "Bills", description: "Bills from our vendors" }),
-			bot.call("mail.run_auto_labels", { dry_run: true }),
+			() => bot.call("mail.update_auto_labels", { enabled: true }),
+			() => bot.call("mail.create_auto_label", { name: "Bills", description: "Bills from our vendors" }),
+			() => bot.call("mail.run_auto_labels", { dry_run: true }),
 		]) {
-			expect(await codeOf(call)).toBe("forbidden");
+			expect(await codeOf(call())).toBe("forbidden");
 		}
 		const tools = (
 			((await mcp(bot.key, "tools/list")).body?.result ?? { tools: [] }) as { tools: { name: string }[] }
