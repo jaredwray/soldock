@@ -27,12 +27,14 @@ import { endEventSockets } from "./principal.ts";
 import { prepareFreshDirectory } from "./setup.ts";
 import { signInWithPassword } from "./signin.ts";
 import {
+	type ApiKeyRecord,
 	assertPrimaryAddress,
 	createPrincipal,
 	createSession,
 	deleteSession,
 	directoryIsEmpty,
 	domainOf,
+	type PrincipalRecord,
 	SESSION_TTL_SECONDS,
 } from "./store.ts";
 
@@ -135,7 +137,8 @@ export function mountAuthRoutes(app: AuthApp): void {
 		assertPrimaryAddress(address);
 		const passwordHash = await hashPassword(password);
 		const reset = parsed.data.start_fresh ? await prepareFreshDirectory(c.env) : null;
-		let created: Awaited<ReturnType<typeof createPrincipal>> = null;
+		// Setup always gives the owner a first key.
+		let created: { principal: PrincipalRecord; key: ApiKeyRecord; secret: string } | null = null;
 		try {
 			created = await createPrincipal(
 				c.env.DIRECTORY,

@@ -297,12 +297,13 @@ export const getPrincipals = defineOperation({
 
 export const createPrincipal = defineOperation({
 	name: "directory.create_principal",
-	summary: "Create a person or an agent, with a mailbox and a first API key",
+	summary: "Create a person or an agent, with a mailbox. An agent also gets a first API key",
 	description: [
 		"Owners and admins only. Creates a human or an agent with an address on one of the mail domains of the deployment.",
 		"A human needs a first password and signs in with the address and the password. Give the password to the person, who can change it in Settings. An agent has no password.",
+		"A human gets no API key. The person can create keys in Settings after the sign-in.",
 		"An agent gets a sponsor (the caller by default) and the internal-only outbound policy.",
-		"The result holds a first API key. Its secret is shown only once.",
+		"The result of an agent holds a first API key with key_scopes. Its secret is shown only once.",
 	].join(" "),
 	http: { method: "POST", path: "/api/v1/directory/principals" },
 	scopes: ["directory.write"],
@@ -317,6 +318,7 @@ export const createPrincipal = defineOperation({
 			sponsor_id: PrincipalId.optional(),
 			/** The first password. Required for a human. An agent has none. */
 			password: Password.optional(),
+			/** The scopes of the first API key of an agent. A human gets no key. */
 			key_scopes: z.array(ScopeName).min(1).optional(),
 		})
 		.refine((input) => input.kind !== "human" || input.password !== undefined, {
@@ -326,8 +328,16 @@ export const createPrincipal = defineOperation({
 		.refine((input) => input.kind !== "agent" || input.password === undefined, {
 			message: "an agent has no password",
 			path: ["password"],
+		})
+		.refine((input) => input.kind !== "human" || input.key_scopes === undefined, {
+			message: "a human gets no API key",
+			path: ["key_scopes"],
 		}),
-	output: z.object({ principal: Principal, api_key: CreatedApiKey }),
+	output: z.object({
+		principal: Principal,
+		/** The first API key of an agent. Null for a human. */
+		api_key: CreatedApiKey.nullable(),
+	}),
 	errors: ["conflict", "not_found"],
 });
 

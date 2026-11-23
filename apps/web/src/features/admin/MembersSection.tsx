@@ -30,7 +30,7 @@ interface MembersSectionProps {
 	principals: readonly Principal[];
 	/** Called after each change, so the page loads the directory again. */
 	onChanged: () => void;
-	/** The new principal and its first key. A service account has no first key: null. */
+	/** The new principal and the first key of an agent. A person and a service account get no key: null. */
 	onCreated: (principal: Principal, key: CreatedApiKey | null) => void;
 }
 

@@ -381,12 +381,15 @@ export const identityHandlers: Pick<HandlerMap<CallContext>, IdentityOperation |
 			if (!input.password) throw new OperationError("invalid", "A person needs a password to sign in.");
 			assertFullCredential(call.caller);
 		}
-		const target = { kind: input.kind, sponsor_id: sponsorId, service: false } as PrincipalRecord;
-		const scopes = grantableScopes(
-			call.caller,
-			target,
-			input.key_scopes ?? (input.kind === "agent" ? AGENT_SCOPES : ALL_SCOPES),
-		);
+		// A person signs in with the password and creates keys in Settings. Only an agent gets a first key.
+		const firstKey =
+			input.kind === "agent"
+				? {
+						label: "First key",
+						scopes: grantableScopes(call.caller, { kind: "agent", service: false }, input.key_scopes ?? AGENT_SCOPES),
+						created_by: call.caller.principal.id,
+					}
+				: null;
 		const created = await createPrincipal(
 			call.env.DIRECTORY,
 			{
@@ -398,7 +401,7 @@ export const identityHandlers: Pick<HandlerMap<CallContext>, IdentityOperation |
 				password_hash: input.kind === "human" && input.password ? await hashPassword(input.password) : null,
 				created_by: call.caller.principal.id,
 			},
-			{ label: "First key", scopes, created_by: call.caller.principal.id },
+			firstKey,
 			// A sponsor archived or deleted during the request must not get a new agent.
 			sponsorId ? { liveSponsorId: sponsorId } : {},
 		);
@@ -411,7 +414,10 @@ export const identityHandlers: Pick<HandlerMap<CallContext>, IdentityOperation |
 		auditOk(call, "directory.create_principal", created.principal.id);
 		return {
 			principal: toPrincipalOutput(created.principal),
-			api_key: { ...toApiKeyOutput(created.key, created.principal), secret: created.secret },
+			api_key:
+				created.key === null || created.secret === null
+					? null
+					: { ...toApiKeyOutput(created.key, created.principal), secret: created.secret },
 		};
 	},
 

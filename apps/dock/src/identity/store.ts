@@ -628,10 +628,11 @@ export interface CreatePrincipalOptions {
 }
 
 /**
- * Creates a principal, its primary address and a first API key in one transaction. With
+ * Creates a principal, its primary address and, with a key, a first API key in one transaction. With
  * `onlyIfEmpty`, the transaction writes nothing when the directory already has a principal, so two
  * concurrent first-run setups cannot both create an owner. Returns null in that case. Without a key
- * (`null`), the principal gets no API key: an agent that connects with OAuth gets tokens instead.
+ * (`null`), the principal gets no API key: a person that an admin creates signs in with a password, a
+ * service account gets tokens in its card, and an agent that connects with OAuth gets tokens instead.
  */
 export async function createPrincipal(
 	db: D1Database,
@@ -645,6 +646,12 @@ export async function createPrincipal(
 	key: NewApiKey,
 	options?: CreatePrincipalOptions,
 ): Promise<{ principal: PrincipalRecord; key: ApiKeyRecord; secret: string } | null>;
+export async function createPrincipal(
+	db: D1Database,
+	principal: NewPrincipal,
+	key: NewApiKey | null,
+	options?: CreatePrincipalOptions,
+): Promise<{ principal: PrincipalRecord; key: ApiKeyRecord | null; secret: string | null } | null>;
 export async function createPrincipal(
 	db: D1Database,
 	principal: NewPrincipal,

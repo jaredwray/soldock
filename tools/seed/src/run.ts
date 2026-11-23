@@ -1,6 +1,6 @@
 // Fills an empty Asterra instance with the made-up organization. Each step is a call that a person or an
 // agent can make: the seed has no access to a database or to a Durable Object.
-import { ApiError, type InputOf } from "@asterra/contracts";
+import { ALL_SCOPES, ApiError, type InputOf } from "@asterra/contracts";
 import { type SeedApi, SeedStop } from "./api.ts";
 import {
 	type ActorKey,
@@ -101,8 +101,14 @@ export async function runSeed(api: SeedApi, options: SeedOptions = {}): Promise<
 			org_role: person.orgRole,
 			password: person.password,
 		});
-		apiKeys.set(key, created.api_key.secret);
 		principalIds.set(key, created.principal.id);
+		// A new person gets no API key. The owner creates one, so the seed can act as the person.
+		const personKey = await api.call(keyOf(OWNER), "account.create_api_key", {
+			principal_id: created.principal.id,
+			label: "Seed",
+			scopes: [...ALL_SCOPES],
+		});
+		apiKeys.set(key, personKey.api_key.secret);
 	}
 	for (const key of Object.keys(AGENTS) as AgentKey[]) {
 		const agent = AGENTS[key];
@@ -112,6 +118,7 @@ export async function runSeed(api: SeedApi, options: SeedOptions = {}): Promise<
 			address: agent.address,
 			sponsor_id: idOf(agent.sponsor),
 		});
+		if (!created.api_key) throw new Error(`The agent ${agent.displayName} got no first API key.`);
 		apiKeys.set(key, created.api_key.secret);
 		principalIds.set(key, created.principal.id);
 	}
