@@ -17,6 +17,11 @@ const DETAIL_CHARS = 200;
  * so a small limit gives an empty answer.
  */
 const REASONING_TOKENS = 1200;
+/**
+ * The tokens of the answer of a reasoning model in a connection test. A test does not stop at the budget,
+ * so it gets a small limit. The answer can be empty then, and the test accepts that.
+ */
+const REASONING_TEST_TOKENS = 64;
 
 export interface ChatMessage {
 	role: "system" | "user";
@@ -166,7 +171,11 @@ export async function chat(env: Env, request: ChatRequest, options: { test?: boo
 		model: `workers-ai/${model}`,
 		messages: request.messages,
 		temperature: 0,
-		max_tokens: aiModel(model)?.reasoning ? Math.max(request.maxTokens, REASONING_TOKENS) : request.maxTokens,
+		max_tokens: !aiModel(model)?.reasoning
+			? request.maxTokens
+			: test
+				? Math.max(request.maxTokens, REASONING_TEST_TOKENS)
+				: Math.max(request.maxTokens, REASONING_TOKENS),
 	};
 	const withSchema = Boolean(request.jsonSchema && aiModel(model)?.json_schema);
 	if (withSchema && request.jsonSchema) {
@@ -249,7 +258,10 @@ export async function chat(env: Env, request: ChatRequest, options: { test?: boo
 	} catch {
 		return await finish(failure("bad_response", { status: response.status, model }), { input: 0, output: 0 });
 	}
-	const content = answer && typeof answer === "object" ? contentOf(answer) : null;
+	// A connection test proves the path to the model. An answer with no text (a reasoning model that used
+	// its tokens to reason) still proves it.
+	const text = answer && typeof answer === "object" ? contentOf(answer) : null;
+	const content = text === null && test && answer && typeof answer === "object" ? "" : text;
 	const inputTokens = tokenCount(answer?.usage?.prompt_tokens) ?? Math.ceil(inputChars / 4);
 	const outputTokens = tokenCount(answer?.usage?.completion_tokens) ?? estimateTokens(content ?? "");
 	if (content === null) {

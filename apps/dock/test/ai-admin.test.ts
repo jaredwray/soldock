@@ -135,6 +135,19 @@ describe("the AI settings", () => {
 		expect(off.monthly_budget_usd).toBe(25.5);
 	});
 
+	it("keep both changes when two admins save at the same time", async () => {
+		await enableAi(owner);
+		const [budget, feature] = await Promise.all([
+			owner.call("ai.update_settings", { monthly_budget_usd: 42 }),
+			admin.call("ai.update_settings", { features: { mail_auto_label: { enabled: false } } }),
+		]);
+		expect(budget.monthly_budget_usd).toBe(42);
+		expect(feature.features.mail_auto_label.enabled).toBe(false);
+		const settings = await owner.call("ai.get_settings", {});
+		expect(settings.monthly_budget_usd).toBe(42);
+		expect(settings.features.mail_auto_label.enabled).toBe(false);
+	});
+
 	it("refuse settings that cannot work", async () => {
 		// On without a gateway, or without a model.
 		expect(await codeOf(owner.call("ai.update_settings", { enabled: true }))).toBe("invalid");
@@ -205,6 +218,26 @@ describe("the connection test", () => {
 		expect(result).toMatchObject({ ok: false, status: 401, reason: "http", detail: expect.stringContaining("token") });
 		const usage = await owner.call("ai.get_usage", {});
 		expect(usage).toMatchObject({ requests: 1, failures: 1, cost_usd: 0 });
+	});
+
+	it("reports a request that did not reach the gateway, and counts it as a failed request", async () => {
+		await enableAi(owner);
+		fakeGateway(() => {
+			throw new TypeError("Network connection lost.");
+		});
+		const result = await owner.call("ai.test_connection", {});
+		expect(result).toMatchObject({ ok: false, status: null, reason: "http", model: AI_MODEL });
+		expect(await owner.call("ai.get_usage", {})).toMatchObject({ requests: 1, failures: 1, cost_usd: 0 });
+	});
+
+	it("keeps the test of a reasoning model small, and accepts its answer with no text", async () => {
+		await enableAi(owner);
+		// A reasoning model can use the tokens of a small answer to reason: the content is null then.
+		const calls = fakeGateway(() => gatewayAnswer(null));
+		const result = await owner.call("ai.test_connection", { model: "@cf/openai/gpt-oss-120b" });
+		expect(result).toMatchObject({ ok: true, status: 200 });
+		// The test does not stop at the budget, so it does not get the 1,200 tokens of a feature call.
+		expect(calls.map((call) => call.body.max_tokens)).toEqual([64]);
 	});
 
 	it("sends nothing without a gateway or without the token", async () => {

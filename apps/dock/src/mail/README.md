@@ -250,20 +250,28 @@ description in plain words. The classifier reads the description. Each label can
    - R0: a sender rule from corrections forces or blocks a sender label.
    - R1: an automatic answer (`Auto-Submitted: auto-replied`) gets no label.
    - R2: a calendar invitation gets Meeting.
-   - R3: automated mail from a social network gets Social.
-   - R4: an issue from a newsletter platform gets Newsletter.
+   - R3: automated mail from a social network gets Social, when the sender is proved.
+   - R4: an issue from a newsletter platform gets Newsletter, when the sender is proved.
    - R5 to R8 remove labels that cannot apply: bulk mail cannot need a reply or be a cold pitch,
      one-to-one mail is not marketing, and a known sender or internal mail is not a cold pitch.
    - R9: when the mailbox is not in To, Needs reply needs a confidence of 0.85.
    - R10: with no label left, the message gets no label.
    A rule that decides applies its labels at once. When one of them skips the inbox, the message
    never shows in the inbox, and it sends no inbox signal and no webhook event.
+   The fact `authenticated` says that the sender is proved: the mail came from inside the
+   organization, or the receiving server recorded a DMARC pass. For other mail, the From address and
+   the list headers can be forged. R3 and R4 do not decide such mail (their labels stay candidates for
+   the classifier), and such mail never skips the inbox, in the rule stage or in the classifier stage.
 3. **Classifier.** Each message that the rules did not decide goes to the `autolabel_outbox` table.
    The alarm puts its ids on the queue `soldock-mail-autolabel`. The consumer reads the message and
    the candidate labels from the mailbox, and calls the model of the feature through the `ai`
    module. The `ai` module checks the budget before the call. The mailbox applies the picks with
    `resolvePicks()`: only candidate keys, a confidence of 0.70 or more, at most 3 labels, and at most
-   one label of the kind of sender. A pick moves mail out of the inbox only at 0.85 or more.
+   one label of the kind of sender. A pick moves mail out of the inbox only at 0.85 or more, and only
+   mail from a proved sender. When the mailbox sent a message in the thread after the message arrived,
+   Needs reply is not a candidate, so a late answer of the classifier does not add it again. Before
+   the call, the consumer checks that the mailbox is in the directory. The mail of a deleted account
+   or team mailbox never goes to the gateway.
 
 When AI cannot take the call (AI or the feature is off, the gateway or the token is not set, or the
 month used its budget), the rules still apply, and the message leaves the outbox with no model label.
@@ -277,8 +285,9 @@ mark goes.
 
 - For a sender label, the newest correction of the address is a rule (R0). A domain rule needs
   corrections from 2 addresses of the domain, and never applies to a free-mail domain.
-- Each correction is an example in the prompt: the same sender first, then the same domain, then
-  the newest. A prompt shows at most 6.
+- A correction is an example in the prompt for mail of the same sender, and then of the same domain
+  (not a free-mail domain). A prompt shows at most 6. Corrections of other senders stay out, so the
+  subject of one sender never goes in the prompt for mail of a different sender.
 
 ### Classifier prompt
 
@@ -590,6 +599,9 @@ A disabled endpoint stays disabled. Delete it and create a new one.
   never name a system label, a label of a different mailbox or an action. The mailbox stores no text
   of the model. The worst result of a hostile message is a wrong label, or an archive of that message,
   which stays in All mail. Only a person writes corrections, so a sender cannot teach rules.
+- Auto labels: only mail from a proved sender (internal mail, or a DMARC pass) skips the inbox, and
+  only such mail gets a label from the sender domain alone (R3, R4). A forged From address or forged
+  list headers cannot hide mail from the inbox.
 
 ## Data inventory
 

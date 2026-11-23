@@ -38,6 +38,10 @@ The read operations audit each refusal.
 | Monthly budget | USD, from 0.01. The default is 10 |
 | Inbox auto labels | On or off, and its model, which must be an allowed model |
 
+`ai.update_settings` applies its change to the newest row and writes with a compare-and-set on
+`updated_at`. It reads and applies again when a different write came first, so two changes at the same
+time both stay.
+
 To turn on AI, the account ID, the gateway ID and one allowed model must be set. The token is not a
 condition: without it, AI makes no calls, the rules of auto labels still apply, and Admin › AI says why.
 
@@ -56,10 +60,15 @@ answer says only whether it exists (`token_configured`).
   address goes in it.
 - The body names the model as `workers-ai/<model id>`, with `temperature: 0`. A model that accepts a
   JSON schema gets `response_format`. When the gateway refuses the schema with `400`, the call goes one
-  more time without it.
+  more time without it. The ledger counts the refused request as a failure.
+- A model with `reasoning: true` in `AI_MODELS` reasons before it answers, and the reasoning uses tokens
+  of the answer. `chat()` gives such a model a limit of 1,200 tokens or more for a feature call, so the answer is not
+  empty. A connection test does not stop at the budget, so it gets 64 tokens, and it accepts an answer
+  with no text.
 - The answer is `choices[0].message.content`, and `usage` gives the tokens. Without `usage`, the tokens
   are estimated at 4 characters each.
-- The timeout is 20 seconds. A timeout, `408`, `429` and `5xx` can be tried again.
+- The timeout is 20 seconds. A timeout, a network error, `408`, `429` and `5xx` can be tried again. A
+  request that did not reach the gateway is a failure with no status, and the ledger counts it.
 
 Before each call, except a connection test, `chat()` checks that AI and the feature are on, that the
 gateway, the token and an allowed model are set, and that the month has budget left. A call that does

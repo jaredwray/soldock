@@ -218,13 +218,30 @@ interface FactsRow extends Row {
 	from_addr: string | null;
 	to_json: string;
 	cc_json: string;
+	auth_json: string | null;
+}
+
+/** True when the receiving server recorded a DMARC pass for the message. */
+function dmarcPassed(authJson: string | null): boolean {
+	if (!authJson) return false;
+	try {
+		return (JSON.parse(authJson) as { dmarc?: unknown } | null)?.dmarc === "pass";
+	} catch {
+		return false;
+	}
+}
+
+/** Stored facts, as the rules use them. Facts from before `authenticated` are not authenticated. */
+export function readFacts(json: string): MailFacts {
+	const facts = JSON.parse(json) as MailFacts;
+	return { ...facts, authenticated: facts.authenticated === true };
 }
 
 /** The facts of one message, from the mailbox: never from the content. */
 export function messageFacts(sql: SqlStorage, seq: number, ownerAddress: string): MailFacts | null {
 	const row = one<FactsRow>(
 		sql,
-		"SELECT seq, thread_id, origin, from_addr, to_json, cc_json FROM messages WHERE seq = ?",
+		"SELECT seq, thread_id, origin, from_addr, to_json, cc_json, auth_json FROM messages WHERE seq = ?",
 		seq,
 	);
 	if (!row) return null;
@@ -261,6 +278,7 @@ export function messageFacts(sql: SqlStorage, seq: number, ownerAddress: string)
 		threadHasSent: (thread?.sent ?? 0) > 0,
 		threadMessages: thread?.earlier ?? 0,
 		ownerAddress,
+		authenticated: row.origin === "internal" || dmarcPassed(row.auth_json),
 	};
 }
 
@@ -298,16 +316,25 @@ export function correctionsOfSender(sql: SqlStorage, sender: string | null): Cor
 	).map(toCorrection);
 }
 
-/** Examples for the prompt: the same sender first, then the same domain, then the newest. */
+/**
+ * Examples for the prompt: the corrections of the same sender first, then of the same domain. Corrections
+ * of other senders stay out, so the subject of one sender never goes in the prompt for mail of a different
+ * sender. A free-mail domain is not a relation between senders, so only the address counts there.
+ */
 export function exampleCorrections(sql: SqlStorage, sender: string | null, limit: number): Correction[] {
-	const address = sender?.toLowerCase() ?? "";
-	const domain = domainOfAddress(address) ?? "";
+	if (!sender) return [];
+	const address = sender.toLowerCase();
+	const own = domainOfAddress(address);
+	const domain = own && !FREE_MAIL_DOMAINS.has(own) ? own : "";
 	return all<CorrectionRow>(
 		sql,
 		`SELECT sender, sender_domain, label_key, action, subject, created_at FROM label_corrections
-		ORDER BY CASE WHEN sender = ? THEN 0 WHEN sender_domain = ? THEN 1 ELSE 2 END, created_at DESC, id DESC LIMIT ?`,
+		WHERE sender = ? OR (? != '' AND sender_domain = ?)
+		ORDER BY CASE WHEN sender = ? THEN 0 ELSE 1 END, created_at DESC, id DESC LIMIT ?`,
 		address,
 		domain,
+		domain,
+		address,
 		limit,
 	).map(toCorrection);
 }

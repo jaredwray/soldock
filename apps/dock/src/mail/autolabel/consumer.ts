@@ -1,4 +1,5 @@
 import { chat } from "../../ai/index.ts";
+import { getMailbox } from "../../identity/index.ts";
 import { log } from "../../platform/index.ts";
 import { mailboxStub } from "../delivery.ts";
 import { ANSWER_TOKENS, buildMessages, newNonce, outputSchema, parseModelOutput } from "./prompt.ts";
@@ -29,7 +30,8 @@ function isAutoLabelJob(body: unknown): body is AutoLabelJob {
  * from the mailbox, calls the classifier through AI Gateway, and gives the picks back to the mailbox. The
  * mailbox does the work only while the message is in its outbox, so a second delivery of a job does
  * nothing. A transient failure of the gateway retries the job. When AI cannot take the call (off, not
- * configured, no budget), the message leaves the outbox with the labels of the rules only.
+ * configured, no budget), the message leaves the outbox with the labels of the rules only. A job for a
+ * mailbox that is not in the directory any more makes no call.
  */
 export async function handleAutoLabelBatch(batch: MessageBatch<unknown>, env: Env): Promise<void> {
 	for (const message of batch.messages) {
@@ -41,6 +43,14 @@ export async function handleAutoLabelBatch(batch: MessageBatch<unknown>, env: En
 		const job = message.body;
 		try {
 			const box = mailboxStub(env, job.mailboxId);
+			// A job can wait in the queue while a person deletes the account or the team mailbox. The mail of a
+			// deleted mailbox never goes to the gateway.
+			if (!(await getMailbox(env.DIRECTORY, job.mailboxId))) {
+				log("info", "auto label job dropped: the mailbox is gone", { mailboxId: job.mailboxId });
+				await box.finishAutoLabel(job.messageId);
+				message.ack();
+				continue;
+			}
 			const context = await box.autoLabelJob(job.messageId);
 			if (!context) {
 				message.ack();

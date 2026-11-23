@@ -34,6 +34,7 @@ import {
 	ensureUserLabel,
 	exampleCorrections,
 	messageFacts,
+	readFacts,
 	recordCorrection,
 	type StoreRefusal,
 	settingsView,
@@ -1425,6 +1426,17 @@ export class MailboxDO extends DurableObject<Env> {
 		);
 	}
 
+	/** True when the mailbox sent a message in the thread of this message after it arrived. */
+	private repliedAfter(seq: number): boolean {
+		return (
+			this.one(
+				`SELECT 1 AS found FROM messages m JOIN messages s ON s.thread_id = m.thread_id
+				WHERE m.seq = ? AND s.origin = 'sent' AND s.seq > m.seq LIMIT 1`,
+				seq,
+			) !== null
+		);
+	}
+
 	/**
 	 * The corrections that a change by a person makes: a removed label that auto labels applied, or an added
 	 * label that is an auto label. The sender is the sender of the newest message that arrived in the thread.
@@ -1542,7 +1554,9 @@ export class MailboxDO extends DurableObject<Env> {
 		if (decision.final) {
 			const keys = decision.labels.map((label) => label.key);
 			const source = decision.labels.some((label) => label.source === "sender") ? "sender" : "rule";
-			const skip = options.mayArchive && keys.some((key) => defs.find((def) => def.key === key)?.skipInbox);
+			// Only mail from a proved sender skips the inbox. A forged sender cannot hide mail there.
+			const skip =
+				options.mayArchive && facts.authenticated && keys.some((key) => defs.find((def) => def.key === key)?.skipInbox);
 			const archived = this.applyAutoLabelKeys(seq, keys, source, defs, skip);
 			return archived ? "archived" : keys.length > 0 ? "labeled" : "none";
 		}
@@ -1749,7 +1763,7 @@ export class MailboxDO extends DurableObject<Env> {
 		);
 		if (!row) return null;
 		const defs = enabledLabelDefs(this.sql);
-		const facts = JSON.parse(row.facts_json) as MailFacts;
+		const facts = readFacts(row.facts_json);
 		const decided = this.decideFor(row.seq, facts, defs);
 		const gone = this.one(
 			"SELECT 1 AS found FROM message_labels WHERE message_seq = ? AND label_id IN ('SPAM', 'TRASH')",
@@ -1765,7 +1779,9 @@ export class MailboxDO extends DurableObject<Env> {
 						keys,
 						source,
 						defs,
-						row.may_archive === 1 && keys.some((key) => defs.find((d) => d.key === key)?.skipInbox),
+						row.may_archive === 1 &&
+							facts.authenticated &&
+							keys.some((key) => defs.find((d) => d.key === key)?.skipInbox),
 					);
 				} else {
 					this.sql.exec("UPDATE messages SET auto_labeled_at = ? WHERE seq = ?", Date.now(), row.seq);
@@ -1773,6 +1789,14 @@ export class MailboxDO extends DurableObject<Env> {
 				this.sql.exec("DELETE FROM autolabel_outbox WHERE message_seq = ?", row.seq);
 				this.bump();
 			});
+			return null;
+		}
+		// The mailbox answered in the thread after this message, so the message does not need a reply any more.
+		const candidates = this.repliedAfter(row.seq)
+			? decided.decision.candidates.filter((key) => key !== "needs_reply")
+			: decided.decision.candidates;
+		if (candidates.length === 0) {
+			this.finishAutoLabel(messageId);
 			return null;
 		}
 		const attachments = (JSON.parse(row.attachments_json) as { filename: string; mimeType: string }[]).map((a) => ({
@@ -1787,13 +1811,10 @@ export class MailboxDO extends DurableObject<Env> {
 				subject: row.subject,
 				text: row.text_body ?? (row.html_body ? htmlToText(row.html_body) : ""),
 				attachments,
-				labels: defs.filter((def) => decided.decision.candidates.includes(def.key)),
+				labels: defs.filter((def) => candidates.includes(def.key)),
 				corrections: exampleCorrections(this.sql, row.from_addr, PROMPT_CORRECTIONS),
 			},
-			decision: {
-				candidates: decided.decision.candidates,
-				needsReplyStrict: decided.decision.needsReplyStrict,
-			},
+			decision: { candidates, needsReplyStrict: decided.decision.needsReplyStrict },
 		};
 	}
 
@@ -1815,11 +1836,21 @@ export class MailboxDO extends DurableObject<Env> {
 			"SELECT 1 AS found FROM message_labels WHERE message_seq = ? AND label_id IN ('SPAM', 'TRASH')",
 			row.seq,
 		);
-		const decided =
-			this.autoLabelsOn() && !gone ? this.decideFor(row.seq, JSON.parse(row.facts_json) as MailFacts, defs) : null;
+		const facts = readFacts(row.facts_json);
+		const decided = this.autoLabelsOn() && !gone ? this.decideFor(row.seq, facts, defs) : null;
+		// A reply from the mailbox can come while the classifier works. `send()` removed Needs reply then, and
+		// a late answer of the classifier must not add it again.
+		const replied = this.repliedAfter(row.seq);
 		const resolved =
 			decided && !decided.decision.final
-				? resolvePicks(picks, decided.decision, defs)
+				? resolvePicks(
+						picks,
+						{
+							...decided.decision,
+							candidates: decided.decision.candidates.filter((key) => !replied || key !== "needs_reply"),
+						},
+						defs,
+					)
 				: { keys: decided?.decision.labels.map((label) => label.key) ?? [], skipInbox: false };
 		const source = decided && !decided.decision.final ? "model" : "rule";
 		let archived = false;
@@ -1829,7 +1860,7 @@ export class MailboxDO extends DurableObject<Env> {
 				resolved.keys,
 				source,
 				defs,
-				row.may_archive === 1 && resolved.skipInbox,
+				row.may_archive === 1 && facts.authenticated && resolved.skipInbox,
 			);
 			this.sql.exec("DELETE FROM autolabel_outbox WHERE message_seq = ?", row.seq);
 			this.bump();

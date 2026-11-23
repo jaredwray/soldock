@@ -27,6 +27,12 @@ export interface MailFacts {
 	/** The messages of the thread before this one. */
 	threadMessages: number;
 	ownerAddress: string;
+	/**
+	 * The sender is proved: the mail came from inside the organization, or it passed DMARC. Headers and the
+	 * From address of other mail can be forged, so a rule from them alone does not decide, and such mail
+	 * never skips the inbox. Facts that were stored before this field are not authenticated.
+	 */
+	authenticated: boolean;
 }
 
 /** A label that a person added to or removed from mail of one sender. */
@@ -163,16 +169,23 @@ export function decide(input: {
 		if (signals.autoSubmitted === "replied") return final([], "auto_reply");
 		// R2: a calendar invitation.
 		if (signals.hasCalendar && usable("meeting")) return final([{ key: "meeting", source: "rule" }], "calendar");
-		// R3: activity mail of a social network.
+		// R3: activity mail of a social network. Only for a proved sender: a forged From can name any domain.
 		if (
+			facts.authenticated &&
 			signals.socialDomain &&
 			(signals.autoSubmitted !== null || signals.listUnsubscribe || signals.noreply) &&
 			usable("social")
 		) {
 			return final([{ key: "social", source: "rule" }], "social_domain");
 		}
-		// R4: an issue from a newsletter platform, from a sender that the owner never wrote to.
-		if (signals.newsletterPlatform && signals.listUnsubscribe && !facts.knownSender && usable("newsletter")) {
+		// R4: an issue from a newsletter platform, from a proved sender that the owner never wrote to.
+		if (
+			facts.authenticated &&
+			signals.newsletterPlatform &&
+			signals.listUnsubscribe &&
+			!facts.knownSender &&
+			usable("newsletter")
+		) {
 			return final([{ key: "newsletter", source: "rule" }], "newsletter_platform");
 		}
 	}

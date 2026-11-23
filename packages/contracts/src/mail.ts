@@ -662,7 +662,10 @@ export const AutoLabelSettings = z.object({
 			name: z.string(),
 			description: z.string(),
 			enabled: z.boolean(),
-			/** True when mail with this label skips the inbox. It stays in All mail and under its label. */
+			/**
+			 * True when mail with this label skips the inbox. It stays in All mail and under its label. Only
+			 * mail from a proved sender skips the inbox: internal mail, or mail that passed DMARC.
+			 */
 			skip_inbox: z.boolean(),
 			/** The user label that the auto label applies, or null before its first use. */
 			label_id: z.string().nullable(),

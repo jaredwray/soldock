@@ -25,6 +25,7 @@ const FACTS: MailFacts = {
 	threadHasSent: false,
 	threadMessages: 0,
 	ownerAddress: "ada@dock.test",
+	authenticated: true,
 };
 
 async function decideRaw(
@@ -134,6 +135,13 @@ describe("the rules of auto labels", () => {
 			rule: "social_domain",
 		});
 		expect((await decideRaw({ from: "Reid <reid@linkedin.com>" })).final).toBe(false);
+		// A From address that is not proved can name any domain: the rule does not decide, the classifier does.
+		const forged = await decideRaw(
+			{ from: "LinkedIn <notifications-noreply@linkedin.com>", headers: BULK },
+			{ facts: { authenticated: false } },
+		);
+		expect(forged.final).toBe(false);
+		expect(forged.candidates).toContain("social");
 	});
 
 	it("R4: an issue from a newsletter platform is a newsletter, unless the owner wrote to the sender", async () => {
@@ -142,6 +150,9 @@ describe("the rules of auto labels", () => {
 		const known = await decideRaw(issue, { facts: { knownSender: true } });
 		expect(known.final).toBe(false);
 		expect(known.candidates).toContain("newsletter");
+		const forged = await decideRaw(issue, { facts: { authenticated: false } });
+		expect(forged.final).toBe(false);
+		expect(forged.candidates).toContain("newsletter");
 	});
 
 	it("R5 to R8: bulk mail cannot need a reply, one-to-one mail is not marketing, and a known sender is no cold pitch", async () => {

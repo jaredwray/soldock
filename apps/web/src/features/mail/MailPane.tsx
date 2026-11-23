@@ -1,6 +1,6 @@
 import type { Label, Message, ThreadSummary } from "@asterra/contracts";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
-import { errorMessage } from "../../lib/api.ts";
+import { api, errorMessage } from "../../lib/api.ts";
 import { Icon } from "../../lib/icons.tsx";
 import { navigate } from "../../lib/router.tsx";
 import { useToast } from "../../lib/toast.tsx";
@@ -22,7 +22,7 @@ import { removesAutoLabel } from "./autoLabels.ts";
 import { type Draft, forwardDraft, replyDraft } from "./compose.ts";
 import { useThread, useThreadList } from "./data.ts";
 import type { ReplyMode } from "./MessageCard.tsx";
-import { useMailboxId, useReadOnlyMailbox } from "./mailbox.tsx";
+import { mailboxInput, useMailboxId, useReadOnlyMailbox } from "./mailbox.tsx";
 import { ThreadList } from "./ThreadList.tsx";
 import { ThreadView } from "./ThreadView.tsx";
 import { Toolbar } from "./Toolbar.tsx";
@@ -158,7 +158,15 @@ export function MailPane(props: MailPaneProps) {
 		try {
 			await modifyThreads(mailboxId, ids, change);
 			const notice = actionNotice(action, ids.length);
-			if (corrects) toast({ message: "Label removed. Auto labels learn from this." });
+			if (corrects) {
+				// The mailbox learns only while its auto labels are on. The marks stay after a person turns them off.
+				void api.call("mail.get_auto_labels", mailboxInput(mailboxId)).then(
+					(settings) => {
+						if (settings.enabled) toast({ message: "Label removed. Auto labels learn from this." });
+					},
+					() => {},
+				);
+			}
 			if (notice) {
 				toast(
 					changed.length > 0
