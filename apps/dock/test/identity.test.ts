@@ -944,6 +944,8 @@ describe("directory upgrade", () => {
 		]);
 		// Before 0027, each key and each OAuth connection of an agent had its own scopes. The bot has two live
 		// keys (one with a scope outside the agent ceiling), a revoked key, a live connection and an expired one.
+		// A new agent of an approval just before the migration has only its code, which a client did not use yet.
+		// A used code and an expired code give nothing.
 		const botSecret = `sdk_${"b".repeat(43)}`;
 		await run([
 			`INSERT INTO api_keys (id, principal_id, key_hash, label, scopes, created_by, created_at)
@@ -962,6 +964,20 @@ describe("directory upgrade", () => {
 					access_expires_at, refresh_hash, refresh_expires_at)
 				VALUES ('grt_old', 'ocl_upgrade', 'prn_bot', '["drive.write"]', 'prn_owner', '${at}', 'a2', '${at}', 'r2',
 					'2026-02-01T00:00:00.000Z')`,
+			`INSERT INTO principals (id, kind, display_name, sponsor_id, outbound_mode, created_at)
+				VALUES ('prn_fresh', 'agent', 'Fresh', 'prn_owner', 'internal-only', '${at}')`,
+			`INSERT INTO addresses VALUES ('fresh@dock.test', 'prn_fresh', 1, '${at}')`,
+			...[
+				["oar_open", "prn_fresh", '["mail.read"]', "c1", "2999-01-01T00:00:00.000Z", "NULL"],
+				["oar_used", "prn_fresh", '["mail.send"]', "c2", "2999-01-01T00:00:00.000Z", `'${at}'`],
+				["oar_late", "prn_fresh", '["chat.read"]', "c3", "2026-02-01T00:00:00.000Z", "NULL"],
+			].map(
+				([id, principal, granted, code, end, used]) =>
+					`INSERT INTO oauth_requests (id, client_id, redirect_uri, code_challenge, scopes, created_at, expires_at,
+						principal_id, granted_scopes, approved_by, code_hash, code_expires_at, used_at)
+					VALUES ('${id}', 'ocl_upgrade', 'https://client.example/cb', 'x', '[]', '${at}', '${end}', '${principal}',
+						'${granted}', 'prn_owner', '${code}', '${end}', ${used})`,
+			),
 		]);
 		await run(agentAccessMigration.split("--> statement-breakpoint"));
 		// 0027 gives an agent each scope of its live keys and live connections. A revoked key and an expired
@@ -973,6 +989,10 @@ describe("directory upgrade", () => {
 			["account.keys", "account.read", "chat.read", "mail.read"],
 			null,
 		]);
+		const fresh = await db
+			.prepare("SELECT agent_scopes FROM principals WHERE id = 'prn_fresh'")
+			.first<string>("agent_scopes");
+		expect(sorted(fresh)).toEqual(["mail.read"]);
 		const ops = await db
 			.prepare("SELECT agent_scopes FROM principals WHERE id = 'prn_ops'")
 			.first<string>("agent_scopes");
@@ -1007,6 +1027,7 @@ describe("directory upgrade", () => {
 		// 0024 keeps each agent an agent and each key without an end.
 		expect((await owner("directory.list_principals", { kind: "agent" })).principals).toMatchObject([
 			{ id: "prn_bot", kind: "agent", sponsor_id: "prn_owner", description: null, created_by: null },
+			{ id: "prn_fresh", kind: "agent" },
 		]);
 		expect((await owner("directory.list_principals", { kind: "human" })).principals).toMatchObject([
 			{ id: "prn_owner", kind: "human" },
