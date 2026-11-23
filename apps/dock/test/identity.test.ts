@@ -864,7 +864,7 @@ describe("directory upgrade", () => {
 		await run(serviceAccountMigration.split("--> statement-breakpoint"));
 		await run(serviceTokenMigration.split("--> statement-breakpoint"));
 		// Three service accounts from before 0026, when each token had its own scopes and limits.
-		// - CI has two live tokens with limits, and a revoked token.
+		// - CI has two live tokens with limits, a revoked token and an expired token.
 		// - Ops has one token with limits and one without.
 		// - New has no token.
 		const at = "2026-01-01T00:00:00.000Z";
@@ -879,11 +879,14 @@ describe("directory upgrade", () => {
 			principalId: string,
 			scopes: string[],
 			resources: string | null,
-			extra: { secret?: string; revoked?: boolean } = {},
+			extra: { secret?: string; revoked?: boolean; expired?: boolean } = {},
 		) =>
-			`INSERT INTO api_keys (id, principal_id, key_hash, label, scopes, created_by, created_at, revoked_at, resources)
+			`INSERT INTO api_keys (id, principal_id, key_hash, label, scopes, created_by, created_at, revoked_at, expires_at,
+					resources)
 				VALUES ('${id}', '${principalId}', '${await hash(extra.secret ?? id)}', '${id}', '${JSON.stringify(scopes)}',
-					'prn_owner', '${at}', ${extra.revoked ? `'${at}'` : "NULL"}, ${resources === null ? "NULL" : `'${resources}'`})`;
+					'prn_owner', '${at}', ${extra.revoked ? `'${at}'` : "NULL"},
+					${extra.expired ? "'2026-02-01T00:00:00.000Z'" : "'2999-01-01T00:00:00.000Z'"},
+					${resources === null ? "NULL" : `'${resources}'`})`;
 		const limits = (mailboxes: string[], drives: string[], rooms: string[]) =>
 			JSON.stringify({ mailbox_ids: mailboxes, drive_ids: drives, room_ids: rooms });
 		await run([
@@ -895,12 +898,14 @@ describe("directory upgrade", () => {
 			}),
 			await tokenRow("key_ci_b", "prn_ci", ["chat.read", "account.read"], limits([], ["prn_ci"], ["rm_1", "rm_2"])),
 			await tokenRow("key_ci_c", "prn_ci", ["drive.write"], null, { revoked: true }),
+			await tokenRow("key_ci_d", "prn_ci", ["mail.send"], null, { expired: true }),
 			await tokenRow("key_ops_a", "prn_ops", ["mail.send"], limits(["prn_ops"], [], [])),
 			await tokenRow("key_ops_b", "prn_ops", ["account.read"], null),
 		]);
 		await run(serviceAccessMigration.split("--> statement-breakpoint"));
-		// 0026 moves the scopes and the limits to the account. An account gets each scope of its tokens that are
-		// not revoked. It gets limits only when each of those tokens had limits: then each listed resource.
+		// 0026 moves the scopes and the limits to the account. An account gets each scope of its live tokens. It
+		// gets limits only when each of those tokens had limits: then each listed resource. A revoked token and
+		// an expired token give nothing: the access of the expired token of CI ended, and it had no limits.
 		const moved = await db
 			.prepare("SELECT id, service_scopes, service_resources FROM principals WHERE service = 1 ORDER BY id")
 			.all<{ id: string; service_scopes: string; service_resources: string | null }>();

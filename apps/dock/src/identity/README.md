@@ -495,6 +495,11 @@ them. A token is only a credential.
 - **No escalation.** The credential of the call must hold each scope of the new list (`grantableScopes`),
   so a narrow key with `directory.write` cannot give an account a scope that the key does not hold. The
   same rule applies to `directory.create_service_account`, to a new token and to a rotation.
+- **A wider account widens each token.** A token follows its account. When an owner or an admin adds a
+  scope to an account, each token of the account gets the scope, also a token that a narrower credential
+  created before. The admin who adds the scope makes that decision, and the log records it. So the
+  check of a new token is not tied to `access_version`: a change at the same moment gives the same
+  result as a change one second later.
 - **Next call.** `authenticate` reads the scopes and the limits from the account row on each call
   (`service_scopes`, `service_resources`). So a change applies to the next call of each token.
 - **Live connections.** Each write adds one to `principals.access_version`. A live connection keeps the
@@ -508,11 +513,12 @@ them. A token is only a credential.
   `SERVICE_SCOPES` is left out. Stored limits that are not valid give an account that reaches nothing.
 - **Log.** A change adds an audit line and an `admin` entry (`directory.set_service_account_access`) to
   the activity log of the account.
-- **Accounts from before migration `0026`.** The migration gives an account each scope of its tokens that
-  are not revoked, so no script loses a scope. A token with fewer scopes then gets the scopes of the
-  other tokens of its account. An account gets limits only when each of those tokens had limits: then
-  each mailbox, drive and room that one of them named. An account with one token without limits stays
-  without limits. An account without a token gets no scope: set its scopes before a new token.
+- **Accounts from before migration `0026`.** The migration gives an account each scope of its live
+  tokens (not revoked and not expired), so no script loses a scope. A token with fewer scopes then gets
+  the scopes of the other live tokens of its account. A revoked token and an expired token give nothing:
+  their access ended. An account gets limits only when each of its live tokens had limits: then each
+  mailbox, drive and room that one of them named. An account with one live token without limits stays
+  without limits. An account without a live token gets no scope: set its scopes before a new token.
   `api_keys.scopes` and `api_keys.resources` keep their old values for a rollback, and the sign-in path
   does not read them for a service account.
 
