@@ -59,7 +59,9 @@ The seed has no access to a database or to a Durable Object. It uses only the pu
 3. `POST /cdn-cgi/local/email` delivers the mail from outside senders. This endpoint exists only in
    `wrangler dev`. The mail goes through the real inbound pipeline.
 
-Each person and each agent acts with their own API key: `directory.create_principal` returns it.
+Each person and each agent acts with their own API key. `directory.create_principal` returns the
+first key of an agent. A new person gets no key, so the owner creates one for each person with
+`account.create_api_key`.
 Thus a person sends their own mail, posts their own chat messages and owns their own drive items.
 The owner creates the shared drive, because only an owner or an admin can. A member with the editor
 role or the manager role adds its items, with the id of the shared drive as `space_id`.

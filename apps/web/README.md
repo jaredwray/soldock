@@ -297,13 +297,14 @@ MCP clients. The app has no UI-only path.
     That member does not get the forms that change an account.
     - **New member**, above the list, opens a dialog for an owner or an admin.
       The kinds are Person, Agent and Service account, with one line that says what each kind is for.
-      The first API key of a new person or agent shows once, with a copy button.
+      The first API key of a new agent shows once, with a copy button.
+      A new person gets no API key. A toast tells the admin to give the first password to the person.
+      The person can create keys in Settings after the sign-in.
       A service account (`directory.create_service_account`) gets a name, an address, a description and a sponsor, and no key.
       A toast tells the admin to open it to add a token.
       A credential cannot grant a scope that it does not hold.
       The form offers only the scopes of the session.
-      For an agent, the form also applies `AGENT_SCOPES`.
-      For a person, the app sends these scopes as `key_scopes`.
+      For an agent, the form also applies `AGENT_SCOPES`, and the app sends the selected scopes as `key_scopes`.
       A person also needs a first password. The admin gives the password to the person.
       An archived person cannot be a sponsor.
       The dialog shows the banner when Agent is selected.

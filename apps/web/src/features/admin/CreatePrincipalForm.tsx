@@ -1,6 +1,5 @@
 import {
 	AGENT_SCOPES,
-	ALL_SCOPES,
 	API_KEY_LIMITS,
 	type CreatedApiKey,
 	EmailAddress,
@@ -30,7 +29,7 @@ interface CreatePrincipalDialogProps {
 	/** The people who can sponsor a new agent. An archived person cannot. */
 	humans: readonly Principal[];
 	onClose: () => void;
-	/** The new principal, with its first API key. A service account has no first key: null. */
+	/** The new principal, with the first API key of an agent. A person and a service account get no key: null. */
 	onCreated: (principal: Principal, key: CreatedApiKey | null) => void;
 }
 
@@ -61,13 +60,13 @@ const KIND_HINTS: Record<Kind, string> = {
 };
 
 /**
- * Creates a person, an agent or a service account. The result of a person or an agent holds a first API
- * key, which shows once. A service account gets its tokens in its card, with a lifetime for each.
+ * Creates a person, an agent or a service account. The result of an agent holds a first API key, which
+ * shows once. A person gets no key: the person signs in with the password and creates keys in Settings.
+ * A service account gets its tokens in its card, with a lifetime for each.
  */
 function CreatePrincipalForm({ me, humans, onBusy, onCancel, onCreated }: CreatePrincipalFormProps) {
 	const { whoami } = useSession();
 	// A credential cannot grant a scope that it does not hold. The form offers only the scopes of this session.
-	const humanScopes = ALL_SCOPES.filter((scope) => whoami.scopes.includes(scope));
 	const agentScopes = AGENT_SCOPES.filter((scope) => whoami.scopes.includes(scope));
 	const [kind, setKind] = useState<Kind>("human");
 	const [description, setDescription] = useState("");
@@ -126,7 +125,6 @@ function CreatePrincipalForm({ me, humans, onBusy, onCancel, onCreated }: Create
 						address: address.trim(),
 						org_role: role,
 						password,
-						key_scopes: humanScopes,
 					}
 				: {
 						kind,
@@ -239,7 +237,7 @@ function CreatePrincipalForm({ me, humans, onBusy, onCancel, onCreated }: Create
 							<Select id={ids.role} value={role} options={ROLE_OPTIONS} onChange={setRole} disabled={busy} />
 						</div>
 						<p className="field-hint form-grid-wide">
-							The first key of the person gets the scopes of this session: {humanScopes.join(", ")}.
+							The person gets no API key. The person can create keys in Settings after the sign-in.
 						</p>
 					</>
 				) : kind === "service" ? (

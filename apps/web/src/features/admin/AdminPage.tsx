@@ -147,9 +147,11 @@ export function AdminPage({ section: routeSection, navOpen, onCloseNav }: AdminP
 						principals={principals}
 						onChanged={() => void load()}
 						onCreated={(principal, key) => {
-							// A service account has no first key. Its card adds tokens.
+							// Only an agent has a first key. A person signs in with the password. A service account card adds tokens.
 							if (key) setCreated({ principal, key });
-							else toast({ message: `${principal.display_name} is ready. Open it to add a token.` });
+							else if (principal.kind === "service") {
+								toast({ message: `${principal.display_name} is ready. Open it to add a token.` });
+							} else toast({ message: `${principal.display_name} is ready. Give the first password to the person.` });
 							void load();
 						}}
 					/>

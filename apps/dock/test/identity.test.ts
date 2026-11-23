@@ -920,6 +920,25 @@ describe("directory authorization", () => {
 		await admin.call("directory.create_principal", input);
 	});
 
+	it("gives a new person no API key, and a new agent a first key with the selected scopes", async () => {
+		const owner = await setupOwner();
+		const person = { kind: "human", display_name: "Eve", address: "eve@dock.test", password: PASSWORD } as const;
+		expect(await denied(owner.call("directory.create_principal", { ...person, key_scopes: ["mail.read"] }))).toBe(
+			"invalid",
+		);
+		const eve = await owner.call("directory.create_principal", person);
+		expect(eve.api_key).toBeNull();
+		expect((await owner.call("account.list_api_keys", { principal_id: eve.principal.id })).api_keys).toEqual([]);
+		const agent = await owner.call("directory.create_principal", {
+			kind: "agent",
+			display_name: "Helper",
+			address: "helper@dock.test",
+			key_scopes: ["mail.read"],
+		});
+		expect(agent.api_key).toMatchObject({ label: "First key", scopes: ["mail.read"] });
+		expect((await owner.call("account.list_api_keys", { principal_id: agent.principal.id })).api_keys).toHaveLength(1);
+	});
+
 	it("gives a new agent a human sponsor and the internal-only policy, and validates the address", async () => {
 		const owner = await setupOwner();
 		const { principal } = await owner.call("directory.create_principal", {
