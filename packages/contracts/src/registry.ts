@@ -1,4 +1,5 @@
 import type { z } from "zod";
+import { aiOperations } from "./ai.ts";
 import { chatOperations } from "./chat.ts";
 import { chatExtraOperations } from "./chat-extras.ts";
 import { chatNotificationOperations } from "./chat-notifications.ts";
@@ -27,6 +28,7 @@ export const operations = {
 	...chatNotificationOperations,
 	...oauthOperations,
 	...webhookOperations,
+	...aiOperations,
 } as const;
 
 export type Operations = typeof operations;

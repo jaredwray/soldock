@@ -85,6 +85,7 @@ export const RESOURCE_RULES: Readonly<Record<string, ResourceRule>> = {
 
 	"mail.get_profile": IN_MAILBOX,
 	"mail.list_labels": IN_MAILBOX,
+	"mail.get_auto_labels": IN_MAILBOX,
 	"mail.create_label": IN_MAILBOX,
 	"mail.delete_label": IN_MAILBOX,
 	"mail.list_threads": IN_MAILBOX,

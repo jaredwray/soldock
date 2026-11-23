@@ -93,6 +93,8 @@ export const ThreadSummary = z.object({
 	starred: z.boolean(),
 	has_attachments: z.boolean(),
 	label_ids: z.array(z.string()),
+	/** The ids in `label_ids` that auto labels applied. A person or an agent applied the others. */
+	auto_label_ids: z.array(z.string()),
 	last_message_at: Timestamp,
 	/** True when a message in the thread came from outside the organization. The subject and snippet are then untrusted. */
 	untrusted: z.boolean(),
@@ -135,6 +137,8 @@ export const Message = z.object({
 	date: Timestamp,
 	received_at: Timestamp,
 	label_ids: z.array(z.string()),
+	/** The ids in `label_ids` that auto labels applied. */
+	auto_label_ids: z.array(z.string()),
 	snippet: z.string(),
 	/**
 	 * `external`: it arrived from the internet. `internal`: another mailbox of this deployment sent it.
@@ -179,6 +183,8 @@ export const Thread = z.object({
 	id: z.string(),
 	subject: z.string(),
 	label_ids: z.array(z.string()),
+	/** The ids in `label_ids` that auto labels applied to a message of the thread. */
+	auto_label_ids: z.array(z.string()),
 	untrusted: z.boolean(),
 	messages: z.array(Message),
 });
@@ -533,6 +539,242 @@ export const updateSettings = defineOperation({
 	errors: [],
 });
 
+export const AUTO_LABEL_LIMITS = {
+	/** The custom auto labels of one mailbox. */
+	custom: 10,
+	nameChars: 40,
+	descriptionMinChars: 10,
+	descriptionChars: 300,
+	/** The inbox messages that one `mail.run_auto_labels` call examines. */
+	runMax: 200,
+	runDefault: 100,
+	/** The label entries in one `mail.update_auto_labels` call. */
+	updateEntries: 30,
+} as const;
+
+/**
+ * The built-in auto labels. `scope` tells what decides the label. `sender`: the sender, so a correction
+ * of the label applies to the next mail from that sender. `message`: the content of each message, so a
+ * correction is only an example for the classifier. `definition` is the text of the classifier prompt
+ * and of the web app.
+ */
+export const AUTO_LABELS = [
+	{
+		key: "needs_reply",
+		name: "Needs reply",
+		scope: "message",
+		definition:
+			"A person wrote to the owner and expects an answer or an action from the owner: a question, a request, an approval or a decision. Not automated mail, mail to a list, a thank-you or an acknowledgement with no question, a cold pitch, or mail where the owner is only in Cc and the text does not address the owner by name.",
+	},
+	{
+		key: "meeting",
+		name: "Meeting",
+		scope: "message",
+		definition:
+			"About one specific meeting or call: an invitation, a change, a cancellation, a reminder, or a person who proposes or confirms a time. Not the promotion of a webinar or an event to a list (marketing), and not a booking for a trip (travel).",
+	},
+	{
+		key: "marketing",
+		name: "Marketing",
+		scope: "sender",
+		definition:
+			"Promotion from a company to a list: offers, sales, product news, webinars, event promotion, win-back mail. The sender wants the owner to buy, upgrade or sign up. Not editorial content to read (newsletter), not mail about the account, order or payment of the owner (notification, receipt), and not one-to-one sales mail from a person (cold_pitch).",
+	},
+	{
+		key: "newsletter",
+		name: "Newsletter",
+		scope: "sender",
+		definition:
+			"Editorial content in issues to subscribers: news digests, blogs, letters from an author, community digests. The main purpose is to read, not to buy. Not promotion (marketing).",
+	},
+	{
+		key: "cold_pitch",
+		name: "Cold pitch",
+		scope: "sender",
+		definition:
+			"Unsolicited one-to-one mail from a person or a company with no relation to the owner. It sells a product or a service, asks for a call, or proposes a partnership, a guest post, links or an investment. Only when FACTS say that the owner never wrote to this sender or its domain and the owner did not write in the thread. Not mail to a list (marketing), and not a reply to mail from the owner.",
+	},
+	{
+		key: "social",
+		name: "Social",
+		scope: "sender",
+		definition:
+			"Automated mail from a social network or a community platform about activity: follows, likes, comments, mentions, connection requests, messages on the platform. Not a person who writes directly, and not security or billing mail of the platform (notification, receipt).",
+	},
+	{
+		key: "notification",
+		name: "Notification",
+		scope: "sender",
+		definition:
+			"Automated mail from an app or a service about the account or the systems of the owner: alerts, sign-in codes, password resets, build and monitor results, comments and tasks in work tools, shipping status, reminders. Not payment documents (receipt), trips (travel), social networks (social) or promotion (marketing).",
+	},
+	{
+		key: "receipt",
+		name: "Receipt",
+		scope: "message",
+		definition:
+			"A document about money: a receipt, an invoice, an order confirmation with a total, a payment confirmation, a refund, a bill, a statement, a renewal charge or a failed payment. Not promotion with prices (marketing), and not shipping status with no payment (notification).",
+	},
+	{
+		key: "travel",
+		name: "Travel",
+		scope: "message",
+		definition:
+			"About one specific trip of the owner: a booking, a ticket, an itinerary, a check-in, a boarding pass, a hotel, car or train reservation, or a change or a cancellation of one. Not travel offers (marketing), and not receipts for local rides or food (receipt).",
+	},
+] as const;
+
+export type BuiltinAutoLabel = (typeof AUTO_LABELS)[number];
+export type AutoLabelKey = BuiltinAutoLabel["key"];
+export const AutoLabelKey = z.enum(AUTO_LABELS.map((label) => label.key) as [AutoLabelKey, ...AutoLabelKey[]]);
+
+/** The id of a custom auto label. */
+export const CustomAutoLabelId = prefixedId("alb");
+
+/** Why auto labels cannot run in this mailbox now. Null when they can. */
+export const AutoLabelUnavailableReason = z.enum(["ai_off", "feature_off"]);
+
+export const AutoLabelSettings = z.object({
+	mailbox_id: z.string(),
+	/** True when the members of the mailbox turned on auto labels. */
+	enabled: z.boolean(),
+	/**
+	 * True when the organization lets auto labels run: an owner or an admin turned on AI and the
+	 * feature. Rules from the headers and from your corrections apply even when the AI Gateway cannot
+	 * take calls, for example after the monthly budget is used.
+	 */
+	available: z.boolean(),
+	unavailable_reason: AutoLabelUnavailableReason.nullable(),
+	labels: z.array(
+		z.object({
+			/** A built-in key such as `newsletter`, or the `alb_` id of a custom auto label. */
+			key: z.string(),
+			kind: z.enum(["builtin", "custom"]),
+			name: z.string(),
+			description: z.string(),
+			enabled: z.boolean(),
+			/** True when mail with this label skips the inbox. It stays in All mail and under its label. */
+			skip_inbox: z.boolean(),
+			/** The user label that the auto label applies, or null before its first use. */
+			label_id: z.string().nullable(),
+		}),
+	),
+});
+export type AutoLabelSettings = z.infer<typeof AutoLabelSettings>;
+
+const AUTO_LABEL_TEXT =
+	"Auto labels sort new mail in the inbox with built-in labels (Needs reply, Meeting, Marketing, Newsletter, Cold pitch, Social, Notification, Receipt, Travel) and with custom labels that the members describe. Rules from the mail headers apply first. A Workers AI model through the AI Gateway of the organization decides the rest. An auto label is a user label, so label:, the sidebar and mail.modify_threads use it.";
+
+const AutoLabelName = z
+	.string()
+	.trim()
+	.min(1)
+	.max(AUTO_LABEL_LIMITS.nameChars)
+	.refine((name) => !/[\p{Cc}]/u.test(name), "must not contain control characters");
+
+const AutoLabelDescription = z
+	.string()
+	.trim()
+	.min(AUTO_LABEL_LIMITS.descriptionMinChars)
+	.max(AUTO_LABEL_LIMITS.descriptionChars)
+	.refine((text) => !/[\p{Cc}]/u.test(text), "must not contain control characters");
+
+export const getAutoLabels = defineOperation({
+	name: "mail.get_auto_labels",
+	summary: "Get the auto-label settings of a mailbox",
+	description: `${AUTO_LABEL_TEXT} Returns whether auto labels are on in the mailbox, whether the organization lets them run, and each built-in and custom auto label. ${IN_MAILBOX_READ}`,
+	http: { method: "GET", path: "/api/v1/mail/auto-labels" },
+	scopes: ["mail.read"],
+	callers: ["human", "agent", "service"],
+	annotations: READ,
+	input: z.strictObject({ mailbox_id: MailboxParam }),
+	output: AutoLabelSettings,
+	errors: [],
+});
+
+export const updateAutoLabels = defineOperation({
+	name: "mail.update_auto_labels",
+	summary: "Change the auto-label settings of a mailbox",
+	description: `Turns auto labels on or off in a mailbox, and changes each auto label that the request names: on or off, skip the inbox, and the description of a custom auto label. The first time you turn on auto labels, each built-in label is on. Turning on a label creates its user label, or uses the user label with the same name. People only. ${IN_MAILBOX} The members of a team mailbox share its settings. ${AGENT_READ_ONLY}`,
+	http: { method: "POST", path: "/api/v1/mail/auto-labels" },
+	scopes: ["mail.modify"],
+	callers: ["human"],
+	annotations: { readOnly: false, destructive: false, idempotent: true, openWorld: false },
+	input: z.strictObject({
+		mailbox_id: MailboxParam,
+		enabled: z.boolean().optional(),
+		labels: z
+			.array(
+				z.strictObject({
+					key: z.union([AutoLabelKey, CustomAutoLabelId]),
+					enabled: z.boolean().optional(),
+					skip_inbox: z.boolean().optional(),
+					description: AutoLabelDescription.optional(),
+				}),
+			)
+			.max(AUTO_LABEL_LIMITS.updateEntries)
+			.optional(),
+	}),
+	output: AutoLabelSettings,
+	errors: ["not_found", "invalid", "conflict"],
+});
+
+export const createAutoLabel = defineOperation({
+	name: "mail.create_auto_label",
+	summary: "Create a custom auto label",
+	description: `Creates a custom auto label: a name and a description in plain words of the mail that gets it, for example "Investor updates: monthly reports from the companies that we invested in". The classifier reads the description. The label can skip the inbox. A mailbox can have at most ${AUTO_LABEL_LIMITS.custom} custom auto labels. People only. ${IN_MAILBOX} ${AGENT_READ_ONLY}`,
+	http: { method: "POST", path: "/api/v1/mail/auto-labels/custom" },
+	scopes: ["mail.modify"],
+	callers: ["human"],
+	annotations: { readOnly: false, destructive: false, idempotent: false, openWorld: false },
+	input: z.strictObject({
+		mailbox_id: MailboxParam,
+		name: AutoLabelName,
+		description: AutoLabelDescription,
+		skip_inbox: z.boolean().default(false),
+	}),
+	output: AutoLabelSettings,
+	errors: ["conflict", "invalid"],
+});
+
+export const deleteAutoLabel = defineOperation({
+	name: "mail.delete_auto_label",
+	summary: "Delete a custom auto label",
+	description: `Deletes a custom auto label. Its user label and the messages with it stay. People only. ${IN_MAILBOX} ${AGENT_READ_ONLY}`,
+	http: { method: "DELETE", path: "/api/v1/mail/auto-labels/custom/{auto_label_id}" },
+	scopes: ["mail.modify"],
+	callers: ["human"],
+	annotations: { readOnly: false, destructive: true, idempotent: true, openWorld: false },
+	input: z.strictObject({ mailbox_id: MailboxParam, auto_label_id: CustomAutoLabelId }),
+	output: z.object({ deleted: z.boolean() }),
+	errors: ["not_found"],
+});
+
+export const runAutoLabels = defineOperation({
+	name: "mail.run_auto_labels",
+	summary: "Apply auto labels to recent inbox mail",
+	description: `Applies auto labels to the newest messages in the inbox that auto labels did not examine. Rules apply at once, and the classifier labels the rest in the next minutes. A run never moves mail out of the inbox: skip the inbox applies to new mail only. Set dry_run to true to get the count without a change. People only. ${IN_MAILBOX} ${AGENT_READ_ONLY}`,
+	http: { method: "POST", path: "/api/v1/mail/auto-labels/run" },
+	scopes: ["mail.modify"],
+	callers: ["human"],
+	annotations: { readOnly: false, destructive: false, idempotent: true, openWorld: false },
+	input: z.strictObject({
+		mailbox_id: MailboxParam,
+		limit: z.number().int().min(1).max(AUTO_LABEL_LIMITS.runMax).default(AUTO_LABEL_LIMITS.runDefault),
+		dry_run: z.boolean().default(false),
+	}),
+	output: z.object({
+		/** The messages that the run examined, or would examine with dry_run. */
+		messages: z.number().int(),
+		/** The messages that rules labelled at once. Zero with dry_run. */
+		labeled_by_rules: z.number().int(),
+		/** The messages that wait for the classifier. Zero with dry_run. */
+		queued: z.number().int(),
+		dry_run: z.boolean(),
+	}),
+	errors: ["conflict"],
+});
+
 export { WEBHOOK_LIMITS } from "./webhooks.ts";
 
 /** The event type for new mail in the inbox of a mailbox. */
@@ -598,6 +840,11 @@ export const mailOperations = {
 	"mail.list_mailboxes": listMailboxes,
 	"mail.get_settings": getSettings,
 	"mail.update_settings": updateSettings,
+	"mail.get_auto_labels": getAutoLabels,
+	"mail.update_auto_labels": updateAutoLabels,
+	"mail.create_auto_label": createAutoLabel,
+	"mail.delete_auto_label": deleteAutoLabel,
+	"mail.run_auto_labels": runAutoLabels,
 	"mail.get_profile": getProfile,
 	"mail.list_labels": listLabels,
 	"mail.create_label": createLabel,

@@ -1,6 +1,7 @@
 // The operation handlers and the resource change feeds of each domain, joined, and the subscriptions of
 // MCP Events. The composition root and the tests use these maps.
 import { SERVICE_ACCESS_LIMITS } from "@asterra/contracts";
+import { aiHandlers } from "./ai/index.ts";
 import {
 	chatHandlers,
 	chatWatchers,
@@ -31,6 +32,7 @@ export const handlers: HandlerMap<CallContext> = {
 	...sheetsHandlers,
 	...chatHandlers,
 	...endpointHandlers,
+	...aiHandlers,
 	async "chat.invoke_slash_command"(call, input) {
 		return await invokeSlashCommand(call, handlers, {
 			room_id: input.room_id,

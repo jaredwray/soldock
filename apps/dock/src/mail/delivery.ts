@@ -1,4 +1,5 @@
-import { addressTag } from "../identity/index.ts";
+import { autoLabelActive } from "../ai/index.ts";
+import { addressTag, getMailbox } from "../identity/index.ts";
 import { sha256Hex } from "../platform/index.ts";
 import { composeMessage } from "./mime/compose.ts";
 import { parseMail } from "./mime/parse.ts";
@@ -54,6 +55,8 @@ export async function deliverStoredRaw(
 	const parsed = await parseMail(input.bytes, { authservId: authservId(env) });
 	// A DMARC failure on mail from the internet goes to Spam. Internal mail has no such header.
 	const spam = input.origin === "external" && parsed.authentication?.dmarc === "fail";
+	// One read of the AI settings. The mailbox applies auto labels only when its own setting is on too.
+	const owner = !spam && (await autoLabelActive(env)) ? await getMailbox(env.DIRECTORY, input.mailboxId) : null;
 	return mailboxStub(env, input.mailboxId).deliver({
 		contentHash: input.contentHash,
 		rawKey: input.rawKey,
@@ -63,6 +66,7 @@ export async function deliverStoredRaw(
 		parsed,
 		spam,
 		tag: input.tag,
+		autoLabel: owner ? { ownerAddress: owner.address } : null,
 	});
 }
 

@@ -1,5 +1,25 @@
 // Public surface of @asterra/contracts. Runtime-agnostic: no Workers, DOM or Node APIs.
 export {
+	AI_FEATURES,
+	AI_LIMITS,
+	AI_MODELS,
+	AI_PRICE_DATE,
+	AiAccountId,
+	AiConnectionTest,
+	type AiFeature,
+	AiGatewayId,
+	type AiModel,
+	type AiModelId,
+	AiModelIdSchema,
+	AiNotReadyReason,
+	AiSettings,
+	AiUsage,
+	aiModel,
+	estimateCostMicroUsd,
+	microToUsd,
+	usdToMicro,
+} from "./ai.ts";
+export {
 	CardsInput,
 	CHAT_LIMITS,
 	CHAT_SOCKET_CLOSE,
@@ -140,6 +160,12 @@ export {
 	PrincipalEvent,
 } from "./events.ts";
 export {
+	AUTO_LABEL_LIMITS,
+	AUTO_LABELS,
+	AutoLabelKey,
+	AutoLabelSettings,
+	type BuiltinAutoLabel,
+	CustomAutoLabelId,
 	DeliveryStatus,
 	Label,
 	LabelId,

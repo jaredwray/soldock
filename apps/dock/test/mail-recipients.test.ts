@@ -105,11 +105,16 @@ describe("mail.suggest_recipients", () => {
 
 		const mailbox = env.MAILBOX.get(env.MAILBOX.idFromName(ada.id));
 		await runInDurableObject(mailbox, (_instance, state) => {
-			const version = state.storage.sql
-				.exec<{ value: string }>("SELECT value FROM meta WHERE key = 'schema_version'")
-				.one().value;
-			state.storage.sql.exec("DROP TABLE recipients");
-			state.storage.sql.exec("UPDATE meta SET value = ? WHERE key = 'schema_version'", String(Number(version) - 1));
+			// Back to schema 3: before the recipients table (migration 4) and the auto labels (migration 5).
+			const sql = state.storage.sql;
+			sql.exec("DROP TABLE recipients");
+			sql.exec("DROP TABLE auto_labels");
+			sql.exec("DROP TABLE label_corrections");
+			sql.exec("DROP TABLE autolabel_outbox");
+			sql.exec("ALTER TABLE message_labels DROP COLUMN auto");
+			sql.exec("ALTER TABLE messages DROP COLUMN signals_json");
+			sql.exec("ALTER TABLE messages DROP COLUMN auto_labeled_at");
+			sql.exec("UPDATE meta SET value = '3' WHERE key = 'schema_version'");
 		});
 		await evictDurableObject(mailbox);
 		expect(await ada.call("mail.suggest_recipients")).toEqual(live);
