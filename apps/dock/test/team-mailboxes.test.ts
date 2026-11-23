@@ -315,6 +315,14 @@ describe("the scopes of a member of a team mailbox", () => {
 				expect.any(String),
 			);
 		}
+
+		// The credential has the same rule in each mailbox: a key with only mail.send sends, but its reply
+		// would read a message that the key cannot read.
+		const sender = await narrowKey(ada, ["mail.send"]);
+		const own = await sender("mail.send", { to: ["owner@dock.test"], text: "First" });
+		const reply = { to: ["owner@dock.test"], text: "Second", reply_to_message_id: own.message_id };
+		expect(await code(sender("mail.send", reply))).toBe("forbidden");
+		expect((await ada.call("mail.send", reply)).thread_id).toBe(own.thread_id);
 	});
 
 	// The Worker from before the scopes writes a member without them, and each member from before has none

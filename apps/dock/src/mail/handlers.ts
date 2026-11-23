@@ -458,13 +458,17 @@ export const mailHandlers: Pick<HandlerMap<CallContext>, MailOperation> = {
 
 	async "mail.send"(call, input) {
 		// A reply reads the message that it answers: its subject and its references go into the new message.
-		// So a member of a team mailbox needs mail.read for a reply, or a send would show mail that it cannot read.
-		const { record, box } = await openMailbox(
-			call,
-			input.mailbox_id,
-			"mail.send",
-			input.reply_to_message_id ? ["mail.read"] : [],
-		);
+		// So a reply needs mail.read too, or a send would show mail that the caller cannot read. The credential
+		// needs it in each mailbox, and a member of a team mailbox needs it in the membership.
+		const replyScopes: MailboxMemberScope[] = input.reply_to_message_id ? ["mail.read"] : [];
+		const missing = replyScopes.filter((scope) => !call.caller.scopes.has(scope));
+		if (missing.length > 0) {
+			throw new OperationError(
+				"forbidden",
+				`A reply reads the message that it answers. The credential does not have the scope ${missing.join(", ")}.`,
+			);
+		}
+		const { record, box } = await openMailbox(call, input.mailbox_id, "mail.send", replyScopes);
 		// The idempotency key is bound to the request, so a reused key with another message is a conflict.
 		const { idempotency_key: _key, ...request } = input;
 		const requestHash = await sha256Hex(JSON.stringify(request));
@@ -567,7 +571,7 @@ export const mailHandlers: Pick<HandlerMap<CallContext>, MailOperation> = {
 		// between them is too late to stop this send.
 		if (record.kind === "team") {
 			try {
-				await teamMailboxFor(call.env.DIRECTORY, record.id, call.caller.id, ["mail.send"]);
+				await teamMailboxFor(call.env.DIRECTORY, record.id, call.caller.id, ["mail.send", ...replyScopes]);
 			} catch (error) {
 				// No message references this attempt's object.
 				await call.env.BLOBS.delete(rawKey);

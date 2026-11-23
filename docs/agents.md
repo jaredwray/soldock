@@ -377,7 +377,8 @@ agent and a service account.
 - The credential that adds an agent must hold each scope that the membership gives. A narrow API key with
   `directory.write` cannot give `mail.send` when it does not hold `mail.send`.
 - A member with only `mail.send` does not see the mailbox in the web app, and cannot watch its inbox. A
-  reply (`reply_to_message_id`) reads the message that it answers, so it also needs `mail.read`.
+  reply (`reply_to_message_id`) reads the message that it answers, so it also needs `mail.read`: in the
+  credential, and in the membership.
 
 - The members share the threads, the labels and the read state. A change by one member shows for
   each member.

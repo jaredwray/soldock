@@ -74,7 +74,9 @@ bytes, and the mailbox drops it as a copy.
   scopes, so a handler cannot ask for a different scope than the invoker did. A member without the
   scope gets `forbidden`. The second check of `mail.send` needs `mail.send`.
 - A reply reads the message that it answers: its subject and its references go into the new message. So
-  `mail.send` with `reply_to_message_id` also needs `mail.read` in the membership of a team mailbox.
+  `mail.send` with `reply_to_message_id` also needs `mail.read`: in the credential, for each mailbox, and
+  in the membership of a team mailbox. The second check of the membership needs it too. Before this rule,
+  a key with only `mail.send` got the subject of a message through a reply.
 - `mail.list_mailboxes` has `scopes` for each mailbox: the three for the own mailbox, the scopes of the
   membership for a team mailbox, and `mail.read` for the mailbox of an agent.
 - The id of a different principal gets `forbidden`, except in the case of
