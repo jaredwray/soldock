@@ -156,7 +156,7 @@ function ApprovalForm({ authorization, agents, domains, canCreate, offered, onDo
 		() => new Set(defaultScopes(authorization.requested_scopes, offered)),
 	);
 	// A new agent starts with a limit to its own mailbox and its own drive: the default of the server. Without
-	// the check, the form sends `resources: null`, and the new agent has no limits.
+	// the check, the form sends `limits: "none"`, and the new agent has no limits.
 	const [limited, setLimited] = useState(true);
 	const [busy, setBusy] = useState(false);
 	const [error, setError] = useState<string | null>(null);
@@ -189,7 +189,7 @@ function ApprovalForm({ authorization, agents, domains, canCreate, offered, onDo
 					? {
 							new_agent: { display_name: name.trim(), address: address.trim() },
 							scopes: offered.filter((scope) => scopes.has(scope)),
-							...(limited ? {} : { resources: null }),
+							...(limited ? {} : { limits: "none" as const }),
 						}
 					: { agent_id: agentId }),
 			});

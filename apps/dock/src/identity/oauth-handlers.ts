@@ -1,6 +1,6 @@
 import type { OAuthAuthorization, OAuthGrant } from "@asterra/contracts";
 import { type HandlerMap, OperationError } from "../platform/index.ts";
-import { auditOk, canManageCredentialsOf, credentialOwner, grantableScopes, isAdmin } from "./access.ts";
+import { auditOk, canManageCredentialsOf, createdTarget, credentialOwner, grantableScopes, isAdmin } from "./access.ts";
 import type { CallContext } from "./auth.ts";
 import {
 	approveStatement,
@@ -118,7 +118,7 @@ export const oauthHandlers: Pick<HandlerMap<CallContext>, OAuthOperation> = {
 					password_hash: null,
 					created_by: call.caller.principal.id,
 					agent_scopes: scopes,
-					no_limits: input.resources === null,
+					no_limits: input.limits === "none",
 				},
 				null,
 				{
@@ -128,7 +128,7 @@ export const oauthHandlers: Pick<HandlerMap<CallContext>, OAuthOperation> = {
 				},
 			);
 			if (!created) throw new OperationError("conflict", `${GONE} A directory reset can also cause this.`);
-			auditOk(call, "directory.create_principal", created.principal.id);
+			auditOk(call, "directory.create_principal", createdTarget(created.principal));
 			auditOk(call, "oauth.approve_authorization", `${request.id}:${created.principal.id}`);
 			return { principal: toPrincipalOutput(created.principal), redirect_to: codeRedirect(request, code.code) };
 		}

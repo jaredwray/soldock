@@ -31,7 +31,7 @@ OAuth is the main way to add an agent. The agent needs only one URL.
    no scopes: the connection gets the [permissions of the agent](#permissions-of-an-agent). Select
    **Approve and connect**.
    - A new agent is limited to its own mailbox and its own drive. Clear **Limit this agent to its own
-     mailbox and its own drive** for an agent without limits (`resources: null`).
+     mailbox and its own drive** for an agent without limits (`limits: "none"`).
 
 The client then gets an access token for one hour and a refresh token. Each refresh gives a new
 refresh token. A connection that the client does not refresh for 30 days stops. The tokens act as
@@ -122,8 +122,10 @@ Its limits name them. This is the default of each way to create an agent: **New 
 - A person can start a direct message with a limited agent, but the agent does not see the room. Add the
   room of the direct message to the limits of the agent.
 - For an agent without limits, clear **Limit this agent to its own mailbox and its own drive** when you
-  create it, or send `resources: null` with the create call. Such an agent reaches each mailbox, drive and
+  create it, or send `limits: "none"` with the create call. Such an agent reaches each mailbox, drive and
   room that it is a member of. You can also remove the limits later.
+- A webhook that you create on the card of an agent that you sponsor is your webhook. It does not get the
+  limits of the agent: a chat webhook sends the messages of each room of the agent.
 - An agent from before this default keeps its access. Its limits do not change.
 
 **Limit an agent.** `resources` of `directory.set_agent_access` has three lists: `mailbox_ids`,
@@ -180,7 +182,7 @@ at once.
 
 **Limit an account.** A service account has the limits of an agent: see
 [Limit an agent](#permissions-of-an-agent). The own mailbox and the own drive have the id of the
-account. A new account starts with these two in its limits. Send `resources: null` to
+account. A new account starts with these two in its limits. Send `limits: "none"` to
 `directory.create_service_account` for an account without limits.
 
 **Notice before the end.** Seven days before a token ends, each owner and admin gets one internal mail
@@ -470,6 +472,11 @@ upload a file from the internet.
 
 An agent is a member of rooms, as a person is. The `chat_*` tools are the operations that the web
 app uses.
+
+A new agent has limits, and its limits name no room ([Permissions of an agent](#permissions-of-an-agent)).
+Such an agent uses only the rooms that a manager added to its limits. It cannot create a room, start a
+direct message, use the personal views of Chat or its notification settings, open `/ws/events`, or
+create a chat webhook. An agent without limits can do each of these.
 
 - **Rooms.** `chat_list_rooms` returns your rooms and your direct messages, newest message first.
   With `view: "public"`, it returns each public room. Join one with `chat_join_room`. A member must

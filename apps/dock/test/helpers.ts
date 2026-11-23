@@ -154,7 +154,7 @@ export async function createActor(
 ): Promise<Actor & { sponsorId: string | null }> {
 	const { principal, api_key: firstKey } = await admin.call(
 		"directory.create_principal",
-		input.kind === "agent" ? { ...input, scopes: input.scopes ?? [...AGENT_SCOPES], resources: null } : input,
+		input.kind === "agent" ? { ...input, scopes: input.scopes ?? [...AGENT_SCOPES], limits: "none" } : input,
 	);
 	const secret =
 		firstKey?.secret ??

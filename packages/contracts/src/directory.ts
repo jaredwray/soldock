@@ -1,6 +1,6 @@
 import { EmailAddress, ID_CHARS, prefixedId, Timestamp } from "./common.ts";
 import { defineOperation } from "./operation.ts";
-import { AgentResources, NoAgentResources } from "./restrictions.ts";
+import { AgentResources, NewAgentLimits } from "./restrictions.ts";
 import { AGENT_SCOPES, ALL_SCOPES, type Scope, SERVICE_SCOPES, type ServiceScope } from "./scopes.ts";
 import { PASSWORD_MAX_LENGTH, Password, TotpCode } from "./signin.ts";
 import { z } from "./zod.ts";
@@ -308,7 +308,7 @@ export const createPrincipal = defineOperation({
 		"A human gets no API key. The person can create keys in Settings after the sign-in.",
 		"An agent gets a sponsor (the caller by default), the internal-only outbound policy, and the scopes of the call. scopes is necessary for an agent, and the credential of the call must hold each one.",
 		"Each API key and each OAuth connection of the agent has the scopes of the agent. Change them with directory.set_agent_access.",
-		"A new agent is limited to its own mailbox and its own drive, and it reaches no chat room. Add a team mailbox, a shared drive or a room to its limits with directory.set_agent_access, after the agent is a member. Send resources: null for an agent without limits, which reaches each mailbox, drive and room that it is a member of.",
+		'A new agent is limited to its own mailbox and its own drive, and it reaches no chat room. Add a team mailbox, a shared drive or a room to its limits with directory.set_agent_access, after the agent is a member. Send limits: "none" for an agent without limits, which reaches each mailbox, drive and room that it is a member of.',
 		"The result of an agent holds a first API key. Its secret is shown only once.",
 	].join(" "),
 	http: { method: "POST", path: "/api/v1/directory/principals" },
@@ -327,10 +327,10 @@ export const createPrincipal = defineOperation({
 			/** What an agent can do. Each API key and OAuth connection of the agent has these scopes. Not for a human. */
 			scopes: z.array(AgentScopeName).min(1).optional(),
 			/**
-			 * Null: the new agent has no resource limits. Without it, the new agent is limited to its own mailbox
-			 * and its own drive. Not for a human.
+			 * The resource limits of a new agent. `own` (the default): its own mailbox and its own drive. `none`:
+			 * no limits. Not for a human.
 			 */
-			resources: NoAgentResources.optional(),
+			limits: NewAgentLimits.optional(),
 		})
 		.refine((input) => input.kind !== "human" || input.password !== undefined, {
 			message: "a human needs a password",
@@ -348,9 +348,9 @@ export const createPrincipal = defineOperation({
 			message: "a human has no scopes of its own: the scopes are on each key",
 			path: ["scopes"],
 		})
-		.refine((input) => input.kind !== "human" || input.resources === undefined, {
+		.refine((input) => input.kind !== "human" || input.limits === undefined, {
 			message: "a human has no resource limits",
-			path: ["resources"],
+			path: ["limits"],
 		}),
 	output: z.object({
 		principal: Principal,
@@ -727,7 +727,7 @@ export const createServiceAccount = defineOperation({
 		"It gets a sponsor (the caller by default), the internal-only outbound policy, the scopes of the call, and no token.",
 		"scopes says what the account can do. Each token of the account has these scopes. The credential of the call must hold each one.",
 		"Create its tokens with account.create_api_key and its principal_id. Change its scopes with directory.set_agent_access.",
-		"A new account is limited to its own mailbox and its own drive, and it reaches no chat room. Add a team mailbox, a shared drive or a room to its limits with directory.set_agent_access, after the account is a member. Send resources: null for an account without limits, which reaches each mailbox, drive and room that it is a member of.",
+		'A new account is limited to its own mailbox and its own drive, and it reaches no chat room. Add a team mailbox, a shared drive or a room to its limits with directory.set_agent_access, after the account is a member. Send limits: "none" for an account without limits, which reaches each mailbox, drive and room that it is a member of.',
 	].join(" "),
 	http: { method: "POST", path: "/api/v1/directory/service-accounts" },
 	scopes: ["directory.write"],
@@ -742,10 +742,10 @@ export const createServiceAccount = defineOperation({
 		/** What the account can do. Each token of the account has these scopes. */
 		scopes: z.array(ServiceScopeName).min(1),
 		/**
-		 * Null: the new account has no resource limits. Without it, the new account is limited to its own
-		 * mailbox and its own drive.
+		 * The resource limits of the new account. `own` (the default): its own mailbox and its own drive.
+		 * `none`: no limits.
 		 */
-		resources: NoAgentResources.optional(),
+		limits: NewAgentLimits.optional(),
 	}),
 	output: z.object({ principal: Principal }),
 	errors: ["conflict", "not_found"],

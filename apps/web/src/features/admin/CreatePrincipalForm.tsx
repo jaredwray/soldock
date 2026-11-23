@@ -84,7 +84,7 @@ function CreatePrincipalForm({ me, humans, onBusy, onCancel, onCreated }: Create
 	const [scopes, setScopes] = useState<ReadonlySet<Scope>>(() => new Set<Scope>(["account.read"]));
 	const selected = offered.filter((scope) => scopes.has(scope));
 	// A new agent or service account starts with a limit to its own mailbox and its own drive: the default of
-	// the server. Without the check, the form sends `resources: null`, and the new member has no limits.
+	// the server. Without the check, the form sends `limits: "none"`, and the new member has no limits.
 	const [limited, setLimited] = useState(true);
 	const [busy, setBusy] = useState(false);
 	const [error, setError] = useState<string | null>(null);
@@ -122,7 +122,7 @@ function CreatePrincipalForm({ me, humans, onBusy, onCancel, onCreated }: Create
 					// `scopesFor` gives `SERVICE_SCOPES` for a service account, which are the scopes that the operation takes.
 					scopes: selected as InputOf<"directory.create_service_account">["scopes"],
 					...(description.trim() ? { description: description.trim() } : {}),
-					...(limited ? {} : { resources: null }),
+					...(limited ? {} : { limits: "none" as const }),
 				});
 				onCreated(result.principal, null);
 			} catch (caught) {
@@ -147,7 +147,7 @@ function CreatePrincipalForm({ me, humans, onBusy, onCancel, onCreated }: Create
 						address: address.trim(),
 						sponsor_id: sponsorId,
 						scopes: selected,
-						...(limited ? {} : { resources: null }),
+						...(limited ? {} : { limits: "none" as const }),
 					};
 		try {
 			const result = await api.call("directory.create_principal", input);

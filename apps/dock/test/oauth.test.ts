@@ -129,7 +129,7 @@ async function connectNewAgent(approver: Actor, address = "claude@dock.test") {
 		request_id: requestId,
 		new_agent: { display_name: "Claude", address },
 		scopes: ["account.read", "mail.read", "chat.read"],
-		resources: null,
+		limits: "none",
 	});
 	const res = await exchange(clientId, approved.redirect_to, verifier);
 	expect(res.status).toBe(200);
@@ -341,7 +341,7 @@ describe("OAuth approval", () => {
 		expect(tools).toContain("chat_list_rooms");
 		expect(tools).not.toContain("mail_send");
 		expect(tools).not.toContain("drive_list_items");
-		// The approval sent no `resources`, so the new agent is limited to its own mailbox and its own drive.
+		// The approval sent no `limits`, so the new agent is limited to its own mailbox and its own drive.
 		const whoami = await callTool(tokens.access_token, "account_whoami");
 		expect(whoami.structuredContent).toMatchObject({
 			principal: { id: approved.principal.id, kind: "agent" },
@@ -504,7 +504,7 @@ describe("OAuth approval", () => {
 		const unlimited = owner.call("oauth.approve_authorization", {
 			request_id: requestId,
 			agent_id: bot.id,
-			resources: null,
+			limits: "none",
 		});
 		expect(await codeOf(unlimited)).toBe("invalid");
 		const keys = owner.call("oauth.approve_authorization", {
@@ -1029,7 +1029,7 @@ describe("OAuth and webhooks", () => {
 			new_agent: { display_name: "Claude", address: "claude@dock.test" },
 			scopes: [`${domain}.read`, `${domain}.webhooks`],
 			// A limited agent cannot make a chat webhook.
-			resources: null,
+			limits: "none",
 		});
 		const tokens = (await (await exchange(clientId, approved.redirect_to, verifier)).json()) as Tokens;
 		const agent = approved.principal;
@@ -1220,7 +1220,7 @@ describe("OAuth and webhooks", () => {
 			new_agent: { display_name: "Dot", address: "dot@dock.test" },
 			scopes: [...scopes],
 			// A chat event without a room needs an agent without limits.
-			resources: null,
+			limits: "none",
 		});
 		const tokens = (await (await exchange(clientId, approved.redirect_to, first.verifier)).json()) as Tokens;
 		const agent = approved.principal;

@@ -310,6 +310,15 @@ export function recordServiceMemberships(
 	);
 }
 
+/**
+ * The audit target of a new principal: its id and, for an agent or a service account, if it has limits. So
+ * the log shows an agent that its creator made without limits, as it shows a change of the limits.
+ */
+export function createdTarget(principal: Pick<PrincipalRecord, "id" | "kind" | "agent_resources">): string {
+	if (principal.kind !== "agent") return principal.id;
+	return `${principal.id}:${principal.agent_resources === null ? "no limits" : "limits"}`;
+}
+
 export function auditOk(call: CallContext, op: string, target: string): void {
 	audit({
 		op,

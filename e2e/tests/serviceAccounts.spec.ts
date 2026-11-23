@@ -90,7 +90,8 @@ test("an admin creates a service account with scopes and a 7-day token, sees its
 		await card.getByLabel("Own drive").uncheck();
 		await expect(card.getByLabel(/^Own mailbox/)).toBeChecked();
 		await card.getByRole("button", { name: "Save permissions" }).click();
-		await expect(card.getByText(`Only: Own mailbox (${local}@example.com)`)).toBeVisible();
+		// The exact text: before the save, the limits also name the own drive.
+		await expect(card.getByText(`Only: Own mailbox (${local}@example.com)`, { exact: true })).toBeVisible();
 		const changed = await context.request.get("/api/v1/account", { headers: { authorization: `Bearer ${rotated}` } });
 		expect(await changed.json()).toMatchObject({
 			scopes: ["account.read", "mail.read", "chat.read"],

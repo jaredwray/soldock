@@ -381,7 +381,7 @@ no team mailbox and no shared drive until a manager adds them to its limits. No 
 
 - An agent or a service account from before this change keeps its access. Its limits do not change.
 - A script that creates an agent and then uses a team mailbox, a shared drive or a room must change. Send
-  `resources: null` to `directory.create_principal` or `directory.create_service_account` for an agent
+  `limits: "none"` to `directory.create_principal` or `directory.create_service_account` for an agent
   without limits. Or set its limits with `directory.set_agent_access` after you add the memberships.
 - [Agents](agents.md#permissions-of-an-agent) has the rules.
 

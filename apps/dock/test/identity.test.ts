@@ -1095,7 +1095,7 @@ describe("directory authorization", () => {
 			"invalid",
 		);
 		// Only an agent has resource limits.
-		expect(await denied(owner.call("directory.create_principal", { ...person, resources: null }))).toBe("invalid");
+		expect(await denied(owner.call("directory.create_principal", { ...person, limits: "own" }))).toBe("invalid");
 		const eve = await owner.call("directory.create_principal", person);
 		expect(eve.api_key).toBeNull();
 		expect((await owner.call("account.list_api_keys", { principal_id: eve.principal.id })).api_keys).toEqual([]);
@@ -1122,23 +1122,26 @@ describe("directory authorization", () => {
 			scopes: ["account.read", "mail.read"],
 			resources: { mailbox_ids: [agent.principal.id], drive_ids: [agent.principal.id], room_ids: [] },
 		});
-		// `resources: null` creates an agent without limits. The call takes no list: the own mailbox and the own
-		// drive have the id of the agent, which the caller does not know yet.
+		// `limits: "none"` creates an agent without limits. Null must not do that: some clients send null for a
+		// field that they did not set. The call takes no list either.
 		const free = {
 			kind: "agent" as const,
 			display_name: "Free",
 			address: "free@dock.test",
 			scopes: ["account.read" as const],
 		};
-		expect(
-			await denied(
-				owner.call("directory.create_principal", {
-					...free,
-					resources: { mailbox_ids: [], drive_ids: [], room_ids: [] } as never,
-				}),
-			),
-		).toBe("invalid");
-		const unlimited = await owner.call("directory.create_principal", { ...free, resources: null });
+		for (const limits of [null, { mailbox_ids: [], drive_ids: [], room_ids: [] }]) {
+			const refused = owner.call("directory.create_principal", { ...free, limits: limits as never });
+			expect(await denied(refused), JSON.stringify(limits)).toBe("invalid");
+		}
+		// The audit line says that the agent has no limits, as the line of a later change does.
+		const spy = vi.spyOn(console, "log");
+		const unlimited = await owner.call("directory.create_principal", { ...free, limits: "none" });
+		const auditLines = spy.mock.calls
+			.map(([line]) => (typeof line === "string" && line.startsWith("{") ? JSON.parse(line) : null))
+			.filter((line) => line?.audit === true && line.op === "directory.create_principal");
+		spy.mockRestore();
+		expect(auditLines.map((line) => line.target)).toEqual([`${unlimited.principal.id}:no limits`]);
 		expect((await api(unlimited.api_key?.secret ?? "")("account.whoami")).resources).toBeNull();
 		// An agent needs scopes.
 		expect(

@@ -75,7 +75,8 @@ test("an admin creates a person with no API key, and an agent with scopes and a 
 		await expect(card.getByLabel(/^Own mailbox/)).toBeChecked();
 		await card.getByLabel("Own drive").uncheck();
 		await card.getByRole("button", { name: "Save permissions" }).click();
-		await expect(card.getByText(`Only: Own mailbox (helper-${local}@example.com)`)).toBeVisible();
+		// The exact text: before the save, the limits also name the own drive.
+		await expect(card.getByText(`Only: Own mailbox (helper-${local}@example.com)`, { exact: true })).toBeVisible();
 		const changed = await scopesOfKey();
 		expect(changed.scopes.sort()).toEqual(["account.read", "chat.read", "mail.read"]);
 		expect(changed.resources).toEqual({ mailbox_ids: [agentId], drive_ids: [], room_ids: [] });
@@ -83,6 +84,46 @@ test("an admin creates a person with no API key, and an agent with scopes and a 
 		// The agent first: a person who sponsors no agent can be deleted.
 		for (const id of ids.reverse()) {
 			await context.request.delete(`/api/v1/directory/principals/${id}`, { headers: { origin: BASE_URL } });
+		}
+		await context.close();
+	}
+});
+
+// The limit of a new agent is the default. An admin who clears the check box gets an agent without limits.
+test("an admin clears the limit in the New member dialog, and the new agent has no limits", async ({ browser }) => {
+	const context = await signIn(browser, "tomasz");
+	let agentId: string | null = null;
+	try {
+		const page = await context.newPage();
+		await page.goto("/admin/members");
+		const dialog = page.getByRole("dialog", { name: "New member" });
+		const agent = unique("Roamer");
+		await page.getByRole("button", { name: "New member" }).click();
+		await dialog.getByLabel("Agent").check();
+		await dialog.getByLabel("Display name").fill(agent);
+		const local = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+		await dialog.getByLabel("Address", { exact: true }).fill(`roamer-${local}@example.com`);
+		await dialog.getByLabel("Limit this agent to its own mailbox and its own drive").uncheck();
+		agentId = await submit(page, "Create agent");
+		const keyDialog = page.getByRole("dialog", { name: `${agent} is ready` });
+		const secret = await keyDialog.getByLabel("API key “First key”").inputValue();
+		await keyDialog.getByRole("button", { name: "Done" }).click();
+		const whoami = await context.request.get("/api/v1/account", { headers: { authorization: `Bearer ${secret}` } });
+		expect(((await whoami.json()) as { resources: unknown }).resources).toBeNull();
+
+		// The card shows no limit. When the admin sets the limit, the form selects what the agent reaches now,
+		// so the check box alone does not stop the agent.
+		await page.getByRole("button", { name: /^Agents/ }).click();
+		const card = page.locator("details.admin-card").filter({ hasText: agent });
+		await card.locator("summary").click();
+		const limit = card.getByLabel("Limit this agent to specific mailboxes, drives and rooms");
+		await expect(limit).not.toBeChecked();
+		await limit.check();
+		await expect(card.getByLabel(/^Own mailbox/)).toBeChecked();
+		await expect(card.getByLabel("Own drive")).toBeChecked();
+	} finally {
+		if (agentId) {
+			await context.request.delete(`/api/v1/directory/principals/${agentId}`, { headers: { origin: BASE_URL } });
 		}
 		await context.close();
 	}

@@ -306,7 +306,7 @@ MCP clients. The app has no UI-only path.
       An agent (`directory.create_principal`) gets its scopes in the same way: the form shows `AGENT_SCOPES` with the texts for a person (`scopeDescription` with the kind `agent`), selects only `account.read` first, and sends the selected scopes as `scopes`.
       The first API key of the agent has no scopes of its own. It has the scopes of the agent.
       For an agent and a service account, the form has the check box **Limit this agent to its own mailbox and its own drive** (**Limit this account …**), which is on first.
-      With it, the form sends no `resources`, and the server gives the default limits. Without it, the form sends `resources: null`, and the new member has no limits.
+      With it, the form sends no `limits`, and the server gives the default limits. Without it, the form sends `limits: "none"`, and the new member has no limits.
       A credential cannot grant a scope that it does not hold.
       The form offers only the scopes of the session.
       A person also needs a first password. The admin gives the password to the person.
@@ -437,7 +437,7 @@ MCP clients. The app has no UI-only path.
     requested scopes and `account.read` first, or each scope when the client asked for none. The app
     sends them as `scopes` with `new_agent`.
   - For a new agent, the check box **Limit this agent to its own mailbox and its own drive** is on first.
-    Without it, the page sends `resources: null` with `new_agent`, and the new agent has no limits.
+    Without it, the page sends `limits: "none"` with `new_agent`, and the new agent has no limits.
   - For an agent that exists, the page offers no scopes and sends only `agent_id`. A line tells that
     the app gets each permission of the agent, and that the agent card in Admin › Members changes them.
     The page reads the selected agent (`directory.get_agent_access`) and lists each scope of the agent.

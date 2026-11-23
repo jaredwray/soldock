@@ -63,7 +63,7 @@ async function seedService(scopes: Scope[] = [...SERVICE_SCOPES]) {
 		description: "Posts build results",
 		sponsor_id: ada.id,
 		scopes: scopes as never,
-		resources: null,
+		limits: "none",
 	});
 	return { owner, admin, ada, bot, service: principal };
 }
@@ -117,7 +117,7 @@ describe("service accounts", () => {
 			outbound_policy: { mode: "internal-only", allowlist: [] },
 		});
 		expect((await admin.call("account.list_api_keys", { principal_id: service.id })).api_keys).toEqual([]);
-		// The account has the scopes of its creation. `resources: null` of the call gave it no limits.
+		// The account has the scopes of its creation. `limits: "none"` of the call gave it no limits.
 		expect(await admin.call("directory.get_agent_access", { principal_id: service.id })).toMatchObject({
 			scopes: ["account.read", "chat.read"],
 			resources: null,
@@ -131,7 +131,7 @@ describe("service accounts", () => {
 		});
 		expect(viaMcp.isError).toBeFalsy();
 		expect(viaMcp.structuredContent).toMatchObject({ principal: { kind: "service", sponsor_id: owner.id } });
-		// A call without `resources` limits the new account to its own mailbox and its own drive.
+		// A call without `limits` limits the new account to its own mailbox and its own drive.
 		const backupId = (viaMcp.structuredContent as { principal: { id: string } }).principal.id;
 		expect((await owner.call("directory.get_agent_access", { principal_id: backupId })).resources).toEqual({
 			mailbox_ids: [backupId],

@@ -38,12 +38,16 @@ export function defaultAgentResources(agentId: string): AgentResources {
 }
 
 /**
- * The `resources` field of an operation that creates an agent or a service account. The only value is null:
- * the new agent then has no limits. Without the field, the new agent gets `defaultAgentResources`. A list is
- * not possible here, because the own mailbox and the own drive have the id of the agent, which does not
- * exist before the call.
+ * The `limits` field of an operation that creates an agent or a service account.
+ * - `own` (the default): the new agent gets `defaultAgentResources`.
+ * - `none`: the new agent has no limits.
+ *
+ * A create call takes no list of resources, because the own mailbox and the own drive have the id of the
+ * agent, which does not exist before the call. The wide value is a word and not null or false: a client that
+ * sends null or false for a field that it did not set must not remove the limits.
  */
-export const NoAgentResources = z.null();
+export const NewAgentLimits = z.enum(["own", "none"]);
+export type NewAgentLimits = z.infer<typeof NewAgentLimits>;
 
 export type ResourceKind = "mailbox" | "drive" | "room";
 
