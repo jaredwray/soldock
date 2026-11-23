@@ -8,9 +8,12 @@ import {
 	callTool,
 	captureAutoLabelJobs,
 	codeOf,
+	consumeAutoLabels,
 	createActor,
 	drainAutoLabels,
 	enableAi,
+	fakeGateway,
+	gatewayAnswer,
 	inject,
 	mcp,
 	PASSWORD,
@@ -231,7 +234,13 @@ describe("a run of auto labels on recent inbox mail", () => {
 		expect(await codeOf(ada.call("mail.run_auto_labels", {}))).toBe("conflict");
 		await enableAi(owner);
 		expect(await codeOf(ada.call("mail.run_auto_labels", {}))).toBe("conflict");
-		await ada.call("mail.update_auto_labels", { enabled: true, labels: [{ key: "meeting", skip_inbox: true }] });
+		await ada.call("mail.update_auto_labels", {
+			enabled: true,
+			labels: [
+				{ key: "meeting", skip_inbox: true },
+				{ key: "receipt", skip_inbox: true },
+			],
+		});
 		const jobs = await captureAutoLabelJobs(ada.id);
 
 		const dry = await ada.call("mail.run_auto_labels", { dry_run: true });
@@ -246,6 +255,13 @@ describe("a run of auto labels on recent inbox mail", () => {
 		// The run never moves mail out of the inbox, though Meeting skips it for new mail.
 		expect(threads[0]?.label_ids).toContain("INBOX");
 		expect(threads[0]?.auto_label_ids).toHaveLength(1);
+
+		// The classifier is sure of a label that skips the inbox. The message of the run stays in the inbox too.
+		fakeGateway(() => gatewayAnswer(JSON.stringify({ labels: [{ key: "receipt", confidence: 0.95 }] })));
+		await consumeAutoLabels(jobs);
+		const { threads: classified } = await ada.call("mail.list_threads", { query: "subject:Question in:anywhere" });
+		expect(classified[0]?.auto_label_ids).toHaveLength(1);
+		expect(classified[0]?.label_ids).toContain("INBOX");
 
 		expect(await ada.call("mail.run_auto_labels", {})).toEqual({
 			messages: 0,

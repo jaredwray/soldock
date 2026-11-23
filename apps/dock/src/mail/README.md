@@ -296,7 +296,8 @@ paths of its links, and keeps at most 3,000 characters. The answer has at most 1
 ### Run on recent mail
 
 `mail.run_auto_labels` applies auto labels to the newest 100 (at most 200) inbox messages that auto
-labels did not examine. `dry_run` gives the count. A run never removes `INBOX`.
+labels did not examine. `dry_run` gives the count. A run never removes `INBOX`: the outbox row of a
+message of a run has `may_archive` 0, so the classifier stage keeps the message in the inbox too.
 
 ### Lifecycle and retries
 
@@ -615,7 +616,7 @@ A disabled endpoint stays disabled. Delete it and create a new one.
 | Auto-label examination time | `MailboxDO` table `messages`, column `auto_labeled_at` | Null until auto labels examined the message |
 | Auto-label settings | `MailboxDO` table `auto_labels`, and table `meta` keys `auto_label_enabled`, `auto_label_initialized`, `auto_label_mailbox_id` | One row for each built-in label that the mailbox turned on once, and for each custom label: the user label, the description, on or off, and skip the inbox |
 | Corrections | `MailboxDO` table `label_corrections` | The newest 500: the sender address, its domain, the label, add or remove, and the first 120 characters of the subject |
-| Classifier outbox | `MailboxDO` table `autolabel_outbox` | One row for each message that waits for the classifier, with the facts at delivery. Deleted after the result or the last send. A directory reset deletes the rows |
+| Classifier outbox | `MailboxDO` table `autolabel_outbox` | One row for each message that waits for the classifier, with the facts at delivery and `may_archive` (0 for a message of a run). Deleted after the result or the last send. A directory reset deletes the rows |
 | Classifier jobs | Queue `soldock-mail-autolabel`, no dead letter queue | Jobs hold the mailbox id and the message id only. The mailbox sends a job again when no result came |
 
 Blob reference counts: each raw object has exactly one owner (the mailbox in its key), so no shared

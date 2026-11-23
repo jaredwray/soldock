@@ -1413,7 +1413,10 @@ export class MailboxDO extends DurableObject<Env> {
 
 	/** Removes the Needs reply label from each message of a thread. */
 	private clearNeedsReply(threadId: string): void {
-		const row = this.one<{ label_id: string }>("SELECT label_id FROM auto_labels WHERE key = 'needs_reply'");
+		// Only while the auto label is on. A person who turned it off uses the label by hand.
+		const row = this.one<{ label_id: string }>(
+			"SELECT label_id FROM auto_labels WHERE key = 'needs_reply' AND enabled = 1",
+		);
 		if (!row) return;
 		this.sql.exec(
 			"DELETE FROM message_labels WHERE label_id = ? AND message_seq IN (SELECT seq FROM messages WHERE thread_id = ?)",
@@ -1543,11 +1546,13 @@ export class MailboxDO extends DurableObject<Env> {
 			const archived = this.applyAutoLabelKeys(seq, keys, source, defs, skip);
 			return archived ? "archived" : keys.length > 0 ? "labeled" : "none";
 		}
+		// The row keeps `mayArchive`, so the classifier stage of a run does not move mail out of the inbox.
 		this.sql.exec(
-			"INSERT OR REPLACE INTO autolabel_outbox (message_seq, sends, next_attempt_at, facts_json) VALUES (?, 0, ?, ?)",
+			"INSERT OR REPLACE INTO autolabel_outbox (message_seq, sends, next_attempt_at, facts_json, may_archive) VALUES (?, 0, ?, ?, ?)",
 			seq,
 			Date.now(),
 			JSON.stringify(facts),
+			options.mayArchive ? 1 : 0,
 		);
 		return "queued";
 	}
@@ -1735,9 +1740,10 @@ export class MailboxDO extends DurableObject<Env> {
 			attachments_json: string;
 			signals_json: string | null;
 			facts_json: string;
+			may_archive: number;
 		}>(
 			`SELECT m.seq, m.from_name, m.from_addr, m.subject, m.text_body, m.html_body, m.attachments_json, m.signals_json,
-				o.facts_json
+				o.facts_json, o.may_archive
 			FROM autolabel_outbox o JOIN messages m ON m.seq = o.message_seq WHERE m.id = ?`,
 			messageId,
 		);
@@ -1759,7 +1765,7 @@ export class MailboxDO extends DurableObject<Env> {
 						keys,
 						source,
 						defs,
-						keys.some((key) => defs.find((d) => d.key === key)?.skipInbox),
+						row.may_archive === 1 && keys.some((key) => defs.find((d) => d.key === key)?.skipInbox),
 					);
 				} else {
 					this.sql.exec("UPDATE messages SET auto_labeled_at = ? WHERE seq = ?", Date.now(), row.seq);
@@ -1797,13 +1803,20 @@ export class MailboxDO extends DurableObject<Env> {
 	 * this mailbox. A second call for the same message does nothing. Returns the label ids that it applied.
 	 */
 	applyAutoLabels(messageId: string, picks: LabelPick[]): { applied: string[]; archived: boolean } {
-		const row = this.one<{ seq: number; facts_json: string }>(
-			"SELECT m.seq, o.facts_json FROM autolabel_outbox o JOIN messages m ON m.seq = o.message_seq WHERE m.id = ?",
+		const row = this.one<{ seq: number; facts_json: string; may_archive: number }>(
+			`SELECT m.seq, o.facts_json, o.may_archive FROM autolabel_outbox o JOIN messages m ON m.seq = o.message_seq
+			WHERE m.id = ?`,
 			messageId,
 		);
 		if (!row) return { applied: [], archived: false };
 		const defs = enabledLabelDefs(this.sql);
-		const decided = this.autoLabelsOn() ? this.decideFor(row.seq, JSON.parse(row.facts_json) as MailFacts, defs) : null;
+		// A person can move the message to Spam or Trash while the classifier works. It gets no label then.
+		const gone = this.one(
+			"SELECT 1 AS found FROM message_labels WHERE message_seq = ? AND label_id IN ('SPAM', 'TRASH')",
+			row.seq,
+		);
+		const decided =
+			this.autoLabelsOn() && !gone ? this.decideFor(row.seq, JSON.parse(row.facts_json) as MailFacts, defs) : null;
 		const resolved =
 			decided && !decided.decision.final
 				? resolvePicks(picks, decided.decision, defs)
@@ -1811,7 +1824,13 @@ export class MailboxDO extends DurableObject<Env> {
 		const source = decided && !decided.decision.final ? "model" : "rule";
 		let archived = false;
 		this.ctx.storage.transactionSync(() => {
-			archived = this.applyAutoLabelKeys(row.seq, resolved.keys, source, defs, resolved.skipInbox);
+			archived = this.applyAutoLabelKeys(
+				row.seq,
+				resolved.keys,
+				source,
+				defs,
+				row.may_archive === 1 && resolved.skipInbox,
+			);
 			this.sql.exec("DELETE FROM autolabel_outbox WHERE message_seq = ?", row.seq);
 			this.bump();
 		});

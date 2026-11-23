@@ -13,13 +13,16 @@ const KIND_NAMES: Record<Usage["top_resources"][number]["kind"], string> = {
 	unknown: "Deleted",
 };
 
-/** The budget as a meter: the fill carries the state, and a label and an icon say it too. */
-function BudgetMeter({ usage }: { usage: Usage }) {
+/**
+ * The budget as a meter: the fill carries the state, and a label and an icon say it too. `current` is
+ * false for a past month: such a month stops nothing, also when it used the budget.
+ */
+function BudgetMeter({ usage, current }: { usage: Usage; current: boolean }) {
 	const state = budgetState(usage.budget_used);
 	const percent = Math.round(usage.budget_used * 100);
 	return (
 		<div className={`ai-tile ai-tile-wide ai-budget-${state}`}>
-			<span className="ai-tile-label">Cost this month</span>
+			<span className="ai-tile-label">{current ? "Cost this month" : "Cost of the month"}</span>
 			<span className="ai-tile-value">
 				{formatUsd(usage.cost_usd)}
 				<span className="ai-tile-of"> of {formatUsd(usage.budget_usd)}</span>
@@ -31,7 +34,8 @@ function BudgetMeter({ usage }: { usage: Usage }) {
 			<span className="ai-tile-note">
 				{state === "stopped" && (
 					<>
-						<Icon name="warning" size={14} className="ai-note-icon-stopped" /> Stopped: the budget is used
+						<Icon name="warning" size={14} className="ai-note-icon-stopped" />{" "}
+						{usage.stopped ? "Stopped: the budget is used" : `${percent}% of the budget`}
 					</>
 				)}
 				{state === "near" && (
@@ -302,7 +306,7 @@ export function AiUsage({ refresh }: { refresh: number }) {
 						</p>
 					)}
 					<div className="ai-tiles">
-						<BudgetMeter usage={usage} />
+						<BudgetMeter usage={usage} current={usage.month === thisMonth()} />
 						<Tile
 							label="Requests"
 							value={formatCount(usage.requests)}

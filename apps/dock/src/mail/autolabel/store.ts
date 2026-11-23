@@ -34,12 +34,14 @@ export const AUTOLABEL_MIGRATION: string[] = [
 	)`,
 	"CREATE INDEX label_corrections_sender ON label_corrections (sender, label_key)",
 	"CREATE INDEX label_corrections_domain ON label_corrections (sender_domain, label_key)",
-	// The messages that wait for the classifier. `facts_json` holds the facts at delivery.
+	// The messages that wait for the classifier. `facts_json` holds the facts at delivery. `may_archive` is 1
+	// for new mail, and 0 for mail of a run: a run never moves mail out of the inbox.
 	`CREATE TABLE autolabel_outbox (
 		message_seq INTEGER PRIMARY KEY,
 		sends INTEGER NOT NULL DEFAULT 0,
 		next_attempt_at INTEGER NOT NULL,
-		facts_json TEXT NOT NULL
+		facts_json TEXT NOT NULL,
+		may_archive INTEGER NOT NULL DEFAULT 1
 	)`,
 	"CREATE INDEX autolabel_outbox_due ON autolabel_outbox (next_attempt_at)",
 ];
