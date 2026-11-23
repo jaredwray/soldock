@@ -1,6 +1,6 @@
 import { runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
-import { EVENTS_SOCKET_PATH, type TokenResources } from "@asterra/contracts";
+import { EVENTS_SOCKET_PATH, type ServiceResources } from "@asterra/contracts";
 import { describe, expect, it, vi } from "vitest";
 import {
 	type Actor,
@@ -19,10 +19,11 @@ import {
 	upgradeRoomSocket,
 } from "./helpers.ts";
 
-// A token of a service account can name the mailboxes, drives and rooms that it reaches, on top of the
-// memberships of the account. The invoker refuses each call outside the list, before the handler runs.
+// A service account can name the mailboxes, drives and rooms that it reaches, on top of its memberships.
+// Each token of the account has these limits. The invoker refuses each call outside the list, before the
+// handler runs.
 
-const NONE: TokenResources = { mailbox_ids: [], drive_ids: [], room_ids: [] };
+const NONE: ServiceResources = { mailbox_ids: [], drive_ids: [], room_ids: [] };
 
 /** The result of a JSON-RPC answer of /mcp. */
 function resultOf<T>(answer: { body: Record<string, unknown> | null }): T {
@@ -44,6 +45,16 @@ async function seed() {
 		display_name: "CI Pipeline",
 		address: "ci@dock.test",
 		sponsor_id: ada.id,
+		scopes: [
+			"account.read",
+			"directory.read",
+			"mail.read",
+			"mail.send",
+			"drive.read",
+			"drive.write",
+			"chat.read",
+			"chat.write",
+		],
 	});
 	const team = async (local: string) =>
 		(
@@ -77,57 +88,62 @@ async function seed() {
 	return { owner, admin, ada, bot, service, t1, t2, d1, d2, r1, r2 };
 }
 
-/** A token of the service account with these limits. */
-async function limited(admin: Actor, serviceId: string, resources: Partial<TokenResources>, scopes?: string[]) {
-	const { api_key } = await admin.call("account.create_api_key", {
+/** Sets the limits of the service account, as an admin does. Null removes them. */
+async function setLimits(by: Actor, serviceId: string, resources: Partial<ServiceResources> | null) {
+	return by.call("directory.set_service_account_access", {
 		principal_id: serviceId,
-		label: "limited",
-		scopes: (scopes ?? [
-			"account.read",
-			"directory.read",
-			"mail.read",
-			"mail.send",
-			"drive.read",
-			"drive.write",
-			"chat.read",
-			"chat.write",
-		]) as never,
-		resources: { ...NONE, ...resources },
+		resources: resources === null ? null : { ...NONE, ...resources },
 	});
-	return { key: api_key.secret, keyId: api_key.id, call: api(api_key.secret), resources: api_key.resources };
 }
 
-describe("the creation of a limited token", () => {
-	it("is for a token of a service account, by owners and admins, with ids that the account can use", async () => {
+/** Limits the service account to these resources, and gives a token of it. Each token of the account has the limits. */
+async function limited(admin: Actor, serviceId: string, resources: Partial<ServiceResources>) {
+	const access = await setLimits(admin, serviceId, resources);
+	const { api_key } = await admin.call("account.create_api_key", { principal_id: serviceId, label: "limited" });
+	return { key: api_key.secret, keyId: api_key.id, call: api(api_key.secret), resources: access.resources };
+}
+
+describe("the limits of a service account", () => {
+	it("are set by owners and admins, for a service account only, with ids that the account can use", async () => {
 		const { owner, admin, ada, bot, service, t1, d1, r1 } = await seed();
+		// A token from before the limits gets them too: a token has no limits of its own.
+		const early = await admin.call("account.create_api_key", { principal_id: service.id, label: "early" });
 		const token = await limited(admin, service.id, { mailbox_ids: [t1.id], drive_ids: [d1.id], room_ids: [r1.id] });
 		expect(token.resources).toEqual({ mailbox_ids: [t1.id], drive_ids: [d1.id], room_ids: [r1.id] });
 		expect((await token.call("account.whoami")).resources).toEqual(token.resources);
-		await limited(owner, service.id, { drive_ids: [service.id] });
-		const make = (by: Actor, principal_id: string | undefined, resources: TokenResources) =>
-			by.call("account.create_api_key", {
-				...(principal_id ? { principal_id } : {}),
-				label: "x",
-				scopes: ["account.read"],
-				resources,
-			});
-		// The sponsor gets no right. A key of a person or an agent cannot be limited.
-		expect(await codeOf(make(ada, service.id, NONE))).toBe("forbidden");
-		expect(await codeOf(make(ada, undefined, NONE))).toBe("invalid");
-		expect(await codeOf(make(ada, bot.id, NONE))).toBe("invalid");
+		expect((await api(early.api_key.secret)("account.whoami")).resources).toEqual(token.resources);
+		// The owner sets them too. A call without scopes keeps the scopes of the account.
+		expect(await setLimits(owner, service.id, { drive_ids: [service.id] })).toMatchObject({
+			scopes: expect.arrayContaining(["account.read", "chat.write"]),
+			resources: { ...NONE, drive_ids: [service.id] },
+		});
+		// The sponsor gets no right. A person and an agent have no limits, and a token takes none of its own.
+		expect(await codeOf(setLimits(ada, service.id, NONE))).toBe("forbidden");
+		expect(await codeOf(setLimits(admin, ada.id, NONE))).toBe("not_found");
+		expect(await codeOf(setLimits(admin, bot.id, NONE))).toBe("not_found");
+		expect(
+			await codeOf(
+				admin.call("account.create_api_key", { principal_id: service.id, label: "x", resources: NONE } as never),
+			),
+		).toBe("invalid");
 		// The id of a different principal is not a resource of the account. A team mailbox must exist.
-		expect(await codeOf(make(admin, service.id, { ...NONE, drive_ids: [ada.id] }))).toBe("invalid");
-		expect(await codeOf(make(admin, service.id, { ...NONE, mailbox_ids: [ada.id] }))).toBe("invalid");
-		expect(await codeOf(make(admin, service.id, { ...NONE, room_ids: ["nope"] }))).toBe("invalid");
-		expect(await codeOf(make(admin, service.id, { ...NONE, mailbox_ids: ["tmb_01ARZ3NDEKTSV4RRFFQ69G5FAV"] }))).toBe(
+		expect(await codeOf(setLimits(admin, service.id, { drive_ids: [ada.id] }))).toBe("invalid");
+		expect(await codeOf(setLimits(admin, service.id, { mailbox_ids: [ada.id] }))).toBe("invalid");
+		expect(await codeOf(setLimits(admin, service.id, { room_ids: ["nope"] }))).toBe("invalid");
+		expect(await codeOf(setLimits(admin, service.id, { mailbox_ids: ["tmb_01ARZ3NDEKTSV4RRFFQ69G5FAV"] }))).toBe(
 			"not_found",
 		);
 		const many = Array.from({ length: 21 }, (_, index) => `rm_${String(index).padStart(26, "0")}`);
-		expect(await codeOf(make(admin, service.id, { ...NONE, room_ids: many }))).toBe("invalid");
+		expect(await codeOf(setLimits(admin, service.id, { room_ids: many }))).toBe("invalid");
+		// A refused change keeps the limits. Null removes them, for each token.
+		expect((await token.call("account.whoami")).resources).toEqual({ ...NONE, drive_ids: [service.id] });
+		await setLimits(admin, service.id, null);
+		expect((await token.call("account.whoami")).resources).toBeNull();
+		expect((await api(early.api_key.secret)("account.whoami")).resources).toBeNull();
 	});
 });
 
-describe("a limited token", () => {
+describe("a limited service account", () => {
 	it("reaches only its team mailbox in Mail, and nothing of Drive and Chat", async () => {
 		const { admin, service, t1, t2, r1 } = await seed();
 		const token = await limited(admin, service.id, { mailbox_ids: [t1.id] });
@@ -178,32 +194,23 @@ describe("a limited token", () => {
 		const fromD1 = await request(`/dl/drive/${d1.id}/${inD1.id}`, { headers: bearer(token.key) });
 		expect(fromD1.status).toBe(200);
 
-		// With the own drive in the list, the shared view leaves out the drive of Ada.
-		const own = await limited(admin, service.id, { drive_ids: [service.id, d1.id] });
-		expect((await own.call("drive.list_items", { view: "shared" })).items).toEqual([]);
-		const full = await admin.call("account.create_api_key", {
-			principal_id: service.id,
-			label: "full",
-			scopes: ["drive.read"],
-		});
-		const all = await api(full.api_key.secret)("drive.list_items", { view: "shared" });
+		// Without limits, the same token gets the item that Ada shared, and its newest star, which is in d2.
+		await setLimits(admin, service.id, null);
+		const all = await token.call("drive.list_items", { view: "shared" });
 		expect(all.items.map((item) => item.id)).toEqual([file.id]);
-		// The newest star is in d2, outside the list. A page of one star holds the star in d1, and no cursor.
 		const inD2 = (
 			await owner.call("drive.upload_file", { space_id: d2.id, name: "a.txt", content_base64: base64("a") })
 		).item;
-		const asFull = api(full.api_key.secret);
-		const editor = await admin.call("account.create_api_key", {
-			principal_id: service.id,
-			label: "editor",
-			scopes: ["drive.read", "drive.write"],
-		});
-		await api(editor.api_key.secret)("drive.star_items", { space_id: d1.id, item_ids: [inD1.id], starred: true });
-		await api(editor.api_key.secret)("drive.star_items", { space_id: d2.id, item_ids: [inD2.id], starred: true });
-		expect((await asFull("drive.list_items", { view: "starred", limit: 1 })).items.map((item) => item.id)).toEqual([
+		await token.call("drive.star_items", { space_id: d1.id, item_ids: [inD1.id], starred: true });
+		await token.call("drive.star_items", { space_id: d2.id, item_ids: [inD2.id], starred: true });
+		expect((await token.call("drive.list_items", { view: "starred", limit: 1 })).items.map((item) => item.id)).toEqual([
 			inD2.id,
 		]);
-		expect(await own.call("drive.list_items", { view: "starred", limit: 1 })).toMatchObject({
+		// With the own drive and d1 in the list, the shared view leaves out the drive of Ada. A page of one
+		// star holds the star in d1, and no cursor, which would name the star in d2.
+		await setLimits(admin, service.id, { drive_ids: [service.id, d1.id] });
+		expect((await token.call("drive.list_items", { view: "shared" })).items).toEqual([]);
+		expect(await token.call("drive.list_items", { view: "starred", limit: 1 })).toMatchObject({
 			items: [{ id: inD1.id }],
 			next_cursor: null,
 		});
@@ -308,16 +315,21 @@ describe("a limited token", () => {
 		const { owner, admin, service, r1 } = await seed();
 		const token = await limited(admin, service.id, { room_ids: [r1.id] });
 		const rotated = await admin.call("account.rotate_api_key", { key_id: token.keyId, overlap_minutes: 0 });
-		expect(rotated.api_key.resources).toEqual(token.resources);
 		const fresh = api(rotated.api_key.secret);
+		expect((await fresh("account.whoami")).resources).toEqual(token.resources);
 		expect((await fresh("chat.list_rooms", {})).rooms.map((room) => room.id)).toEqual([r1.id]);
 		// A listed room gives no access without the membership.
 		await owner.call("chat.remove_member", { room_id: r1.id, principal_id: service.id });
 		expect(await codeOf(fresh("chat.list_messages", { room_id: r1.id }))).not.toBe("ok");
-		// Stored limits that are not valid give a token that reaches nothing.
-		const broken = await limited(admin, service.id, { mailbox_ids: [service.id] });
-		await broken.call("mail.list_threads", {});
-		await env.DIRECTORY.prepare("UPDATE api_keys SET resources = '{bad' WHERE id = ?").bind(broken.keyId).run();
-		expect(await codeOf(broken.call("mail.list_threads", {}))).toBe("forbidden");
+		// Stored limits that are not valid give an account that reaches nothing, never an account without limits.
+		await setLimits(admin, service.id, { mailbox_ids: [service.id] });
+		await fresh("mail.list_threads", {});
+		await env.DIRECTORY.prepare("UPDATE principals SET service_resources = '{bad' WHERE id = ?").bind(service.id).run();
+		expect(await codeOf(fresh("mail.list_threads", {}))).toBe("forbidden");
+		// Stored scopes that are not valid give an account without a scope.
+		await setLimits(admin, service.id, null);
+		await fresh("mail.list_threads", {});
+		await env.DIRECTORY.prepare("UPDATE principals SET service_scopes = '{bad' WHERE id = ?").bind(service.id).run();
+		expect(await codeOf(fresh("mail.list_threads", {}))).toBe("forbidden");
 	});
 });

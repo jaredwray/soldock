@@ -1,4 +1,4 @@
-import type { OutputOf, Principal, TokenResources } from "@asterra/contracts";
+import type { OutputOf, Principal, ServiceResources } from "@asterra/contracts";
 
 /** One mailbox, drive or room that a limited token can name, with the name to show. */
 export interface ResourceChoice {
@@ -41,7 +41,7 @@ export function resourceChoicesOf(account: Pick<Principal, "id" | "address">, ac
 }
 
 /** The text for the limits of a token: "All its memberships", or the names of the listed resources. */
-export function limitText(resources: TokenResources | null, choices: ResourceChoices | undefined): string {
+export function limitText(resources: ServiceResources | null, choices: ResourceChoices | undefined): string {
 	if (resources === null) return "All its memberships";
 	const name = (list: readonly ResourceChoice[] | undefined, id: string) =>
 		list?.find((choice) => choice.id === id)?.label ?? id;

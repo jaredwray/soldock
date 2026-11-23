@@ -23,15 +23,15 @@ export interface ResolvedResource {
 }
 
 /**
- * A resource kind is visible only when the credential can call its read and its list operations. A token
- * with resource limits does not see a kind that reads across rooms (`restricted: "refuse"`).
+ * A resource kind is visible only when the credential can call its read and its list operations. A service
+ * account with resource limits does not see a kind that reads across rooms (`restricted: "refuse"`).
  */
 export function canRead(caller: AuthContext, resource: ResourceDefinition): boolean {
 	if (caller.restriction !== null && resource.restricted === "refuse") return false;
 	return canCall(caller, operations[resource.read.operation]) && canCall(caller, operations[resource.list.operation]);
 }
 
-/** True when a token with resource limits can reach the resource that these URI variables name. */
+/** True when a service account with resource limits can reach the resource that these URI variables name. */
 function allowsVars(caller: AuthContext, resource: ResourceDefinition, vars: Record<string, string>): boolean {
 	if (caller.restriction === null) return true;
 	if (resource.restricted === "refuse") return false;
@@ -63,7 +63,7 @@ export function resolveUri(caller: AuthContext, uri: unknown): ResolvedResource 
 		const vars = matchTemplate(resource.uriTemplate, canonical);
 		if (!vars) continue;
 		if (expandTemplate(resource.uriTemplate, vars) !== canonical) return null;
-		// A limited token names no resource outside its list, so it cannot read or watch one.
+		// A limited account names no resource outside its list, so it cannot read or watch one.
 		if (!allowsVars(caller, resource, vars)) return null;
 		const input = operations[resource.read.operation].input.safeParse(resource.read.input(vars));
 		return input.success ? { uri, resource, vars } : null;
@@ -96,7 +96,7 @@ export async function listResources(
 		try {
 			output = await invokeOperation(operation, handlers[resource.list.operation], call, resource.list.input);
 		} catch (error) {
-			// A token with resource limits can be refused the list of a kind, for example the own drive. That kind
+			// A service account with resource limits can be refused the list of a kind, for example the own drive. That kind
 			// then has no resources for it.
 			if (call.caller.restriction !== null && error instanceof OperationError && error.code === "forbidden") continue;
 			throw error;

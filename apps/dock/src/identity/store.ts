@@ -4,8 +4,8 @@ import {
 	nameAliasParts,
 	type Scope,
 	SERVICE_SCOPES,
+	ServiceResources,
 	searchFold,
-	TokenResources,
 } from "@asterra/contracts";
 import { log, newId, OperationError, randomToken, sha256Hex } from "../platform/index.ts";
 
@@ -40,6 +40,18 @@ export interface PrincipalRecord {
 	description: string | null;
 	/** Who created the principal. A record only: it gives no rights. */
 	created_by: string | null;
+	/**
+	 * The scopes of a service account. Each token of the account has them: a token has no scopes of its
+	 * own. Empty for each other principal.
+	 */
+	service_scopes: Scope[];
+	/** The mailboxes, drives and rooms that a service account is limited to. Null: not limited. */
+	service_resources: ServiceResources | null;
+	/**
+	 * The number of changes of the scopes and the limits of a service account. A live connection keeps the
+	 * number of its open, and stops when the number changes.
+	 */
+	access_version: number;
 }
 
 export interface ApiKeyRecord {
@@ -61,21 +73,23 @@ export interface ApiKeyRecord {
 	rotated_by: string | null;
 	/** Until when the secret before the last rotation also works. Null: no old secret works. */
 	prev_expires_at: string | null;
-	/** The mailboxes, drives and rooms that a token of a service account is limited to. Null: not limited. */
-	resources: TokenResources | null;
 }
 
 interface PrincipalRow
-	extends Omit<PrincipalRecord, "outbound_allowlist" | "password_set" | "totp_enabled" | "service"> {
+	extends Omit<
+		PrincipalRecord,
+		"outbound_allowlist" | "password_set" | "totp_enabled" | "service" | "service_scopes" | "service_resources"
+	> {
 	outbound_allowlist: string;
 	password_set: number;
 	totp_enabled: number;
 	service: number;
+	service_scopes: string | null;
+	service_resources: string | null;
 }
 
-interface ApiKeyRow extends Omit<ApiKeyRecord, "scopes" | "resources"> {
+interface ApiKeyRow extends Omit<ApiKeyRecord, "scopes"> {
 	scopes: string;
-	resources: string | null;
 }
 
 /**
@@ -84,7 +98,7 @@ interface ApiKeyRow extends Omit<ApiKeyRecord, "scopes" | "resources"> {
  */
 const PRINCIPAL_COLUMNS = `p.id, p.kind, p.display_name, p.org_role, p.sponsor_id, p.outbound_mode, p.outbound_allowlist,
 	p.password_hash IS NOT NULL AS password_set, p.totp_secret IS NOT NULL AS totp_enabled, p.created_at, p.archived_at,
-	p.service, p.description, p.created_by`;
+	p.service, p.description, p.created_by, p.service_scopes, p.service_resources, p.access_version`;
 
 const PRINCIPAL_SELECT = `SELECT ${PRINCIPAL_COLUMNS}, a.address
 	FROM principals p JOIN addresses a ON a.principal_id = p.id AND a.is_primary = 1`;
@@ -94,7 +108,7 @@ const PRINCIPAL_SELECT_FROM = `SELECT ${PRINCIPAL_COLUMNS}, a.address FROM`;
 
 /** The columns of an ApiKeyRecord. The hashes of the secrets never leave the store. */
 const API_KEY_COLUMNS = `id, principal_id, label, description, scopes, created_by, created_at, last_used_at, expires_at,
-	revoked_at, revoked_by, rotation, rotated_at, rotated_by, prev_expires_at, resources`;
+	revoked_at, revoked_by, rotation, rotated_at, rotated_by, prev_expires_at`;
 
 const API_KEY_SELECT = `SELECT ${API_KEY_COLUMNS} FROM api_keys`;
 
@@ -115,37 +129,59 @@ export const API_KEY_PREFIX = "sdk_";
 /** A session lasts 30 days. */
 export const SESSION_TTL_SECONDS = 30 * 24 * 60 * 60;
 
+/** No mailbox, no drive and no room: the limits of an account whose stored limits are not valid. */
+const NOTHING: ServiceResources = { mailbox_ids: [], drive_ids: [], room_ids: [] };
+
+/**
+ * The stored limits of a service account. Null: not limited. Stored text that is not valid limits gives an
+ * account that reaches nothing, never an account without limits.
+ */
+function parseResources(id: string, text: string | null): ServiceResources | null {
+	if (text === null) return null;
+	try {
+		const parsed = ServiceResources.safeParse(JSON.parse(text));
+		if (parsed.success) return parsed.data;
+	} catch {
+		// Not JSON. The next lines fail closed.
+	}
+	log("error", "service account: the stored resource limits are not valid; the account reaches nothing", {
+		principalId: id,
+	});
+	return NOTHING;
+}
+
+/**
+ * The stored scopes of a service account, without each value that is not a service scope. Stored text that
+ * is not a list gives no scope.
+ */
+function parseServiceScopes(id: string, text: string | null): Scope[] {
+	if (text === null) return [];
+	try {
+		const parsed: unknown = JSON.parse(text);
+		if (Array.isArray(parsed)) return SERVICE_SCOPES.filter((scope) => parsed.includes(scope));
+	} catch {
+		// Not JSON. The next lines fail closed.
+	}
+	log("error", "service account: the stored scopes are not valid; the account has no scope", { principalId: id });
+	return [];
+}
+
 function toPrincipal(row: PrincipalRow): PrincipalRecord {
+	const service = row.service === 1;
 	return {
 		...row,
 		outbound_allowlist: JSON.parse(row.outbound_allowlist) as string[],
 		password_set: row.password_set === 1,
 		totp_enabled: row.totp_enabled === 1,
-		service: row.service === 1,
+		service,
+		// Only a service account has scopes and limits of its own. A value on a different row is ignored.
+		service_scopes: service ? parseServiceScopes(row.id, row.service_scopes) : [],
+		service_resources: service ? parseResources(row.id, row.service_resources) : null,
 	};
 }
 
-/** No mailbox, no drive and no room: the limits of a token whose stored limits are not valid. */
-const NOTHING: TokenResources = { mailbox_ids: [], drive_ids: [], room_ids: [] };
-
-/**
- * The stored limits of a token. Null: not limited. Stored text that is not valid limits gives a token that
- * reaches nothing, never a token without limits.
- */
-function parseResources(id: string, text: string | null): TokenResources | null {
-	if (text === null) return null;
-	try {
-		const parsed = TokenResources.safeParse(JSON.parse(text));
-		if (parsed.success) return parsed.data;
-	} catch {
-		// Not JSON. The next lines fail closed.
-	}
-	log("error", "api key: the stored resource limits are not valid; the key reaches nothing", { keyId: id });
-	return NOTHING;
-}
-
 function toApiKey(row: ApiKeyRow): ApiKeyRecord {
-	return { ...row, scopes: JSON.parse(row.scopes) as Scope[], resources: parseResources(row.id, row.resources) };
+	return { ...row, scopes: JSON.parse(row.scopes) as Scope[] };
 }
 
 /**
@@ -533,6 +569,8 @@ export interface NewPrincipal {
 	description?: string | null;
 	/** Who creates the principal. Null for the owner from setup. */
 	created_by?: string | null;
+	/** The scopes of a new service account. */
+	service_scopes?: readonly Scope[];
 }
 
 /** Turns a directory constraint failure into an error that the caller can read. */
@@ -558,13 +596,12 @@ export function conflictOf(error: unknown): OperationError | null {
 
 export interface NewApiKey {
 	label: string;
+	/** The scopes of the key. Empty for a token of a service account, which has the scopes of its account. */
 	scopes: readonly Scope[];
 	created_by: string | null;
 	description?: string | null;
 	/** When the key stops, as an ISO time. Null or missing: it has no end. */
 	expires_at?: string | null;
-	/** The resource limits of a token of a service account. Null or missing: not limited. */
-	resources?: TokenResources | null;
 }
 
 /** Options of `createPrincipal`. */
@@ -644,8 +681,8 @@ export async function createPrincipal(
 			db
 				.prepare(
 					`INSERT INTO principals (id, kind, display_name, org_role, sponsor_id, outbound_mode, outbound_allowlist,
-						password_hash, created_at, service, description, created_by)
-					SELECT ?1, ?2, ?3, ?4, ?5, ?6, '[]', ?7, ?8, ?9, ?10, ?11
+						password_hash, created_at, service, description, created_by, service_scopes)
+					SELECT ?1, ?2, ?3, ?4, ?5, ?6, '[]', ?7, ?8, ?9, ?10, ?11, ?16
 					WHERE NOT EXISTS (SELECT 1 FROM setup_lock WHERE token IS NOT NULL)
 						AND (?12 = 0 OR NOT EXISTS (SELECT 1 FROM principals))
 						AND (?13 IS NULL OR EXISTS (SELECT 1 FROM principals sponsor WHERE sponsor.id = ?13
@@ -669,6 +706,7 @@ export async function createPrincipal(
 					options.liveSponsorId ?? null,
 					options.pendingRequest?.id ?? null,
 					options.pendingRequest?.now ?? null,
+					service ? JSON.stringify(SERVICE_SCOPES.filter((scope) => principal.service_scopes?.includes(scope))) : null,
 				),
 			// The name aliases of the mention read, in the same transaction. A lost guard inserted no row, so
 			// this update then changes nothing.
@@ -726,7 +764,6 @@ export async function createPrincipal(
 			rotated_at: null,
 			rotated_by: null,
 			prev_expires_at: null,
-			resources: null,
 		},
 		secret,
 	};
@@ -752,6 +789,35 @@ export async function updateOutboundPolicy(
 	const previousMode = prior?.results[0]?.outbound_mode;
 	if (!previousMode || updated?.meta.changes !== 1) return null;
 	return previousMode;
+}
+
+/**
+ * Sets the scopes and the resource limits of a service account. A field that is undefined does not
+ * change, and `resources: null` removes the limits. Each write adds one to `access_version`, so each live
+ * connection of the account stops at its next check. Returns the new record, or null when no live service
+ * account has that id.
+ */
+export async function setServiceAccess(
+	db: D1Database,
+	id: string,
+	changes: { scopes?: readonly Scope[] | undefined; resources?: ServiceResources | null | undefined },
+): Promise<PrincipalRecord | null> {
+	const scopes =
+		changes.scopes === undefined ? null : JSON.stringify(SERVICE_SCOPES.filter((s) => changes.scopes?.includes(s)));
+	const setResources = changes.resources !== undefined ? 1 : 0;
+	const resources = changes.resources == null ? null : JSON.stringify(changes.resources);
+	const result = await db
+		.prepare(
+			`UPDATE principals SET
+				service_scopes = CASE WHEN ?2 IS NULL THEN service_scopes ELSE ?2 END,
+				service_resources = CASE WHEN ?3 = 1 THEN ?4 ELSE service_resources END,
+				access_version = access_version + 1
+			WHERE id = ?1 AND service = 1 AND deleted_at IS NULL`,
+		)
+		.bind(id, scopes, setResources, resources)
+		.run();
+	if (result.meta.changes !== 1) return null;
+	return getPrincipal(db, id);
 }
 
 /** The changes of `updatePrincipal`. A field that is undefined does not change. */
@@ -1020,12 +1086,10 @@ export async function createApiKey(
 	const description = key.description || null;
 	const expiresAt = key.expires_at ?? null;
 	const createdBy = key.created_by ?? principalId;
-	const resources = key.resources ?? null;
 	await db
 		.prepare(
-			`INSERT INTO api_keys (id, principal_id, key_hash, label, scopes, created_by, created_at, description, expires_at,
-				resources)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			`INSERT INTO api_keys (id, principal_id, key_hash, label, scopes, created_by, created_at, description, expires_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		)
 		.bind(
 			id,
@@ -1037,7 +1101,6 @@ export async function createApiKey(
 			now,
 			description,
 			expiresAt,
-			resources === null ? null : JSON.stringify(resources),
 		)
 		.run();
 	return {
@@ -1057,7 +1120,6 @@ export async function createApiKey(
 			rotated_at: null,
 			rotated_by: null,
 			prev_expires_at: null,
-			resources,
 		},
 		secret,
 	};

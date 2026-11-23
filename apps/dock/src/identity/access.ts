@@ -393,6 +393,12 @@ export interface CredentialRef {
 	 * without it names the first secret (0), so the refs of keys that never rotated do not change.
 	 */
 	gen?: number;
+	/**
+	 * The `access_version` of a service account at the open, when it is 1 or more. A change of the scopes
+	 * or the limits of the account gives a new number, so the connection stops at its next check and the
+	 * client opens a new one with the new access. A ref without it has the number 0.
+	 */
+	av?: number;
 }
 
 /** The same credential can open several sockets and register a push device. */
@@ -411,6 +417,9 @@ export function credentialRef(caller: AuthContext): CredentialRef {
 	const ref: CredentialRef = { principalId: caller.principal.id, kind: caller.credential, id };
 	if (caller.grantId !== null) ref.grantId = caller.grantId;
 	if (caller.keyGeneration !== null && caller.keyGeneration > 0) ref.gen = caller.keyGeneration;
+	if (caller.credential === "api_key" && caller.principal.access_version > 0) {
+		ref.av = caller.principal.access_version;
+	}
 	return ref;
 }
 
@@ -426,7 +435,8 @@ export type CredentialCheck = "live" | "renew" | "ended";
 /**
  * For each credential, what it can do now, by the rules of `authenticate`: the principal is not
  * archived and not deleted, a session did not expire and its person did not sign out, an API key is
- * not revoked and did not expire, and an OAuth access token is the current token of a grant that is not revoked, and did
+ * not revoked and did not expire, the scopes and the limits of its service account did not change after
+ * the open, and an OAuth access token is the current token of a grant that is not revoked, and did
  * not expire. So a refresh of a grant, which replaces its access token, stops the old token here too.
  * One query reads the whole list, and a credential that the list has many times is read one time. So
  * a room with many sockets makes one read.
@@ -434,13 +444,15 @@ export type CredentialCheck = "live" | "renew" | "ended";
 export async function checkCredentials(db: D1Database, refs: readonly CredentialRef[]): Promise<CredentialCheck[]> {
 	if (refs.length === 0) return [];
 	// Two secrets of one key are two credentials here: the old one stops with its overlap. The key of a
-	// ref has the number of its secret. `credentialKey` stays as it is, because push devices match on it.
-	const keys = refs.map((ref) => `${credentialKey(ref)}:${ref.gen ?? 0}`);
+	// ref has the number of its secret, and the access version of its open. `credentialKey` stays as it is,
+	// because push devices match on it.
+	const keys = refs.map((ref) => `${credentialKey(ref)}:${ref.gen ?? 0}:${ref.av ?? 0}`);
 	const unique = [...new Map(refs.map((ref, index) => [keys[index] as string, ref])).values()];
 	const { results } = await db
 		.prepare(
 			`SELECT json_extract(ref.value, '$.kind') || ':' || json_extract(ref.value, '$.id') || ':'
-					|| COALESCE(json_extract(ref.value, '$.gen'), 0) AS key,
+					|| COALESCE(json_extract(ref.value, '$.gen'), 0) || ':'
+					|| COALESCE(json_extract(ref.value, '$.av'), 0) AS key,
 				CASE json_extract(ref.value, '$.kind')
 					WHEN 'session' THEN CASE WHEN p.kind = 'human' AND EXISTS (
 						SELECT 1 FROM sessions s
@@ -450,6 +462,7 @@ export async function checkCredentials(db: D1Database, refs: readonly Credential
 						SELECT 1 FROM api_keys k
 						WHERE k.id = json_extract(ref.value, '$.id') AND k.principal_id = p.id AND k.revoked_at IS NULL
 							AND ${keyNotExpired(2, "k")}
+							AND COALESCE(json_extract(ref.value, '$.av'), 0) = p.access_version
 							AND (COALESCE(json_extract(ref.value, '$.gen'), 0) = k.rotation
 								OR (COALESCE(json_extract(ref.value, '$.gen'), 0) = k.rotation - 1 AND k.prev_expires_at > ?2)))
 						THEN 'live' END

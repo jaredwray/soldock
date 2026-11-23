@@ -94,7 +94,7 @@ async function hydrate(call: CallContext, refs: ItemRef[]): Promise<ItemRecord[]
 	// The drive of a deleted principal, and a deleted shared drive, stay in storage, but openSpace refuses
 	// them. Their items leave the lists too.
 	for (const spaceId of await unknownSpaceIds(call.env.DIRECTORY, [...bySpace.keys()])) bySpace.delete(spaceId);
-	// A token with resource limits gets no item of a drive outside its list.
+	// A service account with resource limits gets no item of a drive outside its list.
 	for (const spaceId of [...bySpace.keys()]) {
 		if (!allowsResource(call.caller.restriction, "drive", spaceId)) bySpace.delete(spaceId);
 	}
@@ -291,7 +291,7 @@ export const driveHandlers: Pick<HandlerMap<CallContext>, DriveOperation> = {
 		}
 		if (input.view === "starred" || input.view === "shared") {
 			const own = await ownSpace(call);
-			// A token with resource limits gets the pointers into its listed drives only, so the cursor never names
+			// A service account with resource limits gets the pointers into its listed drives only, so the cursor never names
 			// a different drive. `hydrate` checks each drive again.
 			const page = accept(
 				await own.space.listRefs(own.ctx, {
@@ -717,7 +717,7 @@ export const driveHandlers: Pick<HandlerMap<CallContext>, DriveOperation> = {
 			throw new OperationError("forbidden", "Only owners and admins of the organization can list each shared drive.");
 		}
 		const limit = input.limit ?? DEFAULT_PAGE;
-		// A token with resource limits sees only its listed drives. The query keeps only those, so the cursor
+		// A service account with resource limits sees only its listed drives. The query keeps only those, so the cursor
 		// never names a different drive.
 		const rows = await listSharedDriveRows(call.env.DIRECTORY, call.caller.id, {
 			all,

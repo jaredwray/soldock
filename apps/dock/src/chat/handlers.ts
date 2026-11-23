@@ -470,7 +470,7 @@ export const chatHandlers: Pick<HandlerMap<CallContext>, ChatOperation> = {
 	...chatPresenceHandlers,
 	...chatLayer8Handlers,
 	async "chat.list_rooms"(call, input) {
-		// A token with resource limits sees only its listed rooms. The queries keep only those, so the cursor
+		// A service account with resource limits sees only its listed rooms. The queries keep only those, so the cursor
 		// never names a different room.
 		const list = {
 			query: input.query ?? null,

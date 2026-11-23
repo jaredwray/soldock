@@ -104,8 +104,8 @@ async function askRooms(env: Env, principalId: string, roomIds: readonly string[
 }
 
 /**
- * The fill for the list of a token with resource limits: only the listed rooms that the object does not
- * have yet, at most `TOKEN_RESOURCE_LIMITS.perKind` calls. The list of the token has no other room, so the
+ * The fill for the list of a service account with resource limits: only the listed rooms that the object does not
+ * have yet, at most `SERVICE_RESOURCE_LIMITS.perKind` calls. The list of the account has no other room, so the
  * page needs no other state, and gives no cursor to a place of the whole fill.
  */
 async function seedListedRooms(env: Env, principalId: string, roomIds: readonly string[]): Promise<void> {
@@ -152,7 +152,7 @@ export async function listJoinedRooms(
 	// the fill, and then the list after that place. A search then finds an old room too.
 	let reached: Position | null = null;
 	if (!listed.seeded && input.ids != null) {
-		// The place of the fill can be a room outside the list of a limited token, so a limited list gives no
+		// The place of the fill can be a room outside the list of a limited account, so a limited list gives no
 		// cursor to it. It fills its listed rooms only, and lists them all.
 		await seedListedRooms(env, principalId, input.ids);
 		listed = await principal.listChatRooms(query);

@@ -25,13 +25,20 @@ export function toPrincipalOutput(record: PrincipalRecord): Principal {
 	};
 }
 
-export function toApiKeyOutput(record: ApiKeyRecord): ApiKey {
+/**
+ * `owner` is the principal of the key. A token of a service account has no scopes of its own, so it
+ * shows the scopes of its account.
+ */
+export function toApiKeyOutput(
+	record: ApiKeyRecord,
+	owner: Pick<PrincipalRecord, "service" | "service_scopes">,
+): ApiKey {
 	return {
 		id: record.id,
 		principal_id: record.principal_id,
 		label: record.label,
 		description: record.description,
-		scopes: record.scopes,
+		scopes: owner.service ? owner.service_scopes : record.scopes,
 		created_by: record.created_by,
 		created_at: record.created_at,
 		last_used_at: record.last_used_at,
@@ -42,7 +49,6 @@ export function toApiKeyOutput(record: ApiKeyRecord): ApiKey {
 		revoked_by: record.revoked_by,
 		rotated_at: record.rotated_at,
 		rotated_by: record.rotated_by,
-		resources: record.resources,
 		previous_secret_expires_at:
 			record.prev_expires_at !== null && Date.parse(record.prev_expires_at) > Date.now() && record.revoked_at === null
 				? record.prev_expires_at

@@ -12,6 +12,7 @@ import nameFoldedMigration from "../migrations/0018_name_folded.sql?raw";
 import directoryOrderMigration from "../migrations/0019_directory_order.sql?raw";
 import serviceAccountMigration from "../migrations/0024_service_accounts.sql?raw";
 import serviceTokenMigration from "../migrations/0025_service_tokens.sql?raw";
+import serviceAccessMigration from "../migrations/0026_service_access.sql?raw";
 import { matchTotp, totpCode } from "../src/identity/totp.ts";
 import legacyDirectory from "./fixtures/directory-v1.sql?raw";
 import {
@@ -214,12 +215,12 @@ describe("first-run setup", () => {
 	it("replaces the directory and invalidates old keys, sessions, and passwords", async () => {
 		const { owner, ada, bot } = await seedOrg();
 		// A service account names its creator. The reset must still drop the principals.
-		const old = await owner.call("directory.create_service_account", { display_name: "CI", address: "ci@dock.test" });
-		const oldToken = await owner.call("account.create_api_key", {
-			principal_id: old.principal.id,
-			label: "ci",
+		const old = await owner.call("directory.create_service_account", {
+			display_name: "CI",
+			address: "ci@dock.test",
 			scopes: ["account.read"],
 		});
+		const oldToken = await owner.call("account.create_api_key", { principal_id: old.principal.id, label: "ci" });
 		const cookie = await signIn(owner.address);
 		const res = await setup(
 			SETUP_TOKEN,
@@ -242,16 +243,23 @@ describe("first-run setup", () => {
 			mail_domains: ["dock.test", "new.example", "second.test"],
 		});
 		expect(await env.DIRECTORY.prepare("SELECT COUNT(*) AS count FROM principals").first("count")).toBe(1);
-		// The fresh directory has the columns of 0024: a service account and a key with an end.
+		// The fresh directory has the columns of 0024 and 0026: a service account with scopes, and a key with
+		// an end.
 		const fresh = api(result.api_key.secret);
-		const service = await fresh("directory.create_service_account", { display_name: "CI", address: "ci@new.example" });
+		const service = await fresh("directory.create_service_account", {
+			display_name: "CI",
+			address: "ci@new.example",
+			scopes: ["account.read"],
+		});
 		const token = await fresh("account.create_api_key", {
 			principal_id: service.principal.id,
 			label: "ci",
-			scopes: ["account.read"],
 			expires_in_days: 1,
 		});
-		expect(await api(token.api_key.secret)("account.whoami")).toMatchObject({ principal: { kind: "service" } });
+		expect(await api(token.api_key.secret)("account.whoami")).toMatchObject({
+			principal: { kind: "service" },
+			scopes: ["account.read"],
+		});
 		await refusal(await submitSignIn(ada.address, PASSWORD));
 		await signIn("owner@new.example");
 		expect((await setup(SETUP_TOKEN, OWNER)).status).toBe(409);
@@ -855,6 +863,69 @@ describe("directory upgrade", () => {
 		await run(directoryOrderMigration.split("--> statement-breakpoint"));
 		await run(serviceAccountMigration.split("--> statement-breakpoint"));
 		await run(serviceTokenMigration.split("--> statement-breakpoint"));
+		// Three service accounts from before 0026, when each token had its own scopes and limits.
+		// - CI has two live tokens with limits, and a revoked token.
+		// - Ops has one token with limits and one without.
+		// - New has no token.
+		const at = "2026-01-01T00:00:00.000Z";
+		const account = (id: string, local: string) => [
+			`INSERT INTO principals (id, kind, display_name, sponsor_id, outbound_mode, created_at, service)
+				VALUES ('${id}', 'agent', '${local}', 'prn_owner', 'internal-only', '${at}', 1)`,
+			`INSERT INTO addresses VALUES ('${local}@dock.test', '${id}', 1, '${at}')`,
+		];
+		const ciSecret = `sdk_${"c".repeat(43)}`;
+		const tokenRow = async (
+			id: string,
+			principalId: string,
+			scopes: string[],
+			resources: string | null,
+			extra: { secret?: string; revoked?: boolean } = {},
+		) =>
+			`INSERT INTO api_keys (id, principal_id, key_hash, label, scopes, created_by, created_at, revoked_at, resources)
+				VALUES ('${id}', '${principalId}', '${await hash(extra.secret ?? id)}', '${id}', '${JSON.stringify(scopes)}',
+					'prn_owner', '${at}', ${extra.revoked ? `'${at}'` : "NULL"}, ${resources === null ? "NULL" : `'${resources}'`})`;
+		const limits = (mailboxes: string[], drives: string[], rooms: string[]) =>
+			JSON.stringify({ mailbox_ids: mailboxes, drive_ids: drives, room_ids: rooms });
+		await run([
+			...account("prn_ci", "ci"),
+			...account("prn_ops", "ops"),
+			...account("prn_new", "new"),
+			await tokenRow("key_ci_a", "prn_ci", ["account.read", "mail.read"], limits(["prn_ci"], [], ["rm_1"]), {
+				secret: ciSecret,
+			}),
+			await tokenRow("key_ci_b", "prn_ci", ["chat.read", "account.read"], limits([], ["prn_ci"], ["rm_1", "rm_2"])),
+			await tokenRow("key_ci_c", "prn_ci", ["drive.write"], null, { revoked: true }),
+			await tokenRow("key_ops_a", "prn_ops", ["mail.send"], limits(["prn_ops"], [], [])),
+			await tokenRow("key_ops_b", "prn_ops", ["account.read"], null),
+		]);
+		await run(serviceAccessMigration.split("--> statement-breakpoint"));
+		// 0026 moves the scopes and the limits to the account. An account gets each scope of its tokens that are
+		// not revoked. It gets limits only when each of those tokens had limits: then each listed resource.
+		const moved = await db
+			.prepare("SELECT id, service_scopes, service_resources FROM principals WHERE service = 1 ORDER BY id")
+			.all<{ id: string; service_scopes: string; service_resources: string | null }>();
+		const sorted = (text: string | null) => {
+			if (text === null) return null;
+			const value = JSON.parse(text) as string[] | Record<string, string[]>;
+			return Array.isArray(value)
+				? [...value].sort()
+				: Object.fromEntries(Object.entries(value).map(([key, ids]) => [key, [...ids].sort()]));
+		};
+		expect(moved.results.map((row) => [row.id, sorted(row.service_scopes), sorted(row.service_resources)])).toEqual([
+			[
+				"prn_ci",
+				["account.read", "chat.read", "mail.read"],
+				{ mailbox_ids: ["prn_ci"], drive_ids: ["prn_ci"], room_ids: ["rm_1", "rm_2"] },
+			],
+			["prn_new", [], null],
+			["prn_ops", ["account.read", "mail.send"], null],
+		]);
+		// A token from before the migration works, with the scopes and the limits of its account.
+		expect(await api(ciSecret)("account.whoami")).toMatchObject({
+			principal: { id: "prn_ci", kind: "service" },
+			scopes: ["account.read", "mail.read", "chat.read"],
+			resources: { mailbox_ids: ["prn_ci"], drive_ids: ["prn_ci"], room_ids: expect.arrayContaining(["rm_1", "rm_2"]) },
+		});
 
 		const owner = api(key);
 		expect(await owner("account.whoami")).toMatchObject({
@@ -864,8 +935,10 @@ describe("directory upgrade", () => {
 		const cookie = `__Host-soldock_session=${session}`;
 		expect((await request("/api/v1/account", { headers: { cookie } })).status).toBe(200);
 		// 0024 keeps each agent an agent and each key without an end.
-		expect((await owner("directory.list_principals")).principals).toMatchObject([
+		expect((await owner("directory.list_principals", { kind: "agent" })).principals).toMatchObject([
 			{ id: "prn_bot", kind: "agent", sponsor_id: "prn_owner", description: null, created_by: null },
+		]);
+		expect((await owner("directory.list_principals", { kind: "human" })).principals).toMatchObject([
 			{ id: "prn_owner", kind: "human" },
 		]);
 		expect((await owner("account.list_api_keys")).api_keys).toMatchObject([

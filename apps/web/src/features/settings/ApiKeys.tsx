@@ -6,7 +6,7 @@ import {
 	type ResourceKind,
 	SCOPES,
 	type Scope,
-	TOKEN_RESOURCE_LIMITS,
+	SERVICE_RESOURCE_LIMITS,
 } from "@asterra/contracts";
 import { type FormEvent, useCallback, useEffect, useId, useState } from "react";
 import { api, errorMessage } from "../../lib/api.ts";
@@ -440,7 +440,7 @@ function CreateKeyForm({
 	function pickList(kind: ResourceKind, legend: string, product: string, choices: readonly ResourceChoice[]) {
 		const count = pickedIds(kind, choices).length;
 		// The server takes at most this many ids of one kind. A full list stops a further selection.
-		const max = TOKEN_RESOURCE_LIMITS.perKind;
+		const max = SERVICE_RESOURCE_LIMITS.perKind;
 		return (
 			<fieldset className="scope-list">
 				<legend className="field-label">{legend}</legend>

@@ -179,7 +179,7 @@ export function mountAuthRoutes(app: AuthApp): void {
 		}
 		const result: SetupResult = {
 			principal: toPrincipalOutput(created.principal),
-			api_key: { ...toApiKeyOutput(created.key), secret: created.secret },
+			api_key: { ...toApiKeyOutput(created.key, created.principal), secret: created.secret },
 		};
 		return c.json(result, 201, headers);
 	});

@@ -61,7 +61,7 @@ const TOOLS = new Map<string, { operation: Operation; tool: Tool }>(
 
 /**
  * A tool is listed only when this credential can call it, so an agent never sees tools that would refuse it.
- * A token with resource limits does not see an operation without a rule, or with the rule `refuse`.
+ * A service account with resource limits does not see an operation without a rule, or with the rule `refuse`.
  */
 export function canCall(caller: AuthContext, operation: Operation): boolean {
 	if (!operation.callers.includes(caller.kind) || !holdsOperationScopes(operation, caller.scopes)) return false;

@@ -248,7 +248,7 @@ export const mailHandlers: Pick<HandlerMap<CallContext>, MailOperation> = {
 			teamMailboxesOf(call.env.DIRECTORY, call.caller.id),
 			canReadAgentMailboxes(call.caller) ? agentMailboxes(call.env.DIRECTORY) : [],
 		]);
-		// A token with resource limits sees only its listed mailboxes.
+		// A service account with resource limits sees only its listed mailboxes.
 		const mailboxes = [ownMailbox(call), ...teams, ...agents].filter((mailbox) =>
 			allowsResource(call.caller.restriction, "mailbox", mailbox.id),
 		);

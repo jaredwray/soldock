@@ -71,7 +71,7 @@ export interface ListInput {
 	cursor: string | null;
 	limit: number;
 	/**
-	 * Keep only these rooms: the list of a token with resource limits. The page and its cursor then come from
+	 * Keep only these rooms: the list of a service account with resource limits. The page and its cursor then come from
 	 * these rooms only, so the cursor never names a different room. Null for no filter.
 	 */
 	ids?: readonly string[] | null;

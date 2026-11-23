@@ -22,16 +22,16 @@ async function seed() {
 		display_name: "CI Pipeline",
 		address: "ci@dock.test",
 		sponsor_id: ada.id,
+		scopes: ["account.read", "mail.read"],
 	});
 	return { owner, admin, ada, bot, service };
 }
 
-/** A token with a lifetime, made by `by`. Returns its id and its end in milliseconds. */
+/** A token of a service account with a lifetime, made by `by`. Returns its id and its end in milliseconds. */
 async function token(by: Actor, principalId: string, days: number, label = "deploy") {
 	const { api_key } = await by.call("account.create_api_key", {
 		principal_id: principalId,
 		label,
-		scopes: ["account.read"],
 		expires_in_days: days,
 	});
 	return { id: api_key.id, end: Date.parse(api_key.expires_at ?? "") };
@@ -54,11 +54,7 @@ describe("the notice before a token ends", () => {
 		expect((await notices(owner))[0]).toContain("CI Pipeline");
 		// The sponsor is a member, so it gets no notice. The account gets none either.
 		expect(await notices(ada)).toEqual([]);
-		const tokenOwner = await admin.call("account.create_api_key", {
-			principal_id: service.id,
-			label: "reader",
-			scopes: ["mail.read"],
-		});
+		const tokenOwner = await admin.call("account.create_api_key", { principal_id: service.id, label: "reader" });
 		const own = await api(tokenOwner.api_key.secret)("mail.list_threads", {});
 		expect(own.threads.filter((thread) => thread.subject.includes('"deploy"'))).toEqual([]);
 
@@ -109,6 +105,7 @@ describe("the notice before a token ends", () => {
 		const archived = await admin.call("directory.create_service_account", {
 			display_name: "Old Job",
 			address: "old@dock.test",
+			scopes: ["account.read"],
 		});
 		const old = await token(admin, archived.principal.id, 30, "old");
 		await admin.call("directory.archive_principal", { principal_id: archived.principal.id });

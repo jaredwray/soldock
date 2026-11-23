@@ -34,10 +34,10 @@ export async function openRoomSocket(
 	roomId: string,
 	options: { feed: boolean },
 ): Promise<Response> {
-	// A token with resource limits gets a socket only to a listed room. The route and the feeds of MCP both
+	// A service account with resource limits gets a socket only to a listed room. The route and the feeds of MCP both
 	// come here.
 	if (!allowsResource(caller.restriction, "room", roomId)) {
-		throw new OperationError("forbidden", "This token is limited, and its list does not name this room.");
+		throw new OperationError("forbidden", "This service account is limited, and its list does not name this room.");
 	}
 	const open: SocketOpen = {
 		roomId,

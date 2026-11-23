@@ -216,8 +216,8 @@ export {
 	type ResourceRule,
 	resourceRefusal,
 	resourceRuleOf,
-	TOKEN_RESOURCE_LIMITS,
-	TokenResources,
+	SERVICE_RESOURCE_LIMITS,
+	ServiceResources,
 } from "./restrictions.ts";
 export {
 	AGENT_SCOPES,
