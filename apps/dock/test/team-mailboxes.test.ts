@@ -337,6 +337,14 @@ describe("an agent in a team mailbox", () => {
 	}
 	const access = (id: string) => owner.call("directory.get_agent_access", { principal_id: id });
 
+	/** Adds a member as the owner, with a directory binding that makes a parallel change before each batch. */
+	const addAs = (directory: D1Database, mailboxId: string, principalId: string) =>
+		withEnv({ DIRECTORY: directory }, `/api/v1/directory/team-mailboxes/${mailboxId}/members`, {
+			method: "POST",
+			headers: { authorization: `Bearer ${owner.key}`, "content-type": "application/json" },
+			body: JSON.stringify({ principal_id: principalId }),
+		});
+
 	// An admin who adds an agent to a mailbox decided what the agent can do there. The agent must not need a
 	// second change of its scopes and of its limits before it can use the mailbox.
 	it("gets the scopes of its membership and the mailbox in its limits, so it can use the mailbox at once", async () => {
@@ -401,31 +409,69 @@ describe("an agent in a team mailbox", () => {
 		expect((await owner.call("directory.list_team_mailboxes")).team_mailboxes).toEqual([support]);
 		expect((await access(agent.id)).resources?.mailbox_ids).toEqual(full);
 
-		// A parallel call can fill the limits after the first check. The write of this call then matches
+		// A parallel call can fill the limits after the first check. The transaction of this call then writes
 		// nothing, and its second try must not store one mailbox more than the most.
-		const one = full.slice(1);
 		await env.DIRECTORY.prepare("UPDATE principals SET agent_resources = ? WHERE id = ?")
-			.bind(JSON.stringify({ mailbox_ids: one, drive_ids: [], room_ids: [] }), agent.id)
+			.bind(JSON.stringify({ mailbox_ids: full.slice(1), drive_ids: [], room_ids: [] }), agent.id)
 			.run();
-		const { access_version: version } = (await env.DIRECTORY.prepare(
-			"SELECT access_version FROM principals WHERE id = ?",
-		)
-			.bind(agent.id)
-			.first<{ access_version: number }>()) ?? { access_version: -1 };
 		const filled = JSON.stringify({ mailbox_ids: full, drive_ids: [], room_ids: [] });
-		const racer = racing(
-			`UPDATE principals SET agent_resources = '${filled}', access_version = access_version + 1
-			WHERE id = ? AND access_version = ${version}`,
+		const raced = await addAs(
+			racing(
+				`UPDATE principals SET agent_resources = '${filled}', access_version = access_version + 1
+				WHERE id = ? AND agent_resources != '${filled}'`,
+				agent.id,
+			),
+			support.id,
 			agent.id,
-			"UPDATE principals SET agent_scopes",
 		);
-		const raced = await withEnv({ DIRECTORY: racer }, `/api/v1/directory/team-mailboxes/${support.id}/members`, {
+		expect(raced.status).toBe(400);
+		expect((await owner.call("directory.list_team_mailboxes")).team_mailboxes).toEqual([support]);
+		expect((await access(agent.id)).resources?.mailbox_ids).toEqual(full);
+	});
+
+	// The membership and the access of the agent are one transaction. A change of the access of the agent by
+	// a different call, between the read and the write, must not be lost, and must not leave a half result.
+	it("keeps a parallel change of the access of the agent, and writes nothing when each try loses", async () => {
+		const agent = await newAgent();
+		const support = await createSupport([]);
+		// One parallel change: a manager gives the agent drive.read. The second try has it.
+		const once = racing(
+			`UPDATE principals SET agent_scopes = '["account.read","mail.read","drive.read"]',
+				access_version = access_version + 1 WHERE id = ? AND agent_scopes NOT LIKE '%drive.read%'`,
+			agent.id,
+		);
+		const added = await addAs(once, support.id, agent.id);
+		expect(added.status).toBe(200);
+		expect(await access(agent.id)).toMatchObject({
+			scopes: ["account.read", "mail.read", "mail.modify", "mail.send", "drive.read"],
+			resources: { mailbox_ids: [agent.id, support.id] },
+		});
+
+		// A change before each try: the call gets conflict. No member, no mailbox and no new access stay.
+		const other = await owner.call("directory.create_principal", {
+			kind: "agent",
+			display_name: "Second",
+			address: "second@dock.test",
+			sponsor_id: ada.id,
+			scopes: ["account.read"],
+		});
+		const always = () =>
+			racing("UPDATE principals SET access_version = access_version + 1 WHERE id = ?", other.principal.id);
+		expect((await addAs(always(), support.id, other.principal.id)).status).toBe(409);
+		const created = await withEnv({ DIRECTORY: always() }, "/api/v1/directory/team-mailboxes", {
 			method: "POST",
 			headers: { authorization: `Bearer ${owner.key}`, "content-type": "application/json" },
-			body: JSON.stringify({ principal_id: agent.id }),
+			body: JSON.stringify({ display_name: "Sales", address: "sales@dock.test", member_ids: [other.principal.id] }),
 		});
-		expect(raced.status).toBe(400);
-		expect((await access(agent.id)).resources?.mailbox_ids).toEqual(full);
+		expect(created.status).toBe(409);
+		const { team_mailboxes } = await owner.call("directory.list_team_mailboxes");
+		expect(team_mailboxes.map((mailbox) => [mailbox.address, mailbox.member_ids])).toEqual([
+			["support@dock.test", [agent.id]],
+		]);
+		expect(await access(other.principal.id)).toMatchObject({
+			scopes: ["account.read"],
+			resources: { mailbox_ids: [other.principal.id] },
+		});
 	});
 });
 

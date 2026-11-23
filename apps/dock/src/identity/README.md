@@ -744,18 +744,23 @@ drives get the same model later.
 - **An agent or a service account gets the access with the membership.** Only an owner or an admin adds a
   member, so the add is the decision. The agent gets each scope of the membership that it does not hold
   (`agent_scopes_added` of the result), and the mailbox goes into its limits when it has limits
-  (`widenAgentForMailbox`). So it can use the mailbox at once, with each key and each connection.
+  (`agentWidening`). So it can use the mailbox at once, with each key and each connection.
   - The scopes of an agent apply to its own mailbox too. An admin who wants less gives fewer `scopes`.
   - No escalation: the credential of the call must hold each scope of the membership of an agent
     (`grantableScopes`). A narrow key with `directory.write` cannot give a scope that it does not hold.
     A refused call writes nothing. A person needs no check: a key of a person has its own scopes.
-  - The write matches only while `access_version` is the one of the read (`widenAgentAccess`), so a
-    parallel `directory.set_agent_access` is not lost. It adds one to `access_version`, ends the events
-    sockets of the agent, and writes the audit line `directory.set_agent_access`.
+  - One transaction writes the membership and the access of the agent (`agentWidening`,
+    `widenAgentAccessStatement`). `directory.create_team_mailbox` writes the mailbox, its first members and
+    the access of each agent in one transaction too. So a call that fails leaves no member, no mailbox and
+    no new access.
+  - The write of the access matches only while `access_version` is the one of the read, and only with the
+    membership. So a parallel `directory.set_agent_access` is not lost: the transaction then writes nothing,
+    and the handler reads the agent and tries again, at most three times. After that, the call gets
+    `conflict`. The write adds one to `access_version`. After it, the handler ends the events sockets of the
+    agent and writes the audit line `directory.set_agent_access`.
   - The limits of an agent name at most 20 mailboxes. A membership that needs place 21 gets `invalid`.
-    Each try of the write checks the place again (`assertPlaceInLimits`), because a parallel call can fill
-    the limits after the first check. A refusal at a second try comes after the write of the membership:
-    the membership stays, outside the limits, and **Access** marks it.
+    Each try checks the place again (`assertPlaceInLimits`), because a parallel call can fill the limits
+    after the first check.
   - A remove does not take the scopes from the agent, and does not change its limits. The membership is
     gone, so a mailbox in the limits gives nothing.
 

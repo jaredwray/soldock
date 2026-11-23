@@ -36,6 +36,7 @@ import { hashPassword } from "./password.ts";
 import { endEventSockets } from "./principal.ts";
 import { confirmPassword } from "./signin.ts";
 import {
+	type AgentWidening,
 	addMailDomain,
 	archivePrincipal,
 	assertPrimaryAddress,
@@ -71,7 +72,6 @@ import {
 	unknownPrincipalIds,
 	updateOutboundPolicy,
 	updatePrincipal,
-	widenAgentAccess,
 } from "./store.ts";
 import {
 	addTeamMailboxMember,
@@ -254,48 +254,44 @@ function assertPlaceInLimits(agent: PrincipalRecord, mailboxId?: string): void {
 	}
 }
 
+/** The access that a membership gives to an agent, with the scopes that the agent did not hold. */
+type MemberWidening = AgentWidening & { agent: PrincipalRecord; added: Scope[] };
+
 /**
- * Gives an agent or a service account the access of its membership of a team mailbox: each scope of the
+ * The access that an agent or a service account gets with its membership of a team mailbox: each scope of the
  * membership that it does not hold, and the mailbox in its limits when it has limits. So the agent can use
- * the mailbox at once, and nobody sets its permissions a second time. Returns the scopes that the agent
- * got. A person, and an agent that has the access, get no write.
+ * the mailbox at once, and nobody sets its permissions a second time. Null for a person, and for an agent
+ * that has the access. The store writes it in the transaction of the membership.
  */
-async function widenAgentForMailbox(
-	call: CallContext,
+function agentWidening(
 	member: PrincipalRecord,
 	mailboxId: string,
 	scopes: readonly MailboxMemberScope[],
-): Promise<Scope[]> {
-	if (member.kind !== "agent") return [];
-	// A parallel change of the access of the agent makes the write match nothing. Then read and try again.
-	let agent: PrincipalRecord | null = member;
-	for (let attempt = 0; agent?.kind === "agent" && attempt < 3; attempt++) {
-		// The limits of each read need the place: a parallel call can fill them after the first check.
-		assertPlaceInLimits(agent, mailboxId);
-		const held = agent.agent_scopes;
-		const added: Scope[] = scopes.filter((scope) => !held.includes(scope));
-		const limits = agent.agent_resources;
-		const resources =
-			limits === null || limits.mailbox_ids.includes(mailboxId)
-				? limits
-				: { ...limits, mailbox_ids: [...limits.mailbox_ids, mailboxId] };
-		if (added.length === 0 && resources === limits) return [];
-		if (await widenAgentAccess(call.env.DIRECTORY, agent, { scopes: [...held, ...added], resources })) {
-			// Each live connection of the agent has the access of its open: see `directory.set_agent_access`.
-			await endEventSockets(call.env, agent.id, { agentAccess: true });
-			const after = [...held, ...added].join(",");
-			auditOk(
-				call,
-				"directory.set_agent_access",
-				`${agent.id}:${after}:${resources === null ? "no limits" : "limits"}`,
-			);
-			recordServiceChange(call, agent, "directory.set_agent_access");
-			return added;
-		}
-		agent = await getPrincipal(call.env.DIRECTORY, agent.id);
-	}
-	throw new OperationError("conflict", DIRECTORY_CHANGED);
+): MemberWidening | null {
+	if (member.kind !== "agent") return null;
+	const held = member.agent_scopes;
+	const added: Scope[] = scopes.filter((scope) => !held.includes(scope));
+	const limits = member.agent_resources;
+	const resources =
+		limits === null || limits.mailbox_ids.includes(mailboxId)
+			? limits
+			: { ...limits, mailbox_ids: [...limits.mailbox_ids, mailboxId] };
+	if (added.length === 0 && resources === limits) return null;
+	return { agent: member, scopes: [...held, ...added], resources, added };
 }
+
+/** The effects of a write of `agentWidening`: the live connections of the agent end, and the logs get a line. */
+async function afterWidening(call: CallContext, widening: MemberWidening): Promise<void> {
+	const { agent, scopes, resources } = widening;
+	// Each live connection of the agent has the access of its open: see `directory.set_agent_access`.
+	await endEventSockets(call.env, agent.id, { agentAccess: true });
+	const limits = resources === null ? "no limits" : "limits";
+	auditOk(call, "directory.set_agent_access", `${agent.id}:${scopes.join(",")}:${limits}`);
+	recordServiceChange(call, agent, "directory.set_agent_access");
+}
+
+/** The tries of a write that a parallel change of the access of an agent made match nothing. */
+const WIDENING_TRIES = 3;
 
 /** The text for the agents and service accounts that a person sponsors, for a refused archive or delete. */
 function sponsoredText(name: string, count: number, action: "archive" | "delete"): string {
@@ -768,32 +764,55 @@ export const identityHandlers: Pick<HandlerMap<CallContext>, IdentityOperation |
 		assertPrimaryAddress(input.address);
 		const unknown = await unknownPrincipalIds(call.env.DIRECTORY, input.member_ids);
 		if (unknown.length > 0) throw new OperationError("not_found", `No principal has the id ${unknown.join(", ")}.`);
-		// Each first member gets each scope in the mailbox. An agent gets the scopes on itself too.
-		const firstMembers = await getPrincipals(call.env.DIRECTORY, input.member_ids);
-		for (const member of firstMembers) assertAgentMembership(call, member, MAILBOX_MEMBER_SCOPES);
-		const created = await createTeamMailbox(call.env.DIRECTORY, {
-			display_name: input.display_name,
-			address: input.address,
-			member_ids: input.member_ids,
-			created_by: call.caller.principal.id,
-		});
-		if (!created) {
-			throw new OperationError("conflict", "A directory reset is in progress. Try again after it completes.");
+		// Each first member gets each scope in the mailbox. An agent gets the scopes on itself too, in the
+		// transaction that creates the mailbox. A parallel change of the access of such an agent makes the
+		// transaction write nothing. Then read the members and try again.
+		const { DIRECTORY } = call.env;
+		let firstMembers = await getPrincipals(DIRECTORY, input.member_ids);
+		let widenings: MemberWidening[] = [];
+		let created: TeamMailboxRecord | null = null;
+		for (let attempt = 0; created === null && attempt < WIDENING_TRIES; attempt++) {
+			for (const member of firstMembers) assertAgentMembership(call, member, MAILBOX_MEMBER_SCOPES);
+			const members = firstMembers;
+			created = await createTeamMailbox(
+				DIRECTORY,
+				{
+					display_name: input.display_name,
+					address: input.address,
+					member_ids: input.member_ids,
+					created_by: call.caller.principal.id,
+				},
+				(mailboxId) => {
+					widenings = members.flatMap((member) => agentWidening(member, mailboxId, MAILBOX_MEMBER_SCOPES) ?? []);
+					return widenings;
+				},
+			);
+			if (created) break;
+			const again = await getPrincipals(DIRECTORY, input.member_ids);
+			const version = (id: string) => again.find((member) => member.id === id)?.access_version;
+			if (!widenings.some(({ agent }) => version(agent.id) !== agent.access_version)) {
+				throw new OperationError("conflict", "A directory reset is in progress. Try again after it completes.");
+			}
+			firstMembers = again;
 		}
-		auditOk(call, "directory.create_team_mailbox", created.id);
-		for (const member of created.members) {
+		if (!created) throw new OperationError("conflict", DIRECTORY_CHANGED);
+		const mailbox = created;
+		auditOk(call, "directory.create_team_mailbox", mailbox.id);
+		for (const member of mailbox.members) {
 			auditOk(
 				call,
 				"directory.add_team_mailbox_member",
-				`${created.id}:${member.principal_id}:${member.scopes.join(",")}`,
+				`${mailbox.id}:${member.principal_id}:${member.scopes.join(",")}`,
 			);
 		}
 		for (const member of firstMembers) {
-			if (!created.member_ids.includes(member.id)) continue;
-			recordServiceChange(call, member, "directory.add_team_mailbox_member");
-			await widenAgentForMailbox(call, member, created.id, MAILBOX_MEMBER_SCOPES);
+			if (mailbox.member_ids.includes(member.id))
+				recordServiceChange(call, member, "directory.add_team_mailbox_member");
 		}
-		return { team_mailbox: created };
+		for (const widening of widenings) {
+			if (mailbox.member_ids.includes(widening.agent.id)) await afterWidening(call, widening);
+		}
+		return { team_mailbox: mailbox };
 	},
 
 	async "directory.update_team_mailbox"(call, input) {
@@ -807,29 +826,45 @@ export const identityHandlers: Pick<HandlerMap<CallContext>, IdentityOperation |
 
 	async "directory.add_team_mailbox_member"(call, input) {
 		const mailbox = await teamMailboxToManage(call, input.mailbox_id, "change the members of");
-		const member = await getPrincipal(call.env.DIRECTORY, input.principal_id);
-		if (!member) throw new OperationError("not_found", "No principal has that id.");
-		// The scopes of the membership after the call: a member keeps its scopes, and a new member gets each one.
-		const current = mailbox.members.find((entry) => entry.principal_id === member.id);
-		const scopes = input.scopes ?? current?.scopes ?? [...MAILBOX_MEMBER_SCOPES];
-		assertAgentMembership(call, member, scopes, mailbox.id);
 		const { DIRECTORY } = call.env;
-		if (!(await addTeamMailboxMember(DIRECTORY, mailbox.id, member.id, call.caller.principal.id, input.scopes))) {
-			if (!(await getPrincipal(DIRECTORY, member.id))) {
-				throw new OperationError("not_found", "No principal has that id.");
+		const current = mailbox.members.find((entry) => entry.principal_id === input.principal_id);
+		// The scopes of the membership after the call: a member keeps its scopes, and a new member gets each one.
+		const scopes = input.scopes ?? current?.scopes ?? [...MAILBOX_MEMBER_SCOPES];
+		// One transaction writes the membership and the access that an agent gets with it. A parallel change of
+		// the access of the agent makes it write nothing. Then read the agent and try again.
+		let widening: MemberWidening | null = null;
+		let written = false;
+		for (let attempt = 0; !written && attempt < WIDENING_TRIES; attempt++) {
+			const member = await getPrincipal(DIRECTORY, input.principal_id);
+			if (!member) throw new OperationError("not_found", "No principal has that id.");
+			assertAgentMembership(call, member, scopes, mailbox.id);
+			widening = agentWidening(member, mailbox.id, scopes);
+			written = await addTeamMailboxMember(
+				DIRECTORY,
+				mailbox.id,
+				member.id,
+				call.caller.principal.id,
+				input.scopes,
+				widening ?? undefined,
+			);
+			if (written) break;
+			const again = await getPrincipal(DIRECTORY, member.id);
+			if (!again) throw new OperationError("not_found", "No principal has that id.");
+			if (again.access_version === member.access_version) {
+				throw new OperationError("invalid", `A team mailbox can have at most ${TEAM_MAILBOX_LIMITS.members} members.`);
 			}
-			throw new OperationError("invalid", `A team mailbox can have at most ${TEAM_MAILBOX_LIMITS.members} members.`);
 		}
+		if (!written) throw new OperationError("conflict", DIRECTORY_CHANGED);
 		const after = await teamMailboxAfterChange(call, mailbox.id);
-		// A parallel call can change the scopes between the read and the write. The agent gets the stored ones.
-		const stored = after.members.find((entry) => entry.principal_id === member.id)?.scopes ?? [];
+		const stored = after.members.find((entry) => entry.principal_id === input.principal_id)?.scopes ?? [];
+		const member = await principalAfterChange(call, input.principal_id);
 		// A call that changes nothing writes no line, so a script can send the wanted members again.
 		if (!current || !sameIds(current.scopes, stored)) {
 			auditOk(call, "directory.add_team_mailbox_member", `${mailbox.id}:${member.id}:${stored.join(",")}`);
 			recordServiceChange(call, member, "directory.add_team_mailbox_member");
 		}
-		const added = await widenAgentForMailbox(call, member, mailbox.id, stored);
-		return { team_mailbox: after, agent_scopes_added: added };
+		if (widening) await afterWidening(call, widening);
+		return { team_mailbox: after, agent_scopes_added: widening?.added ?? [] };
 	},
 
 	async "directory.remove_team_mailbox_member"(call, input) {
