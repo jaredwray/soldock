@@ -52,7 +52,8 @@ export const AGENT_SCOPES: readonly Scope[] = [
 ];
 
 /**
- * The most that a token of a service account can hold. A service account gives a script or a system
+ * The most that a service account can hold. An owner or an admin sets the scopes of each account, and each
+ * token of the account has them. A service account gives a script or a system
  * access through the API. It cannot manage keys or the directory, so it can never widen its own access.
  * It cannot create a webhook. Its outbound policy limits its mail, as for an agent.
  */
@@ -74,7 +75,7 @@ export type ServiceScope = (typeof SERVICE_SCOPE_LIST)[number];
 export const SERVICE_SCOPES: readonly Scope[] = SERVICE_SCOPE_LIST;
 
 /**
- * The text of each scope for a token of a service account. `SCOPES` is written for a person ("your
+ * The text of each scope for a service account. `SCOPES` is written for a person ("your
  * mail") and names rights of owners and admins, which a service account never has. These texts name the
  * service account instead.
  */

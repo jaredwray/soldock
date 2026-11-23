@@ -628,4 +628,44 @@ describe("MCP subscriptions/listen", () => {
 		expect(await steady.next()).toBe("closed");
 		await vi.waitFor(async () => expect(await watchSockets(bot.id)).toBe(0));
 	});
+
+	// An admin can change the scopes and the limits of a service account while a stream is open. The stream
+	// must not keep the access of its open.
+	it("ends when its service account loses the scope or the resource of a watched inbox", async () => {
+		const { owner } = await seedOrg();
+		const account = async (local: string) => {
+			const { principal } = await owner.call("directory.create_service_account", {
+				display_name: local,
+				address: `${local}@dock.test`,
+				scopes: ["account.read", "mail.read"],
+			});
+			const { api_key } = await owner.call("account.create_api_key", { principal_id: principal.id, label: "feed" });
+			return { id: principal.id, key: api_key.secret, address: `${local}@dock.test` };
+		};
+		const [unscoped, limited, steady] = [await account("unscoped"), await account("limited"), await account("steady")];
+		vi.useFakeTimers({ toFake: ["Date"] });
+		const streams = await Promise.all(
+			[unscoped, limited, steady].map((service) => listen(service.key, [inbox(service.id)])),
+		);
+		for (const stream of streams) {
+			expect(await stream.next()).toMatchObject({ method: "notifications/subscriptions/acknowledged" });
+		}
+		// The first account loses mail.read. The second gets limits without its own mailbox. The third gets one
+		// more scope, which takes nothing away.
+		const set = (input: Parameters<typeof owner.call<"directory.set_service_account_access">>[1]) =>
+			owner.call("directory.set_service_account_access", input);
+		await set({ principal_id: unscoped.id, scopes: ["account.read"] });
+		await set({ principal_id: limited.id, resources: { mailbox_ids: [], drive_ids: [], room_ids: [] } });
+		await set({ principal_id: steady.id, scopes: ["account.read", "mail.read", "chat.read"] });
+		// The next change after RECHECK_MS makes each stream check its access first.
+		vi.setSystemTime(Date.now() + RECHECK_MS);
+		for (const service of [unscoped, limited, steady]) {
+			await inject(rawMessage({ from: "x@internet.example", to: service.address, subject: "Hello" }), service.address);
+		}
+		const [first, second, third] = streams;
+		expect(await first?.next()).toBe("closed");
+		expect(await second?.next()).toBe("closed");
+		expect(await third?.next()).toEqual(updated(inbox(steady.id)));
+		await third?.cancel();
+	});
 });

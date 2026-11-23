@@ -1,8 +1,7 @@
 import type { OutputOf, Principal } from "@asterra/contracts";
-import { useCallback, useEffect, useId, useState } from "react";
-import { api, errorMessage } from "../../lib/api.ts";
-import { limitText, resourceChoicesOf, roomLabel } from "../settings/resourceChoices.ts";
+import { useId } from "react";
 import { expiryPhrase } from "../settings/ttl.ts";
+import { limitText, resourceChoicesOf, roomLabel } from "./resourceChoices.ts";
 
 type Access = OutputOf<"directory.get_service_account_access">;
 
@@ -15,37 +14,20 @@ const ROOM_KINDS: Record<string, string> = {
 
 interface ServiceAccountAccessProps {
 	account: Principal;
-	/** A new value loads the access again, for example after a token change. */
-	version: number;
-	/** Called with each loaded access, so the token form can offer the limits without a second read. */
-	onLoaded?: (access: Access) => void;
+	/** The access of the account. Null until its first read. The card reads it for this part and for Permissions. */
+	access: Access | null;
+	/** Why the last read failed, or null. */
+	error: string | null;
+	onRetry: () => void;
 }
 
 /**
- * What a service account can reach (`directory.get_service_account_access`): its own mailbox and drive,
- * the team mailboxes, shared drives and rooms that it is a member of, and the scopes of each live token.
- * A token decides what the account can do with each of them.
+ * What a service account can reach (`directory.get_service_account_access`): its limits, its own mailbox
+ * and drive, the team mailboxes, shared drives and rooms that it is a member of, and its live tokens. The
+ * scopes of the account decide what it can do with each of them.
  */
-export function ServiceAccountAccess({ account, version, onLoaded }: ServiceAccountAccessProps) {
+export function ServiceAccountAccess({ account, access, error, onRetry }: ServiceAccountAccessProps) {
 	const headingId = useId();
-	const [access, setAccess] = useState<Access | null>(null);
-	const [error, setError] = useState<string | null>(null);
-
-	const load = useCallback(async () => {
-		setError(null);
-		try {
-			const loaded = await api.call("directory.get_service_account_access", { principal_id: account.id });
-			setAccess(loaded);
-			onLoaded?.(loaded);
-		} catch (caught) {
-			setError(errorMessage(caught));
-		}
-	}, [account.id, onLoaded]);
-
-	useEffect(() => {
-		void version;
-		void load();
-	}, [load, version]);
 
 	return (
 		<section aria-labelledby={headingId}>
@@ -53,12 +35,12 @@ export function ServiceAccountAccess({ account, version, onLoaded }: ServiceAcco
 				Access
 			</h2>
 			<p className="field-hint">
-				The scopes of a token decide what the account can do. Membership and shares decide where.
+				The scopes of the account decide what it can do. Membership and shares decide where, inside its limits.
 			</p>
 			{error && (
 				<div className="form-error" role="alert">
 					<p>The access did not load. {error}</p>
-					<button type="button" className="button button-small" onClick={() => void load()}>
+					<button type="button" className="button button-small" onClick={onRetry}>
 						Try again
 					</button>
 				</div>
@@ -66,7 +48,7 @@ export function ServiceAccountAccess({ account, version, onLoaded }: ServiceAcco
 			{access === null && !error && <p className="panel-empty">Loading the access…</p>}
 			{access && (
 				<dl className="access-list">
-					<dt>Scopes of live tokens</dt>
+					<dt>Live tokens</dt>
 					<dd>
 						{access.tokens.length === 0 ? (
 							<span className="muted">No live token. The account cannot call the API.</span>
@@ -74,17 +56,18 @@ export function ServiceAccountAccess({ account, version, onLoaded }: ServiceAcco
 							<ul>
 								{access.tokens.map((token) => (
 									<li key={token.key_id}>
-										<strong>{token.label}</strong> ({expiryPhrase(token.expires_at)}):{" "}
-										<span className="cell-scopes">{token.scopes.join(", ")}</span>
-										{token.resources && (
-											<span className="muted">
-												{" "}
-												· limited to {limitText(token.resources, resourceChoicesOf(account, access))}
-											</span>
-										)}
+										<strong>{token.label}</strong> <span className="muted">({expiryPhrase(token.expires_at)})</span>
 									</li>
 								))}
 							</ul>
+						)}
+					</dd>
+					<dt>Limits</dt>
+					<dd>
+						{access.resources === null ? (
+							<span className="muted">None. The account reaches each membership below.</span>
+						) : (
+							<>Only: {limitText(access.resources, resourceChoicesOf(account, access))}</>
 						)}
 					</dd>
 					<dt>Own mailbox and drive</dt>

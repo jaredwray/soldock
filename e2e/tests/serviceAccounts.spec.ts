@@ -2,9 +2,9 @@ import { expect, test } from "@playwright/test";
 import { signIn, unique } from "../support/chat.ts";
 import { BASE_URL } from "../support/server.ts";
 
-// An admin makes a service account in Admin › Members, gives it a token with a lifetime, sees the call of
-// the token in the activity log, and revokes the token.
-test("an admin creates a service account and a 7-day token, sees its activity, rotates it, limits a token and revokes it", async ({
+// An admin makes a service account with scopes in Admin › Members, gives it a token with a lifetime, sees
+// the call of the token in the activity log, changes the permissions of the account, and revokes the token.
+test("an admin creates a service account with scopes and a 7-day token, sees its activity, rotates it, changes its permissions and revokes it", async ({
 	browser,
 }) => {
 	const context = await signIn(browser, "tomasz");
@@ -19,8 +19,11 @@ test("an admin creates a service account and a 7-day token, sees its activity, r
 		const dialog = page.getByRole("dialog", { name: "New member" });
 		await dialog.getByLabel("Service account").check();
 		await dialog.getByLabel("Display name").fill(name);
-		await dialog.getByLabel("Address").fill(`${local}@example.com`);
+		await dialog.getByLabel("Address", { exact: true }).fill(`${local}@example.com`);
 		await dialog.getByLabel("Description").fill("Posts build results");
+		// The account starts with account.read. The admin adds a scope: the scopes are on the account.
+		await expect(dialog.getByRole("checkbox", { name: /^account\.read/ })).toBeChecked();
+		await dialog.getByRole("checkbox", { name: /^mail\.read/ }).check();
 		await dialog.getByRole("button", { name: "Create service account" }).click();
 		await expect(dialog).toBeHidden();
 
@@ -32,6 +35,9 @@ test("an admin creates a service account and a 7-day token, sees its activity, r
 		const tokens = card.getByRole("table", { name: /^Tokens of/ });
 		const activity = card.getByRole("table", { name: /^Activity of/ });
 
+		// The Permissions part shows the scopes of the account. The token form has no scopes.
+		await expect(card.getByRole("checkbox", { name: /^mail\.read/ })).toBeChecked();
+		await expect(card.getByRole("checkbox", { name: /^chat\.read/ })).not.toBeChecked();
 		// The form selects 90 days first. Choose 7 days.
 		await card.getByLabel("New token label").fill("GitHub Actions");
 		await card.getByRole("combobox", { name: "Expires" }).click();
@@ -46,14 +52,16 @@ test("an admin creates a service account and a 7-day token, sees its activity, r
 		// A call with the token acts as the service account, and shows in the log.
 		const whoami = await context.request.get("/api/v1/account", { headers: { authorization: `Bearer ${secret}` } });
 		expect(whoami.status()).toBe(200);
-		const body = (await whoami.json()) as { principal: { id: string; kind: string } };
+		const body = (await whoami.json()) as { principal: { id: string; kind: string }; scopes: string[] };
 		expect(body.principal.kind).toBe("service");
+		// The token has the scopes of the account.
+		expect(body.scopes).toEqual(["account.read", "mail.read"]);
 		accountId = body.principal.id;
 		await expect(async () => {
 			await card.getByRole("button", { name: "Refresh" }).click();
 			await expect(activity.getByRole("row").filter({ hasText: "account.whoami" })).toBeVisible({ timeout: 1000 });
 		}).toPass();
-		await expect(card.getByText("Scopes of live tokens")).toBeVisible();
+		await expect(card.getByText("Live tokens")).toBeVisible();
 
 		// A rotation gives a new secret. The old one works for the overlap, until somebody stops it.
 		await card.getByRole("button", { name: "Rotate token GitHub Actions" }).click();
@@ -74,19 +82,19 @@ test("an admin creates a service account and a 7-day token, sees its activity, r
 		const old = await context.request.get("/api/v1/account", { headers: { authorization: `Bearer ${secret}` } });
 		expect(old.status()).toBe(401);
 
-		// A token limited to the own mailbox shows its limit.
-		await card.getByLabel("New token label").fill("Mailer");
-		await card.getByLabel("Limit this token to specific mailboxes, drives and rooms").check();
+		// A change of the permissions applies to the token at once, without a new secret. The own mailbox and
+		// the own drive have the same id, so the limit to the own mailbox must not select the own drive.
+		await card.getByRole("checkbox", { name: /^chat\.read/ }).check();
+		await card.getByLabel("Limit this account to specific mailboxes, drives and rooms").check();
 		await card.getByLabel(/^Own mailbox/).check();
-		await card.getByRole("button", { name: "Create token" }).click();
-		await page.getByRole("dialog", { name: "Copy the new token" }).getByRole("button", { name: "Done" }).click();
-		// The exact text proves that the own mailbox did not also select the own drive, which has the same id.
-		await expect(
-			tokens
-				.getByRole("row")
-				.filter({ hasText: "Mailer" })
-				.getByText(/^Limited to:/),
-		).toHaveText(`Limited to: Own mailbox (${local}@example.com)`);
+		await expect(card.getByLabel("Own drive")).not.toBeChecked();
+		await card.getByRole("button", { name: "Save permissions" }).click();
+		await expect(card.getByText(`Only: Own mailbox (${local}@example.com)`)).toBeVisible();
+		const changed = await context.request.get("/api/v1/account", { headers: { authorization: `Bearer ${rotated}` } });
+		expect(await changed.json()).toMatchObject({
+			scopes: ["account.read", "mail.read", "chat.read"],
+			resources: { mailbox_ids: [accountId], drive_ids: [], room_ids: [] },
+		});
 
 		await card.getByRole("button", { name: "Revoke token GitHub Actions" }).click();
 		await page.getByRole("dialog").getByRole("button", { name: "Revoke token" }).click();

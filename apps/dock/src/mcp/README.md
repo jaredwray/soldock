@@ -82,15 +82,17 @@ SDK. Protocol 2026-07-28 has no sessions, so a hand-written server stays small.
 - `tools/list` lists only the tools that the credential can call (caller kind and scopes). A call
   to another tool gets JSON-RPC error `-32602`. A token of a service account sees only the tools
   whose callers name `"service"`, and each of its calls goes into the activity log of the account,
-  with the surface `mcp`. A token with resource limits also does not see a tool without a rule or with
+  with the surface `mcp`. A service account with resource limits also does not see a tool without a rule or with
   the rule `refuse`, nor the resource kinds `chat.rooms` and `chat.addressed`, nor a resource outside its
-  list ([identity](../identity/README.md#resource-limits-of-a-token)).
+  list ([identity](../identity/README.md#resource-limits-of-a-service-account)).
 - The instructions name each scope that the credential does not hold, with the number of its
   tools (`missingScopes` of `identity`). They also tell how to get the scope:
   - An OAuth connection: the sponsor, an owner or an admin opens the agent in Admin › Members
     and adds the scope (`oauth.add_grant_scopes`). The connection stays.
   - An API key: its scopes do not change, so the key holder needs a new key. For an agent, its
     sponsor, an owner or an admin creates the key.
+  - A token of a service account: the scopes are on the account. An owner or an admin adds the scope to
+    the account in Admin › Members (`directory.set_service_account_access`). The token stays.
 
   `account_whoami` names the tools of each missing scope (`missing_scopes`). A credential that
   holds each scope of its kind gets no such sentence.
@@ -190,8 +192,10 @@ A modern client sends `subscriptions/listen` with the resource URIs in
 - The stream checks its age before each notification and at each keep-alive. When the last access
   check is older than one minute, it authenticates the credential again and asks the change feed of
   each resource kind again first, with all of its resources in one call. So a lost access stops the
-  notifications within about one minute. The scopes of a credential do not change, so the check does
-  not read them again.
+  notifications within about one minute. An owner or an admin can change the scopes and the resource
+  limits of a service account while a stream is open. So the check also reads each watched URI again
+  with the new scopes and limits (`resolveUri`), and the stream ends when one of them no longer names a
+  resource that the credential can read.
 - Subrequest budget of one stream. When it opens: one D1 query for all team mailboxes, one D1 query
   for all chat rooms, and one socket for each mailbox, each room and `chat.rooms` (at most 100). Each later access
   check makes at most five D1 calls: the credential, the principal, the last-use time of the

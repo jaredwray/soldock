@@ -30,7 +30,7 @@ export interface ResourceDefinition<R extends OperationName = OperationName, L e
 	/** When the server sends `notifications/resources/updated` for a resource of this kind. MCP adds it to the description. */
 	updates: string;
 	/**
-	 * How a token with resource limits treats this kind: the URI variable that names the listed resource, or
+	 * How a service account with resource limits treats this kind: the URI variable that names the listed resource, or
 	 * `refuse` for a kind that reads across rooms. Each kind must say it, so a new kind cannot bypass a limit.
 	 */
 	restricted: { var: string; resource: ResourceKind } | "refuse";

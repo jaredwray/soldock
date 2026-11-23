@@ -88,7 +88,7 @@ describe("the operation registry", () => {
 	// A service account is stored as an agent, so a product applies the agent rules to it. Its tokens hold
 	// less than an agent key: no keys, no directory changes and no webhooks. A new operation refuses it until
 	// its callers name it.
-	it("lists service accounts as callers only where an agent can call and a service token holds every scope", () => {
+	it("lists service accounts as callers only where an agent can call and a service account can hold every scope", () => {
 		expect(AGENT_SCOPES).toEqual(expect.arrayContaining([...SERVICE_SCOPES]));
 		for (const scope of ["account.keys", "directory.write", "mail.webhooks", "chat.webhooks", "drive.webhooks"]) {
 			expect(SERVICE_SCOPES).not.toContain(scope);
@@ -103,7 +103,7 @@ describe("the operation registry", () => {
 		const refused =
 			/^(oauth|webhooks)\.|^chat\.(subscribe_push|unsubscribe_push|get_notification_settings|set_notification_settings|set_room_notification_level|set_status)$|_webhook/;
 		expect(serviceOps.map((op) => op.name).filter((name) => refused.test(name))).toEqual([]);
-		// Each agent operation that a service token can hold the scopes of is open to it, so the two kinds do not drift.
+		// Each agent operation that a service account can hold the scopes of is open to it, so the two kinds do not drift.
 		const missed = operationList.filter(
 			(op) =>
 				op.callers.includes("agent") &&
@@ -114,9 +114,9 @@ describe("the operation registry", () => {
 		expect(missed.map((op) => op.name)).toEqual([]);
 	});
 
-	// The token form of a service account and `missing_scopes` show these texts. A text for a person ("your
+	// The Permissions form of a service account and `missing_scopes` show these texts. A text for a person ("your
 	// mail", rights of owners and admins) would tell a wrong story about the account.
-	it("names the service account, and no right of a person, in the scope text of a service token", () => {
+	it("names the service account, and no right of a person, in the scope text of a service account", () => {
 		for (const scope of SERVICE_SCOPES) {
 			const text = scopeDescription(scope, "service");
 			expect(text, scope).toBe(SERVICE_SCOPE_DESCRIPTIONS[scope as keyof typeof SERVICE_SCOPE_DESCRIPTIONS]);
@@ -180,9 +180,9 @@ describe("the resource registry", () => {
 	});
 });
 
-// The resource limits of a token of a service account. The invoker refuses a limited token for each
+// The resource limits of a service account. The invoker refuses a limited account for each
 // operation without a rule, and each rule must name each input field that names a mailbox, a drive or a room.
-describe("the resource rules of a limited token", () => {
+describe("the resource rules of a limited service account", () => {
 	const serviceOps = operationList.filter((op) => op.callers.includes("service"));
 	const RESOURCE_FIELD = /^(mailbox_id|space_id|drive_id|room_id)$|_(space|room|mailbox|drive)_id$/;
 
@@ -230,7 +230,7 @@ describe("the resource rules of a limited token", () => {
 		expect(of("filter")).toEqual(["chat.list_rooms", "drive.list_shared_drives", "mail.list_mailboxes"]);
 	});
 
-	it("refuses each check and refuse operation for a token that lists nothing, and passes a check of listed ids", () => {
+	it("refuses each check and refuse operation for an account that lists nothing, and passes a check of listed ids", () => {
 		const caller = { id: "prn_self", restriction: { mailbox_ids: [], drive_ids: [], room_ids: [] } };
 		const all = {
 			id: "prn_self",
@@ -255,14 +255,14 @@ describe("the resource rules of a limited token", () => {
 			} else {
 				expect(resourceRefusal(op.name, {}, caller), op.name).toBeNull();
 			}
-			// A token without limits is never refused.
+			// An account without limits is never refused.
 			expect(resourceRefusal(op.name, {}, { id: "prn_self", restriction: null })).toBeNull();
 		}
-		// An operation without a rule is refused for a limited token.
+		// An operation without a rule is refused for a limited account.
 		expect(resourceRefusal("webhooks.create_endpoint", {}, all)).not.toBeNull();
 	});
 
-	it("makes each MCP resource kind say how a limited token treats it", () => {
+	it("makes each MCP resource kind say how a limited account treats it", () => {
 		for (const resource of resourceList) {
 			const restricted = resource.restricted;
 			if (restricted === "refuse") continue;

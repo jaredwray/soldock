@@ -1212,7 +1212,7 @@ export class DriveSpaceDO extends DurableObject<Env> {
 
 	/**
 	 * The pointers of one list of the owner as a user: the stars, or what others shared. Newest first.
-	 * With `spaceIds`, only the pointers into those drives: the list of a token with resource limits. The
+	 * With `spaceIds`, only the pointers into those drives: the list of a service account with resource limits. The
 	 * page and its cursor then come from those pointers only, so the cursor never names a different drive.
 	 */
 	listRefs(

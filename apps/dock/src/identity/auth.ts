@@ -103,6 +103,10 @@ export async function authenticate(
 		waitUntil(touchApiKey(env.DIRECTORY, found.key));
 		// The ceiling applies again here, so a key row with a wider scope list still cannot exceed it.
 		const ceiling = new Set<Scope>(scopeCeiling(found.principal));
+		// A token of a service account is only a credential: the scopes and the limits are those of the account,
+		// so a change of the account applies to the next call of each token. A key of a person or an agent has
+		// its own scopes and no limits.
+		const scopes = found.principal.service ? found.principal.service_scopes : found.key.scopes;
 		return {
 			id: found.principal.id,
 			principal: found.principal,
@@ -110,13 +114,11 @@ export async function authenticate(
 			credential: "api_key",
 			keyId: found.key.id,
 			keyGeneration: found.generation,
-			// Only a token of a service account gets limits through the API. A stored limit on a different key
-			// applies too, so a limit never fails open.
-			restriction: found.key.resources,
+			restriction: found.principal.service_resources,
 			grantId: null,
 			sessionHash: null,
 			accessHash: null,
-			scopes: new Set(found.key.scopes.filter((scope) => ceiling.has(scope))),
+			scopes: new Set(scopes.filter((scope) => ceiling.has(scope))),
 		};
 	}
 	if (!options.allowSession) return null;

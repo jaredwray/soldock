@@ -1,11 +1,14 @@
-import { type OutputOf, type Principal, SERVICE_SCOPE_DESCRIPTIONS, SERVICE_SCOPES } from "@asterra/contracts";
-import { useCallback, useState } from "react";
+import type { OutputOf, Principal } from "@asterra/contracts";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { api, errorMessage } from "../../lib/api.ts";
 import { fullDate, shortDate } from "../../lib/format.ts";
 import { ApiKeyManager } from "../settings/ApiKeys.tsx";
-import { type ResourceChoices, resourceChoicesOf } from "../settings/resourceChoices.ts";
 import { PolicyForm } from "./AgentDetails.tsx";
 import { ServiceAccountAccess } from "./ServiceAccountAccess.tsx";
 import { ServiceAccountActivity } from "./ServiceAccountActivity.tsx";
+import { ServiceAccountPermissions } from "./ServiceAccountPermissions.tsx";
+
+type Access = OutputOf<"directory.get_service_account_access">;
 
 interface ServiceAccountDetailsProps {
 	account: Principal;
@@ -16,21 +19,36 @@ interface ServiceAccountDetailsProps {
 
 /**
  * The tools of one service account, for an owner or an admin: what it is for and who created it, its
- * outbound policy, its tokens with their lifetime, what it can reach, and its activity log. A change of a
- * token loads the access and the activity again.
+ * outbound policy, its permissions (scopes and limits), its tokens with their lifetime, what it can reach,
+ * and its activity log. A change of a token or of the permissions loads the access and the activity again.
  */
 export function ServiceAccountDetails({ account, principals, onChanged }: ServiceAccountDetailsProps) {
-	// Each change of a token gives a new number, so the access and the activity load again.
+	// Each change of a token or of the permissions gives a new number, so the access and the activity load again.
 	const [version, setVersion] = useState(0);
-	// The access of the account gives the choices for the limits of a new token. The Access part loads it.
-	const [choices, setChoices] = useState<ResourceChoices | undefined>(undefined);
-	// The ids keep the callback the same when the directory loads again, so the access does not load again.
-	const { id, address } = account;
-	const onAccess = useCallback(
-		(access: OutputOf<"directory.get_service_account_access">) =>
-			setChoices(resourceChoicesOf({ id, address }, access)),
-		[id, address],
-	);
+	// One read of the access gives the Permissions part its scopes and limits, and the Access part its lists.
+	const [access, setAccess] = useState<Access | null>(null);
+	const [accessError, setAccessError] = useState<string | null>(null);
+	// The id keeps the read the same when the directory loads again, so the access does not load again.
+	const { id } = account;
+	// The number of the newest read. An answer of an older read must not replace a newer one: a token change
+	// and a save of the permissions can each start a read.
+	const newestRead = useRef(0);
+	const loadAccess = useCallback(async () => {
+		newestRead.current += 1;
+		const read = newestRead.current;
+		setAccessError(null);
+		try {
+			const loaded = await api.call("directory.get_service_account_access", { principal_id: id });
+			if (read === newestRead.current) setAccess(loaded);
+		} catch (caught) {
+			if (read === newestRead.current) setAccessError(errorMessage(caught));
+		}
+	}, [id]);
+	useEffect(() => {
+		void version;
+		void loadAccess();
+	}, [loadAccess, version]);
+	const changed = () => setVersion((current) => current + 1);
 	const nameOf = (id: string | null) =>
 		id === null ? null : (principals.find((principal) => principal.id === id)?.display_name ?? "A deleted member");
 	const creator = nameOf(account.created_by);
@@ -45,7 +63,7 @@ export function ServiceAccountDetails({ account, principals, onChanged }: Servic
 					</p>
 					<p className="field-hint">
 						A service account gives a script or a system access through the API. Only owners and admins manage its
-						tokens. In Mail, Drive and Chat it acts as an agent.
+						permissions and its tokens. In Mail, Drive and Chat it acts as an agent.
 					</p>
 				</div>
 			</div>
@@ -54,19 +72,31 @@ export function ServiceAccountDetails({ account, principals, onChanged }: Servic
 				policy={account.outbound_policy ?? { mode: "internal-only", allowlist: [] }}
 				onChanged={onChanged}
 			/>
+			<ServiceAccountPermissions
+				account={account}
+				access={access}
+				failed={accessError !== null}
+				onSaved={(saved) => {
+					// The saved values show at once. A read that started before the save is then too old.
+					newestRead.current += 1;
+					setAccess((current) =>
+						current === null ? current : { ...current, scopes: saved.scopes, resources: saved.resources },
+					);
+					changed();
+				}}
+			/>
 			<ApiKeyManager
 				principalId={account.id}
-				allowedScopes={SERVICE_SCOPES}
-				scopeDescriptions={SERVICE_SCOPE_DESCRIPTIONS}
+				allowedScopes={[]}
+				accountScoped
 				heading={`Tokens of ${account.display_name}`}
-				note="Each token has its own scopes and lifetime. A script sends it as a bearer token to REST or MCP."
+				note="A token is a credential of this account. It has the permissions of the account, and its own lifetime. Give each system its own token."
 				noun="token"
 				defaultTtl="90"
 				people={principals}
-				onChange={() => setVersion((current) => current + 1)}
-				resourceChoices={choices}
+				onChange={changed}
 			/>
-			<ServiceAccountAccess account={account} version={version} onLoaded={onAccess} />
+			<ServiceAccountAccess account={account} access={access} error={accessError} onRetry={() => void loadAccess()} />
 			<ServiceAccountActivity account={account} principals={principals} version={version} />
 		</>
 	);

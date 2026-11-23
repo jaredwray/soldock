@@ -192,7 +192,7 @@ export interface ChatRoomQuery {
 	/** Keep only the rooms with the star of the principal. */
 	starred: boolean;
 	limit: number;
-	/** Keep only these rooms: the list of a token with resource limits. Null or absent for no filter. */
+	/** Keep only these rooms: the list of a service account with resource limits. Null or absent for no filter. */
 	roomIds?: readonly string[] | null;
 }
 
@@ -219,7 +219,11 @@ export interface EventsSocketOpen {
 export const EVENTS_SOCKET_HEADER = "x-soldock-events-socket";
 
 /** A credential that stopped: a session or a key by its id, or each token of an OAuth connection. */
-export type EndedCredential = { kind: CredentialRef["kind"]; id: string } | { grantId: string };
+export type EndedCredential =
+	| { kind: CredentialRef["kind"]; id: string }
+	| { grantId: string }
+	/** Each API key of the principal: the scopes or the limits of a service account changed. */
+	| { apiKeys: true };
 
 /**
  * Tells the object of a principal that a credential stopped, so its events sockets close at once. A
@@ -988,7 +992,8 @@ export class PrincipalDO extends DurableObject<Env> {
 
 	/**
 	 * Closes each socket of a credential that stopped, with `ended`: a session that signed out, a
-	 * revoked key, or each token of a revoked OAuth connection. Returns the number of closed sockets.
+	 * revoked key, each token of a revoked OAuth connection, or each key of a service account whose scopes
+	 * or limits changed. Returns the number of closed sockets.
 	 */
 	endSockets(match: EndedCredential): number {
 		let ended = 0;
@@ -996,9 +1001,11 @@ export class PrincipalDO extends DurableObject<Env> {
 			const credential = (socket.deserializeAttachment() as EventsSocketState | null)?.credential;
 			if (!credential) continue;
 			const hit =
-				"grantId" in match
-					? credential.grantId === match.grantId
-					: credential.kind === match.kind && credential.id === match.id;
+				"apiKeys" in match
+					? credential.kind === "api_key"
+					: "grantId" in match
+						? credential.grantId === match.grantId
+						: credential.kind === match.kind && credential.id === match.id;
 			if (!hit) continue;
 			this.end(socket, EVENTS_SOCKET_CLOSE.ended, "The credential stopped.");
 			ended += 1;
@@ -1277,6 +1284,20 @@ export class PrincipalDO extends DurableObject<Env> {
 							checked.state === "archived"
 								? "Principal is archived."
 								: "The credential that scheduled this message is no longer valid.",
+						);
+						events.push({ type: "chat.scheduled", scheduled_id: item.id, room_id: item.room_id });
+					}
+					continue;
+				}
+				// The scopes and the limits of a service account can change after it scheduled the message. The
+				// send needs the access that a new schedule needs now: `chat.write`, and no limits, because a
+				// limited account cannot schedule a message.
+				const account = checked.principal;
+				if (account.service && (!account.service_scopes.includes("chat.write") || account.service_resources !== null)) {
+					if (this.personal.claimScheduledForSend(item.id, item.send_at, item.text, item.body_json, now)) {
+						this.personal.markScheduledFailed(
+							item.id,
+							"The service account no longer has the access to post this message.",
 						);
 						events.push({ type: "chat.scheduled", scheduled_id: item.id, room_id: item.room_id });
 					}

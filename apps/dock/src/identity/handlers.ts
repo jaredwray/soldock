@@ -8,12 +8,13 @@ import {
 	mentionDirectory,
 	mentionHandle,
 	RoomId,
+	type Scope,
 	SERVICE_ACTIVITY_LIMITS,
+	type ServiceResources,
 	SharedDriveId,
 	SIGN_IN_LOCK_MINUTES,
 	searchFold,
 	TEAM_MAILBOX_LIMITS,
-	type TokenResources,
 } from "@asterra/contracts";
 import { audit, decodeCursor, encodeCursor, type HandlerMap, OperationError } from "../platform/index.ts";
 import { auditOk, credentialOwner, grantableScopes, isAdmin, missingScopes, recordServiceChange } from "./access.ts";
@@ -55,6 +56,7 @@ import {
 	rotateApiKey,
 	setPassword,
 	setPendingTotpSecret,
+	setServiceAccess,
 	unknownPrincipalIds,
 	updateOutboundPolicy,
 	updatePrincipal,
@@ -101,7 +103,8 @@ type IdentityOperation =
 	| "directory.remove_team_mailbox_member"
 	| "directory.create_service_account"
 	| "directory.list_service_account_activity"
-	| "directory.get_service_account_access";
+	| "directory.get_service_account_access"
+	| "directory.set_service_account_access";
 
 /**
  * Only the sponsor of an agent, an owner or an admin can change the agent's policy. Never the agent. Only
@@ -155,14 +158,24 @@ function keyExpiry(input: { expires_in_days?: number | undefined; expires_at?: s
 	return new Date(end).toISOString();
 }
 
+/** True when the two lists have the same ids, in any order. */
+function sameIds(a: readonly string[], b: readonly string[]): boolean {
+	return a.length === b.length && a.every((id) => b.includes(id));
+}
+
+/** True when the two limits allow the same mailboxes, drives and rooms. Null: no limits. */
+function sameResources(a: ServiceResources | null, b: ServiceResources | null): boolean {
+	if (a === null || b === null) return a === b;
+	return sameIds(a.mailbox_ids, b.mailbox_ids) && sameIds(a.drive_ids, b.drive_ids) && sameIds(a.room_ids, b.room_ids);
+}
+
 /**
- * Checks the resource limits of a new token. Only a token of a service account can have them. A mailbox is
- * the own mailbox of the account (its id) or a team mailbox that exists. A drive is the own drive of the
- * account or a shared drive. A room is a room id. Any other id is refused, also the id of a different
- * principal: a limited token does not reach items that a person shared directly with the account.
+ * Checks the resource limits of a service account. A mailbox is the own mailbox of the account (its id) or
+ * a team mailbox that exists. A drive is the own drive of the account or a shared drive. A room is a room
+ * id. Any other id is refused, also the id of a different principal: a limited account does not reach
+ * items that a person shared directly with it.
  */
-async function assertTokenResources(call: CallContext, target: PrincipalRecord, resources: TokenResources) {
-	if (!target.service) throw new OperationError("invalid", "Only a token of a service account can have resources.");
+async function assertServiceResources(call: CallContext, target: PrincipalRecord, resources: ServiceResources) {
 	for (const id of resources.mailbox_ids) {
 		if (id === target.id) continue;
 		if (!isTeamMailboxId(id)) {
@@ -404,7 +417,7 @@ export const identityHandlers: Pick<HandlerMap<CallContext>, IdentityOperation |
 			api_key:
 				created.key === null || created.secret === null
 					? null
-					: { ...toApiKeyOutput(created.key), secret: created.secret },
+					: { ...toApiKeyOutput(created.key, created.principal), secret: created.secret },
 		};
 	},
 
@@ -412,6 +425,9 @@ export const identityHandlers: Pick<HandlerMap<CallContext>, IdentityOperation |
 		if (!isAdmin(call.caller)) {
 			throw new OperationError("forbidden", "Only owners and admins can create service accounts.");
 		}
+		// Each token of the account gives these scopes. So the credential of the call must hold each one, as
+		// for a new key.
+		const scopes = grantableScopes(call.caller, { kind: "agent", service: true }, input.scopes);
 		const domains = await mailDomains(call.env.DIRECTORY);
 		if (!domains.has(domainOf(input.address))) {
 			throw new OperationError("invalid", "The address must use a saved mail domain. Check Admin settings.");
@@ -431,6 +447,7 @@ export const identityHandlers: Pick<HandlerMap<CallContext>, IdentityOperation |
 				password_hash: null,
 				description: input.description ?? null,
 				created_by: call.caller.principal.id,
+				service_scopes: scopes,
 			},
 			null,
 			// A sponsor archived or deleted during the request must not get a new service account.
@@ -480,15 +497,44 @@ export const identityHandlers: Pick<HandlerMap<CallContext>, IdentityOperation |
 			chat_rooms_truncated: false,
 			drive_shared_items: [],
 			drive_shared_items_truncated: false,
-			tokens: keys.map((key) => ({
-				key_id: key.id,
-				label: key.label,
-				scopes: key.scopes,
-				expires_at: key.expires_at,
-				resources: key.resources,
-			})),
-			scopes: [...new Set(keys.flatMap((key) => key.scopes))].sort(),
+			tokens: keys.map((key) => ({ key_id: key.id, label: key.label, expires_at: key.expires_at })),
+			scopes: target.service_scopes,
+			resources: target.service_resources,
 		};
+	},
+
+	async "directory.set_service_account_access"(call, input) {
+		if (!isAdmin(call.caller)) {
+			throw new OperationError("forbidden", "Only owners and admins can change the access of a service account.");
+		}
+		const target = await getPrincipal(call.env.DIRECTORY, input.principal_id);
+		if (!target?.service) throw new OperationError("not_found", "No service account has that id.");
+		// Each token of the account gets the new scopes. So the credential of the call must hold each one.
+		const scopes = input.scopes === undefined ? undefined : grantableScopes(call.caller, target, input.scopes);
+		// The limits say where each scope of the account applies. So a change of the limits also needs a
+		// credential that holds each scope of the account: a narrow key with `directory.write` cannot remove
+		// the limits for a scope that it does not hold.
+		if (input.resources !== undefined) grantableScopes(call.caller, target, scopes ?? target.service_scopes);
+		if (input.resources != null) await assertServiceResources(call, target, input.resources);
+		// A call that changes nothing writes nothing. So the live connections of the account stay open, and
+		// the log gets no entry: a script can send the wanted access again and again.
+		const newScopes = scopes !== undefined && !sameIds(scopes, target.service_scopes);
+		const newResources = input.resources !== undefined && !sameResources(input.resources, target.service_resources);
+		if (!newScopes && !newResources) {
+			return { principal_id: target.id, scopes: target.service_scopes, resources: target.service_resources };
+		}
+		const updated = await setServiceAccess(call.env.DIRECTORY, target.id, {
+			scopes: newScopes ? scopes : undefined,
+			resources: newResources ? input.resources : undefined,
+		});
+		if (!updated) throw new OperationError("not_found", "No service account has that id.");
+		// Each live connection of the account has the access of its open. The events sockets close at once,
+		// and a room socket closes at its next check (`access_version`). A client then opens them again.
+		await endEventSockets(call.env, target.id, { apiKeys: true });
+		const limits = updated.service_resources === null ? "no limits" : "limits";
+		auditOk(call, "directory.set_service_account_access", `${target.id}:${updated.service_scopes.join(",")}:${limits}`);
+		recordServiceChange(call, target, "directory.set_service_account_access");
+		return { principal_id: target.id, scopes: updated.service_scopes, resources: updated.service_resources };
 	},
 
 	async "directory.update_agent_policy"(call, input) {
@@ -670,24 +716,39 @@ export const identityHandlers: Pick<HandlerMap<CallContext>, IdentityOperation |
 
 	async "account.list_api_keys"(call, input) {
 		const target = await credentialOwner(call, input.principal_id);
-		return { api_keys: (await listApiKeys(call.env.DIRECTORY, target.id)).map((key) => toApiKeyOutput(key)) };
+		return {
+			api_keys: (await listApiKeys(call.env.DIRECTORY, target.id)).map((key) => toApiKeyOutput(key, target)),
+		};
 	},
 
 	async "account.create_api_key"(call, input) {
 		const target = await credentialOwner(call, input.principal_id);
-		const scopes = grantableScopes(call.caller, target, input.scopes);
-		if (input.resources !== undefined) await assertTokenResources(call, target, input.resources);
+		let scopes: Scope[];
+		if (target.service) {
+			// A token of a service account is only a credential of the account. It has no scopes of its own.
+			if (input.scopes !== undefined) {
+				throw new OperationError(
+					"invalid",
+					"A token of a service account has the scopes of its account. Do not send scopes. Change them with directory.set_service_account_access.",
+				);
+			}
+			// The secret gives each scope of the account. So the credential of the call must hold each one.
+			grantableScopes(call.caller, target, target.service_scopes);
+			scopes = [];
+		} else {
+			if (input.scopes === undefined) throw new OperationError("invalid", "Send scopes: the scopes of the new key.");
+			scopes = grantableScopes(call.caller, target, input.scopes);
+		}
 		const created = await createApiKey(call.env.DIRECTORY, target.id, {
 			label: input.label,
 			scopes,
 			created_by: call.caller.principal.id,
 			description: input.description ?? null,
 			expires_at: keyExpiry(input),
-			resources: input.resources ?? null,
 		});
 		auditOk(call, "account.create_api_key", created.key.id);
 		recordServiceChange(call, target, "account.create_api_key", created.key.id);
-		return { api_key: { ...toApiKeyOutput(created.key), secret: created.secret } };
+		return { api_key: { ...toApiKeyOutput(created.key, target), secret: created.secret } };
 	},
 
 	async "account.revoke_api_key"(call, input) {
@@ -705,8 +766,10 @@ export const identityHandlers: Pick<HandlerMap<CallContext>, IdentityOperation |
 		const key = await getApiKey(call.env.DIRECTORY, input.key_id);
 		if (!key) throw new OperationError("not_found", "No API key has that id.");
 		const owner = await credentialOwner(call, key.principal_id);
-		// The new secret gives each scope of the key. So the caller must hold each one, as for a new key.
-		const notHeld = key.scopes.filter((scope) => !call.caller.scopes.has(scope));
+		// The new secret gives each scope of the key: for a token of a service account, each scope of the
+		// account. So the caller must hold each one, as for a new key.
+		const given = owner.service ? owner.service_scopes : key.scopes;
+		const notHeld = given.filter((scope) => !call.caller.scopes.has(scope));
 		if (notHeld.length > 0) {
 			throw new OperationError(
 				"forbidden",
@@ -728,7 +791,7 @@ export const identityHandlers: Pick<HandlerMap<CallContext>, IdentityOperation |
 		}
 		auditOk(call, "account.rotate_api_key", key.id);
 		recordServiceChange(call, owner, "account.rotate_api_key", key.id);
-		return { api_key: { ...toApiKeyOutput(rotated.key), secret: rotated.secret } };
+		return { api_key: { ...toApiKeyOutput(rotated.key, owner), secret: rotated.secret } };
 	},
 
 	async "account.end_api_key_rotation"(call, input) {
@@ -743,7 +806,7 @@ export const identityHandlers: Pick<HandlerMap<CallContext>, IdentityOperation |
 			auditOk(call, "account.end_api_key_rotation", key.id);
 			recordServiceChange(call, owner, "account.end_api_key_rotation", key.id);
 		}
-		return { api_key: toApiKeyOutput(ended) };
+		return { api_key: toApiKeyOutput(ended, owner) };
 	},
 
 	async "account.set_password"(call, input) {
