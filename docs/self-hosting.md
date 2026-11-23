@@ -150,6 +150,41 @@ It encrypts the message location and the unread count for the device.
 A failed request gets up to five retries. An HTTP 404 or 410 removes that subscription.
 The job and the push service each have a time limit of one hour from the original message.
 
+## AI
+
+Asterra uses Workers AI through Cloudflare AI Gateway, in your own Cloudflare account. The first feature
+is inbox auto labels. AI is off until an owner or an admin turns it on in **Admin › AI**.
+
+1. In the Cloudflare dashboard, open **AI › AI Gateway**. Create a gateway, for example `asterra`.
+2. In the settings of the gateway, turn on **Authenticated Gateway**.
+3. Create an API token with the permissions **Workers AI: Read** and **AI Gateway: Run**, for your
+   account only. Keep it in your secret store.
+4. Set the token as a secret of the dock Worker, for each environment:
+
+   ```sh
+   pnpm --filter @asterra/dock exec wrangler secret put AI_GATEWAY_TOKEN
+   ```
+
+   ```sh
+   pnpm --filter @asterra/dock exec wrangler secret put AI_GATEWAY_TOKEN --env development
+   ```
+
+5. In **Admin › AI**, enter the account ID and the gateway ID. Select **Test connection**.
+6. Allow the models, choose the model of **Inbox auto labels**, set the monthly budget, and turn on AI.
+7. Each person turns on auto labels for their mailbox in Mail, with the spark button next to
+   **Labels**.
+
+- The token is never in the directory, in an API answer or in a log. Admin › AI shows only whether
+  the secret exists. Without it, AI makes no calls, and auto labels use their rules only.
+- Only Workers AI models are on the list, so the AI stays in Cloudflare.
+- AI stops when the estimated cost of the month (UTC) reaches the budget. The estimate uses the
+  published Workers AI prices. The AI Gateway dashboard is the source for billing.
+- The gateway can keep a log of each request, with the mail text of auto labels. To keep no mail text
+  in Cloudflare logs, turn off log collection in the settings of the gateway.
+- The deploy creates the queue `soldock-mail-autolabel`. Migration `0027` adds the AI tables: run
+  `wrangler d1 migrations apply` as for each migration.
+- For local work, put `AI_GATEWAY_TOKEN=<token>` in `apps/dock/.dev.vars`. Never commit that file.
+
 ## Mail
 
 The dock Worker receives mail through Email Routing and sends mail through Email Service. Do these

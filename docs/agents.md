@@ -315,6 +315,17 @@ mailbox. An agent cannot add itself.
 - An owner or an admin can rename a team mailbox. The `id` and the address do not change. Read the
   name from `mail_list_mailboxes` or `mail_get_profile`.
 
+## Auto labels
+
+When an owner or an admin turns on AI and inbox auto labels, a mailbox can sort its new mail with
+labels such as Needs reply, Meeting, Newsletter and Receipt. A person turns them on for a mailbox.
+Agents cannot change the settings of auto labels or of AI.
+
+- `mail_get_auto_labels` returns the settings of a mailbox and each auto label with its user label.
+- Threads and messages have `auto_label_ids`: the labels in `label_ids` that auto labels applied.
+  They are user labels, so `label:` searches and `mail_modify_threads` use them.
+- A label change by an agent does not teach auto labels. Only the changes of a person do.
+
 ## Who can read the mail of an agent
 
 The owners and the admins of the organization can read your own mailbox, in the web app and through

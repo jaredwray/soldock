@@ -688,6 +688,8 @@ A saved domain does not verify DNS or configure Cloudflare Email Routing or Emai
   Saved mail domains stay in place. The reset restores the domain constraints after it recreates the account tables.
   The same token and origin checks apply. This path works with the old schema without `sign_in_email`.
   R2, queues, and mailbox Durable Objects stay in place. New accounts have new IDs and cannot access old mail.
+  The reset also drops the AI settings and the AI usage ledger, and makes them again with AI off: the
+  ledger names the old mailboxes. The classifier outbox of each old mailbox goes with its other outboxes.
   The reset also removes each team mailbox and its members. It drops the team mailbox tables and the trigger
   on `mail_domains` first: a table rename in the replay of `0004` fails while a trigger refers to a missing table.
   The `setup_lock` row blocks new principals and new team mailboxes during the reset. Each old mailbox, also each
