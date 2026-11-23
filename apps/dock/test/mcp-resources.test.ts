@@ -90,6 +90,12 @@ describe("MCP resources", () => {
 			rawMessage({ from: "x@internet.example", to: "bot@dock.test", subject: "Invoice", text: "Pay now." }),
 			"bot@dock.test",
 		);
+		// Bot can send from the finance mailbox, but cannot read it. So its inbox is not a resource of Bot.
+		await owner.call("directory.add_team_mailbox_member", {
+			mailbox_id: finance.id,
+			principal_id: bot.id,
+			scopes: ["mail.send"],
+		});
 
 		const listed = (await modern(bot.key, "resources/list")).body?.result as Record<string, unknown>;
 		expect(listed).toMatchObject({ resultType: "complete", cacheScope: "private" });
@@ -211,7 +217,13 @@ describe("MCP resources", () => {
 
 describe("MCP subscriptions/listen", () => {
 	it("notifies a subscriber of new mail in its own inbox and its team inboxes, and of nothing else", async () => {
-		const { ada, bot, support, finance } = await seedTeams();
+		const { owner, ada, bot, support, finance } = await seedTeams();
+		// A member without mail.read cannot watch the inbox: a notification tells when mail arrives.
+		await owner.call("directory.add_team_mailbox_member", {
+			mailbox_id: finance.id,
+			principal_id: bot.id,
+			scopes: ["mail.send"],
+		});
 		// An alias with other percent-encoding names no resource, so one request cannot watch a mailbox many times.
 		const alias = inbox(support.id).replace("tmb_", "%74mb_");
 		const savedInbox = `soldock://mail/${bot.id}/inbox`;

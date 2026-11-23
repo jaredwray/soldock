@@ -3,7 +3,7 @@ import { useEffect, useRef } from "react";
 import { participantsLabel, shortDate } from "../../lib/format.ts";
 import { Icon } from "../../lib/icons.tsx";
 import { Link } from "../../lib/router.tsx";
-import { type MailView, threadPath } from "../../routes.ts";
+import { isAgentMailbox, type MailView, threadPath } from "../../routes.ts";
 import type { ListState } from "./data.ts";
 import { useMailboxId, useReadOnlyMailbox } from "./mailbox.tsx";
 import { isUserLabelId } from "./views.ts";
@@ -29,8 +29,7 @@ interface ThreadListProps {
 export function ThreadList(props: ThreadListProps) {
 	const { list, view } = props;
 	const mailboxId = useMailboxId();
-	const readOnly = useReadOnlyMailbox();
-	const owner = mailboxId === null ? "own" : readOnly ? "agent" : "team";
+	const owner = mailboxId === null ? "own" : isAgentMailbox(mailboxId) ? "agent" : "team";
 
 	if (list.status === "loading") {
 		return (

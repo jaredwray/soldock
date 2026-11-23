@@ -5,7 +5,7 @@ import { limitText, resourceChoicesOf } from "../src/features/admin/resourceChoi
 const account = { id: "prn_ci", address: "ci@example.com" };
 const access = {
 	principal_id: "prn_ci",
-	team_mailboxes: [{ id: "tmb_1", display_name: "Support", address: "support@example.com" }],
+	team_mailboxes: [{ id: "tmb_1", display_name: "Support", address: "support@example.com", scopes: ["mail.read"] }],
 	shared_drives: [{ id: "drv_1", name: "Releases", role: "editor" }],
 	chat_rooms: [
 		{ id: "rm_1", kind: "private", name: "builds", peer_name: null, role: "member" },

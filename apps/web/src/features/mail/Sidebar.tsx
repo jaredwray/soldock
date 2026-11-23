@@ -25,8 +25,10 @@ interface SidebarProps {
 	expanded: Readonly<Record<string, boolean>>;
 	/** Expands or collapses a mailbox. Null goes back to the default: only the open mailbox is expanded. */
 	onSetExpanded: (key: string, expanded: boolean | null) => void;
-	/** True in the mailbox of an agent: no compose button and no label changes. */
-	readOnly: boolean;
+	/** False when the person cannot change the mailbox: no label changes. */
+	canModify: boolean;
+	/** False when the person cannot send from the mailbox: no compose button. */
+	canSend: boolean;
 	view: MailView;
 	labels: Label[] | null;
 	labelsError: string | null;
@@ -45,7 +47,8 @@ export function Sidebar({
 	mailboxes,
 	expanded,
 	onSetExpanded,
-	readOnly,
+	canModify,
+	canSend,
 	view,
 	labels,
 	labelsError,
@@ -80,7 +83,7 @@ export function Sidebar({
 			labels={labels}
 			labelsError={labelsError}
 			nested={nested}
-			editable={!readOnly}
+			editable={canModify}
 			onNewLabel={onNewLabel}
 			onDeleteLabel={onDeleteLabel}
 		/>
@@ -98,7 +101,7 @@ export function Sidebar({
 				aria-label="Mailboxes, folders and labels"
 			>
 				<SidebarHeader title="Mail" subtitle={address} />
-				{!readOnly && (
+				{canSend && (
 					<button type="button" className="compose-button" onClick={onCompose}>
 						<Icon name="pencil" size={16} />
 						Compose

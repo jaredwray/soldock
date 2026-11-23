@@ -18,8 +18,8 @@ import {
 	credentialState,
 	getPrincipal,
 	isTeamMailboxId,
-	isTeamMailboxMember,
 	type PrincipalRecord,
+	teamMailboxMemberScopes,
 } from "../identity/index.ts";
 import { base64ToBytes, bytesToBase64, hmacSha256, log } from "../platform/index.ts";
 import { adoptLegacyWebhooks, unmigratedCount } from "./legacy.ts";
@@ -452,7 +452,9 @@ async function checkDelivery(
 		return { action: "skip" };
 	} else if (target !== creator.id) {
 		if (subscription.domain === "mail" && isTeamMailboxId(target)) {
-			if (!(await isTeamMailboxMember(db, target, creator.id))) {
+			// A member that lost mail.read in the mailbox lost the access of a new subscription.
+			const scopes = await teamMailboxMemberScopes(db, target, creator.id);
+			if (!scopes?.includes("mail.read")) {
 				return { action: "disable_subscription", reason: "access_lost" };
 			}
 		} else {

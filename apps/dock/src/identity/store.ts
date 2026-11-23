@@ -843,6 +843,33 @@ export async function setAgentAccess(
 	return getPrincipal(db, target.id);
 }
 
+/**
+ * Writes the scopes and the limits of an agent that a new membership widened. The write matches only while
+ * the access of the agent is the access of the read (`access_version`), so a parallel change of the access
+ * is never lost. Returns false when it matched no row: the caller reads the agent again.
+ */
+export async function widenAgentAccess(
+	db: D1Database,
+	target: Pick<PrincipalRecord, "id" | "service" | "access_version">,
+	access: { scopes: readonly Scope[]; resources: AgentResources | null },
+): Promise<boolean> {
+	const ceiling = scopeCeiling({ kind: "agent", service: target.service });
+	const result = await db
+		.prepare(
+			`UPDATE principals SET agent_scopes = ?2, agent_resources = ?3, access_version = access_version + 1
+			WHERE id = ?1 AND kind = 'agent' AND service = ?4 AND deleted_at IS NULL AND access_version = ?5`,
+		)
+		.bind(
+			target.id,
+			JSON.stringify(ceiling.filter((scope) => access.scopes.includes(scope))),
+			access.resources === null ? null : JSON.stringify(access.resources),
+			target.service ? 1 : 0,
+			target.access_version,
+		)
+		.run();
+	return result.meta.changes === 1;
+}
+
 /** The changes of `updatePrincipal`. A field that is undefined does not change. */
 export interface PrincipalChanges {
 	display_name?: string | undefined;

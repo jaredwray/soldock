@@ -260,7 +260,14 @@ export {
 	TOTP_PERIOD_SECONDS,
 	TotpCode,
 } from "./signin.ts";
-export { TEAM_MAILBOX_LIMITS, TeamMailbox } from "./team-mailboxes.ts";
+export {
+	MAILBOX_MEMBER_SCOPES,
+	type MailboxMemberScope,
+	mailboxMemberScopes,
+	TEAM_MAILBOX_LIMITS,
+	TeamMailbox,
+	TeamMailboxMember,
+} from "./team-mailboxes.ts";
 export {
 	authorizationConflict,
 	CHAT_ADDRESSED_REASONS,

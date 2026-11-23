@@ -78,9 +78,10 @@ export {
 	agentMailboxFor,
 	getMailbox,
 	isTeamMailboxId,
-	isTeamMailboxMember,
 	type MailboxRecord,
+	type MemberMailboxRecord,
 	resolveMailboxAddress,
 	teamMailboxesOf,
 	teamMailboxFor,
+	teamMailboxMemberScopes,
 } from "./team-mailboxes.ts";

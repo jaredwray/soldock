@@ -308,7 +308,7 @@ export const createPrincipal = defineOperation({
 		"A human gets no API key. The person can create keys in Settings after the sign-in.",
 		"An agent gets a sponsor (the caller by default), the internal-only outbound policy, and the scopes of the call. scopes is necessary for an agent, and the credential of the call must hold each one.",
 		"Each API key and each OAuth connection of the agent has the scopes of the agent. Change them with directory.set_agent_access.",
-		'A new agent is limited to its own mailbox and its own drive, and it reaches no chat room. Add a team mailbox, a shared drive or a room to its limits with directory.set_agent_access, after the agent is a member. Send limits: "none" for an agent without limits, which reaches each mailbox, drive and room that it is a member of.',
+		'A new agent is limited to its own mailbox and its own drive, and it reaches no chat room. directory.add_team_mailbox_member adds a team mailbox to its limits. Add a shared drive or a room to its limits with directory.set_agent_access, after the agent is a member. Send limits: "none" for an agent without limits, which reaches each mailbox, drive and room that it is a member of.',
 		"The result of an agent holds a first API key. Its secret is shown only once.",
 	].join(" "),
 	http: { method: "POST", path: "/api/v1/directory/principals" },
@@ -727,7 +727,7 @@ export const createServiceAccount = defineOperation({
 		"It gets a sponsor (the caller by default), the internal-only outbound policy, the scopes of the call, and no token.",
 		"scopes says what the account can do. Each token of the account has these scopes. The credential of the call must hold each one.",
 		"Create its tokens with account.create_api_key and its principal_id. Change its scopes with directory.set_agent_access.",
-		'A new account is limited to its own mailbox and its own drive, and it reaches no chat room. Add a team mailbox, a shared drive or a room to its limits with directory.set_agent_access, after the account is a member. Send limits: "none" for an account without limits, which reaches each mailbox, drive and room that it is a member of.',
+		'A new account is limited to its own mailbox and its own drive, and it reaches no chat room. directory.add_team_mailbox_member adds a team mailbox to its limits. Add a shared drive or a room to its limits with directory.set_agent_access, after the account is a member. Send limits: "none" for an account without limits, which reaches each mailbox, drive and room that it is a member of.',
 	].join(" "),
 	http: { method: "POST", path: "/api/v1/directory/service-accounts" },
 	scopes: ["directory.write"],
@@ -829,7 +829,10 @@ export const getAgentAccess = defineOperation({
 	input: z.strictObject({ principal_id: PrincipalId }),
 	output: z.object({
 		principal_id: z.string(),
-		team_mailboxes: z.array(z.object({ id: z.string(), display_name: z.string(), address: z.string() })),
+		// `scopes` is what the agent can do in the mailbox: of `MAILBOX_MEMBER_SCOPES`.
+		team_mailboxes: z.array(
+			z.object({ id: z.string(), display_name: z.string(), address: z.string(), scopes: z.array(z.string()) }),
+		),
 		shared_drives: z.array(z.object({ id: z.string(), name: z.string(), role: z.string() })),
 		// `peer_name` is the name of the other member of a direct message. It is null for each other kind.
 		chat_rooms: z.array(

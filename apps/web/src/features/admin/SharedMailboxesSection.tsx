@@ -45,8 +45,9 @@ export function SharedMailboxesSection({ principals }: { principals: readonly Pr
 		<section className="panel">
 			<div className="panel-head">
 				<p className="panel-heading panel-intro">
-					A shared mailbox has its own address, for example support@example.com. Each member, a person or an agent, can
-					read it and send from its address. The members share the labels and the read state.
+					A shared mailbox has its own address, for example support@example.com. For each member, a person or an agent,
+					you select what the member can do: read the mailbox, change it and send from its address. The members share
+					the labels and the read state.
 				</p>
 				<button
 					type="button"

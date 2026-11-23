@@ -116,9 +116,12 @@ each OAuth connection of the agent has them. A key or a connection is only a cre
 Its limits name them. This is the default of each way to create an agent: **New member**, the
 **Connect an agent** page, `directory.create_principal` and `oauth.approve_authorization`.
 
-- A membership alone gives a limited agent nothing. Add the agent to a team mailbox, a shared drive or a
-  room first. Then open the agent in **Admin › Members**, and select the resource under **Permissions**.
-  **Access** on the card marks each membership that is **Not in the limits**.
+- A membership of a shared drive or a room alone gives a limited agent nothing. Add the agent to the
+  shared drive or the room first. Then open the agent in **Admin › Members**, and select the resource
+  under **Permissions**. **Access** on the card marks each membership that is **Not in the limits**.
+- A team mailbox needs no second step. An owner or an admin adds the agent under
+  **Admin › Shared mailboxes**, and selects what the agent can do there. The agent can use the mailbox at
+  once: see [Team mailboxes](#team-mailboxes).
 - A person can start a direct message with a limited agent, but the agent does not see the room. Add the
   room of the direct message to the limits of the agent.
 - For an agent without limits, clear **Limit this agent to its own mailbox and its own drive** when you
@@ -348,16 +351,39 @@ owner or an admin creates it under **Admin › Shared mailboxes** and adds peopl
 mailbox. An agent cannot add itself.
 
 1. Call `mail_list_mailboxes`. The result has your own mailbox first, then each team mailbox that
-   you are a member of.
+   you are a member of. `scopes` says what you can do in each mailbox.
 2. Pass the `id` of a team mailbox as `mailbox_id` to a mail tool, for example `mail_list_threads`
    or `mail_send`. Without `mailbox_id`, a mail tool uses your own mailbox.
+
+**What a member can do.** Each member has scopes in the mailbox. The rule is the same for a person, an
+agent and a service account.
+
+| Scope | In the settings | The member can |
+| --- | --- | --- |
+| `mail.read` | **Read** | Read the mail and the labels, and watch the inbox |
+| `mail.modify` | **Change** | Change labels and the read state, archive and trash |
+| `mail.send` | **Send** | Send from the address of the mailbox |
+
+- A new member gets the three scopes. In **Admin › Shared mailboxes**, open the mailbox, and select the
+  scopes when you add the member. The check boxes in the list of members change them later
+  (`directory.add_team_mailbox_member` with `scopes`). A change applies at the next call of the member.
+- A call needs its scope in your credential and in your membership. Without it, the call fails with
+  `forbidden`, and the text names the scope.
+- **An agent or a service account gets the scopes on its account too.** When you add it with a scope that
+  it does not hold, it gets that scope, and the mailbox goes into its limits. So you do not open
+  **Admin › Members** for a second change. The scope also applies to its own mailbox. The result has the
+  new scopes in `agent_scopes_added`.
+- The credential that adds an agent must hold each scope that the membership gives. A narrow API key with
+  `directory.write` cannot give `mail.send` when it does not hold `mail.send`.
+- A member with only `mail.send` does not see the mailbox in the web app, and cannot watch its inbox.
 
 - The members share the threads, the labels and the read state. A change by one member shows for
   each member.
 - A send from a team mailbox comes from the name and the address of the team mailbox. The sent copy
   names the member in `sent_by`.
 - The outbound policy of an agent also applies to mail that it sends from a team mailbox.
-- A call for a team mailbox without membership fails with `forbidden`.
+- A call for a team mailbox without membership, or without the scope in your membership, fails with
+  `forbidden`.
 - An owner or an admin can rename a team mailbox. The `id` and the address do not change. Read the
   name from `mail_list_mailboxes` or `mail_get_profile`.
 

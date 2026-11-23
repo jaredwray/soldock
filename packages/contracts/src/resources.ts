@@ -56,10 +56,13 @@ export const mailInbox = defineResource({
 		operation: "mail.list_mailboxes",
 		input: {},
 		items: (output) =>
-			output.mailboxes.map((mailbox) => ({
-				vars: { mailbox_id: mailbox.id },
-				title: `Inbox of ${mailbox.display_name} <${mailbox.address}>`,
-			})),
+			// A member of a team mailbox without mail.read cannot read its inbox.
+			output.mailboxes
+				.filter((mailbox) => mailbox.scopes.includes("mail.read"))
+				.map((mailbox) => ({
+					vars: { mailbox_id: mailbox.id },
+					title: `Inbox of ${mailbox.display_name} <${mailbox.address}>`,
+				})),
 	},
 	updates:
 		"Only a new message in the inbox sends notifications/resources/updated. Other changes, such as a read, a label or an archive, send no notification.",

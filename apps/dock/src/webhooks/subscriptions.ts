@@ -120,7 +120,8 @@ export async function creatableTarget(
 		return targetId;
 	}
 	if (isTeamMailboxId(targetId) && domain === "mail") {
-		return (await teamMailboxFor(call.env.DIRECTORY, targetId, caller.id)).id;
+		// A webhook tells when mail arrives, so the membership needs mail.read, as a read of the inbox does.
+		return (await teamMailboxFor(call.env.DIRECTORY, targetId, caller.id, ["mail.read"])).id;
 	}
 	const target = await getPrincipal(call.env.DIRECTORY, targetId);
 	if (!target) throw new OperationError("not_found", "No principal has that id.");

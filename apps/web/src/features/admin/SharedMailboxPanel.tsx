@@ -1,4 +1,10 @@
-import { type Principal, TEAM_MAILBOX_LIMITS, type TeamMailbox } from "@asterra/contracts";
+import {
+	MAILBOX_MEMBER_SCOPES,
+	type MailboxMemberScope,
+	type Principal,
+	TEAM_MAILBOX_LIMITS,
+	type TeamMailbox,
+} from "@asterra/contracts";
 import { type FormEvent, useId, useState } from "react";
 import { api, errorMessage } from "../../lib/api.ts";
 import { ConfirmDialog } from "../../lib/ConfirmDialog.tsx";
@@ -8,6 +14,7 @@ import { useToast } from "../../lib/toast.tsx";
 import { principalOption } from "../../lib/usePrincipals.ts";
 import { TargetWebhooks } from "../settings/TargetWebhooks.tsx";
 import { AdminCard } from "./AdminCard.tsx";
+import { MAILBOX_SCOPE_NAMES, memberScopes, scopesText, toggleMemberScope } from "./mailboxScopes.ts";
 
 // The UI says "shared mailbox". The operations and the mail paths keep the name "team mailbox".
 
@@ -19,8 +26,8 @@ interface SharedMailboxPanelProps {
 }
 
 /**
- * One shared mailbox, as a card like an agent: its name, its members and its webhooks. A member creates
- * a webhook with the API. An owner or an admin can clear an event of one.
+ * One shared mailbox, as a card like an agent: its name, its members with what each one can do in the
+ * mailbox, and its webhooks. A member creates a webhook with the API. An owner or an admin can clear an event of one.
  */
 export function SharedMailboxPanel({ mailbox, principals, onChanged }: SharedMailboxPanelProps) {
 	const count = mailbox.member_ids.length;
@@ -114,15 +121,52 @@ function NameForm({ mailbox, onChanged }: PartProps) {
 	);
 }
 
-/** The members, with a control to add one and a button to remove each one. */
+/**
+ * The members, with what each one can do in the mailbox (`directory.add_team_mailbox_member` with `scopes`),
+ * a control to add one and a button to remove each one. The scopes are the same for a person, an agent and a
+ * service account. An agent or a service account also gets the scopes on its account, so it can use the
+ * mailbox at once.
+ */
 function MembersPart({ mailbox, principals, onChanged }: PartProps & { principals: readonly Principal[] }) {
 	const toast = useToast();
 	const [candidateId, setCandidateId] = useState("");
+	const [newScopes, setNewScopes] = useState<MailboxMemberScope[]>([...MAILBOX_MEMBER_SCOPES]);
 	const [busy, setBusy] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 	const [removing, setRemoving] = useState<Principal | null>(null);
-	const ids = { heading: useId(), select: useId(), hint: useId() };
-	const members = mailbox.member_ids.flatMap((id) => principals.filter((principal) => principal.id === id));
+	const ids = { heading: useId(), select: useId(), hint: useId(), scopes: useId() };
+	const members = mailbox.members.flatMap((member) =>
+		principals
+			.filter((principal) => principal.id === member.principal_id)
+			.map((principal) => ({ principal, scopes: memberScopes(member.scopes) })),
+	);
+
+	/** The text for the scopes that an agent or a service account got on its account. */
+	function grantedText(principal: Principal, added: readonly string[]): string {
+		const scopes = memberScopes(added);
+		return scopes.length === 0 ? "" : ` ${principal.display_name} now also holds ${scopes.join(", ")}.`;
+	}
+
+	/** Sets what a member can do in the mailbox. The change applies at the next call of the member. */
+	async function setScopes(principal: Principal, scopes: MailboxMemberScope[]) {
+		setBusy(true);
+		setError(null);
+		try {
+			const result = await api.call("directory.add_team_mailbox_member", {
+				mailbox_id: mailbox.id,
+				principal_id: principal.id,
+				scopes,
+			});
+			onChanged(result.team_mailbox);
+			toast({
+				message: `${principal.display_name} can now ${scopesText(scopes)} in ${mailbox.display_name}.${grantedText(principal, result.agent_scopes_added)}`,
+			});
+		} catch (caught) {
+			setError(errorMessage(caught));
+		} finally {
+			setBusy(false);
+		}
+	}
 	// An archived account cannot use a mailbox, so the list does not offer it.
 	const candidates = principals
 		.filter((principal) => !mailbox.member_ids.includes(principal.id) && principal.archived_at === null)
@@ -139,10 +183,14 @@ function MembersPart({ mailbox, principals, onChanged }: PartProps & { principal
 			const result = await api.call("directory.add_team_mailbox_member", {
 				mailbox_id: mailbox.id,
 				principal_id: principal.id,
+				scopes: newScopes,
 			});
 			setCandidateId("");
+			setNewScopes([...MAILBOX_MEMBER_SCOPES]);
 			onChanged(result.team_mailbox);
-			toast({ message: `${principal.display_name} can now use ${mailbox.display_name}.` });
+			toast({
+				message: `${principal.display_name} can now ${scopesText(newScopes)} in ${mailbox.display_name}.${grantedText(principal, result.agent_scopes_added)}`,
+			});
 		} catch (caught) {
 			setError(errorMessage(caught));
 		} finally {
@@ -175,13 +223,14 @@ function MembersPart({ mailbox, principals, onChanged }: PartProps & { principal
 								<tr>
 									<th scope="col">Name</th>
 									<th scope="col">Kind</th>
+									<th scope="col">Can</th>
 									<th scope="col" className="cell-actions">
 										<span className="visually-hidden">Actions</span>
 									</th>
 								</tr>
 							</thead>
 							<tbody>
-								{members.map((member) => (
+								{members.map(({ principal: member, scopes }) => (
 									<tr key={member.id} className={member.archived_at !== null ? "row-muted" : undefined}>
 										<td>
 											<div className="member-name">
@@ -192,6 +241,29 @@ function MembersPart({ mailbox, principals, onChanged }: PartProps & { principal
 										</td>
 										<td>
 											<span className={`kind kind-${actorKind(member.kind)}`}>{KIND_NAMES[member.kind]}</span>
+										</td>
+										<td>
+											<fieldset className="scope-inline">
+												<legend className="visually-hidden">
+													What {member.display_name} can do in {mailbox.display_name}
+												</legend>
+												{MAILBOX_MEMBER_SCOPES.map((scope) => {
+													const next = toggleMemberScope(scopes, scope);
+													return (
+														<label key={scope} className="check-row check-row-inline">
+															<input
+																type="checkbox"
+																className="checkbox"
+																checked={scopes.includes(scope)}
+																onChange={() => next && void setScopes(member, next)}
+																// A member keeps one scope. Remove takes the access away.
+																disabled={busy || next === null}
+															/>
+															<span>{MAILBOX_SCOPE_NAMES[scope]}</span>
+														</label>
+													);
+												})}
+											</fieldset>
 										</td>
 										<td className="cell-actions">
 											<button
@@ -230,6 +302,29 @@ function MembersPart({ mailbox, principals, onChanged }: PartProps & { principal
 								: "An agent sends from this mailbox only to the recipients that its own policy allows."}
 						</p>
 					</div>
+					<fieldset className="scope-inline" aria-describedby={ids.scopes}>
+						<legend className="field-label">The new member can</legend>
+						{MAILBOX_MEMBER_SCOPES.map((scope) => {
+							const next = toggleMemberScope(newScopes, scope);
+							return (
+								<label key={scope} className="check-row check-row-inline">
+									<input
+										type="checkbox"
+										className="checkbox"
+										checked={newScopes.includes(scope)}
+										onChange={() => next && setNewScopes(next)}
+										disabled={busy || full || next === null}
+									/>
+									<span>{MAILBOX_SCOPE_NAMES[scope]}</span>
+								</label>
+							);
+						})}
+						<p id={ids.scopes} className="field-hint">
+							Read shows the mail and the labels. Change sets labels, the read state, archive and trash. Send sends from
+							the address of the mailbox. An agent or a service account also gets these scopes on its account, so it can
+							use the mailbox at once.
+						</p>
+					</fieldset>
 					{error && (
 						<p className="form-error" role="alert">
 							{error}

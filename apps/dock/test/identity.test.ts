@@ -14,6 +14,7 @@ import serviceAccountMigration from "../migrations/0024_service_accounts.sql?raw
 import serviceTokenMigration from "../migrations/0025_service_tokens.sql?raw";
 import serviceAccessMigration from "../migrations/0026_service_access.sql?raw";
 import agentAccessMigration from "../migrations/0027_agent_access.sql?raw";
+import mailboxMemberScopesMigration from "../migrations/0028_mailbox_member_scopes.sql?raw";
 import { matchTotp, totpCode } from "../src/identity/totp.ts";
 import legacyDirectory from "./fixtures/directory-v1.sql?raw";
 import {
@@ -980,6 +981,8 @@ describe("directory upgrade", () => {
 			),
 		]);
 		await run(agentAccessMigration.split("--> statement-breakpoint"));
+		// The test dropped and made the team mailbox tables again, so they need the columns of the later migrations.
+		await run(mailboxMemberScopesMigration.split("--> statement-breakpoint"));
 		// 0027 gives an agent each scope of its live keys and live connections. A revoked key and an expired
 		// connection give nothing. A service account keeps its scopes and limits in the renamed columns.
 		const bot = await db

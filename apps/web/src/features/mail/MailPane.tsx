@@ -5,7 +5,7 @@ import { Icon } from "../../lib/icons.tsx";
 import { navigate } from "../../lib/router.tsx";
 import { useToast } from "../../lib/toast.tsx";
 import { useOnChange } from "../../lib/useOnChange.ts";
-import { type MailView, threadPath, viewPath } from "../../routes.ts";
+import { isAgentMailbox, type MailView, threadPath, viewPath } from "../../routes.ts";
 import { SEARCH_INPUT_ID } from "../../shell/nav.ts";
 import { SearchBox } from "../../shell/SearchBox.tsx";
 import {
@@ -21,7 +21,8 @@ import {
 import { type Draft, forwardDraft, replyDraft } from "./compose.ts";
 import { useThread, useThreadList } from "./data.ts";
 import type { ReplyMode } from "./MessageCard.tsx";
-import { useMailboxId, useReadOnlyMailbox } from "./mailbox.tsx";
+import { useMailboxId, useMailboxRights } from "./mailbox.tsx";
+import { rightsNotice } from "./mailboxNav.ts";
 import { ThreadList } from "./ThreadList.tsx";
 import { ThreadView } from "./ThreadView.tsx";
 import { Toolbar } from "./Toolbar.tsx";
@@ -31,8 +32,11 @@ import { type ViewQuery, viewIcon } from "./views.ts";
 /** Actions that send the open thread back to the list. */
 const LEAVE_THREAD: readonly MailAction[] = ["archive", "trash", "spam", "notSpam", "restore", "unread"];
 
-/** The shortcuts that change the mailbox, select threads for a change, or start a message. */
-const CHANGE_KEYS: ReadonlySet<string> = new Set(["e", "#", "s", "x", "c", "r"]);
+/** The shortcuts that change the mailbox, or select threads for a change. They need `mail.modify`. */
+const CHANGE_KEYS: ReadonlySet<string> = new Set(["e", "#", "s", "x"]);
+
+/** The shortcuts that start a message. They need `mail.send`. */
+const SEND_KEYS: ReadonlySet<string> = new Set(["c", "r"]);
 
 interface MailPaneProps {
 	view: MailView;
@@ -57,7 +61,9 @@ export function MailPane(props: MailPaneProps) {
 	const { view, threadId, query, title, labelsById, myAddress, onChanged, onCompose } = props;
 	const toast = useToast();
 	const mailboxId = useMailboxId();
-	const readOnly = useReadOnlyMailbox();
+	const rights = useMailboxRights();
+	const readOnly = !rights.modify;
+	const notice = rightsNotice(rights);
 	const list = useThreadList(mailboxId, query.status === "ready" ? query.query : null);
 	const thread = useThread(mailboxId, threadId);
 	const [selected, setSelected] = useState<ReadonlySet<string>>(() => new Set());
@@ -199,6 +205,7 @@ export function MailPane(props: MailPaneProps) {
 
 	useShortcuts((event) => {
 		if (readOnly && CHANGE_KEYS.has(event.key)) return;
+		if (!rights.send && SEND_KEYS.has(event.key)) return;
 		const current = threads[cursorIndex];
 		const keyTargets = listMode ? (selectedIds.length > 0 ? selectedIds : current ? [current.id] : []) : targets;
 		switch (event.key) {
@@ -288,7 +295,7 @@ export function MailPane(props: MailPaneProps) {
 					onChanged();
 				}}
 			/>
-			{readOnly && (
+			{isAgentMailbox(mailboxId) ? (
 				<p className="notice read-only-notice">
 					<Icon name="eye" size={18} />
 					<span>
@@ -297,6 +304,13 @@ export function MailPane(props: MailPaneProps) {
 						log records the lists and the conversations that you open.
 					</span>
 				</p>
+			) : (
+				notice && (
+					<p className="notice read-only-notice">
+						<Icon name="eye" size={18} />
+						<span>{notice} An owner or an admin sets what each member can do.</span>
+					</p>
+				)
 			)}
 			<div className="mail-scroll" ref={scrollRef}>
 				{query.status === "missing" ? (
