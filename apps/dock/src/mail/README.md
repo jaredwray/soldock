@@ -270,8 +270,8 @@ description in plain words. The classifier reads the description. Each label can
    one label of the kind of sender. A pick moves mail out of the inbox only at 0.85 or more, and only
    mail from a proved sender. When the mailbox sent a message in the thread after the message arrived,
    Needs reply is not a candidate, so a late answer of the classifier does not add it again. Before
-   the call, the consumer checks that the mailbox is in the directory. The mail of a deleted account
-   or team mailbox never goes to the gateway.
+   it reads the message, the consumer checks that the mailbox is in the directory. It checks again just
+   before the call. The mail of a deleted account or team mailbox does not go to the gateway.
 
 When AI cannot take the call (AI or the feature is off, the gateway or the token is not set, or the
 month used its budget), the rules still apply, and the message leaves the outbox with no model label.
@@ -318,8 +318,9 @@ message of a run has `may_archive` 0, so the classifier stage keeps the message 
 - A user label that a person deletes takes its auto label with it.
 - When an owner or an admin deletes the principal of a mailbox, the mailbox turns off its auto labels and
   empties its classifier outbox. A job that waits in the queue then gets nothing from the mailbox. The
-  consumer also drops each job of a mailbox that is not in the directory. Only a classifier call that read
-  its message before the delete can still finish. A directory reset does the same for each old mailbox.
+  consumer also drops each job of a mailbox that is not in the directory. It checks before it reads the
+  message and again just before the call. Only a call that passed the second check before the delete can
+  still finish. A directory reset does the same for each old mailbox.
 
 ## Search
 
