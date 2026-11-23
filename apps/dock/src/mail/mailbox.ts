@@ -1869,6 +1869,19 @@ export class MailboxDO extends DurableObject<Env> {
 		return { applied: resolved.keys.flatMap((key) => byKey.get(key) ?? []), archived };
 	}
 
+	/**
+	 * Turns off auto labels and empties the classifier outbox. The Worker calls it when it deletes the
+	 * principal of this mailbox: from then on, `autoLabelJob` gives nothing to a job that waits in the queue,
+	 * so no mail of the deleted mailbox goes to the gateway. Only a call that already read its message can
+	 * still finish.
+	 */
+	closeAutoLabels(): void {
+		this.ctx.storage.transactionSync(() => {
+			this.setMeta(AUTO_LABEL_ENABLED_KEY, "0");
+			this.sql.exec("DELETE FROM autolabel_outbox");
+		});
+	}
+
 	/** Takes a message out of the classifier outbox with no label: AI cannot take the call. */
 	finishAutoLabel(messageId: string): void {
 		const row = this.one<{ seq: number }>(
@@ -2095,6 +2108,8 @@ export class MailboxDO extends DurableObject<Env> {
 			this.sql.exec("DELETE FROM outbox");
 			this.sql.exec("DELETE FROM event_outbox");
 			this.sql.exec("DELETE FROM autolabel_outbox");
+			// The mail of the old organization never goes to the classifier again.
+			this.setMeta(AUTO_LABEL_ENABLED_KEY, "0");
 			this.sql.exec("DELETE FROM meta WHERE key IN (?, ?)", EVENTS_MAILBOX_KEY, EVENTS_LAST_KEY);
 			this.bump();
 		});

@@ -116,3 +116,12 @@ export async function deliverSystemNotice(
 	});
 	return deliverInternal(env, notice.to.mailboxId, notice.to.address, new TextEncoder().encode(raw));
 }
+
+/**
+ * Turns off auto labels in a mailbox and empties its classifier outbox, when its principal is deleted. A job
+ * that waits in the queue then gets nothing from the mailbox, so no mail of the deleted mailbox goes to the
+ * gateway.
+ */
+export async function closeAutoLabels(env: Pick<Env, "MAILBOX">, mailboxId: string): Promise<void> {
+	await mailboxStub(env, mailboxId).closeAutoLabels();
+}

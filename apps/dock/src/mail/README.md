@@ -316,6 +316,10 @@ message of a run has `may_archive` 0, so the classifier stage keeps the message 
 - The consumer retries a timeout, `408`, `429` and `5xx` of the gateway with backoff.
 - A second delivery of a job does nothing: the mailbox works only while the message is in its outbox.
 - A user label that a person deletes takes its auto label with it.
+- When an owner or an admin deletes the principal of a mailbox, the mailbox turns off its auto labels and
+  empties its classifier outbox. A job that waits in the queue then gets nothing from the mailbox. The
+  consumer also drops each job of a mailbox that is not in the directory. Only a classifier call that read
+  its message before the delete can still finish. A directory reset does the same for each old mailbox.
 
 ## Search
 

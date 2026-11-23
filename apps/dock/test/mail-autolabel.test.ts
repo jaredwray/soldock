@@ -291,6 +291,11 @@ describe("the classifier stage", () => {
 		await drainAutoLabels(grace.id);
 		expect(queued).toHaveLength(1);
 		await owner.call("directory.delete_principal", { principal_id: grace.id });
+		// The delete closes auto labels in the mailbox: a job that got past the directory check still gets
+		// nothing from the mailbox, so no mail of the deleted mailbox can reach the gateway.
+		expect(await autoLabelOutbox(grace.id)).toEqual([]);
+		const job = queued[0] as { messageId: string };
+		expect(await env.MAILBOX.get(env.MAILBOX.idFromName(grace.id)).autoLabelJob(job.messageId)).toBeNull();
 		const calls = fakeGateway(() => answer([{ key: "needs_reply", confidence: 0.9 }]));
 		const result = await consumeAutoLabels(queued);
 		expect(result.explicitAcks).toHaveLength(1);

@@ -297,6 +297,9 @@ can act on another admin. Only the owner is out of reach, as for credentials.
   (tables `webhook_subscriptions` and `webhook_endpoints` of the [shared webhook module](../webhooks/README.md)).
   It also deletes the old rows in `webhooks` and `chat_webhooks`.
   Each record holds a signature secret that nobody can access after deletion.
+  After the transaction, the Worker turns off the auto labels of the mailbox of the principal and empties
+  its classifier outbox, so no mail of the deleted mailbox goes to AI Gateway
+  ([auto labels](../mail/README.md#auto-labels)).
   - Each query that returns a principal joins its primary address, so a deleted principal is not in
     the directory. `unknownPrincipalIds` also leaves it out, so Drive refuses its id and leaves its
     items out of Shared with me and Starred.
