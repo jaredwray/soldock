@@ -5219,14 +5219,24 @@ fieldset {
 	background: var(--link);
 }
 
-.cell-number {
+.table th.cell-number,
+.table td.cell-number {
 	font-variant-numeric: tabular-nums;
 	text-align: right;
 	white-space: nowrap;
 }
 
-.table th.cell-number {
-	text-align: right;
+/* The three ranked tables have the same columns, so their numbers line up. */
+.ai-ranked .table {
+	table-layout: fixed;
+}
+
+.ai-ranked .table .cell-number {
+	width: 96px;
+}
+
+.ai-ranked .check-hint {
+	font-weight: 400;
 }
 
 @media (max-width: 900px) {

@@ -555,14 +555,15 @@ export const AUTO_LABEL_LIMITS = {
 /**
  * The built-in auto labels. `scope` tells what decides the label. `sender`: the sender, so a correction
  * of the label applies to the next mail from that sender. `message`: the content of each message, so a
- * correction is only an example for the classifier. `definition` is the text of the classifier prompt
- * and of the web app.
+ * correction is only an example for the classifier. `definition` is the text of the classifier prompt.
+ * `summary` is the short text of the settings, for people.
  */
 export const AUTO_LABELS = [
 	{
 		key: "needs_reply",
 		name: "Needs reply",
 		scope: "message",
+		summary: "Mail from a person who asks you a question or waits for your answer or decision.",
 		definition:
 			"A person wrote to the owner and expects an answer or an action from the owner: a question, a request, an approval or a decision. Not automated mail, mail to a list, a thank-you or an acknowledgement with no question, a cold pitch, or mail where the owner is only in Cc and the text does not address the owner by name.",
 	},
@@ -570,6 +571,7 @@ export const AUTO_LABELS = [
 		key: "meeting",
 		name: "Meeting",
 		scope: "message",
+		summary: "Invitations, changes and reminders of meetings and calls, and people who propose a time.",
 		definition:
 			"About one specific meeting or call: an invitation, a change, a cancellation, a reminder, or a person who proposes or confirms a time. Not the promotion of a webinar or an event to a list (marketing), and not a booking for a trip (travel).",
 	},
@@ -577,6 +579,7 @@ export const AUTO_LABELS = [
 		key: "marketing",
 		name: "Marketing",
 		scope: "sender",
+		summary: "Promotions, offers and product news that companies send to their lists.",
 		definition:
 			"Promotion from a company to a list: offers, sales, product news, webinars, event promotion, win-back mail. The sender wants the owner to buy, upgrade or sign up. Not editorial content to read (newsletter), not mail about the account, order or payment of the owner (notification, receipt), and not one-to-one sales mail from a person (cold_pitch).",
 	},
@@ -584,6 +587,7 @@ export const AUTO_LABELS = [
 		key: "newsletter",
 		name: "Newsletter",
 		scope: "sender",
+		summary: "Issues of newsletters, digests and blogs that you read.",
 		definition:
 			"Editorial content in issues to subscribers: news digests, blogs, letters from an author, community digests. The main purpose is to read, not to buy. Not promotion (marketing).",
 	},
@@ -591,6 +595,7 @@ export const AUTO_LABELS = [
 		key: "cold_pitch",
 		name: "Cold pitch",
 		scope: "sender",
+		summary: "Sales mail from people and companies that you never wrote to.",
 		definition:
 			"Unsolicited one-to-one mail from a person or a company with no relation to the owner. It sells a product or a service, asks for a call, or proposes a partnership, a guest post, links or an investment. Only when FACTS say that the owner never wrote to this sender or its domain and the owner did not write in the thread. Not mail to a list (marketing), and not a reply to mail from the owner.",
 	},
@@ -598,6 +603,7 @@ export const AUTO_LABELS = [
 		key: "social",
 		name: "Social",
 		scope: "sender",
+		summary: "Activity from social networks and communities: follows, likes, comments and mentions.",
 		definition:
 			"Automated mail from a social network or a community platform about activity: follows, likes, comments, mentions, connection requests, messages on the platform. Not a person who writes directly, and not security or billing mail of the platform (notification, receipt).",
 	},
@@ -605,6 +611,7 @@ export const AUTO_LABELS = [
 		key: "notification",
 		name: "Notification",
 		scope: "sender",
+		summary: "Automated mail about your accounts and tools: alerts, codes, builds and shipping.",
 		definition:
 			"Automated mail from an app or a service about the account or the systems of the owner: alerts, sign-in codes, password resets, build and monitor results, comments and tasks in work tools, shipping status, reminders. Not payment documents (receipt), trips (travel), social networks (social) or promotion (marketing).",
 	},
@@ -612,6 +619,7 @@ export const AUTO_LABELS = [
 		key: "receipt",
 		name: "Receipt",
 		scope: "message",
+		summary: "Receipts, invoices, order confirmations, bills and payment problems.",
 		definition:
 			"A document about money: a receipt, an invoice, an order confirmation with a total, a payment confirmation, a refund, a bill, a statement, a renewal charge or a failed payment. Not promotion with prices (marketing), and not shipping status with no payment (notification).",
 	},
@@ -619,6 +627,7 @@ export const AUTO_LABELS = [
 		key: "travel",
 		name: "Travel",
 		scope: "message",
+		summary: "Bookings, tickets, itineraries and check-ins of your trips.",
 		definition:
 			"About one specific trip of the owner: a booking, a ticket, an itinerary, a check-in, a boarding pass, a hotel, car or train reservation, or a change or a cancellation of one. Not travel offers (marketing), and not receipts for local rides or food (receipt).",
 	},

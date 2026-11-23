@@ -122,7 +122,7 @@ export function settingsView(sql: SqlStorage, enabled: boolean): Pick<AutoLabelS
 			key: label.key,
 			kind: "builtin" as const,
 			name: label.name,
-			description: label.definition,
+			description: label.summary,
 			enabled: row?.enabled === 1,
 			skip_inbox: row?.skip_inbox === 1,
 			label_id: row?.label_id ?? null,
