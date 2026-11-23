@@ -82,9 +82,9 @@ SDK. Protocol 2026-07-28 has no sessions, so a hand-written server stays small.
 - `tools/list` lists only the tools that the credential can call (caller kind and scopes). A call
   to another tool gets JSON-RPC error `-32602`. A token of a service account sees only the tools
   whose callers name `"service"`, and each of its calls goes into the activity log of the account,
-  with the surface `mcp`. A token with resource limits also does not see a tool without a rule or with
+  with the surface `mcp`. A service account with resource limits also does not see a tool without a rule or with
   the rule `refuse`, nor the resource kinds `chat.rooms` and `chat.addressed`, nor a resource outside its
-  list ([identity](../identity/README.md#resource-limits-of-a-token)).
+  list ([identity](../identity/README.md#resource-limits-of-a-service-account)).
 - The instructions name each scope that the credential does not hold, with the number of its
   tools (`missingScopes` of `identity`). They also tell how to get the scope:
   - An OAuth connection: the sponsor, an owner or an admin opens the agent in Admin › Members

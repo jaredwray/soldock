@@ -298,7 +298,8 @@ MCP clients. The app has no UI-only path.
     - **New member**, above the list, opens a dialog for an owner or an admin.
       The kinds are Person, Agent and Service account, with one line that says what each kind is for.
       The first API key of a new person or agent shows once, with a copy button.
-      A service account (`directory.create_service_account`) gets a name, an address, a description and a sponsor, and no key.
+      A service account (`directory.create_service_account`) gets a name, an address, a description, a sponsor and its scopes, and no key.
+      The form shows the scopes of a service account with their texts (`SERVICE_SCOPE_DESCRIPTIONS`), and selects only `account.read` first.
       A toast tells the admin to open it to add a token.
       A credential cannot grant a scope that it does not hold.
       The form offers only the scopes of the session.
@@ -328,20 +329,22 @@ MCP clients. The app has no UI-only path.
       **Name, description and sponsor** (`directory.update_principal`, with `description`).
       The creation time, the creator and the sponsor.
       The outbound policy.
-      **Tokens of …**: the API key manager with the word "token", `SERVICE_SCOPES`, a lifetime of 90 days first, and the creator and the revoker of each token.
+      **Permissions** (`directory.set_service_account_access`, `ServiceAccountPermissions.tsx`): the scopes of the account, and **Limit this account to specific mailboxes, drives and rooms**.
+      The scopes and the limits are on the account. Each token of the account has them, and a token has none of its own.
       The scope texts are the texts for a service account (`SERVICE_SCOPE_DESCRIPTIONS`), without "your".
-      The form has **Limit this token to specific mailboxes, drives and rooms**.
-      It shows a list of check boxes for each product: the own mailbox, the team mailboxes, the own drive, the shared drives and the rooms (`resources` of `account.create_api_key`).
+      With the limit, the form shows a list of check boxes for each product: the own mailbox, the team mailboxes, the own drive, the shared drives and the rooms.
+      The choices come from the access of the account (`admin/resourceChoices.ts`). A listed resource that is not a membership now shows with its id, so an admin can remove it.
       A selection key has the kind and the id, because the own mailbox and the own drive have the same id.
-      A list stops a further selection at 20 (`TOKEN_RESOURCE_LIMITS.perKind`), with a count when it has more choices.
+      A list stops a further selection at 20 (`SERVICE_RESOURCE_LIMITS.perKind`), with a count when it has more choices.
       A direct message shows the name of its other member (`peer_name`).
-      A create clears the limits for the next token.
-      The choices come from the access of the account (`settings/resourceChoices.ts`), so the form shows the check box after the access loads.
-      A limited token shows "Limited to: …" in its row and "limited to …" in the access. A token without limits shows neither.
-      **Access** (`directory.get_service_account_access`): the scopes and the limits of each live token, the own mailbox and drive, the team mailboxes, the shared drives, the rooms with the role, and **Shared directly in Drive** (the items that a member shared with the account).
+      **Save permissions** sends only the fields that changed (`admin/permissionsDraft.ts`), and is off when nothing changed. A line tells when the choices are not saved.
+      **Tokens of …**: the API key manager with the word "token", a lifetime of 90 days first, and the creator and the revoker of each token.
+      The token form has a label, a description and a lifetime, and no scopes (`accountScoped`). A token row shows no scopes.
+      **Access** (`directory.get_service_account_access`): the live tokens, the limits, the own mailbox and drive, the team mailboxes, the shared drives, the rooms with the role, and **Shared directly in Drive** (the items that a member shared with the account).
+      The card reads the access one time for **Permissions** and for **Access**.
       **Activity** (`directory.list_service_account_activity`): a table of the newest entries, a filter for one token, **Refresh** and **Load more**.
       The surface `system` shows as "Asterra", for example for the notice before a token ends. The surface `member` shows as "Member change".
-      A create, a rotation or a revoke of a token loads the access and the activity again.
+      A create, a rotation or a revoke of a token, and a save of the permissions, load the access and the activity again.
       Each part shows its loading, empty and error states, and an error has **Try again**.
     - An agent card also has the outbound policy, the connected apps, the webhooks and the API keys.
       The policy sets the mail recipients and the webhook hosts (`directory.update_agent_policy`).
@@ -1703,13 +1706,13 @@ Each view uses one search query: Inbox `in:inbox`, Starred `is:starred`, Sent `i
 | [`src/shell/`](src/shell/) | The signed-in frame: the rail, the account menu with the Appearance choice, the search box, the header row of a page, and the header of a sidebar |
 | [`src/features/auth/`](src/features/auth/) | The sign-in page and the `/auth/*` calls |
 | [`src/features/mail/`](src/features/mail/) | Mail: data hooks, sidebar, toolbar, thread list, thread view, composer and shortcuts |
-| [`src/features/admin/`](src/features/admin/) | Admin: the side navigation, the directory, the create form, the MCP endpoint banner, the agent panels with their OAuth connections, the service account panels (details, access and activity), the sign-in help, the team mailboxes and the email domains |
+| [`src/features/admin/`](src/features/admin/) | Admin: the side navigation, the directory, the create form, the MCP endpoint banner, the agent panels with their OAuth connections, the service account panels (details, permissions, access and activity), the sign-in help, the team mailboxes and the email domains |
 | [`src/features/connect/`](src/features/connect/) | The OAuth approval page, and the pure rules of its first values in `connect.ts` |
 | [`src/features/drive/`](src/features/drive/) | Drive: the sidebar, the item list, the menus and dialogs (new folder, rename, move, share, versions, preview), the data hooks, the pure rules in `model.ts`, the upload queue in `uploadQueue.ts`, and the document header that the editors share |
 | [`src/features/docs/`](src/features/docs/) | Docs: the schema, the commands, the autosave, the paste of Markdown (`markdownPaste.ts`), the editor and the page. For images: the store of the images of a doc (`images.ts`), the geometry (`imageModel.ts`), the commands (`imageCommands.ts`), the view of an image (`imageView.ts`), the plugin for a drop and a paste (`imagePlugin.ts`), the toolbar and the dialogs |
 | [`src/features/sheets/`](src/features/sheets/) | Sheets: the store with the tabs and the save queue, the toolbar, the grid, the formula bar, the tab bar, and the pure modules for cell names, the selection, clipboard text, the cells of the grid, the formats of cells and the formulas of the Σ menu |
 | [`src/features/chat/`](src/features/chat/) | Chat: the sidebar, the room view, the profile view, the dialogs (new room, public rooms, new direct message, members, name and topic), the message box with its toolbar, Markdown shortcuts and suggestions of a mention (`ChatComposer.tsx`, `composerSchema.ts`, `composerCommands.ts`), the files of a new message (`attachments.ts`, `ComposerFiles.tsx`, the drop in `fileDrop.ts`), the files and the link previews of a message (`MessageFiles.tsx`), the focus after the X of a chip (`focusAfterRemove.ts`), the data hooks, the pure rules in `model.ts`, the rules of mentions in `mentions.ts`, the part of the history that the page keeps in `history.ts`, the page reads in `pager.ts`, the last list of each room in `roomCache.ts`, the drafts in `drafts.ts`, the sends whose message the room has in `settle.ts`, and the sync of the open room in `sync.ts` |
-| [`src/features/settings/`](src/features/settings/) | Settings, the password and two-step verification cards, the TOTP setup panel, the API key manager with the lifetime of a key (`ttl.ts`) and the limit choices of a token (`resourceChoices.ts`), the event check boxes, the webhook list of one target, and the one-time secret dialog |
+| [`src/features/settings/`](src/features/settings/) | Settings, the password and two-step verification cards, the TOTP setup panel, the API key manager with the lifetime of a key (`ttl.ts`), the event check boxes, the webhook list of one target, and the one-time secret dialog |
 | [`src/lib/`](src/lib/) | The API client, the router, the dialog, the select, toasts, icons (with the Iconoir files in `iconoir/`), the appearance, format helpers, the names of the kinds of principals (`principalKind.ts`), the hook for the people and agents of the organization, the page chunks with the reload after a deploy, the upload of a file to Drive (`upload.ts`), the limit of the uploads and the small pictures that run at the same time (`limiter.ts`), and the small picture of a picture or a video (`filePreview.ts`) |
 | [`src/styles.css`](src/styles.css) | Plain CSS with custom properties. The `dark` class on `<html>` selects the dark colors. See [Design](#design) |
 | [`test/`](test/) | Vitest tests for the pure modules: routes, view queries, label rows, compose, rich text, editor commands, actions and shortcuts, the Drive rules, the Docs schema, commands, autosave and images, the Sheets cells, clipboard text, formats, Σ formulas and save queue, the message list rules, the mentions, the room sync and the files of a new message of Chat, the upload in parts, the limit of the uploads, the upload queue of Drive and the small pictures, the first values of the OAuth approval page, the icons and the appearance rules |

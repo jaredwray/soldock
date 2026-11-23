@@ -11,6 +11,8 @@ import {
 	type Principal,
 	SCOPES,
 	type Scope,
+	SERVICE_SCOPE_DESCRIPTIONS,
+	SERVICE_SCOPES,
 } from "@asterra/contracts";
 import { type FormEvent, useId, useState } from "react";
 import { api, errorMessage } from "../../lib/api.ts";
@@ -54,21 +56,25 @@ interface CreatePrincipalFormProps {
 
 type Kind = "human" | "agent" | "service";
 
+const SERVICE_DESCRIPTIONS: Partial<Record<Scope, string>> = SERVICE_SCOPE_DESCRIPTIONS;
+
 const KIND_HINTS: Record<Kind, string> = {
 	human: "Signs in to the web app with a password.",
 	agent: "An AI agent. It connects with OAuth or an API key, and a sponsor is accountable for it.",
-	service: "Gives a script or a system access through the API, with tokens that owners and admins manage.",
+	service: "Gives a script or a system access through the API, with scopes and tokens that owners and admins manage.",
 };
 
 /**
  * Creates a person, an agent or a service account. The result of a person or an agent holds a first API
- * key, which shows once. A service account gets its tokens in its card, with a lifetime for each.
+ * key, which shows once. A service account gets its scopes here, and its tokens in its card, with a
+ * lifetime for each.
  */
 function CreatePrincipalForm({ me, humans, onBusy, onCancel, onCreated }: CreatePrincipalFormProps) {
 	const { whoami } = useSession();
 	// A credential cannot grant a scope that it does not hold. The form offers only the scopes of this session.
 	const humanScopes = ALL_SCOPES.filter((scope) => whoami.scopes.includes(scope));
 	const agentScopes = AGENT_SCOPES.filter((scope) => whoami.scopes.includes(scope));
+	const serviceScopes = SERVICE_SCOPES.filter((scope) => whoami.scopes.includes(scope));
 	const [kind, setKind] = useState<Kind>("human");
 	const [description, setDescription] = useState("");
 	const [name, setName] = useState("");
@@ -78,6 +84,10 @@ function CreatePrincipalForm({ me, humans, onBusy, onCancel, onCreated }: Create
 	const sponsors = humans.filter((human) => human.archived_at === null);
 	const [sponsorId, setSponsorId] = useState(me.id);
 	const [scopes, setScopes] = useState<ReadonlySet<Scope>>(() => new Set(agentScopes));
+	// A new service account starts with the least: it can read its own account. The admin selects the rest.
+	const [accountScopes, setAccountScopes] = useState<ReadonlySet<Scope>>(
+		() => new Set(serviceScopes.filter((scope) => scope === "account.read")),
+	);
 	const [busy, setBusy] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 	const ids = {
@@ -99,6 +109,7 @@ function CreatePrincipalForm({ me, humans, onBusy, onCancel, onCreated }: Create
 			return setError(`Enter a first password of ${PASSWORD_MIN_LENGTH} to ${PASSWORD_MAX_LENGTH} characters.`);
 		}
 		if (kind === "agent" && scopes.size === 0) return setError("Select at least one scope for the first key.");
+		if (kind === "service" && accountScopes.size === 0) return setError("Select at least one scope for the account.");
 		setBusy(true);
 		onBusy(true);
 		setError(null);
@@ -108,6 +119,9 @@ function CreatePrincipalForm({ me, humans, onBusy, onCancel, onCreated }: Create
 					display_name: name.trim(),
 					address: address.trim(),
 					sponsor_id: sponsorId,
+					scopes: serviceScopes.filter((scope) =>
+						accountScopes.has(scope),
+					) as InputOf<"directory.create_service_account">["scopes"],
 					...(description.trim() ? { description: description.trim() } : {}),
 				});
 				onCreated(result.principal, null);
@@ -147,6 +161,15 @@ function CreatePrincipalForm({ me, humans, onBusy, onCancel, onCreated }: Create
 
 	function toggle(scope: Scope) {
 		setScopes((current) => {
+			const next = new Set(current);
+			if (next.has(scope)) next.delete(scope);
+			else next.add(scope);
+			return next;
+		});
+	}
+
+	function toggleAccountScope(scope: Scope) {
+		setAccountScopes((current) => {
 			const next = new Set(current);
 			if (next.has(scope)) next.delete(scope);
 			else next.add(scope);
@@ -274,9 +297,29 @@ function CreatePrincipalForm({ me, humans, onBusy, onCancel, onCreated }: Create
 								placeholder="Posts build results to #builds"
 							/>
 						</div>
+						<fieldset className="scope-list form-grid-wide">
+							<legend className="field-label">Scopes of the account</legend>
+							{serviceScopes.map((scope) => (
+								<label key={scope} className="check-row">
+									<input
+										type="checkbox"
+										className="checkbox"
+										checked={accountScopes.has(scope)}
+										onChange={() => toggleAccountScope(scope)}
+										disabled={busy}
+									/>
+									<span>
+										<code>{scope}</code>
+										<span className="check-hint">{SERVICE_DESCRIPTIONS[scope]}</span>
+									</span>
+								</label>
+							))}
+						</fieldset>
 						<p className="field-hint form-grid-wide">
+							The scopes say what the account can do. Each token of the account has them, and you can change them later.
 							The sponsor is the person to ask about the account. Only owners and admins create its tokens. Open the
-							account under Members after you create it to add a token.
+							account under Members after you create it to add a token, or to limit it to specific mailboxes, drives and
+							rooms.
 						</p>
 					</>
 				) : (

@@ -10,7 +10,7 @@
 | **Owns** | D1 `directory` tables, except `chat_rooms`, `chat_members`, `chat_custom_emoji`, `chat_incoming_webhooks`, `chat_slash_commands` (`chat`) and `webhooks` and `chat_webhooks` (`webhooks`). `PrincipalDO` owns the Chat state, personal Chat views (activity, sections, saved messages, drafts, scheduled messages, reminders), notification settings and events sockets of each principal. Later: R2 `audit`. |
 | **Depends on** | `platform`. |
 | **Operations** | `chat.get_presence`, `chat.set_status`, `account.whoami`, `account.list_api_keys`, `account.create_api_key`, `account.revoke_api_key`, `account.rotate_api_key`, `account.end_api_key_rotation`, `account.set_password`, `account.create_totp_secret`, `account.enable_totp`, `account.disable_totp`, `directory.list_principals`, `directory.get_principals`, `directory.create_principal`, `directory.update_agent_policy`, `directory.update_principal`, `directory.archive_principal`, `directory.restore_principal`, `directory.delete_principal`, `directory.list_mail_domains`, `directory.add_mail_domain`, `directory.remove_mail_domain`, `directory.list_team_mailboxes`, `directory.create_team_mailbox`, `directory.update_team_mailbox`, `directory.add_team_mailbox_member`, `directory.remove_team_mailbox_member`, `directory.create_service_account`, `directory.list_service_account_activity`, `directory.get_service_account_access`, `oauth.get_authorization`, `oauth.approve_authorization`, `oauth.deny_authorization`, `oauth.list_grants`, `oauth.revoke_grant`, `oauth.add_grant_scopes` |
-| **Data inventory** | D1 `directory`: `principals` (with `password_hash`, `totp_secret`, `totp_pending_secret`, `totp_last_step`, `sign_in_failures`, `sign_in_locked_until`, `chat_online_until`, `chat_active_until`, `chat_status_json`, `archived_at`, `deleted_at`, and the name aliases of a Chat mention `alias_first`, `alias_full` and `aliases_set`, and the name in the form of a search `name_folded`, which come from the display name, and `service`, `description` and `created_by` of [service accounts](#service-accounts)), `addresses`, `api_keys` (with `expires_at`, `description` and `revoked_by`, and for a rotation `prev_key_hash`, `prev_expires_at`, `rotation`, `rotated_at` and `rotated_by`, `expiry_notice_at` for the notice before a token ends, and `resources` for the [resource limits](#resource-limits-of-a-token) of a token), `sessions`, `setup_lock`, `mail_domains`, `team_mailboxes` (name, address, creator), `team_mailbox_members` (mailbox, principal, who added the member), `oauth_clients` (registered MCP clients: name, URI, redirect URIs), `oauth_requests` (authorization requests: client, redirect URI, state, PKCE challenge, scopes, approval, code hash, the grant that the code made), `oauth_grants` (approved connections: client, principal, scopes, approver, hashes of the access token and of the current, previous and consumed refresh tokens) ([`migrations/`](../../migrations/)). The TOTP secrets are stored as plain base32 in D1, because a server must read them to check a code. Unused and empty since migration `0004`, kept for the Worker from before it: `principals.sign_in_email` and `sign_in_codes`. A later migration removes them. `PrincipalDO` (one for each principal, keyed by the principal id): tables `chat_rooms`, `chat_threads`, `chat_addressed`, `chat_activity`, `chat_sections`, `chat_section_rooms`, `chat_saved_messages`, `chat_drafts`, `chat_scheduled_messages`, `chat_reminders`, `chat_notification_levels`, `chat_push_devices`, and `chat_notification_sounds` (see [The object of a principal](#the-object-of-a-principal)), table `service_activity` (the activity log of a service account: at most 10,000 calls, at most 1,000 membership changes by members, its admin changes, and 90 days, see [Service accounts](#service-accounts)), table `meta` (schema version, the owner id in `presence_principal`, `chat_seeded` after the first fill, and `chat_threads_filled` after the first fill of the threads), and the hibernatable sockets of `/ws/events` (not in the database: each keeps the reference to its credential, the time of its open and of its last check, and its latest activity report; no backup). Backups: not built yet. |
+| **Data inventory** | D1 `directory`: `principals` (with `password_hash`, `totp_secret`, `totp_pending_secret`, `totp_last_step`, `sign_in_failures`, `sign_in_locked_until`, `chat_online_until`, `chat_active_until`, `chat_status_json`, `archived_at`, `deleted_at`, and the name aliases of a Chat mention `alias_first`, `alias_full` and `aliases_set`, and the name in the form of a search `name_folded`, which come from the display name, and `service`, `description` and `created_by` of [service accounts](#service-accounts), and their `service_scopes`, `service_resources` and `access_version`, see [Access of a service account](#access-of-a-service-account)), `addresses`, `api_keys` (with `expires_at`, `description` and `revoked_by`, and for a rotation `prev_key_hash`, `prev_expires_at`, `rotation`, `rotated_at` and `rotated_by`, `expiry_notice_at` for the notice before a token ends, and `resources`, which is not read since migration `0026` and stays for the Worker from before it), `sessions`, `setup_lock`, `mail_domains`, `team_mailboxes` (name, address, creator), `team_mailbox_members` (mailbox, principal, who added the member), `oauth_clients` (registered MCP clients: name, URI, redirect URIs), `oauth_requests` (authorization requests: client, redirect URI, state, PKCE challenge, scopes, approval, code hash, the grant that the code made), `oauth_grants` (approved connections: client, principal, scopes, approver, hashes of the access token and of the current, previous and consumed refresh tokens) ([`migrations/`](../../migrations/)). The TOTP secrets are stored as plain base32 in D1, because a server must read them to check a code. Unused and empty since migration `0004`, kept for the Worker from before it: `principals.sign_in_email` and `sign_in_codes`. A later migration removes them. `PrincipalDO` (one for each principal, keyed by the principal id): tables `chat_rooms`, `chat_threads`, `chat_addressed`, `chat_activity`, `chat_sections`, `chat_section_rooms`, `chat_saved_messages`, `chat_drafts`, `chat_scheduled_messages`, `chat_reminders`, `chat_notification_levels`, `chat_push_devices`, and `chat_notification_sounds` (see [The object of a principal](#the-object-of-a-principal)), table `service_activity` (the activity log of a service account: at most 10,000 calls, at most 1,000 membership changes by members, its admin changes, and 90 days, see [Service accounts](#service-accounts)), table `meta` (schema version, the owner id in `presence_principal`, `chat_seeded` after the first fill, and `chat_threads_filled` after the first fill of the threads), and the hibernatable sockets of `/ws/events` (not in the database: each keeps the reference to its credential, the time of its open and of its last check, and its latest activity report; no backup). Backups: not built yet. |
 
 Public surface: `index.ts` only. Other domains must not import files from this folder directly.
 
@@ -313,7 +313,7 @@ the API, with tokens. Nobody signs in as it, and it never connects through OAuth
   Owners and admins can read its mailbox, as they read the mailbox of an agent. They can create a token
   with `mail.read` too, so a different rule would protect nothing.
 - **Who manages it.** Only owners and admins create it (`directory.create_service_account`), change it,
-  manage its tokens and read its activity and access. `created_by` records the creator. `sponsor_id`
+  set its scopes and its limits, manage its tokens and read its activity and access. `created_by` records the creator. `sponsor_id`
   names the accountable person, the creator by default. Neither gives a right: a creator or a sponsor
   who is not an admin cannot list, create or revoke its tokens, change its policy, or add a webhook for
   it. An admin who becomes a member loses these rights at once.
@@ -326,18 +326,30 @@ the API, with tokens. Nobody signs in as it, and it never connects through OAuth
   `directory.get_principals`), only owners and admins read `description` and `created_by`. Each other
   caller gets null for the two fields, also a service token and an agent. The operations of owners and
   admins return them, and `account.whoami` returns them for the record of the caller.
+- **Scopes.** The account holds the scopes, not its tokens (`principals.service_scopes`, migration
+  `0026`). `directory.create_service_account` takes `scopes` (at least one), and
+  `directory.set_service_account_access` changes them. An account can hold only `SERVICE_SCOPES`:
+  `account.read`, `directory.read`, `mail.read`, `mail.modify`, `mail.send`, `drive.read`, `drive.write`,
+  `drive.share`, `chat.read` and `chat.write`. It never holds `account.keys`, `directory.write` or a
+  webhook scope, so it cannot widen its own access and it cannot create a webhook. Its outbound policy
+  limits its mail, as for an agent. See [Access of a service account](#access-of-a-service-account).
 - **Tokens.** A token is an API key of the service account (`account.create_api_key` with its
-  `principal_id`). It has a label, an optional description, its scopes, its creator, an optional end,
-  and, after a revoke, who revoked it. A service account can have many tokens. `account.revoke_api_key`
-  stops one token at once and closes its sockets. A second revoke changes nothing.
-- **Scopes.** A token can hold only `SERVICE_SCOPES`: `account.read`, `directory.read`, `mail.read`,
-  `mail.modify`, `mail.send`, `drive.read`, `drive.write`, `drive.share`, `chat.read` and `chat.write`.
-  It never holds `account.keys`, `directory.write` or a webhook scope, so it cannot widen its own access
-  and it cannot create a webhook. Its outbound policy limits its mail, as for an agent.
+  `principal_id`). It is only a credential of the account: it has no scopes and no limits of its own.
+  Tokens are there for a rotation, and for more than one system that uses the account. A token has a
+  label, an optional description, its creator, an optional end, and, after a revoke, who revoked it. A
+  service account can have many tokens. `account.revoke_api_key` stops one token at once and closes its
+  sockets. A second revoke changes nothing.
+  - `account.create_api_key` refuses `scopes` for a service account (`invalid`). A key of a person or an
+    agent needs `scopes`, as before.
+  - `account.list_api_keys` shows the scopes of the account as the `scopes` of each of its tokens.
+  - A new secret gives each scope of the account. So the credential that creates or rotates a token must
+    hold each scope of the account (`forbidden`), as for a new key.
+  - A new token stores an empty list in `api_keys.scopes`. The sign-in path does not read that column
+    for a service account.
 - **Operations.** The invoker gives a service account the caller kind `service`. An operation that it
   can call names `"service"` in its callers. So a new operation refuses a service account until its
   callers name it. The registry test keeps the rule: an operation names `"service"` only when it names
-  `"agent"` and a service token can hold each scope it needs, and never for OAuth, webhooks or push.
+  `"agent"` and a service account can hold each scope it needs, and never for OAuth, webhooks or push.
 - **Activity log.** The `PrincipalDO` of the service account keeps its log in table `service_activity`.
   - Each call of a token through REST or MCP adds one entry: the operation, the result (`ok`, `denied`
     or `error`), the error code, the token, the surface (`rest` or `mcp`), the resource of the input
@@ -384,9 +396,9 @@ the API, with tokens. Nobody signs in as it, and it never connects through OAuth
     one for the operation that it runs.
   - An event of an MCP subscription or of a socket adds no entry, by design. It gives no access beyond
     the open of its feed, which is in the log, and its count would push the real calls out of the log.
-- **Access.** `directory.get_service_account_access` returns its team mailboxes, its shared drives and
-  its rooms with its role, the Drive items that others shared directly with it, with its role, and the
-  scopes of each live token. The memberships come from the index tables in D1 (`team_mailbox_members`,
+- **Access.** `directory.get_service_account_access` returns its scopes and its limits, its team
+  mailboxes, its shared drives and its rooms with its role, the Drive items that others shared directly
+  with it, with its role, and its live tokens (id, label and end). The memberships come from the index tables in D1 (`team_mailbox_members`,
   `shared_drive_members` and `chat_members`). At most 200 rooms, with `chat_rooms_truncated`.
   - The items shared directly come from the `shared_with_me` list of its own drive
     (`sharedItemsOfPrincipal` of [`drive`](../drive/README.md)), the newest share first, at most 200,
@@ -397,7 +409,9 @@ the API, with tokens. Nobody signs in as it, and it never connects through OAuth
 - **Rollback.** A Worker from before migration `0024` sees a service account as an agent. It ignores
   the end of a key, and it lets the sponsor manage the tokens. The stored scopes stay inside
   `SERVICE_SCOPES`, so a rollback gives no scope beyond them. Revoke the tokens before a rollback to stop
-  them.
+  them. A Worker from before migration `0026` reads the scopes and the limits of each token. A token from
+  after `0026` has no scope there, so it fails closed. A token from before `0026` gets its old scopes and
+  limits back.
 
 ## API keys with an end
 
@@ -413,8 +427,9 @@ sockets close at the next check (`checkCredentials`), and a lasting effect that 
 `account.rotate_api_key` gives a key a new secret and returns it once. The key keeps its id, label,
 description, scopes and end. It works for each key: of a person, of an agent and of a service account.
 The principals that can revoke the key can rotate it, so only owners and admins rotate the token of a
-service account. The new secret gives each scope of the key, so the caller must hold each one, as for a
-new key (`forbidden`). A narrow key with `account.keys` cannot rotate a wider key.
+service account. The new secret gives each scope of the key (for a token of a service account, each
+scope of its account), so the caller must hold each one, as for a new key (`forbidden`). A narrow key
+with `account.keys` cannot rotate a wider key.
 
 - The old secret works for `overlap_minutes` more: 60 by default, at most 1,440, and 0 stops it at once.
   A script changes to the new secret in that time. `account.end_api_key_rotation` stops the old secret
@@ -466,24 +481,57 @@ hourly cron runs the job (`runScheduled` in `src/scheduled.ts`).
   `system`. The count limit of the log does not count it as a call.
 - The key list of the web app shows **Expires soon** for a key that ends within seven days.
 
-## Resource limits of a token
+## Access of a service account
 
-A token of a service account can name the mailboxes, the drives and the rooms that it reaches
-(`resources` of `account.create_api_key`). The limits apply on top of the memberships of the account: a
-listed room that the account left gives nothing. A token without `resources` reaches each membership, as
-before.
+The scopes and the resource limits of a service account are on the account. Each token of the account has
+them. A token is only a credential.
+
+- **Why.** A service account has one purpose, so one place says what it can do. An admin changes the
+  access without a new secret, and the change applies to each token. A token that replaces an expired
+  token needs no second selection of scopes.
+- **Set.** `directory.set_service_account_access` (owners and admins) takes `scopes`, `resources` or both.
+  A field that the call does not send does not change. `scopes` replaces the list, with at least one
+  scope of `SERVICE_SCOPES`. `resources: null` removes the limits.
+- **No escalation.** The credential of the call must hold each scope of the new list (`grantableScopes`),
+  so a narrow key with `directory.write` cannot give an account a scope that the key does not hold. The
+  same rule applies to `directory.create_service_account`, to a new token and to a rotation.
+- **Next call.** `authenticate` reads the scopes and the limits from the account row on each call
+  (`service_scopes`, `service_resources`). So a change applies to the next call of each token.
+- **Live connections.** Each write adds one to `principals.access_version`. A live connection keeps the
+  number of its open (`av` in its credential reference, only when it is 1 or more). `checkCredentials`
+  ends a connection with a different number. So a room socket and a feed close at their next check, at
+  most 60 seconds later, and the events sockets of the account close at once (`endSockets` with
+  `apiKeys`). A client then opens them again, and gets the new access.
+- **Stored values.** Stored scopes that are not a list give an account without a scope. A value outside
+  `SERVICE_SCOPES` is left out. Stored limits that are not valid give an account that reaches nothing.
+- **Log.** A change adds an audit line and an `admin` entry (`directory.set_service_account_access`) to
+  the activity log of the account.
+- **Accounts from before migration `0026`.** The migration gives an account each scope of its tokens that
+  are not revoked, so no script loses a scope. A token with fewer scopes then gets the scopes of the
+  other tokens of its account. An account gets limits only when each of those tokens had limits: then
+  each mailbox, drive and room that one of them named. An account with one token without limits stays
+  without limits. An account without a token gets no scope: set its scopes before a new token.
+  `api_keys.scopes` and `api_keys.resources` keep their old values for a rollback, and the sign-in path
+  does not read them for a service account.
+
+## Resource limits of a service account
+
+A service account can name the mailboxes, the drives and the rooms that it reaches (`resources` of
+`directory.set_service_account_access`). The limits apply on top of the memberships of the account: a
+listed room that the account left gives nothing. An account without `resources` reaches each membership.
+The limits also stop the account from a wider reach: it cannot join or create a room, and it does not
+reach an item that a person shared directly with it.
 
 - `resources` has three lists: `mailbox_ids`, `drive_ids` and `room_ids`, each at most 20 ids
-  (`TOKEN_RESOURCE_LIMITS`). Each list is complete: an empty list allows nothing of that product. The own
+  (`SERVICE_RESOURCE_LIMITS`). Each list is complete: an empty list allows nothing of that product. The own
   mailbox and the own drive have the id of the account, and a list names them like each other id.
-- Only a token of a service account can have limits. A mailbox id is the account or a team mailbox that
-  exists, a drive id is the account or a shared drive, and a room id is a room id. Each other id gets
-  `invalid` (also the id of a person: a limited token does not reach items that a person shared directly
-  with the account). An unknown team mailbox gets `not_found`.
-- The limits do not change after the create. A rotation keeps them. `api_keys.resources` stores them as
-  JSON (migration `0025`). Stored text that is not valid limits gives a token that reaches nothing.
-- `account.whoami`, `account.list_api_keys` and the tokens of `directory.get_service_account_access` show
-  `resources`.
+- Only a service account can have limits. A mailbox id is the account or a team mailbox that exists, a
+  drive id is the account or a shared drive, and a room id is a room id. Each other id gets `invalid`
+  (also the id of a person: a limited account does not reach items that a person shared directly with
+  it). An unknown team mailbox gets `not_found`.
+- An admin can change the limits at each time. A rotation of a token does not change them.
+  `principals.service_resources` stores them as JSON (migration `0026`).
+- `account.whoami` and `directory.get_service_account_access` show `resources`.
 
 **Where the limits apply.** Each one fails closed.
 
@@ -494,7 +542,7 @@ before.
 2. `RESOURCE_RULES` of the contracts has one rule for each operation that a service account can call:
    - `none` (the scope decides): `account.whoami`, `directory.list_principals`, `directory.get_principals`,
      `directory.list_team_mailboxes`, `chat.list_custom_emoji`, `chat.list_slash_commands` and
-     `chat.get_presence`. The directory is not narrowed: leave `directory.read` off a token to stop it.
+     `chat.get_presence`. The directory is not narrowed: leave `directory.read` off the account to stop it.
    - `filter`: `mail.list_mailboxes`, `drive.list_shared_drives` and `chat.list_rooms` leave out each
      resource outside the list. The shared and the starred views of `drive.list_items` leave out each
      drive outside the list. Each list that has pages gives the ids of the list to its query
@@ -511,15 +559,16 @@ before.
    An operation without a rule is refused, so a new operation cannot bypass the limits. The registry test
    keeps the map complete and makes each rule name each input field that names a mailbox, a drive or a room.
 3. MCP: `tools/list` hides each tool with no rule or the rule `refuse`. Each resource kind says how a
-   limited token treats it (`restricted`). `chat.rooms` and `chat.addressed` are hidden, and a URI of a
+   limited account treats it (`restricted`). `chat.rooms` and `chat.addressed` are hidden, and a URI of a
    mailbox, a room, a drive or an item outside the list names no resource, for `resources/read` and for
    `subscriptions/listen`.
-4. Sockets: `openEventsSocket` refuses a limited token, because the events socket carries each room.
+4. Sockets: `openEventsSocket` refuses a limited account, because the events socket carries each room.
    `openRoomSocket` opens only a listed room. The routes and the feeds of MCP both call them.
-5. `/dl/chat/emoji/{name}` is data of the organization, so a limited token with `chat.read` reads it.
+5. `/dl/chat/emoji/{name}` is data of the organization, so a limited account with `chat.read` reads it.
 
-Rollback: a Worker from before migration `0025` does not read `resources`, so a limited token is not
-limited there. Revoke the limited tokens before a rollback.
+Rollback: a Worker from before migration `0026` does not read `service_resources`, so a limited account
+is not limited there. A token from after `0026` has no scope there, so it cannot call. Revoke the tokens
+from before `0026` of a limited account before a rollback.
 
 ## Team mailboxes
 
