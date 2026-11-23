@@ -993,10 +993,14 @@ describe("directory upgrade", () => {
 			.prepare("SELECT agent_scopes FROM principals WHERE id = 'prn_fresh'")
 			.first<string>("agent_scopes");
 		expect(sorted(fresh)).toEqual(["mail.read"]);
+		// The migration only adds: the Worker from before still reads its columns until the deploy.
 		const ops = await db
-			.prepare("SELECT agent_scopes FROM principals WHERE id = 'prn_ops'")
-			.first<string>("agent_scopes");
-		expect(sorted(ops)).toEqual(["account.read", "mail.send"]);
+			.prepare("SELECT agent_scopes, service_scopes FROM principals WHERE id = 'prn_ops'")
+			.first<{ agent_scopes: string; service_scopes: string }>();
+		expect([sorted(ops?.agent_scopes ?? null), sorted(ops?.service_scopes ?? null)]).toEqual([
+			["account.read", "mail.send"],
+			["account.read", "mail.send"],
+		]);
 		// A key from before the migration works with the scopes of its agent. The Worker leaves out the scope
 		// outside the agent ceiling.
 		expect(await api(botSecret)("account.whoami")).toMatchObject({

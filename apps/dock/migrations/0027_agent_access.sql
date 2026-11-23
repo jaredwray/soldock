@@ -1,13 +1,19 @@
 -- The scopes and the resource limits of an agent are on the agent, as for a service account since 0026. An
 -- API key or an OAuth connection of an agent is only a credential: `api_keys.scopes` and `oauth_grants.scopes`
 -- of an agent are not read. A key of a person keeps its own scopes.
--- No Worker from before this migration is kept: the deploy replaces it, and a rollback is not supported. The
+-- The deploy applies the migrations while the Worker from before runs, so this migration only adds: that
+-- Worker keeps its columns until the deploy replaces it. A rollback past this migration is not supported. The
 -- statement markers let a fresh reset replay this file without a SQL parser.
 
--- The columns hold the scopes and the limits of each agent now, also of a service account.
-ALTER TABLE principals RENAME COLUMN service_scopes TO agent_scopes;
+-- The scopes of each agent and each service account, as a JSON list. Null for a person.
+ALTER TABLE principals ADD COLUMN agent_scopes TEXT;
 --> statement-breakpoint
-ALTER TABLE principals RENAME COLUMN service_resources TO agent_resources;
+-- The mailboxes, drives and rooms that an agent or a service account is limited to, as JSON. Null: not limited.
+ALTER TABLE principals ADD COLUMN agent_resources TEXT;
+--> statement-breakpoint
+-- A service account keeps its scopes and its limits. `service_scopes` and `service_resources` are not read
+-- after this migration.
+UPDATE principals SET agent_scopes = service_scopes, agent_resources = service_resources WHERE service = 1;
 --> statement-breakpoint
 -- An agent from before this migration gets each scope of its live API keys, its live OAuth connections and its
 -- approved OAuth codes that a client did not use yet, so no client of the agent loses a scope. A code works for
