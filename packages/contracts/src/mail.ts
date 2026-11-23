@@ -46,7 +46,8 @@ const MailboxParam = MailboxId.optional().describe(
 );
 
 /** One sentence for the description of each mail operation that takes `mailbox_id`. */
-const IN_MAILBOX = "Set mailbox_id to use a team mailbox that you are a member of.";
+const IN_MAILBOX =
+	"Set mailbox_id to use a team mailbox that you are a member of. Your membership must have the scope of this operation: see scopes in mail.list_mailboxes.";
 
 /** The text about `mailbox_id` for an operation that only reads. Owners and admins can read the mailbox of an agent. */
 const IN_MAILBOX_READ = `${IN_MAILBOX} An owner or an admin can also set the id of an agent, to read the mailbox of that agent.`;
@@ -70,6 +71,12 @@ export const Mailbox = z.object({
 	kind: MailboxKind,
 	address: z.string(),
 	display_name: z.string(),
+	/**
+	 * What you can do in the mailbox: `mail.read`, `mail.modify` and `mail.send`. Your own mailbox has the
+	 * three. A team mailbox has the scopes of your membership. The mailbox of an agent has `mail.read` only.
+	 * The scopes of your credential apply too.
+	 */
+	scopes: z.array(z.string()),
 });
 export type Mailbox = z.infer<typeof Mailbox>;
 export const LabelId = z.union([z.enum(SYSTEM_LABELS), prefixedId("lbl")]);
@@ -196,7 +203,7 @@ export const listMailboxes = defineOperation({
 	name: "mail.list_mailboxes",
 	summary: "List the mailboxes that you can use",
 	description:
-		"Returns your own mailbox first, then each team mailbox that you are a member of. A team mailbox is a shared mailbox with its own address. For an owner or an admin, the list then has the mailbox of each agent (kind agent). They can read the mailbox of an agent, but they cannot change it or send from it. Pass the id of a mailbox as mailbox_id to the other mail operations. Without mailbox_id, they use your own mailbox.",
+		"Returns your own mailbox first, then each team mailbox that you are a member of. A team mailbox is a shared mailbox with its own address. scopes says what you can do in each mailbox: an owner or an admin sets the scopes of each member of a team mailbox. For an owner or an admin, the list then has the mailbox of each agent (kind agent). They can read the mailbox of an agent, but they cannot change it or send from it. Pass the id of a mailbox as mailbox_id to the other mail operations. Without mailbox_id, they use your own mailbox.",
 	http: { method: "GET", path: "/api/v1/mail/mailboxes" },
 	scopes: ["mail.read"],
 	callers: ["human", "agent", "service"],
@@ -398,6 +405,7 @@ export const send = defineOperation({
 		AGENT_READ_ONLY,
 		"For formatted mail, also set html. The message then has two parts: text for mail apps without HTML, and html. Make text the plain-text form of html.",
 		"To reply, set reply_to_message_id: the message joins that thread, and the subject defaults to Re: and the original subject.",
+		"A reply reads the message that it answers. So it also needs mail.read: in your credential, and in your membership of a team mailbox.",
 		"An agent can send only to the recipients that its policy allows, also from a team mailbox. Otherwise the call fails with policy_denied and nothing is sent.",
 		"Set idempotency_key to make a retry safe: a second call with the same key and the same message returns the first result and sends nothing. The same key with a different message fails with conflict.",
 	].join(" "),

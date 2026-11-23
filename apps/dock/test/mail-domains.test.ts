@@ -10,6 +10,7 @@ import serviceAccountMigration from "../migrations/0024_service_accounts.sql?raw
 import serviceTokenMigration from "../migrations/0025_service_tokens.sql?raw";
 import serviceAccessMigration from "../migrations/0026_service_access.sql?raw";
 import agentAccessMigration from "../migrations/0027_agent_access.sql?raw";
+import mailboxMemberScopesMigration from "../migrations/0029_mailbox_member_scopes.sql?raw";
 import {
 	api,
 	callTool,
@@ -147,7 +148,7 @@ describe("mail domain settings", () => {
 
 	it("carries existing mailbox domains into settings on upgrade", async () => {
 		const { owner } = await seedOrg();
-		// A directory from before 0003 has no team mailbox tables. It gets 0003, 0004, 0005, 0008, 0017, 0018, 0024, 0025 and then 0026 on deploy.
+		// A directory from before 0003 has no team mailbox tables. It gets 0003, 0004, 0005, 0008, 0017, 0018, 0024, 0025, 0026, 0027 and then 0029 on deploy.
 		await env.DIRECTORY.batch(
 			[
 				"DROP TABLE team_mailbox_members",
@@ -163,6 +164,7 @@ describe("mail domain settings", () => {
 				...serviceTokenMigration.split("--> statement-breakpoint"),
 				...serviceAccessMigration.split("--> statement-breakpoint"),
 				...agentAccessMigration.split("--> statement-breakpoint"),
+				...mailboxMemberScopesMigration.split("--> statement-breakpoint"),
 			].map((sql) => env.DIRECTORY.prepare(sql)),
 		);
 		expect(await (await domains(owner.key)).json()).toEqual({ mail_domains: ["dock.test"] });

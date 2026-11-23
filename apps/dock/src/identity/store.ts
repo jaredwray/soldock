@@ -843,6 +843,45 @@ export async function setAgentAccess(
 	return getPrincipal(db, target.id);
 }
 
+/** The access of an agent after a membership of a team mailbox widened it. */
+export interface AgentWidening {
+	/** The agent as the caller read it. The write matches only while the agent has this `access_version`. */
+	agent: Pick<PrincipalRecord, "id" | "service" | "access_version">;
+	/** Each scope of the agent after the write. */
+	scopes: readonly Scope[];
+	resources: AgentResources | null;
+}
+
+/**
+ * The statement that writes the scopes and the limits that a membership of a team mailbox gives to an agent.
+ * It goes into the batch that writes the membership, so the two writes are one transaction. It matches only
+ * while the access of the agent is the access of the read (`access_version`), so a parallel change of the
+ * access is never lost. It also matches only when the batch wrote the membership: an agent never gets the
+ * access without it.
+ */
+export function widenAgentAccessStatement(
+	db: D1Database,
+	widening: AgentWidening,
+	mailboxId: string,
+): D1PreparedStatement {
+	const { agent } = widening;
+	const ceiling = scopeCeiling({ kind: "agent", service: agent.service });
+	return db
+		.prepare(
+			`UPDATE principals SET agent_scopes = ?2, agent_resources = ?3, access_version = access_version + 1
+			WHERE id = ?1 AND kind = 'agent' AND service = ?4 AND deleted_at IS NULL AND access_version = ?5
+			AND EXISTS (SELECT 1 FROM team_mailbox_members WHERE mailbox_id = ?6 AND principal_id = ?1)`,
+		)
+		.bind(
+			agent.id,
+			JSON.stringify(ceiling.filter((scope) => widening.scopes.includes(scope))),
+			widening.resources === null ? null : JSON.stringify(widening.resources),
+			agent.service ? 1 : 0,
+			agent.access_version,
+			mailboxId,
+		);
+}
+
 /** The changes of `updatePrincipal`. A field that is undefined does not change. */
 export interface PrincipalChanges {
 	display_name?: string | undefined;

@@ -53,7 +53,7 @@ bytes, and the mailbox drops it as a copy.
 | Kind | Mailbox id | Who can use it |
 | --- | --- | --- |
 | `personal` | The id of the principal (`prn_…`) | That principal only |
-| `team` | The id of the team mailbox (`tmb_…`) | Each member of the team mailbox |
+| `team` | The id of the team mailbox (`tmb_…`) | Each member of the team mailbox, with the scopes of its membership |
 | `agent` | The id of an agent (`prn_…`) | The agent, as its `personal` mailbox. Each owner and admin can read it, and nothing more |
 
 - Each mail operation takes an optional `mailbox_id`. Without it, the operation uses the own
@@ -68,6 +68,17 @@ bytes, and the mailbox drops it as a copy.
   different principal, get `forbidden`. The `MailboxDO` does not know its callers.
 - The scopes of the credential apply in each mailbox: a key with only `mail.read` reads a team
   mailbox and cannot send from it.
+- A membership of a team mailbox has scopes too: `mail.read`, `mail.modify` and `mail.send`
+  ([`identity`](../identity/README.md#team-mailboxes), Member scopes). `openMailbox` takes the name of its
+  operation, and needs each mail scope of that operation in the membership. The contract names the
+  scopes, so a handler cannot ask for a different scope than the invoker did. A member without the
+  scope gets `forbidden`. The second check of `mail.send` needs `mail.send`.
+- A reply reads the message that it answers: its subject and its references go into the new message. So
+  `mail.send` with `reply_to_message_id` also needs `mail.read`: in the credential, for each mailbox, and
+  in the membership of a team mailbox. The second check of the membership needs it too. Before this rule,
+  a key with only `mail.send` got the subject of a message through a reply.
+- `mail.list_mailboxes` has `scopes` for each mailbox: the three for the own mailbox, the scopes of the
+  membership for a team mailbox, and `mail.read` for the mailbox of an agent.
 - The id of a different principal gets `forbidden`, except in the case of
   [Agent mailboxes](#agent-mailboxes). A credential of an owner or an admin with `mail.read` reads
   each agent mailbox, also a narrow API key. The `mail.read` scope text says so.
@@ -430,7 +441,7 @@ client of protocol 2026-07-28 subscribes to it with `subscriptions/listen`
 ([`mcp`](../mcp/README.md#subscriptions)).
 
 1. The Worker checks the mailboxes: the own mailbox, or a team mailbox that the caller is a member
-   of. One query reads all team mailboxes of the caller. An owner or an admin can read the mailbox of
+   of with `mail.read`. One query reads all team mailboxes of the caller. An owner or an admin can read the mailbox of
    an agent, but cannot subscribe to it.
 2. The Worker opens a watch socket to the `MailboxDO`: a WebSocket that the object accepts with
    `acceptWebSocket` and the tag `watch`. The object can sleep while its sockets wait.
@@ -439,8 +450,9 @@ client of protocol 2026-07-28 subscribes to it with `subscriptions/listen`
 4. The Worker sends `notifications/resources/updated` with the inbox URI to the client.
 
 - Spam, a duplicate delivery, a label change, a read and an archive send nothing.
-- In a team mailbox, each member with a stream gets the notification. A removed member stops getting
-  notifications within about one minute, when the stream checks the membership again.
+- In a team mailbox, each member with a stream gets the notification. A removed member, and a member
+  that lost `mail.read` in the mailbox, stop getting notifications within about one minute, when the
+  stream checks the membership again.
 - The signal holds no content. The client reads the inbox with the scope and mailbox checks of REST.
 - `resources/list` gives the inbox of each mailbox of `mail.list_mailboxes`, so an owner or an admin
   also sees the inbox of each agent. The acknowledgment of `subscriptions/listen` leaves those out. A
@@ -462,7 +474,8 @@ on a server, a REST client or an MCP client of an older protocol.
   new agent, do not get this scope unless the person selects it. A key or a connection of an agent has the scopes
   of the agent.
 - A person can watch their own mailbox, a team mailbox that they are a member of, and the mailbox of
-  an agent that they sponsor. An agent can watch its own mailbox and its team mailboxes.
+  an agent that they sponsor. An agent can watch its own mailbox and its team mailboxes. A webhook
+  tells when mail arrives, so the membership of a team mailbox needs `mail.read`.
 - An owner or an admin who is not the sponsor cannot watch the mailbox of an agent: a webhook tells
   when the agent gets mail, without the audit line of a read. The sponsor can create a webhook for
   the agent, and the audit line of the create names the mailbox of the agent.
@@ -557,7 +570,7 @@ code that the Worker makes: `http_<status>`, `redirect`, `timeout` or `network`.
 | --- | --- |
 | The creator was deleted, or its API key or OAuth grant was revoked or expired | Disabled, `credential_revoked` |
 | The creator, or the agent of the mailbox, is archived | No POST. The webhook stays active, and a restore makes it send again |
-| The creator is not a member of the team mailbox, or not the sponsor of the agent | Disabled, `access_lost` |
+| The creator is not a member of the team mailbox, its membership has no `mail.read`, or it is not the sponsor of the agent | Disabled, `access_lost` |
 | The creator is an agent that does not hold `mail.webhooks` now, or whose resource limits do not name the mailbox ([Access of an agent](../identity/README.md#access-of-an-agent)) | Disabled, `access_lost` |
 | The creator, or the principal of the mailbox, was deleted | `directory.delete_principal` deleted the webhook in its transaction |
 | The outbound policy of the agent that created it does not allow the host | Disabled, `policy_denied` |

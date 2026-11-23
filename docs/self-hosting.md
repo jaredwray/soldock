@@ -413,13 +413,32 @@ problem with a new deploy.
 
 ### Limits of a new agent
 
-A new agent or service account is limited to its own mailbox and its own drive. It reaches no chat room,
-no team mailbox and no shared drive until a manager adds them to its limits. No migration is necessary.
+A new agent or service account is limited to its own mailbox and its own drive. It reaches no chat room
+and no shared drive until a manager adds them to its limits. No migration is necessary.
 
 - An agent or a service account from before this change keeps its access. Its limits do not change.
-- A script that creates an agent and then uses a team mailbox, a shared drive or a room must change. Send
+- A script that creates an agent and then uses a shared drive or a room must change. Send
   `limits: "none"` to `directory.create_principal` or `directory.create_service_account` for an agent
   without limits. Or set its limits with `directory.set_agent_access` after you add the memberships.
+- A team mailbox needs no change of the limits: see [Scopes of a member of a team mailbox](#scopes-of-a-member-of-a-team-mailbox).
+
+### Scopes of a member of a team mailbox
+
+Migration `0029_mailbox_member_scopes.sql` adds the scopes of each member of a team mailbox: `mail.read`,
+`mail.modify` and `mail.send`. An owner or an admin sets them under **Admin › Shared mailboxes**, for a
+person, an agent and a service account.
+
+- The migration only adds a column. Each member from before the migration keeps the three scopes, so no
+  member loses access. The old Worker keeps working between the migration and the deploy.
+- `directory.add_team_mailbox_member` and `directory.create_team_mailbox` now also change an agent or a
+  service account that they add. It gets each scope of its membership that it does not hold, and the
+  mailbox goes into its limits. A script that added an agent and then called `directory.set_agent_access`
+  for the mailbox can stop the second call.
+- The credential that adds an agent must hold each scope of the membership. A script with a narrow key
+  must send `scopes` that its key holds, or get a key with the mail scopes.
+- A membership from before this change that is not in the limits of its agent stays outside them. Add the
+  member again, or select the mailbox under **Permissions** of the agent.
+- [Agents](agents.md#team-mailboxes) has the rules.
 - [Agents](agents.md#permissions-of-an-agent) has the rules.
 
 ### Recover a sign-in

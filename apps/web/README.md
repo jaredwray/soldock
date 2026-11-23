@@ -247,6 +247,12 @@ MCP clients. The app has no UI-only path.
     leaves out the team address, not the address of the person.
   - A sent message shows **Sent by** and the member (`sent_by`). No sender shows as "me", because
     more than one person sends from the address.
+  - The views follow the scopes of the membership (`scopes` of `mail.list_mailboxes`, `mailboxRights` in
+    `mailboxNav.ts`). Without `mail.modify`, the views show no action that changes the mailbox, and an
+    open conversation stays unread. Without `mail.send`, they show no **Compose**, **Reply** or
+    **Forward**. A notice above the list says what the person cannot do (`rightsNotice`). A mailbox
+    without `mail.read` has no row in the sidebar. A mailbox that is not in the list yet hides no action:
+    the server refuses a call without its scope.
   - A person who is not a member gets the error from the server in the list, for example after an
     admin removed the access.
 - **Agent mailboxes.** An owner or an admin can read the mailbox of each agent. The sidebar then
@@ -393,6 +399,15 @@ MCP clients. The app has no UI-only path.
     - **Members of …**, a list of the members with a **Remove** button for each member, with a
       confirmation (`directory.remove_team_mailbox_member`). A control below the list adds a member
       (`directory.add_team_mailbox_member`).
+      - The column **Can** has three check boxes for each member: **Read** (`mail.read`), **Change**
+        (`mail.modify`) and **Send** (`mail.send`). A click saves at once
+        (`directory.add_team_mailbox_member` with `scopes`). The last check box of a member is off: a
+        member keeps one scope, and **Remove** takes the access away (`toggleMemberScope` in
+        `mailboxScopes.ts`).
+      - **The new member can** has the same three check boxes for a new member. Each one is on at the start.
+      - The rule is the same for a person, an agent and a service account. The toast names the scopes that
+        an agent or a service account got on its account, and says when the mailbox went into its limits
+        (`agent_access_changes`, `accessChangeText`). The toast of a new shared mailbox names them too.
     - **Webhooks of …**, each webhook that gets the mail event of the shared mailbox (`mail.list_webhook_subscriptions`).
       **Edit events** opens the check box of that event. An owner or an admin can clear it
       (`mail.delete_webhook_subscription`), for example when the mailbox reaches its limit of active subscriptions.

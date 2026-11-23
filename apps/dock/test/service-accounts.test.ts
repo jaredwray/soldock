@@ -1218,7 +1218,14 @@ describe("the access of a service account", () => {
 		});
 		expect(access).toEqual({
 			principal_id: service.id,
-			team_mailboxes: [{ id: team_mailbox.id, display_name: "Support", address: "support@dock.test" }],
+			team_mailboxes: [
+				{
+					id: team_mailbox.id,
+					display_name: "Support",
+					address: "support@dock.test",
+					scopes: ["mail.read", "mail.modify", "mail.send"],
+				},
+			],
 			shared_drives: [{ id: drive.id, name: "Releases", role: "editor" }],
 			// A direct message names its other member, so an admin can tell two of them apart.
 			chat_rooms: [
@@ -1230,7 +1237,8 @@ describe("the access of a service account", () => {
 			drive_shared_items_truncated: false,
 			// A token has no scopes of its own: the scopes and the limits are those of the account.
 			tokens: [{ key_id: live.keyId, label: "deploy", expires_at: null }],
-			scopes: ["mail.read", "chat.read"],
+			// The membership of the team mailbox gave the account mail.modify and mail.send.
+			scopes: ["mail.read", "mail.modify", "mail.send", "chat.read"],
 			resources: null,
 		});
 		const viaMcp = await callTool(admin.key, "directory_get_agent_access", { principal_id: service.id });

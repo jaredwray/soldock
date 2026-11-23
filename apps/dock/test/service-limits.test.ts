@@ -338,8 +338,9 @@ describe("a limited service account", () => {
 
 describe("the limits of a new agent", () => {
 	// A new agent has no membership. Each member of a room can add the agent to the room. That membership must
-	// not widen what the agent reaches: only a manager of the agent does that, with the limits.
-	it("keep the agent in its own mailbox and drive until a manager adds a membership to them", async () => {
+	// not widen what the agent reaches: only a manager of the agent does that, with the limits. Only an owner
+	// or an admin adds a member to a team mailbox, so that membership gives the access itself.
+	it("keep the agent in its own mailbox and drive until a manager adds a room to them or adds it to a team mailbox", async () => {
 		const { owner, ada } = await seedOrg();
 		const created = await owner.call("directory.create_principal", {
 			kind: "agent",
@@ -367,10 +368,11 @@ describe("the limits of a new agent", () => {
 		]);
 		expect((await agent("chat.list_rooms", {})).rooms).toEqual([]);
 		expect(await codeOf(agent("chat.list_messages", { room_id: room.id }))).toBe("forbidden");
-		expect((await agent("mail.list_mailboxes")).mailboxes.map((mailbox) => mailbox.id)).toEqual([id]);
-		expect(await codeOf(agent("mail.list_threads", { mailbox_id: team.id }))).toBe("forbidden");
+		expect((await agent("mail.list_mailboxes")).mailboxes.map((mailbox) => mailbox.id)).toEqual([id, team.id]);
+		expect((await agent("mail.list_threads", { mailbox_id: team.id })).threads).toEqual([]);
 
-		// The sponsor adds the room. The agent reaches it at its next call, and still not the team mailbox.
+		// The sponsor adds the room, and names only the own mailbox. The agent reaches the room at its next
+		// call, and no longer the team mailbox: the limits still apply on top of the membership.
 		await setLimits(ada, id, { ...own, room_ids: [room.id] });
 		expect((await agent("chat.list_rooms", {})).rooms.map((listed) => listed.id)).toEqual([room.id]);
 		expect((await agent("chat.list_messages", { room_id: room.id })).messages).toEqual([]);

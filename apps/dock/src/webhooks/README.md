@@ -118,7 +118,7 @@ A credential that cannot use any subscription of an endpoint does not see that e
 A credential that lacks the scope of one subscription cannot change the endpoint. The error is `forbidden`.
 A disabled endpoint does not start again, and it accepts no new subscription. Delete it and create a new one.
 
-Mail subscriptions use `mail.webhooks`. The target is your mailbox, a team mailbox, or an agent that you sponsor.
+Mail subscriptions use `mail.webhooks`. The target is your mailbox, a team mailbox where your membership has `mail.read`, or an agent that you sponsor.
 Chat subscriptions use `chat.webhooks`. The target is you, or an agent that you sponsor.
 Drive subscriptions use `drive.webhooks`. The target is your drive, a shared drive that you belong to, or the drive of an agent that you sponsor.
 A sponsor cannot subscribe to a shared drive only because an agent belongs to it.

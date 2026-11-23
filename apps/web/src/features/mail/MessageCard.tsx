@@ -5,9 +5,10 @@ import { base64ToBytes, saveBytes } from "../../lib/base64.ts";
 import { addressName, formatBytes, fullDate, initials, sameAddress, shortDate } from "../../lib/format.ts";
 import { Icon } from "../../lib/icons.tsx";
 import { useToast } from "../../lib/toast.tsx";
+import { isAgentMailbox } from "../../routes.ts";
 import { AUTO_MARK_TEXT, AUTO_MARK_TITLE } from "./autoLabels.ts";
 import { MessageBody } from "./MessageBody.tsx";
-import { mailboxInput, useMailboxId, useReadOnlyMailbox } from "./mailbox.tsx";
+import { mailboxInput, useMailboxId, useMailboxRights } from "./mailbox.tsx";
 import { labelChipName } from "./views.ts";
 
 export type ReplyMode = "reply" | "replyAll" | "forward";
@@ -61,8 +62,8 @@ export function MessageCard({ message, myAddress, labelsById, defaultExpanded, o
 	// In a team mailbox, more than one person sends from the address, so the sender is not "me". In the
 	// mailbox of an agent, the sender is the agent, not the person who reads.
 	const mailboxId = useMailboxId();
-	const readOnly = useReadOnlyMailbox();
-	const inTeamMailbox = mailboxId !== null && !readOnly;
+	const canSend = useMailboxRights().send;
+	const inTeamMailbox = mailboxId !== null && !isAgentMailbox(mailboxId);
 	const selfAddress = mailboxId === null ? myAddress : "";
 	// Reply and Forward quote the full body. They wait for a body that mail.get_thread left out.
 	const withBody = body ? { ...message, body } : null;
@@ -163,7 +164,7 @@ export function MessageCard({ message, myAddress, labelsById, defaultExpanded, o
 						{message.origin === "sent" && message.delivery && message.delivery.length > 0 && (
 							<Delivery delivery={message.delivery} />
 						)}
-						{!readOnly && (
+						{canSend && (
 							<div className="message-actions">
 								<button
 									type="button"

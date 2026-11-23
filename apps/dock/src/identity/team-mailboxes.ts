@@ -1,16 +1,23 @@
-import { TEAM_MAILBOX_LIMITS } from "@asterra/contracts";
+import { MAILBOX_MEMBER_SCOPES, type MailboxMemberScope, TEAM_MAILBOX_LIMITS } from "@asterra/contracts";
 import { newId, OperationError } from "../platform/index.ts";
-import { conflictOf, normalizeAddress } from "./store.ts";
+import { type AgentWidening, conflictOf, normalizeAddress, widenAgentAccessStatement } from "./store.ts";
 
 /** The prefix of a team mailbox id. A principal id starts with `prn_`, so the two never collide. */
 const TEAM_MAILBOX_PREFIX = "tmb";
 
-/** A team mailbox as the directory stores it, with the ids of its members. */
+/** One member of a team mailbox, with what the member can do in it. */
+export interface TeamMailboxMemberRecord {
+	principal_id: string;
+	scopes: MailboxMemberScope[];
+}
+
+/** A team mailbox as the directory stores it, with its members in the order in which they joined. */
 export interface TeamMailboxRecord {
 	id: string;
 	display_name: string;
 	address: string;
 	member_ids: string[];
+	members: TeamMailboxMemberRecord[];
 	created_at: string;
 }
 
@@ -26,7 +33,35 @@ export interface MailboxRecord {
 	display_name: string;
 }
 
-type TeamMailboxRow = Omit<TeamMailboxRecord, "member_ids">;
+/** A team mailbox for one of its members, with the scopes of that membership. */
+export interface MemberMailboxRecord extends MailboxRecord {
+	scopes: MailboxMemberScope[];
+}
+
+type TeamMailboxRow = Omit<TeamMailboxRecord, "member_ids" | "members">;
+
+/**
+ * The scopes of a membership, from the stored JSON list. A value that is not a list of mail scopes gives
+ * no scope for the unknown parts, so a bad row never gives access.
+ */
+function parseMemberScopes(stored: string): MailboxMemberScope[] {
+	let value: unknown;
+	try {
+		value = JSON.parse(stored);
+	} catch {
+		return [];
+	}
+	return Array.isArray(value) ? MAILBOX_MEMBER_SCOPES.filter((scope) => value.includes(scope)) : [];
+}
+
+/** The stored form of the scopes of a membership: in the order of `MAILBOX_MEMBER_SCOPES`, each one time. */
+function storedMemberScopes(scopes: readonly MailboxMemberScope[]): string {
+	return JSON.stringify(MAILBOX_MEMBER_SCOPES.filter((scope) => scopes.includes(scope)));
+}
+
+function withMembers(row: TeamMailboxRow, members: TeamMailboxMemberRecord[]): TeamMailboxRecord {
+	return { ...row, member_ids: members.map((member) => member.principal_id), members };
+}
 
 const TEAM_MAILBOX_SELECT = "SELECT id, display_name, address, created_at FROM team_mailboxes";
 
@@ -34,54 +69,64 @@ export function isTeamMailboxId(id: string): boolean {
 	return id.startsWith(`${TEAM_MAILBOX_PREFIX}_`);
 }
 
-async function membersOf(db: D1Database, mailboxId: string): Promise<string[]> {
+async function membersOf(db: D1Database, mailboxId: string): Promise<TeamMailboxMemberRecord[]> {
 	const { results } = await db
-		.prepare("SELECT principal_id FROM team_mailbox_members WHERE mailbox_id = ? ORDER BY created_at, principal_id")
+		.prepare(
+			"SELECT principal_id, scopes FROM team_mailbox_members WHERE mailbox_id = ? ORDER BY created_at, principal_id",
+		)
 		.bind(mailboxId)
-		.all<{ principal_id: string }>();
-	return results.map((row) => row.principal_id);
+		.all<{ principal_id: string; scopes: string }>();
+	return results.map((row) => ({ principal_id: row.principal_id, scopes: parseMemberScopes(row.scopes) }));
 }
 
 export async function getTeamMailbox(db: D1Database, id: string): Promise<TeamMailboxRecord | null> {
 	const row = await db.prepare(`${TEAM_MAILBOX_SELECT} WHERE id = ?`).bind(id).first<TeamMailboxRow>();
-	return row ? { ...row, member_ids: await membersOf(db, id) } : null;
+	return row ? withMembers(row, await membersOf(db, id)) : null;
 }
 
 /** Every team mailbox, by name, each with its members in the order in which they joined. */
 export async function listTeamMailboxes(db: D1Database): Promise<TeamMailboxRecord[]> {
-	const [mailboxes, members] = await db.batch<TeamMailboxRow | { mailbox_id: string; principal_id: string }>([
+	type MemberRow = { mailbox_id: string; principal_id: string; scopes: string };
+	const [mailboxes, members] = await db.batch<TeamMailboxRow | MemberRow>([
 		db.prepare(`${TEAM_MAILBOX_SELECT} ORDER BY display_name, id`),
-		db.prepare("SELECT mailbox_id, principal_id FROM team_mailbox_members ORDER BY created_at, principal_id"),
+		db.prepare("SELECT mailbox_id, principal_id, scopes FROM team_mailbox_members ORDER BY created_at, principal_id"),
 	]);
-	const byMailbox = new Map<string, string[]>();
-	for (const row of (members?.results ?? []) as { mailbox_id: string; principal_id: string }[]) {
-		byMailbox.set(row.mailbox_id, [...(byMailbox.get(row.mailbox_id) ?? []), row.principal_id]);
+	const byMailbox = new Map<string, TeamMailboxMemberRecord[]>();
+	for (const row of (members?.results ?? []) as MemberRow[]) {
+		const member = { principal_id: row.principal_id, scopes: parseMemberScopes(row.scopes) };
+		byMailbox.set(row.mailbox_id, [...(byMailbox.get(row.mailbox_id) ?? []), member]);
 	}
-	return ((mailboxes?.results ?? []) as TeamMailboxRow[]).map((row) => ({
-		...row,
-		member_ids: byMailbox.get(row.id) ?? [],
-	}));
+	return ((mailboxes?.results ?? []) as TeamMailboxRow[]).map((row) => withMembers(row, byMailbox.get(row.id) ?? []));
 }
 
 /**
- * Creates a team mailbox and its first members in one transaction. Returns null, and writes nothing,
- * while a directory reset is in progress: the reset pauses the mailboxes that exist when it starts.
+ * Creates a team mailbox and its first members in one transaction. `widen` gives the access that the agents
+ * of the first members get with the mailbox: the same transaction writes it. Returns null, and writes
+ * nothing, while a directory reset is in progress: the reset pauses the mailboxes that exist when it starts.
+ * It also returns null, and writes nothing, when the access of one of these agents changed after its read.
  */
 export async function createTeamMailbox(
 	db: D1Database,
 	input: { display_name: string; address: string; member_ids: readonly string[]; created_by: string },
+	widen: (mailboxId: string) => AgentWidening[] = () => [],
 ): Promise<TeamMailboxRecord | null> {
 	const id = newId(TEAM_MAILBOX_PREFIX);
 	const now = new Date().toISOString();
 	const memberIds = [...new Set(input.member_ids)];
+	const widenings = widen(id);
+	const versions = widenings.map(({ agent }) => ({ id: agent.id, version: agent.access_version }));
 	try {
 		const [created] = await db.batch([
 			db
 				.prepare(
 					`INSERT INTO team_mailboxes (id, display_name, address, created_by, created_at)
-					SELECT ?, ?, ?, ?, ? WHERE NOT EXISTS (SELECT 1 FROM setup_lock WHERE token IS NOT NULL)`,
+					SELECT ?1, ?2, ?3, ?4, ?5 WHERE NOT EXISTS (SELECT 1 FROM setup_lock WHERE token IS NOT NULL)
+					AND NOT EXISTS (
+						SELECT 1 FROM json_each(?6) expected JOIN principals p ON p.id = json_extract(expected.value, '$.id')
+						WHERE p.access_version != json_extract(expected.value, '$.version')
+					)`,
 				)
-				.bind(id, input.display_name, normalizeAddress(input.address), input.created_by, now),
+				.bind(id, input.display_name, normalizeAddress(input.address), input.created_by, now, JSON.stringify(versions)),
 			...memberIds.map((principalId) =>
 				db
 					.prepare(
@@ -91,6 +136,7 @@ export async function createTeamMailbox(
 					)
 					.bind(id, principalId, input.created_by, now),
 			),
+			...widenings.map((widening) => widenAgentAccessStatement(db, widening, id)),
 		]);
 		if (!created?.meta.changes) return null;
 	} catch (error) {
@@ -109,28 +155,55 @@ export async function renameTeamMailbox(db: D1Database, id: string, displayName:
 }
 
 /**
- * Adds a member. A second call for the same member changes nothing. Returns false when the mailbox
- * has the most members that it can have, or when the principal was deleted during the request.
+ * Adds a member with these scopes, or gives a member these scopes. Without `scopes`, a new member gets each
+ * scope, and a member keeps its scopes: a second call changes nothing. Returns false when the mailbox has
+ * the most members that it can have, or when the principal was deleted during the request.
+ *
+ * `widening` is the access that an agent gets with the membership. The same transaction writes it. Then the
+ * call also returns false, and writes nothing, when the access of the agent changed after its read.
  */
 export async function addTeamMailboxMember(
 	db: D1Database,
 	mailboxId: string,
 	principalId: string,
 	addedBy: string,
+	scopes?: readonly MailboxMemberScope[],
+	widening?: AgentWidening,
 ): Promise<boolean> {
-	if (await isTeamMailboxMember(db, mailboxId, principalId)) return true;
-	// The count is in the statement, so two parallel calls cannot go past the limit.
-	const result = await db
-		.prepare(
-			`INSERT INTO team_mailbox_members (mailbox_id, principal_id, added_by, created_at)
-			SELECT ?1, ?2, ?3, ?4
-			WHERE (SELECT COUNT(*) FROM team_mailbox_members WHERE mailbox_id = ?1) < ?5
-			AND EXISTS (SELECT 1 FROM principals WHERE id = ?2 AND deleted_at IS NULL)
-			ON CONFLICT DO NOTHING`,
-		)
-		.bind(mailboxId, principalId, addedBy, new Date().toISOString(), TEAM_MAILBOX_LIMITS.members)
-		.run();
-	return result.meta.changes === 1 || (await isTeamMailboxMember(db, mailboxId, principalId));
+	const stored = scopes === undefined ? null : storedMemberScopes(scopes);
+	const version = widening?.agent.access_version ?? null;
+	const [updated, inserted, widened] = await db.batch([
+		// A member takes no new place, so the count does not apply to a change of its scopes.
+		db
+			.prepare(
+				`UPDATE team_mailbox_members SET scopes = COALESCE(?3, scopes) WHERE mailbox_id = ?1 AND principal_id = ?2
+				AND (?4 IS NULL OR EXISTS (SELECT 1 FROM principals WHERE id = ?2 AND access_version = ?4))`,
+			)
+			.bind(mailboxId, principalId, stored, version),
+		// The count is in the statement, so two parallel calls cannot go past the limit. A member has a row,
+		// so the insert then changes nothing.
+		db
+			.prepare(
+				`INSERT INTO team_mailbox_members (mailbox_id, principal_id, added_by, created_at, scopes)
+				SELECT ?1, ?2, ?3, ?4, ?6
+				WHERE (SELECT COUNT(*) FROM team_mailbox_members WHERE mailbox_id = ?1) < ?5
+				AND EXISTS (SELECT 1 FROM principals WHERE id = ?2 AND deleted_at IS NULL AND (?7 IS NULL OR access_version = ?7))
+				ON CONFLICT DO NOTHING`,
+			)
+			.bind(
+				mailboxId,
+				principalId,
+				addedBy,
+				new Date().toISOString(),
+				TEAM_MAILBOX_LIMITS.members,
+				stored ?? storedMemberScopes(MAILBOX_MEMBER_SCOPES),
+				version,
+			),
+		...(widening ? [widenAgentAccessStatement(db, widening, mailboxId)] : []),
+	]);
+	// The statement of the agent matches only with the membership, so its result is the result of the three.
+	if (widening) return widened?.meta.changes === 1;
+	return updated?.meta.changes === 1 || inserted?.meta.changes === 1;
 }
 
 export async function removeTeamMailboxMember(db: D1Database, mailboxId: string, principalId: string): Promise<void> {
@@ -140,49 +213,68 @@ export async function removeTeamMailboxMember(db: D1Database, mailboxId: string,
 		.run();
 }
 
-export async function isTeamMailboxMember(db: D1Database, mailboxId: string, principalId: string): Promise<boolean> {
+/** The scopes of a member in a team mailbox, or null for a principal that is not a member. */
+export async function teamMailboxMemberScopes(
+	db: D1Database,
+	mailboxId: string,
+	principalId: string,
+): Promise<MailboxMemberScope[] | null> {
 	const row = await db
-		.prepare("SELECT 1 AS found FROM team_mailbox_members WHERE mailbox_id = ? AND principal_id = ?")
+		.prepare("SELECT scopes FROM team_mailbox_members WHERE mailbox_id = ? AND principal_id = ?")
 		.bind(mailboxId, principalId)
-		.first();
-	return row !== null;
+		.first<{ scopes: string }>();
+	return row ? parseMemberScopes(row.scopes) : null;
 }
 
-/** The team mailboxes that a principal is a member of, by name. */
-export async function teamMailboxesOf(db: D1Database, principalId: string): Promise<MailboxRecord[]> {
+/** The team mailboxes that a principal is a member of, by name, each with the scopes of the membership. */
+export async function teamMailboxesOf(db: D1Database, principalId: string): Promise<MemberMailboxRecord[]> {
 	const { results } = await db
 		.prepare(
-			`SELECT t.id, 'team' AS kind, t.address, t.display_name FROM team_mailboxes t
+			`SELECT t.id, 'team' AS kind, t.address, t.display_name, m.scopes FROM team_mailboxes t
 			JOIN team_mailbox_members m ON m.mailbox_id = t.id
 			WHERE m.principal_id = ? ORDER BY t.display_name, t.id`,
 		)
 		.bind(principalId)
-		.all<MailboxRecord>();
-	return results;
+		.all<MailboxRecord & { scopes: string }>();
+	return results.map((row) => ({ ...row, scopes: parseMemberScopes(row.scopes) }));
 }
 
 /**
  * The team mailbox with this id, for a member. Throws `not_found` for an unknown id and `forbidden`
- * for a principal that is not a member. Each call reads the directory, so removed access ends at once.
+ * for a principal that is not a member, or for a member without one of the scopes in `needed`. Each call
+ * reads the directory, so removed access and a removed scope end at once.
  */
-export async function teamMailboxFor(db: D1Database, mailboxId: string, principalId: string): Promise<MailboxRecord> {
+export async function teamMailboxFor(
+	db: D1Database,
+	mailboxId: string,
+	principalId: string,
+	needed: readonly MailboxMemberScope[] = [],
+): Promise<MemberMailboxRecord> {
 	const row = await db
 		.prepare(
-			`SELECT t.id, 'team' AS kind, t.address, t.display_name, EXISTS (
-				SELECT 1 FROM team_mailbox_members m WHERE m.mailbox_id = t.id AND m.principal_id = ?2
-			) AS member
+			`SELECT t.id, 'team' AS kind, t.address, t.display_name, (
+				SELECT m.scopes FROM team_mailbox_members m WHERE m.mailbox_id = t.id AND m.principal_id = ?2
+			) AS scopes
 			FROM team_mailboxes t WHERE t.id = ?1`,
 		)
 		.bind(mailboxId, principalId)
-		.first<MailboxRecord & { member: number }>();
+		.first<MailboxRecord & { scopes: string | null }>();
 	if (!row) throw new OperationError("not_found", "No team mailbox has that id.");
-	if (row.member !== 1) {
+	if (row.scopes === null) {
 		throw new OperationError(
 			"forbidden",
 			"You are not a member of this team mailbox. An owner or an admin can add you.",
 		);
 	}
-	return { id: row.id, kind: "team", address: row.address, display_name: row.display_name };
+	const scopes = parseMemberScopes(row.scopes);
+	const missing = needed.filter((scope) => !scopes.includes(scope));
+	if (missing.length > 0) {
+		throw new OperationError(
+			"forbidden",
+			`Your membership of this team mailbox does not have ${missing.join(", ")}. An owner or an admin can add it.`,
+		);
+	}
+	return { id: row.id, kind: "team", address: row.address, display_name: row.display_name, scopes };
 }
 
 const AGENT_MAILBOX_SELECT = `SELECT p.id AS id, 'agent' AS kind, a.address AS address, p.display_name AS display_name

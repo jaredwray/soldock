@@ -47,7 +47,12 @@ export function mailboxNav(
 ): MailboxEntry[] | null {
 	const list = mailboxes ?? [];
 	const own = list.find((mailbox) => mailbox.kind === "personal");
-	const others = [...list.filter((mailbox) => mailbox.kind === "team"), ...list.filter((m) => m.kind === "agent")];
+	// The views of a mailbox read it. A shared mailbox that the person can only send from has no row.
+	const readable = list.filter((mailbox) => mailbox.scopes.includes("mail.read"));
+	const others = [
+		...readable.filter((mailbox) => mailbox.kind === "team"),
+		...readable.filter((m) => m.kind === "agent"),
+	];
 	if (others.length === 0 && current === null) return null;
 	const entries: MailboxEntry[] = [
 		{ id: null, key: OWN_KEY, name: "My mailbox", address: own?.address ?? null, kind: "personal" },
@@ -70,4 +75,39 @@ export function mailboxNav(
 		});
 	}
 	return entries;
+}
+
+/** What the person can do in the open mailbox, other than read it. */
+export interface MailboxRights {
+	/** Change the mailbox: labels, the read state, archive, trash and stars (`mail.modify`). */
+	modify: boolean;
+	/** Send from the address of the mailbox (`mail.send`). */
+	send: boolean;
+}
+
+/**
+ * The rights of the person in a mailbox of the mail views. `mailboxId` is null for the own mailbox, where
+ * the person has each right. In the mailbox of an agent, an owner or an admin has none. In a shared (team)
+ * mailbox, the scopes of the membership decide. A mailbox that is not in the list yet has each right, so
+ * the views do not hide an action while the list loads: the server refuses a call without its scope.
+ */
+export function mailboxRights(mailboxes: readonly Mailbox[] | null, mailboxId: string | null): MailboxRights {
+	if (mailboxId === null) return { modify: true, send: true };
+	if (isAgentMailbox(mailboxId)) return { modify: false, send: false };
+	const listed = mailboxes?.find((mailbox) => mailbox.id === mailboxId);
+	if (!listed) return { modify: true, send: true };
+	return { modify: listed.scopes.includes("mail.modify"), send: listed.scopes.includes("mail.send") };
+}
+
+/**
+ * The text of the notice above the list of a mailbox with fewer rights, or null with each right. The
+ * mailbox of an agent has its own notice.
+ */
+export function rightsNotice(rights: MailboxRights): string | null {
+	if (rights.modify && rights.send) return null;
+	if (rights.modify) return "You can read and change this shared mailbox. You cannot send from it.";
+	if (rights.send) {
+		return "You can read this shared mailbox and send from it. You cannot change it, and the conversations that you open stay unread.";
+	}
+	return "You can read this shared mailbox. You cannot change it or send from it, and the conversations that you open stay unread.";
 }

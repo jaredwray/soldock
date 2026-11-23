@@ -1,5 +1,5 @@
 import { createContext, useContext } from "react";
-import { isAgentMailbox } from "../../routes.ts";
+import type { MailboxRights } from "./mailboxNav.ts";
 
 /**
  * The mailbox of the mail views: the id of a team mailbox, the id of an agent whose mailbox an owner or
@@ -14,12 +14,22 @@ export function useMailboxId(): string | null {
 	return useContext(MailboxContext);
 }
 
+/** The rights of the person in the mailbox of the mail views (`mailboxRights`). The own mailbox has each one. */
+const MailboxRightsContext = createContext<MailboxRights>({ modify: true, send: true });
+
+export const MailboxRightsProvider = MailboxRightsContext.Provider;
+
+export function useMailboxRights(): MailboxRights {
+	return useContext(MailboxRightsContext);
+}
+
 /**
- * True in the mailbox of an agent. An owner or an admin can read it, and nothing more: the views show
- * no action that changes the mailbox or sends from it, and an open thread stays unread for the agent.
+ * True when the person cannot change the mailbox: the mailbox of an agent, which an owner or an admin can
+ * only read, or a shared mailbox where the membership has no `mail.modify`. The views then show no action
+ * that changes the mailbox, and an open thread stays unread.
  */
 export function useReadOnlyMailbox(): boolean {
-	return isAgentMailbox(useMailboxId());
+	return !useMailboxRights().modify;
 }
 
 /** The `mailbox_id` field of a mail operation. Without it, the operation uses the own mailbox. */

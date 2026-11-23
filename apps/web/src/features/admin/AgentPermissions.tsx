@@ -188,9 +188,9 @@ export function AgentPermissions({ agent, access, failed, onSaved }: AgentPermis
 				</label>
 				<p id={limitHintId} className="field-hint">
 					A new {noun} has this limit, with its own mailbox and its own drive. With a limit, the {noun} reaches only the
-					selected ones, and it cannot use the views that read across rooms. Select a team mailbox, a shared drive or a
-					room here after the {noun} is a member of it. Without a limit, the {noun} reaches each mailbox, drive and room
-					that it is a member of.
+					selected ones, and it cannot use the views that read across rooms. A shared mailbox goes into the selection
+					when an owner or an admin adds the {noun} to it. Select a shared drive or a room here after the {noun} is a
+					member of it. Without a limit, the {noun} reaches each mailbox, drive and room that it is a member of.
 				</p>
 			</div>
 			{draft.limited && pickList("mailbox", "Mailboxes", "Mail", choices.mailboxes)}

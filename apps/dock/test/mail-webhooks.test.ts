@@ -234,6 +234,13 @@ describe("creating webhooks", () => {
 		expect((await createMail(ada, { mailbox_id: team, url: HOOK })).webhook.mailbox_id).toBe(team);
 		expect((await createMail(ada, { mailbox_id: bot.id, url: HOOK })).webhook.mailbox_id).toBe(bot.id);
 		expect(await codeOf(createMail(cy, { mailbox_id: team, url: HOOK }))).toBe("forbidden");
+		// A webhook tells when mail arrives. A member that cannot read the mailbox cannot watch it.
+		await owner.call("directory.add_team_mailbox_member", {
+			mailbox_id: team,
+			principal_id: cy.id,
+			scopes: ["mail.send"],
+		});
+		expect(await codeOf(createMail(cy, { mailbox_id: team, url: HOOK }))).toBe("forbidden");
 		// The owner can read the mail of the bot, but is not its sponsor.
 		expect(await codeOf(createMail(owner, { mailbox_id: bot.id, url: HOOK }))).toBe("forbidden");
 		expect(await codeOf(createMail(cy, { mailbox_id: ada.id, url: HOOK }))).toBe("forbidden");
@@ -672,15 +679,23 @@ describe("access checks before each POST", () => {
 	});
 
 	it("stops a webhook when its creator loses access to the mailbox", async () => {
-		const team = await teamMailbox([cy.id]);
+		const team = await teamMailbox([cy.id, ada.id]);
 		const inTeam = (await createMail(cy, { mailbox_id: team, url: HOOK })).webhook;
+		const noRead = (await createMail(ada, { mailbox_id: team, url: HOOK })).webhook;
 		const forBot = (await createMail(ada, { mailbox_id: bot.id, url: HOOK })).webhook;
 		const posts = receiveWebhooks();
 		await owner.call("directory.remove_team_mailbox_member", { mailbox_id: team, principal_id: cy.id });
+		// A member that stays, but can no longer read the mailbox, lost the access of a new webhook too.
+		await owner.call("directory.add_team_mailbox_member", {
+			mailbox_id: team,
+			principal_id: ada.id,
+			scopes: ["mail.send"],
+		});
 		await owner.call("directory.update_principal", { principal_id: bot.id, sponsor_id: cy.id });
-		await consumeWebhooks([deliveryJob(inTeam), deliveryJob(forBot)]);
+		await consumeWebhooks([deliveryJob(inTeam), deliveryJob(noRead), deliveryJob(forBot)]);
 		expect(posts).toEqual([]);
 		expect(await webhookOf(cy, inTeam.id)).toMatchObject({ status: "disabled", disabled_reason: "access_lost" });
+		expect(await webhookOf(ada, noRead.id)).toMatchObject({ status: "disabled", disabled_reason: "access_lost" });
 		expect(await webhookOf(ada, forBot.id)).toMatchObject({ status: "disabled", disabled_reason: "access_lost" });
 	});
 

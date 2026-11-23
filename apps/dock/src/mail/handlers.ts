@@ -1,4 +1,12 @@
-import { allowsResource, MAIL_LIMITS, type Message } from "@asterra/contracts";
+import {
+	allowsResource,
+	MAIL_LIMITS,
+	MAILBOX_MEMBER_SCOPES,
+	type MailboxMemberScope,
+	type Message,
+	mailboxMemberScopes,
+	operations,
+} from "@asterra/contracts";
 import { autoLabelUnavailableReason } from "../ai/index.ts";
 import {
 	agentMailboxes,
@@ -67,24 +75,32 @@ function ownMailbox(call: CallContext): MailboxRecord {
 	return { id: principal.id, kind: "personal", address: principal.address, display_name: principal.display_name };
 }
 
-/** What an operation does in a mailbox. `write` changes the mailbox or sends from it. */
-type Access = "read" | "write";
-
 /**
  * The mailbox of a call: the own mailbox of the caller by default, or a team mailbox that the caller
  * is a member of. An owner or an admin can also read the own mailbox of an agent, but cannot change it
  * or send from it. This is the resource check of each mail operation. The scopes of the credential
  * decide what the caller can do, and this decides in which mailbox.
+ *
+ * In a team mailbox, the membership has scopes too. The call needs each mail scope of its operation in the
+ * membership (`mailboxMemberScopes`). The contract of the operation names them, so a handler cannot ask for
+ * a different scope than the invoker did. `also` names a scope that one input of the operation needs more.
  */
-async function openMailbox(call: CallContext, mailboxId: string | undefined, access: Access) {
+async function openMailbox(
+	call: CallContext,
+	mailboxId: string | undefined,
+	operation: MailOperation,
+	also: readonly MailboxMemberScope[] = [],
+) {
+	const needed = [...new Set([...mailboxMemberScopes(operations[operation].scopes), ...also])];
 	let record: MailboxRecord;
 	if (mailboxId === undefined || mailboxId === call.caller.id) record = ownMailbox(call);
-	else if (isTeamMailboxId(mailboxId)) record = await teamMailboxFor(call.env.DIRECTORY, mailboxId, call.caller.id);
-	else if (canReadAgentMailboxes(call.caller)) {
+	else if (isTeamMailboxId(mailboxId)) {
+		record = await teamMailboxFor(call.env.DIRECTORY, mailboxId, call.caller.id, needed);
+	} else if (canReadAgentMailboxes(call.caller)) {
 		record = await agentMailboxFor(call.env.DIRECTORY, mailboxId);
 		// An owner or an admin reads the mail of an agent. A change would change what the agent sees, for
 		// example the read state, and a send would come from the address of the agent.
-		if (access === "write") {
+		if (needed.some((scope) => scope !== "mail.read")) {
 			throw new OperationError(
 				"forbidden",
 				"You can read the mailbox of an agent, but you cannot change it or send from it.",
@@ -256,9 +272,12 @@ export const mailHandlers: Pick<HandlerMap<CallContext>, MailOperation> = {
 			canReadAgentMailboxes(call.caller) ? agentMailboxes(call.env.DIRECTORY) : [],
 		]);
 		// A service account with resource limits sees only its listed mailboxes.
-		const mailboxes = [ownMailbox(call), ...teams, ...agents].filter((mailbox) =>
-			allowsResource(call.caller.restriction, "mailbox", mailbox.id),
-		);
+		const mailboxes = [
+			{ ...ownMailbox(call), scopes: [...MAILBOX_MEMBER_SCOPES] },
+			...teams,
+			// An owner or an admin can read the mailbox of an agent, and nothing more.
+			...agents.map((mailbox) => ({ ...mailbox, scopes: ["mail.read"] })),
+		].filter((mailbox) => allowsResource(call.caller.restriction, "mailbox", mailbox.id));
 		return { mailboxes };
 	},
 
@@ -273,14 +292,14 @@ export const mailHandlers: Pick<HandlerMap<CallContext>, MailOperation> = {
 	},
 
 	async "mail.get_auto_labels"(call, input) {
-		const { record, box } = await openMailbox(call, input.mailbox_id, "read");
+		const { record, box } = await openMailbox(call, input.mailbox_id, "mail.get_auto_labels");
 		const [settings, reason] = await Promise.all([box.autoLabelSettings(), autoLabelUnavailableReason(call.env)]);
 		auditAgentRead(call, record, "mail.get_auto_labels", record.id);
 		return { mailbox_id: record.id, ...settings, available: reason === null, unavailable_reason: reason };
 	},
 
 	async "mail.update_auto_labels"(call, input) {
-		const { record, box } = await openMailbox(call, input.mailbox_id, "write");
+		const { record, box } = await openMailbox(call, input.mailbox_id, "mail.update_auto_labels");
 		const settings = accept(await box.updateAutoLabels(record.id, { enabled: input.enabled, labels: input.labels }));
 		auditOk(call, record, "mail.update_auto_labels", record.id);
 		const reason = await autoLabelUnavailableReason(call.env);
@@ -288,7 +307,7 @@ export const mailHandlers: Pick<HandlerMap<CallContext>, MailOperation> = {
 	},
 
 	async "mail.create_auto_label"(call, input) {
-		const { record, box } = await openMailbox(call, input.mailbox_id, "write");
+		const { record, box } = await openMailbox(call, input.mailbox_id, "mail.create_auto_label");
 		const settings = accept(
 			await box.createAutoLabel(record.id, {
 				name: input.name,
@@ -302,14 +321,14 @@ export const mailHandlers: Pick<HandlerMap<CallContext>, MailOperation> = {
 	},
 
 	async "mail.delete_auto_label"(call, input) {
-		const { record, box } = await openMailbox(call, input.mailbox_id, "write");
+		const { record, box } = await openMailbox(call, input.mailbox_id, "mail.delete_auto_label");
 		const result = accept(await box.deleteAutoLabel(record.id, input.auto_label_id));
 		auditOk(call, record, "mail.delete_auto_label", input.auto_label_id);
 		return result;
 	},
 
 	async "mail.run_auto_labels"(call, input) {
-		const { record, box } = await openMailbox(call, input.mailbox_id, "write");
+		const { record, box } = await openMailbox(call, input.mailbox_id, "mail.run_auto_labels");
 		if ((await autoLabelUnavailableReason(call.env)) !== null) {
 			throw new OperationError("conflict", "An owner or an admin must turn on AI and inbox auto labels first.");
 		}
@@ -319,7 +338,7 @@ export const mailHandlers: Pick<HandlerMap<CallContext>, MailOperation> = {
 	},
 
 	async "mail.get_profile"(call, input) {
-		const { record, box } = await openMailbox(call, input.mailbox_id, "read");
+		const { record, box } = await openMailbox(call, input.mailbox_id, "mail.get_profile");
 		const profile = await box.profile();
 		return {
 			mailbox_id: record.id,
@@ -332,26 +351,26 @@ export const mailHandlers: Pick<HandlerMap<CallContext>, MailOperation> = {
 	},
 
 	async "mail.list_labels"(call, input) {
-		const { box } = await openMailbox(call, input.mailbox_id, "read");
+		const { box } = await openMailbox(call, input.mailbox_id, "mail.list_labels");
 		return { labels: await box.listLabels() };
 	},
 
 	async "mail.create_label"(call, input) {
-		const { record, box } = await openMailbox(call, input.mailbox_id, "write");
+		const { record, box } = await openMailbox(call, input.mailbox_id, "mail.create_label");
 		const label = accept(await box.createLabel(input.name));
 		auditOk(call, record, "mail.create_label", label.id);
 		return label;
 	},
 
 	async "mail.delete_label"(call, input) {
-		const { record, box } = await openMailbox(call, input.mailbox_id, "write");
+		const { record, box } = await openMailbox(call, input.mailbox_id, "mail.delete_label");
 		const result = accept(await box.deleteLabel(input.label_id));
 		auditOk(call, record, "mail.delete_label", input.label_id);
 		return result;
 	},
 
 	async "mail.list_threads"(call, input) {
-		const { record, box } = await openMailbox(call, input.mailbox_id, "read");
+		const { record, box } = await openMailbox(call, input.mailbox_id, "mail.list_threads");
 		const query = input.query ?? DEFAULT_QUERY;
 		const now = Date.now();
 		// "me" in a search is the mailbox: in a team mailbox, from:me finds mail from the team address.
@@ -394,7 +413,7 @@ export const mailHandlers: Pick<HandlerMap<CallContext>, MailOperation> = {
 	},
 
 	async "mail.get_thread"(call, input) {
-		const { record, box } = await openMailbox(call, input.mailbox_id, "read");
+		const { record, box } = await openMailbox(call, input.mailbox_id, "mail.get_thread");
 		const thread = await box.getThread(input.thread_id);
 		if (!thread) throw new OperationError("not_found", "No thread has that id.");
 		auditAgentRead(call, record, "mail.get_thread", input.thread_id);
@@ -414,7 +433,7 @@ export const mailHandlers: Pick<HandlerMap<CallContext>, MailOperation> = {
 	},
 
 	async "mail.get_message"(call, input) {
-		const { record, box } = await openMailbox(call, input.mailbox_id, "read");
+		const { record, box } = await openMailbox(call, input.mailbox_id, "mail.get_message");
 		const stored = await box.getMessage(input.message_id);
 		if (!stored) throw new OperationError("not_found", "No message has that id.");
 		auditAgentRead(call, record, "mail.get_message", input.message_id);
@@ -422,7 +441,7 @@ export const mailHandlers: Pick<HandlerMap<CallContext>, MailOperation> = {
 	},
 
 	async "mail.modify_threads"(call, input) {
-		const { record, box } = await openMailbox(call, input.mailbox_id, "write");
+		const { record, box } = await openMailbox(call, input.mailbox_id, "mail.modify_threads");
 		const result = accept(
 			await box.modifyThreads({
 				threadIds: input.thread_ids,
@@ -438,7 +457,18 @@ export const mailHandlers: Pick<HandlerMap<CallContext>, MailOperation> = {
 	},
 
 	async "mail.send"(call, input) {
-		const { record, box } = await openMailbox(call, input.mailbox_id, "write");
+		// A reply reads the message that it answers: its subject and its references go into the new message.
+		// So a reply needs mail.read too, or a send would show mail that the caller cannot read. The credential
+		// needs it in each mailbox, and a member of a team mailbox needs it in the membership.
+		const replyScopes: MailboxMemberScope[] = input.reply_to_message_id ? ["mail.read"] : [];
+		const missing = replyScopes.filter((scope) => !call.caller.scopes.has(scope));
+		if (missing.length > 0) {
+			throw new OperationError(
+				"forbidden",
+				`A reply reads the message that it answers. The credential does not have the scope ${missing.join(", ")}.`,
+			);
+		}
+		const { record, box } = await openMailbox(call, input.mailbox_id, "mail.send", replyScopes);
 		// The idempotency key is bound to the request, so a reused key with another message is a conflict.
 		const { idempotency_key: _key, ...request } = input;
 		const requestHash = await sha256Hex(JSON.stringify(request));
@@ -541,7 +571,7 @@ export const mailHandlers: Pick<HandlerMap<CallContext>, MailOperation> = {
 		// between them is too late to stop this send.
 		if (record.kind === "team") {
 			try {
-				await teamMailboxFor(call.env.DIRECTORY, record.id, call.caller.id);
+				await teamMailboxFor(call.env.DIRECTORY, record.id, call.caller.id, ["mail.send", ...replyScopes]);
 			} catch (error) {
 				// No message references this attempt's object.
 				await call.env.BLOBS.delete(rawKey);
@@ -570,7 +600,7 @@ export const mailHandlers: Pick<HandlerMap<CallContext>, MailOperation> = {
 	},
 
 	async "mail.suggest_recipients"(call, input) {
-		const { record, box } = await openMailbox(call, input.mailbox_id, "read");
+		const { record, box } = await openMailbox(call, input.mailbox_id, "mail.suggest_recipients");
 		const recipients = await box.suggestRecipients(input.query ?? "", input.limit ?? DEFAULT_SUGGESTIONS);
 		// The addresses tell to whom the agent writes, so a read by an owner or an admin gets a line. The query
 		// can hold a private address, so the line names the mailbox only, as for mail.list_threads.
@@ -585,7 +615,7 @@ export const mailHandlers: Pick<HandlerMap<CallContext>, MailOperation> = {
 	},
 
 	async "mail.get_attachment"(call, input) {
-		const { record, box } = await openMailbox(call, input.mailbox_id, "read");
+		const { record, box } = await openMailbox(call, input.mailbox_id, "mail.get_attachment");
 		const source = await box.getAttachmentSource(input.message_id);
 		if (!source) throw new OperationError("not_found", "No message has that id.");
 		const meta = source.attachments[input.index];

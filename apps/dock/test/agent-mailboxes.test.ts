@@ -56,11 +56,24 @@ async function auditLines(run: () => Promise<unknown>): Promise<Record<string, u
 
 describe("the mailbox of an agent", () => {
 	it("lists each agent mailbox for owners and admins, and for nobody else", async () => {
-		const agentMailbox = { id: bot.id, kind: "agent", address: "bot@dock.test", display_name: "Billing Bot" };
+		// An owner or an admin can only read the mailbox of an agent, and its scopes say so.
+		const agentMailbox = {
+			id: bot.id,
+			kind: "agent",
+			address: "bot@dock.test",
+			display_name: "Billing Bot",
+			scopes: ["mail.read"],
+		};
 		for (const reader of [owner, admin]) {
 			const { mailboxes } = await reader.call("mail.list_mailboxes");
 			expect(mailboxes).toEqual([
-				{ id: reader.id, kind: "personal", address: reader.address, display_name: expect.any(String) },
+				{
+					id: reader.id,
+					kind: "personal",
+					address: reader.address,
+					display_name: expect.any(String),
+					scopes: ["mail.read", "mail.modify", "mail.send"],
+				},
 				agentMailbox,
 			]);
 		}

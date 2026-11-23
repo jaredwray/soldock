@@ -643,6 +643,23 @@ fieldset {
 	margin-bottom: 8px;
 }
 
+/* The scopes of one member in a row: the check boxes stand side by side, and wrap on a narrow screen. */
+.scope-inline {
+	display: flex;
+	flex-wrap: wrap;
+	column-gap: 16px;
+	width: 100%;
+}
+
+.scope-inline .check-row-inline {
+	gap: 6px;
+	padding: 2px 0;
+}
+
+.scope-inline .field-hint {
+	flex-basis: 100%;
+}
+
 .notice {
 	margin: 12px 0;
 	padding: 10px 12px;
