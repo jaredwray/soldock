@@ -501,7 +501,9 @@ them. A token is only a credential.
   number of its open (`av` in its credential reference, only when it is 1 or more). `checkCredentials`
   ends a connection with a different number. So a room socket and a feed close at their next check, at
   most 60 seconds later, and the events sockets of the account close at once (`endSockets` with
-  `apiKeys`). A client then opens them again, and gets the new access.
+  `apiKeys`). A client then opens them again, and gets the new access. A `subscriptions/listen` stream of
+  MCP authenticates again at its check, and ends when a watched resource is outside the new scopes or
+  limits ([`mcp`](../mcp/README.md)).
 - **Stored values.** Stored scopes that are not a list give an account without a scope. A value outside
   `SERVICE_SCOPES` is left out. Stored limits that are not valid give an account that reaches nothing.
 - **Log.** A change adds an audit line and an `admin` entry (`directory.set_service_account_access`) to

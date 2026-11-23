@@ -190,8 +190,10 @@ A modern client sends `subscriptions/listen` with the resource URIs in
 - The stream checks its age before each notification and at each keep-alive. When the last access
   check is older than one minute, it authenticates the credential again and asks the change feed of
   each resource kind again first, with all of its resources in one call. So a lost access stops the
-  notifications within about one minute. The scopes of a credential do not change, so the check does
-  not read them again.
+  notifications within about one minute. An owner or an admin can change the scopes and the resource
+  limits of a service account while a stream is open. So the check also reads each watched URI again
+  with the new scopes and limits (`resolveUri`), and the stream ends when one of them no longer names a
+  resource that the credential can read.
 - Subrequest budget of one stream. When it opens: one D1 query for all team mailboxes, one D1 query
   for all chat rooms, and one socket for each mailbox, each room and `chat.rooms` (at most 100). Each later access
   check makes at most five D1 calls: the credential, the principal, the last-use time of the

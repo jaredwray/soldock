@@ -135,7 +135,11 @@ export async function listen(input: ListenInput): Promise<Response> {
 		try {
 			const caller = await input.reauthenticate();
 			if (caller?.id !== call.caller.id) return stop("the credential stopped working");
-			// The scopes of a credential do not change, so the check asks only if each resource is still usable.
+			// The scopes and the resource limits of a service account can change while the stream is open. So each
+			// watched URI must still name a resource that the credential can read now, as at the open.
+			for (const uri of feeds.keys()) {
+				if (!resolveUri(caller, uri)) return stop("the caller lost access to a resource");
+			}
 			const fresh: CallContext = { ...call, caller };
 			const byWatcher = new Map<ResourceWatcher<CallContext>, Readonly<Record<string, string>>[]>();
 			for (const feed of feeds.values()) {
