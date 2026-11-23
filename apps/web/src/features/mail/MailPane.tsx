@@ -1,6 +1,6 @@
 import type { Label, Message, ThreadSummary } from "@asterra/contracts";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
-import { errorMessage } from "../../lib/api.ts";
+import { api, errorMessage } from "../../lib/api.ts";
 import { Icon } from "../../lib/icons.tsx";
 import { navigate } from "../../lib/router.tsx";
 import { useToast } from "../../lib/toast.tsx";
@@ -18,10 +18,11 @@ import {
 	type MailAction,
 	modifyThreads,
 } from "./actions.ts";
+import { removesAutoLabel } from "./autoLabels.ts";
 import { type Draft, forwardDraft, replyDraft } from "./compose.ts";
 import { useThread, useThreadList } from "./data.ts";
 import type { ReplyMode } from "./MessageCard.tsx";
-import { useMailboxId, useReadOnlyMailbox } from "./mailbox.tsx";
+import { mailboxInput, useMailboxId, useReadOnlyMailbox } from "./mailbox.tsx";
 import { ThreadList } from "./ThreadList.tsx";
 import { ThreadView } from "./ThreadView.tsx";
 import { Toolbar } from "./Toolbar.tsx";
@@ -137,6 +138,14 @@ export function MailPane(props: MailPaneProps) {
 			return labelIds === null || changesLabels(labelIds, change);
 		});
 		const openLabels = threadId && ids.includes(threadId) ? labelsOf(threadId) : null;
+		// A person who removes a label that auto labels applied corrects them. Say that they learn from it.
+		const corrects = removesAutoLabel(
+			[
+				...threads.filter((item) => ids.includes(item.id)),
+				...(openThread && ids.includes(openThread.id) ? [openThread] : []),
+			],
+			change.remove,
+		);
 		list.patch(ids, change, view);
 		if (openThread && ids.includes(openThread.id)) thread.patch(change);
 		if (threadId && ids.includes(threadId)) {
@@ -149,6 +158,15 @@ export function MailPane(props: MailPaneProps) {
 		try {
 			await modifyThreads(mailboxId, ids, change);
 			const notice = actionNotice(action, ids.length);
+			if (corrects) {
+				// The mailbox learns only while its auto labels are on. The marks stay after a person turns them off.
+				void api.call("mail.get_auto_labels", mailboxInput(mailboxId)).then(
+					(settings) => {
+						if (settings.enabled) toast({ message: "Label removed. Auto labels learn from this." });
+					},
+					() => {},
+				);
+			}
 			if (notice) {
 				toast(
 					changed.length > 0
@@ -334,6 +352,9 @@ export function MailPane(props: MailPaneProps) {
 						labelsById={labelsById}
 						onReply={reply}
 						onRetry={() => void thread.retry()}
+						onRemoveLabel={
+							readOnly || !openThread ? undefined : (labelId) => void run({ unlabel: labelId }, [openThread.id])
+						}
 					/>
 				)}
 			</div>

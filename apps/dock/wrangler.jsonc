@@ -62,6 +62,10 @@
 	// A ChatRoomDO puts each message with links on soldock-chat-previews. The consumer fetches the previews.
 	// The room sends a job again when no result came, so the queue needs no dead letter queue. At most 2
 	// consumers run at one time, so link previews use a bounded part of the outbound capacity.
+	// A MailboxDO puts each message that the rules of auto labels did not decide on soldock-mail-autolabel (ids
+	// only). The consumer calls the classifier through AI Gateway and gives the labels back to the mailbox. The
+	// mailbox sends a job again when no result came, so the queue needs no dead letter queue. At most 4 consumers
+	// run at one time, which bounds the rate of AI Gateway calls and how far calls in flight can pass the budget.
 	"queues": {
 		"producers": [
 			{ "binding": "MAIL_INBOUND", "queue": "soldock-mail-inbound" },
@@ -69,7 +73,8 @@
 			{ "binding": "WEBHOOKS", "queue": "soldock-webhooks" },
 			{ "binding": "WEBHOOKS_DLQ", "queue": "soldock-webhooks-dlq" },
 			{ "binding": "CHAT_PREVIEWS", "queue": "soldock-chat-previews" },
-			{ "binding": "CHAT_PUSH", "queue": "soldock-chat-push" }
+			{ "binding": "CHAT_PUSH", "queue": "soldock-chat-push" },
+			{ "binding": "MAIL_AUTOLABEL", "queue": "soldock-mail-autolabel" }
 		],
 		"consumers": [
 			{
@@ -98,6 +103,13 @@
 				"max_batch_size": 10,
 				"max_batch_timeout": 1,
 				"max_retries": 5
+			},
+			{
+				"queue": "soldock-mail-autolabel",
+				"max_batch_size": 5,
+				"max_batch_timeout": 2,
+				"max_retries": 3,
+				"max_concurrency": 4
 			}
 		]
 	},
@@ -154,7 +166,8 @@
 					{ "binding": "WEBHOOKS", "queue": "soldock-webhooks" },
 					{ "binding": "WEBHOOKS_DLQ", "queue": "soldock-webhooks-dlq" },
 					{ "binding": "CHAT_PREVIEWS", "queue": "soldock-chat-previews" },
-					{ "binding": "CHAT_PUSH", "queue": "soldock-chat-push" }
+					{ "binding": "CHAT_PUSH", "queue": "soldock-chat-push" },
+					{ "binding": "MAIL_AUTOLABEL", "queue": "soldock-mail-autolabel" }
 				],
 				"consumers": [
 					{
@@ -183,6 +196,13 @@
 						"max_batch_size": 10,
 						"max_batch_timeout": 1,
 						"max_retries": 5
+					},
+					{
+						"queue": "soldock-mail-autolabel",
+						"max_batch_size": 5,
+						"max_batch_timeout": 2,
+						"max_retries": 3,
+						"max_concurrency": 4
 					}
 				]
 			},

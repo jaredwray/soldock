@@ -23,6 +23,7 @@ import serviceAccountSchema from "../../migrations/0024_service_accounts.sql";
 import serviceTokenSchema from "../../migrations/0025_service_tokens.sql";
 import serviceAccessSchema from "../../migrations/0026_service_access.sql";
 import agentAccessSchema from "../../migrations/0027_agent_access.sql";
+import aiSchema from "../../migrations/0028_ai.sql";
 import { log, OperationError, randomToken } from "../platform/index.ts";
 import { allMailboxIds } from "./team-mailboxes.ts";
 
@@ -116,6 +117,9 @@ function freshDirectoryStatements(db: D1Database): D1PreparedStatement[] {
 		"DROP TABLE IF EXISTS sign_in_codes",
 		"DROP TABLE IF EXISTS api_keys",
 		"DROP TABLE IF EXISTS addresses",
+		// The AI ledger names the old mailboxes, and the settings belong to the old organization.
+		"DROP TABLE IF EXISTS ai_usage",
+		"DROP TABLE IF EXISTS ai_settings",
 		// Remove references from agents before SQLite deletes the principals table.
 		"DELETE FROM principals WHERE kind = 'agent'",
 		"DROP TABLE principals",
@@ -145,6 +149,7 @@ function freshDirectoryStatements(db: D1Database): D1PreparedStatement[] {
 		...serviceTokenSchema.split("--> statement-breakpoint"),
 		...serviceAccessSchema.split("--> statement-breakpoint"),
 		...agentAccessSchema.split("--> statement-breakpoint"),
+		...aiSchema.split("--> statement-breakpoint"),
 		// The directory now has the schema of each bundled migration. Record them in the table that
 		// `wrangler d1 migrations apply` reads, or it runs them again later. A second run of 0004 would
 		// copy the principals without their passwords. The columns are the ones that wrangler creates.
@@ -182,4 +187,5 @@ const BUNDLED_MIGRATIONS = [
 	"0025_service_tokens.sql",
 	"0026_service_access.sql",
 	"0027_agent_access.sql",
+	"0028_ai.sql",
 ] as const;

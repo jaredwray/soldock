@@ -53,7 +53,12 @@ state. Owners and admins can read the mailbox of each agent.
 </p>
 
 Mail from outside is untrusted content. Asterra sanitizes the HTML of a message before it shows the
-message. The app has a Light, a Dark and a System appearance.
+message.
+
+Auto labels sort new mail with labels such as Needs reply, Meeting, Newsletter, Cold pitch and
+Receipt, and with labels that you describe in plain words. A label can keep its mail out of the inbox.
+Rules from the mail headers decide first, so most bulk mail costs nothing. A Workers AI model through
+your own Cloudflare AI Gateway decides the rest. Remove a wrong label, and auto labels learn from it. The app has a Light, a Dark and a System appearance.
 
 ![An open thread of Mail in dark mode, with its labels and two messages](docs/screenshots/dark.png)
 
@@ -124,7 +129,9 @@ each system makes a rotation easy. Its card shows what it can reach and a log of
 
 ### Admin
 
-Owners and admins create people, agents, service accounts, shared mailboxes, shared drives and email domains. They
+Owners and admins create people, agents, service accounts, shared mailboxes, shared drives and email domains.
+**Admin › AI** connects the AI Gateway of the Cloudflare account, allows Workers AI models, sets a
+monthly budget, and shows the cost of the month, each day, and the mailboxes that use AI the most. They
 set a new password for a person, and they archive, restore or delete an account. **Admin › Shared
 drives** creates a shared drive, changes its name and its members, and deletes an empty shared drive.
 An owner or an admin gets access to the items of a shared drive only as a member. A person signs in with an

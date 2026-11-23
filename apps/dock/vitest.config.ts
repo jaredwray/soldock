@@ -16,6 +16,8 @@ export default defineProject(async () => ({
 					TEST_MIGRATIONS: await readD1Migrations(migrations),
 					// At least SETUP_TOKEN_MIN_LENGTH (32) characters, or setup stays off.
 					SETUP_TOKEN: "test-setup-token-0123456789abcdef",
+					// Tests replace `fetch`, so this token never leaves the test.
+					AI_GATEWAY_TOKEN: "test-ai-gateway-token",
 				},
 			},
 		}),

@@ -1,6 +1,7 @@
 // The jobs of the cron trigger (`triggers.crons` in wrangler.jsonc). The composition root calls
 // `runScheduled` from the `scheduled` handler.
 import { API_KEY_LIMITS } from "@asterra/contracts";
+import { pruneUsage } from "./ai/index.ts";
 import {
 	dueExpiryNotices,
 	isNoticeDue,
@@ -25,6 +26,14 @@ export async function runScheduled(env: Env, now: number): Promise<void> {
 		await sendExpiryNotices(env, now);
 	} catch (error) {
 		log("error", "scheduled: the expiry notices failed", {
+			error: error instanceof Error ? (error.stack ?? error.message) : String(error),
+		});
+	}
+	try {
+		const removed = await pruneUsage(env.DIRECTORY, now);
+		if (removed > 0) log("info", "scheduled: old AI usage removed", { rows: removed });
+	} catch (error) {
+		log("error", "scheduled: the AI usage cleanup failed", {
 			error: error instanceof Error ? (error.stack ?? error.message) : String(error),
 		});
 	}

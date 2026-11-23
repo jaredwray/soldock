@@ -785,7 +785,7 @@ export async function connectRoomSocket(roomId: string, headers: Record<string, 
 
 /** Sends a request to the Worker with these bindings in place of the ones in vitest.config.ts. */
 export function withEnv(
-	overrides: { SETUP_TOKEN?: string | undefined; DIRECTORY?: D1Database },
+	overrides: { SETUP_TOKEN?: string | undefined; AI_GATEWAY_TOKEN?: string | undefined; DIRECTORY?: D1Database },
 	path: string,
 	init: { method?: string; headers?: Record<string, string>; body?: string } = {},
 ) {
@@ -823,4 +823,125 @@ export function racing(change: string, bind: string, write?: string) {
 			return typeof value === "function" ? value.bind(target) : value;
 		},
 	});
+}
+
+/** The Cloudflare account and the AI Gateway of the AI tests. */
+export const AI_ACCOUNT_ID = "0123456789abcdef0123456789abcdef";
+export const AI_GATEWAY_ID = "asterra-ai";
+export const AI_MODEL = "@cf/meta/llama-3.3-70b-instruct-fp8-fast";
+/** The URL that the Worker posts to for each AI call. */
+export const AI_GATEWAY_URL = `https://gateway.ai.cloudflare.com/v1/${AI_ACCOUNT_ID}/${AI_GATEWAY_ID}/compat/chat/completions`;
+
+/** Connects the AI Gateway and turns on AI and inbox auto labels, as an owner does in Admin › AI. */
+export function enableAi(admin: Actor, patch: InputOf<"ai.update_settings"> = {}) {
+	return admin.call("ai.update_settings", {
+		enabled: true,
+		account_id: AI_ACCOUNT_ID,
+		gateway_id: AI_GATEWAY_ID,
+		allowed_models: [AI_MODEL],
+		monthly_budget_usd: 10,
+		features: { mail_auto_label: { enabled: true, model: AI_MODEL } },
+		...patch,
+	});
+}
+
+export interface GatewayCall {
+	url: string;
+	headers: Headers;
+	body: { model: string; messages: { role: string; content: string }[]; response_format?: unknown } & Record<
+		string,
+		unknown
+	>;
+}
+
+/** An answer of AI Gateway in the OpenAI form, with `content` as the text of the first choice. */
+export function gatewayAnswer(
+	content: unknown,
+	usage: Record<string, number> | null = { prompt_tokens: 1000, completion_tokens: 20 },
+): Response {
+	return Response.json({
+		choices: [{ index: 0, message: { role: "assistant", content } }],
+		...(usage ? { usage } : {}),
+	});
+}
+
+/**
+ * Replaces the global `fetch` with a fake AI Gateway that records each call and answers with `respond`.
+ * The outbound request is the boundary. Restore it with `vi.restoreAllMocks()`.
+ */
+export function fakeGateway(
+	respond: (call: GatewayCall) => Response | Promise<Response> = () => gatewayAnswer('{"labels":[]}'),
+): GatewayCall[] {
+	const calls: GatewayCall[] = [];
+	vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+		const outgoing = new Request(input, init);
+		const call = { url: outgoing.url, headers: outgoing.headers, body: (await outgoing.json()) as GatewayCall["body"] };
+		calls.push(call);
+		return respond(call);
+	});
+	return calls;
+}
+
+/**
+ * Replaces the auto-label queue of one mailbox object with a recorder, and returns the jobs that the
+ * object puts on the queue. Call it before mail arrives. No real queue consumer runs.
+ */
+export async function captureAutoLabelJobs(mailboxId: string): Promise<unknown[]> {
+	const jobs: unknown[] = [];
+	const stub = env.MAILBOX.get(env.MAILBOX.idFromName(mailboxId));
+	await runInDurableObject(stub, (instance) => {
+		const target = instance as unknown as { env: Env };
+		const queue = { send: async (body: unknown) => void jobs.push(body) } as unknown as Queue;
+		target.env = { ...target.env, MAIL_AUTOLABEL: queue };
+	});
+	return jobs;
+}
+
+/** Waits until the classifier outbox of a mailbox has no due message, as `drainOutbox` does for mail. */
+export async function drainAutoLabels(mailboxId: string): Promise<void> {
+	const stub = env.MAILBOX.get(env.MAILBOX.idFromName(mailboxId));
+	await vi.waitFor(
+		async () => {
+			await runDurableObjectAlarm(stub);
+			const due = await runInDurableObject(
+				stub,
+				(_instance, state) =>
+					state.storage.sql
+						.exec<{ n: number }>("SELECT COUNT(*) AS n FROM autolabel_outbox WHERE next_attempt_at <= ?", Date.now())
+						.one().n,
+			);
+			if (due > 0) throw new Error(`${due} auto-label jobs are due`);
+		},
+		{ timeout: 5000, interval: 20 },
+	);
+}
+
+/** The messages of a mailbox that wait for the classifier. */
+export async function autoLabelOutbox(mailboxId: string): Promise<{ message_seq: number; sends: number }[]> {
+	const stub = env.MAILBOX.get(env.MAILBOX.idFromName(mailboxId));
+	return runInDurableObject(stub, (_instance, state) =>
+		state.storage.sql
+			.exec<{ message_seq: number; sends: number }>(
+				"SELECT message_seq, sends FROM autolabel_outbox ORDER BY message_seq",
+			)
+			.toArray(),
+	);
+}
+
+/**
+ * Runs the auto-label queue consumer on the given job bodies, as delivery number `attempts`, with these
+ * bindings in place of the ones in vitest.config.ts.
+ */
+export async function consumeAutoLabels(
+	jobs: unknown[],
+	attempts = 1,
+	overrides: { AI_GATEWAY_TOKEN?: string | undefined; DIRECTORY?: D1Database } = {},
+) {
+	const batch = createMessageBatch(
+		"soldock-mail-autolabel",
+		jobs.map((body, i) => ({ id: `autolabel-job-${++counter}-${i}`, timestamp: new Date(), attempts, body })),
+	);
+	const ctx = createExecutionContext();
+	await handlers.queue(batch, { ...env, ...overrides } as Env, ctx);
+	return getQueueResult(batch, ctx);
 }

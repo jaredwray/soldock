@@ -5,6 +5,7 @@ import { base64ToBytes, saveBytes } from "../../lib/base64.ts";
 import { addressName, formatBytes, fullDate, initials, sameAddress, shortDate } from "../../lib/format.ts";
 import { Icon } from "../../lib/icons.tsx";
 import { useToast } from "../../lib/toast.tsx";
+import { AUTO_MARK_TEXT, AUTO_MARK_TITLE } from "./autoLabels.ts";
 import { MessageBody } from "./MessageBody.tsx";
 import { mailboxInput, useMailboxId, useReadOnlyMailbox } from "./mailbox.tsx";
 import { labelChipName } from "./views.ts";
@@ -74,7 +75,7 @@ export function MessageCard({ message, myAddress, labelsById, defaultExpanded, o
 		: "(unknown sender)";
 	const chips = message.label_ids.flatMap((id) => {
 		const name = labelChipName(id, labelsById);
-		return name ? [{ id, name }] : [];
+		return name ? [{ id, name, auto: message.auto_label_ids.includes(id) }] : [];
 	});
 
 	return (
@@ -129,8 +130,14 @@ export function MessageCard({ message, myAddress, labelsById, defaultExpanded, o
 						{chips.length > 0 && (
 							<ul className="chips" aria-label="Labels">
 								{chips.map((chip) => (
-									<li key={chip.id} className="chip mail-chip">
+									<li
+										key={chip.id}
+										className={chip.auto ? "chip mail-chip chip-auto" : "chip mail-chip"}
+										title={chip.auto ? AUTO_MARK_TITLE : undefined}
+									>
+										{chip.auto && <Icon name="sparks" size={12} className="auto-mark" />}
 										{chip.name}
+										{chip.auto && <span className="visually-hidden">{AUTO_MARK_TEXT}</span>}
 									</li>
 								))}
 							</ul>

@@ -30,7 +30,7 @@ export type DriveView =
  * The sections of the admin page. Each has one path under `/admin`. People and agents share `members`.
  * The old `/admin/agents` path redirects there.
  */
-export const ADMIN_SECTIONS = ["members", "shared-mailboxes", "shared-drives", "chat", "domains"] as const;
+export const ADMIN_SECTIONS = ["members", "shared-mailboxes", "shared-drives", "chat", "domains", "ai"] as const;
 export type AdminSection = (typeof ADMIN_SECTIONS)[number];
 
 export const CHAT_VIEWS = ["activity", "saved", "drafts"] as const;

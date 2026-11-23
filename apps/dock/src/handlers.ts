@@ -1,6 +1,7 @@
 // The operation handlers and the resource change feeds of each domain, joined, and the subscriptions of
 // MCP Events. The composition root and the tests use these maps.
 import { AGENT_ACCESS_LIMITS } from "@asterra/contracts";
+import { aiHandlers } from "./ai/index.ts";
 import {
 	chatHandlers,
 	chatWatchers,
@@ -17,7 +18,7 @@ import {
 	sharedItemsOfPrincipal,
 } from "./drive/index.ts";
 import { type CallContext, getPrincipal, identityHandlers } from "./identity/index.ts";
-import { enableMailEvents, mailHandlers, mailWatchers } from "./mail/index.ts";
+import { closeAutoLabels, enableMailEvents, mailHandlers, mailWatchers } from "./mail/index.ts";
 import type { EventSubscriptions, HandlerMap, WatcherMap } from "./platform/index.ts";
 import { log } from "./platform/index.ts";
 import { sheetsHandlers } from "./sheets/index.ts";
@@ -31,6 +32,7 @@ export const handlers: HandlerMap<CallContext> = {
 	...sheetsHandlers,
 	...chatHandlers,
 	...endpointHandlers,
+	...aiHandlers,
 	async "chat.invoke_slash_command"(call, input) {
 		return await invokeSlashCommand(call, handlers, {
 			room_id: input.room_id,
@@ -62,6 +64,16 @@ export const handlers: HandlerMap<CallContext> = {
 	},
 	async "directory.delete_principal"(call, input) {
 		const result = await identityHandlers["directory.delete_principal"](call, input);
+		// The mail of a deleted mailbox never goes to the classifier: its auto labels turn off and their outbox
+		// empties. If this fails, the consumer still drops each job of a mailbox that is not in the directory.
+		try {
+			await closeAutoLabels(call.env, result.principal_id);
+		} catch (error) {
+			log("error", "auto labels did not close on principal delete", {
+				principalId: result.principal_id,
+				error: error instanceof Error ? error.message : String(error),
+			});
+		}
 		// Bounded best-effort cleanup on delete; admins can finish larger memberships via chat.admin_remove_deleted_principal.
 		try {
 			await removeDeletedPrincipalFromRooms(call.env, result.principal_id, 50);
