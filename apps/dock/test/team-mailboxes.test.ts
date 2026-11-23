@@ -12,10 +12,12 @@ import {
 	inject,
 	ORIGIN,
 	PASSWORD,
+	racing,
 	rawMessage,
 	request,
 	SETUP_TOKEN,
 	seedOrg,
+	withEnv,
 } from "./helpers.ts";
 
 let owner: Actor;
@@ -397,6 +399,32 @@ describe("an agent in a team mailbox", () => {
 		const add = { mailbox_id: support.id, principal_id: agent.id };
 		expect(await code(owner.call("directory.add_team_mailbox_member", add))).toBe("invalid");
 		expect((await owner.call("directory.list_team_mailboxes")).team_mailboxes).toEqual([support]);
+		expect((await access(agent.id)).resources?.mailbox_ids).toEqual(full);
+
+		// A parallel call can fill the limits after the first check. The write of this call then matches
+		// nothing, and its second try must not store one mailbox more than the most.
+		const one = full.slice(1);
+		await env.DIRECTORY.prepare("UPDATE principals SET agent_resources = ? WHERE id = ?")
+			.bind(JSON.stringify({ mailbox_ids: one, drive_ids: [], room_ids: [] }), agent.id)
+			.run();
+		const { access_version: version } = (await env.DIRECTORY.prepare(
+			"SELECT access_version FROM principals WHERE id = ?",
+		)
+			.bind(agent.id)
+			.first<{ access_version: number }>()) ?? { access_version: -1 };
+		const filled = JSON.stringify({ mailbox_ids: full, drive_ids: [], room_ids: [] });
+		const racer = racing(
+			`UPDATE principals SET agent_resources = '${filled}', access_version = access_version + 1
+			WHERE id = ? AND access_version = ${version}`,
+			agent.id,
+			"UPDATE principals SET agent_scopes",
+		);
+		const raced = await withEnv({ DIRECTORY: racer }, `/api/v1/directory/team-mailboxes/${support.id}/members`, {
+			method: "POST",
+			headers: { authorization: `Bearer ${owner.key}`, "content-type": "application/json" },
+			body: JSON.stringify({ principal_id: agent.id }),
+		});
+		expect(raced.status).toBe(400);
 		expect((await access(agent.id)).resources?.mailbox_ids).toEqual(full);
 	});
 });

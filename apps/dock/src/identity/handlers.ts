@@ -236,12 +236,20 @@ function assertAgentMembership(
 ): void {
 	if (member.kind !== "agent") return;
 	grantableScopes(call.caller, member, scopes);
-	const listed = member.agent_resources?.mailbox_ids;
+	assertPlaceInLimits(member, mailboxId);
+}
+
+/**
+ * Refuses a mailbox that the limits of an agent have no place for. Stored limits with more ids than the most
+ * are not valid, and an agent with such limits reaches nothing.
+ */
+function assertPlaceInLimits(agent: PrincipalRecord, mailboxId?: string): void {
+	const listed = agent.agent_resources?.mailbox_ids;
 	const isListed = mailboxId !== undefined && listed?.includes(mailboxId);
 	if (listed && !isListed && listed.length >= AGENT_RESOURCE_LIMITS.perKind) {
 		throw new OperationError(
 			"invalid",
-			`The limits of this ${agentNoun(member)} name ${AGENT_RESOURCE_LIMITS.perKind} mailboxes, the most. Remove a mailbox from its limits, or remove its limits.`,
+			`The limits of this ${agentNoun(agent)} name ${AGENT_RESOURCE_LIMITS.perKind} mailboxes, the most. Remove a mailbox from its limits, or remove its limits.`,
 		);
 	}
 }
@@ -262,6 +270,8 @@ async function widenAgentForMailbox(
 	// A parallel change of the access of the agent makes the write match nothing. Then read and try again.
 	let agent: PrincipalRecord | null = member;
 	for (let attempt = 0; agent?.kind === "agent" && attempt < 3; attempt++) {
+		// The limits of each read need the place: a parallel call can fill them after the first check.
+		assertPlaceInLimits(agent, mailboxId);
 		const held = agent.agent_scopes;
 		const added: Scope[] = scopes.filter((scope) => !held.includes(scope));
 		const limits = agent.agent_resources;

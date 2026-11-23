@@ -753,6 +753,9 @@ drives get the same model later.
     parallel `directory.set_agent_access` is not lost. It adds one to `access_version`, ends the events
     sockets of the agent, and writes the audit line `directory.set_agent_access`.
   - The limits of an agent name at most 20 mailboxes. A membership that needs place 21 gets `invalid`.
+    Each try of the write checks the place again (`assertPlaceInLimits`), because a parallel call can fill
+    the limits after the first check. A refusal at a second try comes after the write of the membership:
+    the membership stays, outside the limits, and **Access** marks it.
   - A remove does not take the scopes from the agent, and does not change its limits. The membership is
     gone, so a mailbox in the limits gives nothing.
 
