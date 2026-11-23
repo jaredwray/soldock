@@ -181,6 +181,10 @@ export function AutoLabelsDialog({ team, onClose, onChanged }: AutoLabelsDialogP
 									<h3 id={ids.builtin} className="dialog-section-title">
 										Built-in labels
 									</h3>
+									<p className="field-hint">
+										Mail skips the inbox only when its sender is proved: mail from your organization, or mail that
+										passed DMARC. Other mail keeps its label and stays in the inbox.
+									</p>
 									<ul className="auto-label-list">
 										{builtins.map((label) => (
 											<li key={label.key} className="auto-label-row">

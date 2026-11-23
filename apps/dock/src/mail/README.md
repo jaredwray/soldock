@@ -599,6 +599,10 @@ A disabled endpoint stays disabled. Delete it and create a new one.
   never name a system label, a label of a different mailbox or an action. The mailbox stores no text
   of the model. The worst result of a hostile message is a wrong label, or an archive of that message,
   which stays in All mail. Only a person writes corrections, so a sender cannot teach rules.
+- The header rules are hints, not proof. A sender can add `Auto-Submitted: auto-replied` to get no
+  label (R1), or `List-Unsubscribe` to stay out of Cold pitch (R5). Such evasion only keeps mail in the
+  inbox: no header can move mail out of it, because only a proved sender (internal mail, or a DMARC
+  pass) skips the inbox.
 - Auto labels: only mail from a proved sender (internal mail, or a DMARC pass) skips the inbox, and
   only such mail gets a label from the sender domain alone (R3, R4). A forged From address or forged
   list headers cannot hide mail from the inbox.
