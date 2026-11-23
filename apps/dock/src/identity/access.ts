@@ -30,6 +30,16 @@ export function canReadAgentMailboxes(caller: AuthContext): boolean {
 }
 
 /**
+ * Who changes the policy and the access (scopes and resource limits) of an agent: its sponsor, an owner or an
+ * admin. Only an owner or an admin changes them for a service account. Never an agent, also not for itself.
+ */
+export function canManageAgent(caller: AuthContext, target: PrincipalRecord): boolean {
+	if (caller.kind !== "human" || target.kind !== "agent") return false;
+	if (target.service) return isAdmin(caller);
+	return target.sponsor_id === caller.principal.id || isAdmin(caller);
+}
+
+/**
  * A human manages their own credentials (keys, password and two-step verification), the keys of the
  * agents that they sponsor and, as an admin, the credentials of others. Only the owner manages the owner's
  * credentials, so an admin can never act as the owner. Only owners and admins manage the tokens of a
@@ -45,8 +55,8 @@ export function canManageCredentialsOf(caller: AuthContext, target: PrincipalRec
 }
 
 /**
- * The scopes for a new key. A key can never hold more than its principal kind allows, and never more
- * than the credential that creates it, so a narrow key cannot mint a wider one.
+ * The scopes for a new key of a person, or for an agent. The scopes can never be more than the principal
+ * kind allows, and never more than the credential that gives them, so a narrow key cannot mint a wider one.
  */
 export function grantableScopes(
 	caller: AuthContext,
@@ -56,8 +66,8 @@ export function grantableScopes(
 	const ceiling = new Set(scopeCeiling(target));
 	const outside = requested.filter((scope) => !ceiling.has(scope));
 	if (outside.length > 0) {
-		const kind = target.service ? "a service account" : `an ${target.kind}`;
-		throw new OperationError("invalid", `A key for ${kind} cannot hold ${outside.join(", ")}.`);
+		const holder = target.service ? "A service account" : target.kind === "agent" ? "An agent" : "A key for a person";
+		throw new OperationError("invalid", `${holder} cannot hold ${outside.join(", ")}.`);
 	}
 	const notHeld = requested.filter((scope) => !caller.scopes.has(scope));
 	if (notHeld.length > 0) {
@@ -394,9 +404,10 @@ export interface CredentialRef {
 	 */
 	gen?: number;
 	/**
-	 * The `access_version` of a service account at the open, when it is 1 or more. A change of the scopes
-	 * or the limits of the account gives a new number, so the connection stops at its next check and the
-	 * client opens a new one with the new access. A ref without it has the number 0.
+	 * The `access_version` of an agent at the open, when it is 1 or more: for an API key or an OAuth token of
+	 * an agent or a service account. A change of the scopes or the limits of the agent gives a new number, so
+	 * the connection stops at its next check and the client opens a new one with the new access. A ref
+	 * without it has the number 0.
 	 */
 	av?: number;
 }
@@ -417,7 +428,7 @@ export function credentialRef(caller: AuthContext): CredentialRef {
 	const ref: CredentialRef = { principalId: caller.principal.id, kind: caller.credential, id };
 	if (caller.grantId !== null) ref.grantId = caller.grantId;
 	if (caller.keyGeneration !== null && caller.keyGeneration > 0) ref.gen = caller.keyGeneration;
-	if (caller.credential === "api_key" && caller.principal.access_version > 0) {
+	if (caller.credential !== "session" && caller.principal.access_version > 0) {
 		ref.av = caller.principal.access_version;
 	}
 	return ref;
@@ -426,8 +437,9 @@ export function credentialRef(caller: AuthContext): CredentialRef {
 /**
  * What a credential can do now.
  * - `live`: it works.
- * - `renew`: an OAuth access token that expired, or that a refresh replaced, while its grant works.
- *   The client can get a new token and connect again.
+ * - `renew`: the connection must authenticate again. An OAuth access token that expired, or that a refresh
+ *   replaced, while its grant works: the client gets a new token. Or a key or a token whose agent got new
+ *   scopes or limits after the open: the client opens a new connection, with the new access.
  * - `ended`: it does not work, and its owner cannot renew it.
  */
 export type CredentialCheck = "live" | "renew" | "ended";
@@ -435,9 +447,11 @@ export type CredentialCheck = "live" | "renew" | "ended";
 /**
  * For each credential, what it can do now, by the rules of `authenticate`: the principal is not
  * archived and not deleted, a session did not expire and its person did not sign out, an API key is
- * not revoked and did not expire, the scopes and the limits of its service account did not change after
- * the open, and an OAuth access token is the current token of a grant that is not revoked, and did
- * not expire. So a refresh of a grant, which replaces its access token, stops the old token here too.
+ * not revoked and did not expire, an OAuth access token is the current token of a grant that is not
+ * revoked, and did not expire, and the scopes and the limits of the agent of a key or a token did not
+ * change after the open. So a refresh of a grant, which replaces its access token, stops the old token
+ * here too. A live key, and an OAuth token whose grant works, get `renew` when the access of their agent
+ * changed: the client connects again.
  * One query reads the whole list, and a credential that the list has many times is read one time. So
  * a room with many sockets makes one read.
  */
@@ -462,15 +476,16 @@ export async function checkCredentials(db: D1Database, refs: readonly Credential
 						SELECT 1 FROM api_keys k
 						WHERE k.id = json_extract(ref.value, '$.id') AND k.principal_id = p.id AND k.revoked_at IS NULL
 							AND ${keyNotExpired(2, "k")}
-							AND COALESCE(json_extract(ref.value, '$.av'), 0) = p.access_version
 							AND (COALESCE(json_extract(ref.value, '$.gen'), 0) = k.rotation
 								OR (COALESCE(json_extract(ref.value, '$.gen'), 0) = k.rotation - 1 AND k.prev_expires_at > ?2)))
-						THEN 'live' END
+						THEN CASE WHEN COALESCE(json_extract(ref.value, '$.av'), 0) = p.access_version THEN 'live' ELSE 'renew' END
+						END
 					WHEN 'oauth' THEN CASE
 						WHEN EXISTS (
 							SELECT 1 FROM oauth_grants g
 							WHERE g.access_hash = json_extract(ref.value, '$.id') AND g.principal_id = p.id
-								AND g.revoked_at IS NULL AND g.access_expires_at > ?2)
+								AND g.revoked_at IS NULL AND g.access_expires_at > ?2
+								AND COALESCE(json_extract(ref.value, '$.av'), 0) = p.access_version)
 							THEN 'live'
 						WHEN EXISTS (
 							SELECT 1 FROM oauth_grants g

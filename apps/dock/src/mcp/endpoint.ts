@@ -62,15 +62,13 @@ const KIND_NAMES: Record<AuthContext["kind"], string> = {
 
 /** How the credential gets a scope that it does not hold. */
 function addScopeHint(caller: AuthContext): string {
-	if (caller.credential === "oauth") {
-		return "The sponsor of this agent, an owner or an admin can add a scope in Admin › Members. You do not need a new connection.";
-	}
 	if (caller.kind === "service") {
 		return "The scopes are on the service account, not on this token. An owner or an admin can add a scope to this service account in Admin › Members. This token then has the scope, without a new token.";
 	}
-	return caller.kind === "agent"
-		? "The scopes of an API key do not change. The sponsor of this agent, an owner or an admin can create a key with more scopes in Admin › Members."
-		: "The scopes of an API key do not change. You can create a key with more scopes in Settings.";
+	if (caller.kind === "agent") {
+		return "The scopes are on this agent, not on this key or connection. The sponsor of this agent, an owner or an admin can add a scope to the agent in Admin › Members. This credential then has the scope, without a new key or connection.";
+	}
+	return "The scopes of an API key do not change. You can create a key with more scopes in Settings.";
 }
 
 /** The sentences that tell a credential which tools it cannot see, and why. Empty when it holds each scope. */

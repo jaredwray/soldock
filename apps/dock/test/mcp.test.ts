@@ -53,16 +53,17 @@ describe("the MCP endpoint", () => {
 		const unknown = await mcp(bot.key, "initialize", { protocolVersion: "1999-01-01" });
 		expect(((unknown.body?.result ?? {}) as { protocolVersion?: string }).protocolVersion).toBe("2025-11-25");
 
-		// A narrow key learns which scopes it does not hold. The scopes of a key never change: it needs a new key.
-		const { api_key } = await ada.call("account.create_api_key", {
-			principal_id: bot.id,
-			label: "narrow",
-			scopes: ["account.read", "mail.read"],
-		});
-		const narrow = instructionsOf((await initialize(api_key.secret)).body);
+		// A narrow agent learns which scopes it does not hold. The scopes are on the agent, so the text tells that
+		// a person adds the scope to the agent, and not that the agent needs a new key.
+		await ada.call("directory.set_agent_access", { principal_id: bot.id, scopes: ["account.read", "mail.read"] });
+		const narrow = instructionsOf((await initialize(bot.key)).body);
 		expect(narrow).toContain("mail.send (1 tool)");
-		expect(narrow).toContain("can create a key with more scopes");
+		expect(narrow).toContain("can add a scope to the agent");
+		expect(narrow).not.toContain("create a key with more scopes");
 		expect(narrow).not.toContain("account.keys");
+		// A key of a person still has its own scopes: it needs a new key.
+		const { api_key } = await ada.call("account.create_api_key", { label: "narrow", scopes: ["account.read"] });
+		expect(instructionsOf((await initialize(api_key.secret)).body)).toContain("can create a key with more scopes");
 	});
 
 	// A token of a service account has the scopes of its account. A new token cannot have more scopes, so the
@@ -91,7 +92,7 @@ describe("the MCP endpoint", () => {
 		const { owner, bot } = await seedOrg();
 		const all = names((await mcp(owner.key, "tools/list")).body);
 		expect(all).toContain("directory_update_agent_policy");
-		expect(all).toHaveLength(202);
+		expect(all).toHaveLength(201);
 		expect(all).toEqual(
 			expect.arrayContaining([
 				"chat_subscribe_push",

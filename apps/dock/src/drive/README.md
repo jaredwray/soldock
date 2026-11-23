@@ -277,12 +277,12 @@ This table is for a personal drive. A shared drive has no `owner`. Its roles are
 - The handler does not ask the drive of a deleted principal (`directory.delete_principal`). That
   drive stays in storage, but nobody can open it, so its items leave the lists.
 - `sharedItemsOfPrincipal` reads the `shared` pointers of a principal with the same rules, for the access
-  view of a service account (`directory.get_service_account_access`). It acts as that principal, so each
-  drive checks the access of the principal, not of the admin who asks. It checks no access of the caller:
+  view of an agent or a service account (`directory.get_agent_access`). It acts as that principal, so each
+  drive checks the access of the principal, not of the person who asks. It checks no access of the caller:
   the identity handler does that first.
-- A service account with resource limits gets no item of a drive outside its list in the
+- An agent or a service account with resource limits gets no item of a drive outside its list in the
   `shared` and the `starred` views, and `drive.list_shared_drives` leaves out each drive outside the list
-  ([identity](../identity/README.md#resource-limits-of-a-service-account)). The queries keep only the listed drives
+  ([identity](../identity/README.md#resource-limits-of-an-agent)). The queries keep only the listed drives
   (`spaceIds` of `listRefs`, `ids` of `listSharedDriveRows`), so `next_cursor` never names a different
   drive.
 - A star is in the own drive of the principal that set it (`stars`), also for an item of somebody
@@ -599,6 +599,7 @@ Delivery uses that list. A job with no list sends nothing.
 A permanent delete of a folder sends one `drive.item.deleted` for the folder.
 The alarm sends the event to `soldock-webhooks`.
 A move to another drive sends `drive.item.moved` from the source and `drive.item.created` from the target.
+For a subscription that an agent created, each delivery also needs `drive.webhooks` on the agent, and the drive inside the limits of the agent ([identity](../identity/README.md#access-of-an-agent)).
 See the [webhook module](../webhooks/README.md).
 
 ## Safety

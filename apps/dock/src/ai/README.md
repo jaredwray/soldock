@@ -8,7 +8,7 @@
 | | |
 | --- | --- |
 | **Purpose** | One place for AI calls: the settings of the organization, the gateway call, the budget stop and the usage that Admin › AI shows. |
-| **Owns** | D1 tables `ai_settings` and `ai_usage` (migration `0027`). The Worker secret `AI_GATEWAY_TOKEN` is the operator's. |
+| **Owns** | D1 tables `ai_settings` and `ai_usage` (migration `0028`). The Worker secret `AI_GATEWAY_TOKEN` is the operator's. |
 | **Depends on** | `platform`, `identity`. |
 | **Operations** | `ai.get_settings`, `ai.update_settings`, `ai.test_connection`, `ai.get_usage` |
 | **Data inventory** | See [Data inventory](#data-inventory). Backups: not built yet. |
@@ -101,8 +101,8 @@ A connection test counts for the person who ran it. A deleted mailbox shows as `
 
 | State | Where | Notes |
 | --- | --- | --- |
-| AI settings | D1 `ai_settings` (migration `0027`) | One row. No secret. A directory reset makes a new row with AI off |
-| Usage ledger | D1 `ai_usage` (migration `0027`) | One row for each UTC day, feature, model and resource (a mailbox id, or the id of the person who tested). Requests, failures, tokens and the cost in micro-USD. No content. The hourly cron trigger deletes days older than 400 days. A directory reset deletes it |
+| AI settings | D1 `ai_settings` (migration `0028`) | One row. No secret. A directory reset makes a new row with AI off |
+| Usage ledger | D1 `ai_usage` (migration `0028`) | One row for each UTC day, feature, model and resource (a mailbox id, or the id of the person who tested). Requests, failures, tokens and the cost in micro-USD. No content. The hourly cron trigger deletes days older than 400 days. A directory reset deletes it |
 | API token | Worker secret `AI_GATEWAY_TOKEN` | Set with `wrangler secret put`. Not in a backup of Asterra |
 | Prompts and answers | AI Gateway logs, in the Cloudflare account | Asterra stores neither. The gateway can keep logs of each request, with the mail text of auto labels. Turn off log collection in the gateway if you do not want this |
 

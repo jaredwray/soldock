@@ -303,9 +303,10 @@ MCP clients. The app has no UI-only path.
       A service account (`directory.create_service_account`) gets a name, an address, a description, a sponsor and its scopes, and no key.
       The form shows the scopes of a service account with their texts (`SERVICE_SCOPE_DESCRIPTIONS`), and selects only `account.read` first.
       A toast tells the admin to open it to add a token.
+      An agent (`directory.create_principal`) gets its scopes in the same way: the form shows `AGENT_SCOPES` with the texts for a person (`scopeDescription` with the kind `agent`), selects only `account.read` first, and sends the selected scopes as `scopes`.
+      The first API key of the agent has no scopes of its own. It has the scopes of the agent.
       A credential cannot grant a scope that it does not hold.
       The form offers only the scopes of the session.
-      For an agent, the form also applies `AGENT_SCOPES`, and the app sends the selected scopes as `key_scopes`.
       A person also needs a first password. The admin gives the password to the person.
       An archived person cannot be a sponsor.
       The dialog shows the banner when Agent is selected.
@@ -326,35 +327,39 @@ MCP clients. The app has no UI-only path.
       The confirmation says that delete cannot be undone.
       For a person who sponsors agents, the dialog names the agents.
       It tells the admin to give each agent a different sponsor first, or to archive or delete the agent.
+    - The agent card and the service account card share two parts. An agent and a service account hold their scopes and their limits. Each API key and each OAuth connection of an agent, and each token of a service account, has them, and has none of its own.
+      **Permissions** (`directory.set_agent_access`, `AgentPermissions.tsx`): the scopes of the agent, and **Limit this agent to specific mailboxes, drives and rooms** (**Limit this account …** for a service account).
+      The form offers `AGENT_SCOPES` for an agent and `SERVICE_SCOPES` for a service account (`scopesFor` of `admin/permissionsDraft.ts`).
+      The scope texts come from `scopeDescription`: the texts for a person for an agent, and the texts for a service account (`SERVICE_SCOPE_DESCRIPTIONS`, without "your") for a service account.
+      With the limit, the form shows a list of check boxes for each product: the own mailbox, the team mailboxes, the own drive, the shared drives and the rooms.
+      The choices come from the access of the agent (`admin/resourceChoices.ts`). A listed resource that is not in these lists shows with its id, so a manager can remove it.
+      A selection key has the kind and the id, because the own mailbox and the own drive have the same id.
+      A list stops a further selection at 20 (`AGENT_RESOURCE_LIMITS.perKind`), with a count when it has more choices.
+      A direct message shows the name of its other member (`peer_name`).
+      **Save permissions** sends only the fields that changed (`admin/permissionsDraft.ts`), and is off when nothing changed. A line tells when the choices are not saved.
+      After a save, the form shows the saved values from the answer of the save at once, also when the next read of the access is slow or fails. The card ignores the answer of a read that is older than its newest read.
+      **Access** (`directory.get_agent_access`, `AgentAccess.tsx`): the live API keys (**Live tokens** for a service account), the limits, the own mailbox and drive, the team mailboxes, the shared drives, the rooms with the role, and **Shared directly in Drive** (the items that a member shared with the agent).
+      The list of live API keys of an agent does not show the apps that connect with OAuth.
+      The card reads the access one time for **Permissions** and for **Access** (`admin/useAgentAccess.ts`).
+      A create, a rotation or a revoke of a key, and a save of the permissions, load the access again.
     - A service account card has these parts, for an owner or an admin only:
       **Name, description and sponsor** (`directory.update_principal`, with `description`).
       The creation time, the creator and the sponsor.
       The outbound policy.
-      **Permissions** (`directory.set_service_account_access`, `ServiceAccountPermissions.tsx`): the scopes of the account, and **Limit this account to specific mailboxes, drives and rooms**.
-      The scopes and the limits are on the account. Each token of the account has them, and a token has none of its own.
-      The scope texts are the texts for a service account (`SERVICE_SCOPE_DESCRIPTIONS`), without "your".
-      With the limit, the form shows a list of check boxes for each product: the own mailbox, the team mailboxes, the own drive, the shared drives and the rooms.
-      The choices come from the access of the account (`admin/resourceChoices.ts`). A listed resource that is not in these lists shows with its id, so an admin can remove it.
-      A selection key has the kind and the id, because the own mailbox and the own drive have the same id.
-      A list stops a further selection at 20 (`SERVICE_RESOURCE_LIMITS.perKind`), with a count when it has more choices.
-      A direct message shows the name of its other member (`peer_name`).
-      **Save permissions** sends only the fields that changed (`admin/permissionsDraft.ts`), and is off when nothing changed. A line tells when the choices are not saved.
-      After a save, the form shows the saved values from the answer of the save at once, also when the next read of the access is slow or fails. The card ignores the answer of a read that is older than its newest read.
+      **Permissions**.
       **Tokens of …**: the API key manager with the word "token", a lifetime of 90 days first, and the creator and the revoker of each token.
-      The token form has a label, a description and a lifetime, and no scopes (`accountScoped`). A token row shows no scopes.
-      **Access** (`directory.get_service_account_access`): the live tokens, the limits, the own mailbox and drive, the team mailboxes, the shared drives, the rooms with the role, and **Shared directly in Drive** (the items that a member shared with the account).
-      The card reads the access one time for **Permissions** and for **Access**.
+      The token form has a label, a description and a lifetime, and no scopes (`scopesFrom="account"`). A token row shows no scopes.
+      **Access**.
       **Activity** (`directory.list_service_account_activity`): a table of the newest entries, a filter for one token, **Refresh** and **Load more**.
       The surface `system` shows as "Asterra", for example for the notice before a token ends. The surface `member` shows as "Member change".
       A create, a rotation or a revoke of a token, and a save of the permissions, load the access and the activity again.
       Each part shows its loading, empty and error states, and an error has **Try again**.
-    - An agent card also has the outbound policy, the connected apps, the webhooks and the API keys.
+    - An agent card also has the outbound policy, **Permissions**, the connected apps, the webhooks, the API keys and **Access**.
+      The sponsor, an owner or an admin sees the card, and each of them can save the permissions. An agent can never change its own permissions.
       The policy sets the mail recipients and the webhook hosts (`directory.update_agent_policy`).
-      **Apps connected as …** uses `oauth.list_grants`, **Add scopes** (`oauth.add_grant_scopes`) and Revoke (`oauth.revoke_grant`).
-      The two buttons are side by side with a space between them. At 500px and below, one is above the other.
-      **Add scopes** shows on a live connection when the session can give one more agent scope.
-      Its dialog lists those scopes. The confirm button stays off until the person selects a scope.
-      To remove a scope, revoke the connection and connect again.
+      **Apps connected as …** uses `oauth.list_grants` and Revoke (`oauth.revoke_grant`).
+      A connection has the permissions of the agent, so a row shows no scopes.
+      **API keys of …**: the key form has a label, a description and a lifetime, and no scopes (`scopesFrom="agent"`). A key row shows no scopes.
       **Webhooks of …** shows one row for each webhook that gets an event of the agent.
       The rows come from `mail.list_webhook_subscriptions`, `chat.list_webhook_subscriptions` and `drive.list_webhook_subscriptions`.
       **Edit events** opens a dialog with a check box for each mail, chat and drive event.
@@ -423,8 +428,15 @@ MCP clients. The app has no UI-only path.
   - An owner or an admin can create a new agent: the name and the address come from the client name
     and the first mail domain, and the person can change them. A person can also select an agent
     that they sponsor (each agent, for an admin). The list does not offer an archived agent.
-  - The scopes are the agent scopes that the session holds. The page selects the requested scopes
-    and `account.read` first, or each scope when the client asked for none.
+  - For a new agent, the scopes are the agent scopes that the session holds. The page selects the
+    requested scopes and `account.read` first, or each scope when the client asked for none. The app
+    sends them as `scopes` with `new_agent`.
+  - For an agent that exists, the page offers no scopes and sends only `agent_id`. A line tells that
+    the app gets each permission of the agent, and that the agent card in Admin › Members changes them.
+    The page reads the selected agent (`directory.get_agent_access`) and lists each scope of the agent.
+    It marks a scope as **Requested** or **Not requested**, names the requested scopes that the agent
+    does not hold, and tells if the agent is limited to listed resources (`agentGrant` in `connect.ts`).
+    It does not make this read for a new agent. If the read fails, the page shows the error and **Try again**.
   - **Approve and connect** (`oauth.approve_authorization`) and **Deny** (`oauth.deny_authorization`)
     send the browser to the `redirect_to` of the result. A member who cannot approve sees only Deny.
   - An expired or decided request shows a message to start again in the app.

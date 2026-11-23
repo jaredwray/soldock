@@ -1,6 +1,6 @@
 // The operation handlers and the resource change feeds of each domain, joined, and the subscriptions of
 // MCP Events. The composition root and the tests use these maps.
-import { SERVICE_ACCESS_LIMITS } from "@asterra/contracts";
+import { AGENT_ACCESS_LIMITS } from "@asterra/contracts";
 import { aiHandlers } from "./ai/index.ts";
 import {
 	chatHandlers,
@@ -40,17 +40,17 @@ export const handlers: HandlerMap<CallContext> = {
 			text: input.text ?? "",
 		});
 	},
-	// The identity handler checks the access and reads the team mailboxes and the tokens. The shared drives
+	// The identity handler checks the access and reads the team mailboxes and the keys. The shared drives
 	// and the rooms come from the indexes of Drive and Chat. The items shared directly come from the drive of
-	// the account, and the drive of each item checks the access of the account again.
-	async "directory.get_service_account_access"(call, input) {
-		const result = await identityHandlers["directory.get_service_account_access"](call, input);
-		const account = await getPrincipal(call.env.DIRECTORY, result.principal_id);
+	// the agent, and the drive of each item checks the access of the agent again.
+	async "directory.get_agent_access"(call, input) {
+		const result = await identityHandlers["directory.get_agent_access"](call, input);
+		const agent = await getPrincipal(call.env.DIRECTORY, result.principal_id);
 		const [drives, rooms, shared] = await Promise.all([
 			sharedDrivesOfPrincipal(call.env.DIRECTORY, result.principal_id),
-			roomsOfPrincipal(call.env.DIRECTORY, result.principal_id, SERVICE_ACCESS_LIMITS.rooms),
-			account
-				? sharedItemsOfPrincipal(call.env, account, SERVICE_ACCESS_LIMITS.sharedItems)
+			roomsOfPrincipal(call.env.DIRECTORY, result.principal_id, AGENT_ACCESS_LIMITS.rooms),
+			agent
+				? sharedItemsOfPrincipal(call.env, agent, AGENT_ACCESS_LIMITS.sharedItems)
 				: { items: [], truncated: false },
 		]);
 		return {

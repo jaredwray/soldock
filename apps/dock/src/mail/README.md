@@ -119,8 +119,8 @@ who can.
   mailbox, not the query, because a query can hold private words. `mail.get_profile` and
   `mail.list_labels` write no line: the web app polls them, and they return no mail content.
 - The access check reads the directory on each call, so a role change applies to the next call.
-- `mail.list_mailboxes` leaves out each mailbox outside the list of a service account with resource limits
-  ([identity](../identity/README.md#resource-limits-of-a-service-account)).
+- `mail.list_mailboxes` leaves out each mailbox outside the list of an agent or a service account with
+  resource limits ([identity](../identity/README.md#resource-limits-of-an-agent)).
 - A [service account](../identity/README.md#service-accounts) is an agent here. Owners and admins read
   its mailbox with these rules, its outbound policy limits its mail, and its mail shows the kind `agent`
   in `sent_by`.
@@ -453,8 +453,9 @@ on a server, a REST client or an MCP client of an older protocol.
 
 ### Create
 
-- `mail.create_webhook_subscription` needs the scope `mail.webhooks`. In the web app, a new key does not get this
-  scope unless the person selects it.
+- `mail.create_webhook_subscription` needs the scope `mail.webhooks`. In the web app, a new key of a person, and a
+  new agent, do not get this scope unless the person selects it. A key or a connection of an agent has the scopes
+  of the agent.
 - A person can watch their own mailbox, a team mailbox that they are a member of, and the mailbox of
   an agent that they sponsor. An agent can watch its own mailbox and its team mailboxes.
 - An owner or an admin who is not the sponsor cannot watch the mailbox of an agent: a webhook tells
@@ -552,6 +553,7 @@ code that the Worker makes: `http_<status>`, `redirect`, `timeout` or `network`.
 | The creator was deleted, or its API key or OAuth grant was revoked or expired | Disabled, `credential_revoked` |
 | The creator, or the agent of the mailbox, is archived | No POST. The webhook stays active, and a restore makes it send again |
 | The creator is not a member of the team mailbox, or not the sponsor of the agent | Disabled, `access_lost` |
+| The creator is an agent that does not hold `mail.webhooks` now, or whose resource limits do not name the mailbox ([Access of an agent](../identity/README.md#access-of-an-agent)) | Disabled, `access_lost` |
 | The creator, or the principal of the mailbox, was deleted | `directory.delete_principal` deleted the webhook in its transaction |
 | The outbound policy of the agent that created it does not allow the host | Disabled, `policy_denied` |
 

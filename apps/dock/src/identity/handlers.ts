@@ -1,5 +1,5 @@
 import {
-	AGENT_SCOPES,
+	type AgentResources,
 	ALL_SCOPES,
 	API_KEY_LIMITS,
 	commaListEntries,
@@ -10,14 +10,21 @@ import {
 	RoomId,
 	type Scope,
 	SERVICE_ACTIVITY_LIMITS,
-	type ServiceResources,
 	SharedDriveId,
 	SIGN_IN_LOCK_MINUTES,
 	searchFold,
 	TEAM_MAILBOX_LIMITS,
 } from "@asterra/contracts";
 import { audit, decodeCursor, encodeCursor, type HandlerMap, OperationError } from "../platform/index.ts";
-import { auditOk, credentialOwner, grantableScopes, isAdmin, missingScopes, recordServiceChange } from "./access.ts";
+import {
+	auditOk,
+	canManageAgent,
+	credentialOwner,
+	grantableScopes,
+	isAdmin,
+	missingScopes,
+	recordServiceChange,
+} from "./access.ts";
 import type { AuthContext, CallContext } from "./auth.ts";
 import { oauthHandlers } from "./oauth-handlers.ts";
 import { toApiKeyOutput, toPrincipalOutput } from "./output.ts";
@@ -54,9 +61,9 @@ import {
 	restorePrincipal,
 	revokeApiKey,
 	rotateApiKey,
+	setAgentAccess,
 	setPassword,
 	setPendingTotpSecret,
-	setServiceAccess,
 	unknownPrincipalIds,
 	updateOutboundPolicy,
 	updatePrincipal,
@@ -103,17 +110,26 @@ type IdentityOperation =
 	| "directory.remove_team_mailbox_member"
 	| "directory.create_service_account"
 	| "directory.list_service_account_activity"
-	| "directory.get_service_account_access"
-	| "directory.set_service_account_access";
+	| "directory.get_agent_access"
+	| "directory.set_agent_access";
 
 /**
- * Only the sponsor of an agent, an owner or an admin can change the agent's policy. Never the agent. Only
- * an owner or an admin changes the policy of a service account.
+ * The agent or the service account whose access the caller reads or changes: its sponsor, an owner or an
+ * admin, and only an owner or an admin for a service account (`canManageAgent`). Throws `not_found` for a
+ * principal that is not an agent, and `forbidden` for each other caller.
  */
-function canChangePolicyOf(caller: AuthContext, target: PrincipalRecord): boolean {
-	if (caller.kind !== "human" || target.kind !== "agent") return false;
-	if (target.service) return isAdmin(caller);
-	return target.sponsor_id === caller.principal.id || isAdmin(caller);
+async function agentToManage(call: CallContext, principalId: string, action: string): Promise<PrincipalRecord> {
+	const target = await getPrincipal(call.env.DIRECTORY, principalId);
+	if (target?.kind !== "agent") throw new OperationError("not_found", "No agent or service account has that id.");
+	if (!canManageAgent(call.caller, target)) {
+		throw new OperationError(
+			"forbidden",
+			target.service
+				? `Only an owner or an admin can ${action} of a service account.`
+				: `Only the sponsor of the agent, an owner or an admin can ${action} of the agent.`,
+		);
+	}
+	return target;
 }
 
 /**
@@ -164,22 +180,22 @@ function sameIds(a: readonly string[], b: readonly string[]): boolean {
 }
 
 /** True when the two limits allow the same mailboxes, drives and rooms. Null: no limits. */
-function sameResources(a: ServiceResources | null, b: ServiceResources | null): boolean {
+function sameResources(a: AgentResources | null, b: AgentResources | null): boolean {
 	if (a === null || b === null) return a === b;
 	return sameIds(a.mailbox_ids, b.mailbox_ids) && sameIds(a.drive_ids, b.drive_ids) && sameIds(a.room_ids, b.room_ids);
 }
 
 /**
- * Checks the resource limits of a service account. A mailbox is the own mailbox of the account (its id) or
- * a team mailbox that exists. A drive is the own drive of the account or a shared drive. A room is a room
- * id. Any other id is refused, also the id of a different principal: a limited account does not reach
- * items that a person shared directly with it.
+ * Checks the resource limits of an agent or a service account. A mailbox is the own mailbox of the agent (its
+ * id) or a team mailbox that exists. A drive is the own drive of the agent or a shared drive. A room is a room
+ * id. Any other id is refused, also the id of a different principal: a limited agent does not reach items
+ * that a person shared directly with it.
  */
-async function assertServiceResources(call: CallContext, target: PrincipalRecord, resources: ServiceResources) {
+async function assertAgentResources(call: CallContext, target: PrincipalRecord, resources: AgentResources) {
 	for (const id of resources.mailbox_ids) {
 		if (id === target.id) continue;
 		if (!isTeamMailboxId(id)) {
-			throw new OperationError("invalid", `${id} is not the own mailbox of the account or a team mailbox.`);
+			throw new OperationError("invalid", `${id} is not the own mailbox of the agent or a team mailbox.`);
 		}
 		if (!(await getTeamMailbox(call.env.DIRECTORY, id))) {
 			throw new OperationError("not_found", `No team mailbox has the id ${id}.`);
@@ -187,7 +203,7 @@ async function assertServiceResources(call: CallContext, target: PrincipalRecord
 	}
 	for (const id of resources.drive_ids) {
 		if (id !== target.id && !SharedDriveId.safeParse(id).success) {
-			throw new OperationError("invalid", `${id} is not the own drive of the account or a shared drive.`);
+			throw new OperationError("invalid", `${id} is not the own drive of the agent or a shared drive.`);
 		}
 	}
 	for (const id of resources.room_ids) {
@@ -381,15 +397,14 @@ export const identityHandlers: Pick<HandlerMap<CallContext>, IdentityOperation |
 			if (!input.password) throw new OperationError("invalid", "A person needs a password to sign in.");
 			assertFullCredential(call.caller);
 		}
-		// A person signs in with the password and creates keys in Settings. Only an agent gets a first key.
+		// Each key and each OAuth connection of the agent gives these scopes. So the credential of the call must
+		// hold each one, as for a new key. The contract makes an agent send scopes.
+		const agentScopes =
+			input.kind === "agent" ? grantableScopes(call.caller, { kind: "agent", service: false }, input.scopes ?? []) : [];
+		// A person signs in with the password and creates keys in Settings. Only an agent gets a first key, which
+		// is only a credential: it has the scopes of the agent.
 		const firstKey =
-			input.kind === "agent"
-				? {
-						label: "First key",
-						scopes: grantableScopes(call.caller, { kind: "agent", service: false }, input.key_scopes ?? AGENT_SCOPES),
-						created_by: call.caller.principal.id,
-					}
-				: null;
+			input.kind === "agent" ? { label: "First key", scopes: [], created_by: call.caller.principal.id } : null;
 		const created = await createPrincipal(
 			call.env.DIRECTORY,
 			{
@@ -400,6 +415,7 @@ export const identityHandlers: Pick<HandlerMap<CallContext>, IdentityOperation |
 				sponsor_id: sponsorId,
 				password_hash: input.kind === "human" && input.password ? await hashPassword(input.password) : null,
 				created_by: call.caller.principal.id,
+				agent_scopes: agentScopes,
 			},
 			firstKey,
 			// A sponsor archived or deleted during the request must not get a new agent.
@@ -447,7 +463,7 @@ export const identityHandlers: Pick<HandlerMap<CallContext>, IdentityOperation |
 				password_hash: null,
 				description: input.description ?? null,
 				created_by: call.caller.principal.id,
-				service_scopes: scopes,
+				agent_scopes: scopes,
 			},
 			null,
 			// A sponsor archived or deleted during the request must not get a new service account.
@@ -479,8 +495,8 @@ export const identityHandlers: Pick<HandlerMap<CallContext>, IdentityOperation |
 	},
 
 	// The composition root adds the shared drives and the rooms (`src/handlers.ts`).
-	async "directory.get_service_account_access"(call, input) {
-		const target = await serviceAccountToRead(call, input.principal_id);
+	async "directory.get_agent_access"(call, input) {
+		const target = await agentToManage(call, input.principal_id, "read the access");
 		const [mailboxes, keys] = await Promise.all([
 			teamMailboxesOf(call.env.DIRECTORY, target.id),
 			liveApiKeys(call.env.DIRECTORY, target.id),
@@ -498,49 +514,49 @@ export const identityHandlers: Pick<HandlerMap<CallContext>, IdentityOperation |
 			drive_shared_items: [],
 			drive_shared_items_truncated: false,
 			tokens: keys.map((key) => ({ key_id: key.id, label: key.label, expires_at: key.expires_at })),
-			scopes: target.service_scopes,
-			resources: target.service_resources,
+			scopes: target.agent_scopes,
+			resources: target.agent_resources,
 		};
 	},
 
-	async "directory.set_service_account_access"(call, input) {
-		if (!isAdmin(call.caller)) {
-			throw new OperationError("forbidden", "Only owners and admins can change the access of a service account.");
-		}
-		const target = await getPrincipal(call.env.DIRECTORY, input.principal_id);
-		if (!target?.service) throw new OperationError("not_found", "No service account has that id.");
-		// Each token of the account gets the new scopes. So the credential of the call must hold each one.
+	async "directory.set_agent_access"(call, input) {
+		const target = await agentToManage(call, input.principal_id, "change the access");
+		// Each key and each OAuth connection of the agent gets the new scopes. So the credential of the call must
+		// hold each one.
 		const scopes = input.scopes === undefined ? undefined : grantableScopes(call.caller, target, input.scopes);
-		// The limits say where each scope of the account applies. So a change of the limits also needs a
-		// credential that holds each scope of the account: a narrow key with `directory.write` cannot remove
-		// the limits for a scope that it does not hold.
-		if (input.resources !== undefined) grantableScopes(call.caller, target, scopes ?? target.service_scopes);
-		if (input.resources != null) await assertServiceResources(call, target, input.resources);
-		// A call that changes nothing writes nothing. So the live connections of the account stay open, and
-		// the log gets no entry: a script can send the wanted access again and again.
-		const newScopes = scopes !== undefined && !sameIds(scopes, target.service_scopes);
-		const newResources = input.resources !== undefined && !sameResources(input.resources, target.service_resources);
+		// The limits say where each scope of the agent applies. So a change of the limits also needs a credential
+		// that holds each scope of the agent: a narrow key with `directory.write` cannot remove the limits for a
+		// scope that it does not hold.
+		if (input.resources !== undefined) grantableScopes(call.caller, target, scopes ?? target.agent_scopes);
+		if (input.resources != null) await assertAgentResources(call, target, input.resources);
+		// A call that changes nothing writes nothing. So the live connections of the agent stay open, and the log
+		// gets no entry: a script can send the wanted access again and again.
+		const newScopes = scopes !== undefined && !sameIds(scopes, target.agent_scopes);
+		const newResources = input.resources !== undefined && !sameResources(input.resources, target.agent_resources);
 		if (!newScopes && !newResources) {
-			return { principal_id: target.id, scopes: target.service_scopes, resources: target.service_resources };
+			return { principal_id: target.id, scopes: target.agent_scopes, resources: target.agent_resources };
 		}
-		const updated = await setServiceAccess(call.env.DIRECTORY, target.id, {
-			scopes: newScopes ? scopes : undefined,
-			resources: newResources ? input.resources : undefined,
-		});
-		if (!updated) throw new OperationError("not_found", "No service account has that id.");
-		// Each live connection of the account has the access of its open. The events sockets close at once,
-		// and a room socket closes at its next check (`access_version`). A client then opens them again.
-		await endEventSockets(call.env, target.id, { apiKeys: true });
-		const limits = updated.service_resources === null ? "no limits" : "limits";
-		auditOk(call, "directory.set_service_account_access", `${target.id}:${updated.service_scopes.join(",")}:${limits}`);
-		recordServiceChange(call, target, "directory.set_service_account_access");
-		return { principal_id: target.id, scopes: updated.service_scopes, resources: updated.service_resources };
+		// A sponsor who is not an admin acts only while the agent still has that sponsor, in the write itself.
+		const updated = await setAgentAccess(
+			call.env.DIRECTORY,
+			target,
+			{ scopes: newScopes ? scopes : undefined, resources: newResources ? input.resources : undefined },
+			isAdmin(call.caller) ? null : call.caller.principal.id,
+		);
+		if (!updated) throw new OperationError("conflict", DIRECTORY_CHANGED);
+		// Each live connection of the agent has the access of its open. The events sockets close at once, and a
+		// room socket or a feed closes at its next check (`access_version`). A client then opens them again.
+		await endEventSockets(call.env, target.id, { agentAccess: true });
+		const limits = updated.agent_resources === null ? "no limits" : "limits";
+		auditOk(call, "directory.set_agent_access", `${target.id}:${updated.agent_scopes.join(",")}:${limits}`);
+		recordServiceChange(call, target, "directory.set_agent_access");
+		return { principal_id: target.id, scopes: updated.agent_scopes, resources: updated.agent_resources };
 	},
 
 	async "directory.update_agent_policy"(call, input) {
 		const target = await getPrincipal(call.env.DIRECTORY, input.principal_id);
 		if (target?.kind !== "agent") throw new OperationError("not_found", "No agent has that id.");
-		if (!canChangePolicyOf(call.caller, target)) {
+		if (!canManageAgent(call.caller, target)) {
 			throw new OperationError(
 				"forbidden",
 				target.service
@@ -724,16 +740,16 @@ export const identityHandlers: Pick<HandlerMap<CallContext>, IdentityOperation |
 	async "account.create_api_key"(call, input) {
 		const target = await credentialOwner(call, input.principal_id);
 		let scopes: Scope[];
-		if (target.service) {
-			// A token of a service account is only a credential of the account. It has no scopes of its own.
+		if (target.kind === "agent") {
+			// A key of an agent or a service account is only a credential of the agent. It has no scopes of its own.
 			if (input.scopes !== undefined) {
 				throw new OperationError(
 					"invalid",
-					"A token of a service account has the scopes of its account. Do not send scopes. Change them with directory.set_service_account_access.",
+					"A key of an agent or a service account has the scopes of its agent. Do not send scopes. Change them with directory.set_agent_access.",
 				);
 			}
-			// The secret gives each scope of the account. So the credential of the call must hold each one.
-			grantableScopes(call.caller, target, target.service_scopes);
+			// The secret gives each scope of the agent. So the credential of the call must hold each one.
+			grantableScopes(call.caller, target, target.agent_scopes);
 			scopes = [];
 		} else {
 			if (input.scopes === undefined) throw new OperationError("invalid", "Send scopes: the scopes of the new key.");
@@ -766,9 +782,9 @@ export const identityHandlers: Pick<HandlerMap<CallContext>, IdentityOperation |
 		const key = await getApiKey(call.env.DIRECTORY, input.key_id);
 		if (!key) throw new OperationError("not_found", "No API key has that id.");
 		const owner = await credentialOwner(call, key.principal_id);
-		// The new secret gives each scope of the key: for a token of a service account, each scope of the
-		// account. So the caller must hold each one, as for a new key.
-		const given = owner.service ? owner.service_scopes : key.scopes;
+		// The new secret gives each scope of the key: for a key of an agent or a service account, each scope of
+		// the agent. So the caller must hold each one, as for a new key.
+		const given = owner.kind === "agent" ? owner.agent_scopes : key.scopes;
 		const notHeld = given.filter((scope) => !call.caller.scopes.has(scope));
 		if (notHeld.length > 0) {
 			throw new OperationError(

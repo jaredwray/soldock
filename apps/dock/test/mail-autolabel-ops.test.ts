@@ -206,7 +206,7 @@ describe("who can use the auto-label settings", () => {
 			address: "billing@dock.test",
 			member_ids: [service.id],
 		});
-		await owner.call("directory.set_service_account_access", {
+		await owner.call("directory.set_agent_access", {
 			principal_id: service.id,
 			resources: { mailbox_ids: [], drive_ids: [], room_ids: [] },
 		});

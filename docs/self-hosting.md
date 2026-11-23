@@ -181,7 +181,7 @@ is inbox auto labels. AI is off until an owner or an admin turns it on in **Admi
   published Workers AI prices. The AI Gateway dashboard is the source for billing.
 - The gateway can keep a log of each request, with the mail text of auto labels. To keep no mail text
   in Cloudflare logs, turn off log collection in the settings of the gateway.
-- The deploy creates the queue `soldock-mail-autolabel`. Migration `0027` adds the AI tables: run
+- The deploy creates the queue `soldock-mail-autolabel`. Migration `0028` adds the AI tables: run
   `wrangler d1 migrations apply` as for each migration.
 - For local work, put `AI_GATEWAY_TOKEN=<token>` in `apps/dock/.dev.vars`. Never commit that file.
 
@@ -344,14 +344,70 @@ What changes for a script that calls the API:
 
 - `directory.create_service_account` needs `scopes`.
 - `account.create_api_key` refuses `scopes` for a service account, and it has no `resources` field. Set
-  the scopes and the limits with `directory.set_service_account_access`.
+  the scopes and the limits with `directory.set_agent_access` (the name since migration `0027`).
 - `account.list_api_keys` has no `resources` field. The tokens of
-  `directory.get_service_account_access` have no `scopes` and no `resources`: the account has them.
+  `directory.get_agent_access` have no `scopes` and no `resources`: the account has them.
 
 Between the migration and the deploy, the old Worker keeps working with the scopes and the limits of
 each token. A service account or a token that the old Worker creates in that time has no scope on the
-account after the deploy: set the scopes of the account. If you deploy the old Worker again, a token
-from after the migration has no scope there, and a token from before gets its old scopes and limits.
+account after the deploy: set the scopes of the account. A rollback past migration `0027` is not
+supported ([Upgrade to permissions on the agent](#upgrade-to-permissions-on-the-agent)).
+
+### Upgrade to permissions on the agent
+
+Migration `0027_agent_access.sql` moves the scopes and the resource limits of an agent from each API key
+and each OAuth connection to the agent, as `0026` did for a service account. After it, each key and each
+connection of an agent has the scopes and the limits of the agent. A key of a person keeps its own
+scopes.
+
+What the migration does:
+
+- It adds `principals.agent_scopes` and `agent_resources`, and copies the scopes and the limits of each
+  service account into them. A service account keeps its scopes and its limits. `service_scopes` and
+  `service_resources` stay for the old Worker, and the new Worker does not read them.
+- Each agent gets each scope of these credentials, so no client of the agent loses a scope:
+  - its live API keys (not revoked and not expired)
+  - its live OAuth connections (not revoked, and the refresh token did not expire)
+  - its approved OAuth codes that a client did not use yet
+- A key or a connection with fewer scopes then gets the scopes of the other live credentials of its
+  agent.
+- An agent gets no limits.
+- An agent without a live credential has no scope. Its sponsor, an owner or an admin sets its scopes
+  before a client connects or uses a new key.
+
+After the deploy, open each agent under **Admin › Members**, and examine **Permissions**. Remove each
+scope that the agent does not need. A scope that you remove stops the webhooks of the agent that need
+it.
+
+What changes for a client that calls the API:
+
+- `directory.set_service_account_access` is now `directory.set_agent_access`
+  (`POST /api/v1/directory/agents/{principal_id}/access`), and `directory.get_service_account_access` is
+  now `directory.get_agent_access` (`GET` on the same path). They work for an agent and for a service
+  account. The sponsor of an agent, an owner or an admin calls them. For a service account, only an
+  owner or an admin calls them. A sponsor that a parallel change replaced gets `conflict`. The `tokens`
+  of `directory.get_agent_access` lists live API keys only.
+- `directory.create_principal` has no `key_scopes`. An agent needs `scopes`, and the first key of the
+  agent has no scopes of its own. A person with `scopes` gets `invalid`.
+- `account.create_api_key` refuses `scopes` for a key of an agent (`invalid`). A key of a person still
+  needs `scopes`. `account.list_api_keys` shows the scopes of the agent for a key of an agent.
+- `oauth.approve_authorization` needs `scopes` with `new_agent`, and refuses `scopes` with `agent_id`
+  (`invalid`). `OAuthGrant.scopes` and the `scope` of a token response show the scopes of the agent.
+- `oauth.add_grant_scopes` is removed. To add or remove a scope of a connection, change the agent with
+  `directory.set_agent_access`.
+- In the contracts, `ServiceResources` is now `AgentResources`, `SERVICE_RESOURCE_LIMITS` is now
+  `AGENT_RESOURCE_LIMITS`, and `SERVICE_ACCESS_LIMITS` is now `AGENT_ACCESS_LIMITS`.
+- A change of the scopes or the limits closes the sockets of each key and each OAuth token of the agent
+  with code `4001` (`reconnect`). The events sockets close at once, and each other socket at its next
+  check. A client opens a new socket with the same credential. A token of a service account also gets
+  `4001` now, not `4003` (`ended`).
+
+The migration only adds, so the old Worker keeps working between the migration and the deploy, with the
+scopes of each key and each connection. A key, a connection or an agent that the old Worker creates in
+that time has no scope on the agent after the deploy: set the scopes of the agent. A change of the access
+of a service account that the old Worker saves in that time is lost. A rollback to a Worker from before
+this migration is not supported: it gives each key of an agent its old scopes, and a new key none. Fix a
+problem with a new deploy.
 
 ### Recover a sign-in
 

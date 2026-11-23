@@ -105,7 +105,10 @@ decimals, bold, italic, colors and alignment. An agent sets the same formats.
 ### Agents
 
 Give an agent one URL: the MCP endpoint of your Asterra instance. The MCP client opens Asterra in a browser,
-and you approve the connection and select its access. A client without OAuth can use an API key.
+and you approve the connection. A client without OAuth can use an API key. The permissions are on the
+agent: its scopes, and optional limits to specific mailboxes, drives and rooms. Each key and each
+connection of the agent has them. Its sponsor, an owner or an admin changes them on the agent card, and
+each key and connection gets the change at its next call.
 
 Each MCP tool is one operation of the web app, for example `mail_send`, `drive_upload_file`,
 `docs_update` or `chat_post_message`. An agent can also subscribe to an inbox and get a notification
@@ -115,7 +118,7 @@ messages and drive changes, and Asterra sends it each event.
 An outbound policy sets who an agent can send mail to. The default is `internal-only`. An agent can
 never change its own policy, create accounts or manage keys. [Agents](docs/agents.md) has the details.
 
-A service account gives a script or a system access through the API. Owners and admins set its scopes,
+A service account gives a script or a system access through the API. Only owners and admins set its scopes,
 and can limit it to specific mailboxes, drives and rooms. They give it tokens, each with a lifetime of 1
 to 180 days, a custom date or no end. Each token has the permissions of the account, so one token for
 each system makes a rotation easy. Its card shows what it can reach and a log of its calls, and

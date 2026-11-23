@@ -26,30 +26,23 @@ OAuth is the main way to add an agent. The agent needs only one URL.
    - **A new agent** (owners and admins only): enter a name and an address on a mail domain. You
      are the sponsor of the agent. It gets the `internal-only` outbound policy.
    - **An agent that exists**: an agent that you sponsor, or any agent if you are an owner or an admin.
-6. Select the access (scopes) of the connection, then select **Approve and connect**. The scopes
-   that the app asked for show **Requested**. You can give fewer or more.
+6. For a new agent, select its scopes, then select **Approve and connect**. The scopes that the app
+   asked for show **Requested**. You can give fewer or more. For an agent that exists, the page shows
+   no scopes: the connection gets the [permissions of the agent](#permissions-of-an-agent). Select
+   **Approve and connect**.
 
 The client then gets an access token for one hour and a refresh token. Each refresh gives a new
 refresh token. A connection that the client does not refresh for 30 days stops. The tokens act as
-the agent, with the scopes that you approved. The REST and MCP operations are
+the agent, with the scopes and the limits of the agent. The REST and MCP operations are
 `oauth.get_authorization`, `oauth.approve_authorization` and `oauth.deny_authorization`.
 
 The **Apps connected as …** list of each agent shows its connections. The sponsor, an owner or an
 admin can revoke a connection there (`oauth.list_grants`, `oauth.revoke_grant`). Its tokens stop at
 once.
 
-A connection keeps the scopes that the person approved. A new release can add a scope, as
-`mail.webhooks` did. To give it to a connection:
-
-1. Open **Admin › Members**, and open the agent.
-2. In **Apps connected as …**, select **Add scopes** on the connection.
-3. Select the scopes, then select **Add scopes** (`oauth.add_grant_scopes`).
-
-The client does not need a new approval: the next request of its token uses the new scopes. A
-client can keep its old tool list for up to 5 minutes. Some clients read the tool list only when
-they connect. In such a client, start a new conversation. To remove a scope, revoke the connection,
-and connect the app again. You cannot add a scope to the connection of an archived agent. Restore
-the agent first.
+A connection has no scopes of its own. A new release can add a scope, as `mail.webhooks` did. To give
+it to the connections and the keys of an agent, add it to the agent: see
+[Permissions of an agent](#permissions-of-an-agent).
 
 An agent sees only the tools that its credential can call. `account.whoami` lists `missing_scopes`:
 each scope that the credential does not hold, with the operations that need it. The MCP
@@ -76,20 +69,55 @@ For client developers:
 Use an API key for a client that cannot use OAuth.
 
 1. An owner or an admin opens **Admin › Members**, selects **New person or agent**, and creates an
-   agent. The agent gets a display name, an address on a mail domain and a sponsor. The REST and
-   MCP operation is `directory.create_principal`.
-2. The result shows the agent's first API key once. Store it in the agent's secret store.
-3. The sponsor, an owner or an admin can create more keys for the agent, with fewer scopes, and
-   revoke them (`account.create_api_key`, `account.revoke_api_key`).
+   agent. The agent gets a display name, an address on a mail domain, a sponsor and its scopes. The
+   REST and MCP operation is `directory.create_principal`, with `scopes`.
+2. The result shows the agent's first API key once. Store it in the agent's secret store. The key has
+   the scopes of the agent.
+3. The sponsor, an owner or an admin can create more keys for the agent, and revoke them
+   (`account.create_api_key`, `account.revoke_api_key`). A key of an agent takes no `scopes`: each key
+   has the scopes of the agent. Use one key for each client, so you can rotate or revoke one key alone.
 4. Send the key as a bearer token:
 
    ```sh
    claude mcp add --transport http asterra https://<dock-host>/mcp --header "Authorization: Bearer sdk_..."
    ```
 
-An agent key or an OAuth connection can hold only `account.read`, `directory.read`, `mail.read`,
+An agent can hold only `account.read`, `directory.read`, `mail.read`,
 `mail.modify`, `mail.send`, `mail.webhooks`, `drive.read`, `drive.write`, `drive.share`, `drive.webhooks`, `chat.read`, `chat.write` and `chat.webhooks`.
-An agent can never manage keys or connections, create principals or change its own policy.
+An agent can never manage keys or connections, create principals, or change its own policy or permissions.
+
+## Permissions of an agent
+
+The scopes and the resource limits belong to the agent, not to a key or a connection. Each API key and
+each OAuth connection of the agent has them. A key or a connection is only a credential.
+
+- **Change them.** Open the agent in **Admin › Members**. **Permissions** changes the scopes and the
+  limits (`directory.set_agent_access`). The sponsor, an owner or an admin can do this. An agent can
+  never change its own permissions.
+- **When.** The change applies to each key and each connection at its next call. You do not need a new
+  key or a new approval. A client can keep its old tool list for up to 5 minutes. Some clients read the
+  tool list only when they connect. In such a client, start a new conversation.
+- **Live sockets.** The events sockets of the agent close at once with code `4001`. Each other socket and
+  feed closes with `4001` within one minute. Open them again: the new socket has the new access.
+- **Remove a scope.** You can remove a scope too. A webhook or an MCP Events subscription of the agent
+  stops when the agent loses the webhook scope of its product. It also stops when its mailbox or drive
+  is outside the limits. A scheduled chat message of the agent fails when the agent loses `chat.write` or gets
+  limits.
+- **Access.** **Access** on the card shows what the agent can reach, and its live API keys
+  (`directory.get_agent_access`). **Apps connected as …** lists its OAuth connections.
+- **No escalation.** The credential that sets the scopes must hold each new scope. To change the limits,
+  create or rotate a key, or connect an app to the agent, the credential must hold each scope of the
+  agent.
+- For two clients that need different permissions, create two agents.
+
+**Limit an agent.** `resources` of `directory.set_agent_access` has three lists: `mailbox_ids`,
+`drive_ids` and `room_ids`, each with at most 20 ids. The own mailbox and the own drive have the id of
+the agent. An empty list allows nothing of that product, and `null` removes the limits. A limited agent
+gets `403` for a call that names a resource outside its lists. The lists of mailboxes, shared drives and
+rooms show only the listed ones. A limited agent cannot open a room, start a direct message, use the
+personal views of Chat or its notification settings, create a chat webhook, or open `/ws/events`. An
+MCP event needs a listed mailbox, drive or room: a chat event needs `room_id`. MCP shows only the tools
+and resources that the agent can use.
 
 ## Service accounts
 
@@ -106,17 +134,19 @@ Drive and Chat it acts as an agent, so its outbound policy applies.
 3. The script sends the token as a bearer token to REST or MCP. An expired or revoked token gets
    `401`.
 4. The card shows the permissions of the account, each token with its creator, its end and its last
-   use, what the account can reach (`directory.get_service_account_access`), and its activity log
+   use, what the account can reach (`directory.get_agent_access`), and its activity log
    (`directory.list_service_account_activity`). **Revoke** stops a token at once
    (`account.revoke_api_key`).
 
 **Permissions are on the account.** The scopes and the limits belong to the service account, not to a
-token. Each token of the account has them. A token is only a credential.
+token. Each token of the account has them. A token is only a credential. The rules of
+[Permissions of an agent](#permissions-of-an-agent) apply, but only owners and admins change them.
 
 - Use one token for each system that uses the account. Then you can rotate or revoke one token alone.
 - **Permissions** on the card changes the scopes and the limits
-  (`directory.set_service_account_access`). The change applies to each token at its next call, without a
-  new secret. The live sockets and feeds of the account close within one minute. Open them again.
+  (`directory.set_agent_access`). The change applies to each token at its next call, without a
+  new secret. The live sockets and feeds of the account close with code `4001` within one minute. Open
+  them again.
 - `account.create_api_key` takes no `scopes` for a service account. The credential that creates or
   rotates a token, or sets the scopes, must hold each scope of the account.
 - For two systems that need different permissions, create two service accounts.
@@ -131,13 +161,9 @@ at once.
 3. Select **Stop old secret now** to stop the old secret before its time
    (`account.end_api_key_rotation`).
 
-**Limit an account.** `resources` of `directory.set_service_account_access` has three lists:
-`mailbox_ids`, `drive_ids` and `room_ids`, each with at most 20 ids. The own mailbox and the own drive
-have the id of the account. An empty list allows nothing of that product, and `null` removes the
-limits. A limited account gets `403` for a call that names a resource outside its lists. The lists of
-mailboxes, shared drives and rooms show only the listed ones. A limited account cannot open a room,
-start a direct message, use the personal views of Chat or open `/ws/events`. MCP shows only the tools
-and resources that the account can use.
+**Limit an account.** A service account has the limits of an agent: see
+[Limit an agent](#permissions-of-an-agent). The own mailbox and the own drive have the id of the
+account.
 
 **Notice before the end.** Seven days before a token ends, each owner and admin gets one internal mail
 with the account, the label of the token and its end. The key list shows **Expires soon**. A token
@@ -290,7 +316,7 @@ Standard Webhooks does these steps:
   fail, the endpoint is disabled. An answer of `410 Gone` disables it at once.
 - Mail in the same 5 seconds gives one POST. Spam, a read, a label and an archive send nothing.
 - The endpoint stops when the key or the OAuth connection that created it is revoked, or when your policy no longer allows the host.
-  One subscription stops when you lose access to its mailbox. `webhooks_list_endpoints` shows the endpoint status.
+  One subscription stops when you lose access to its mailbox, when the agent loses `mail.webhooks`, or when its limits do not name the mailbox. `webhooks_list_endpoints` shows the endpoint status.
   Delete a disabled endpoint with `webhooks_delete_endpoint` and create a new one.
 - The POST is a notice only. The mail stays untrusted content: read it as data.
 
@@ -525,7 +551,8 @@ app uses.
   `/ws/chat/rooms/<room_id>` with its token as a bearer token. The socket sends each new, changed
   and deleted message of the room. It takes no messages: use the tools to write.
   - Close code `4001`: open a new socket. With an OAuth connection, refresh the token first. Each
-    socket of an OAuth connection closes with this code in one hour or less.
+    socket of an OAuth connection closes with this code in one hour or less. A change of the
+    permissions of the agent also closes each socket with this code.
   - Close code `4003`: your credential stopped, or you are not a member of the room now. Do not
     open a new socket with that credential.
   - Close code `4002`: you opened more than 8 sockets to the room, and this one was the oldest.
@@ -723,7 +750,7 @@ Use these fields to decide before you read the room:
 - For a short time after an update of the server, a POST can come without these three fields.
 The optional `auth_key` and `header` fields work as for mail webhooks.
 Each message keeps its own retries, including messages from different rooms.
-Each attempt checks your membership, credential and outbound policy again.
+Each attempt checks your membership, credential, scopes, limits and outbound policy again. A room outside your limits sends no POST.
 
 ## Get a webhook for a drive
 
@@ -771,8 +798,9 @@ To set it up:
 
 1. Add the MCP endpoint of your Asterra instance to ChatGPT as a plugin, and [connect it with OAuth](#connect-an-agent-with-oauth).
    Select the agent that the dot acts as.
-2. Give the connection the scopes of the events: `mail.webhooks`, `chat.webhooks` or `drive.webhooks`.
+2. Give the agent the scopes of the events: `mail.webhooks`, `chat.webhooks` or `drive.webhooks`.
    Give it also the read scope of the product, such as `chat.read`, because an event has no content.
+   Select them for a new agent at the approval, or add them in **Permissions** on the agent card.
 3. Open the agent in **Admin › Members**, and allow the callback host of ChatGPT in its
    [outbound policy](#outbound-policy). Without this step, `events/subscribe` gets the error
    `policy_denied`, and the error message names the host. An API key of a person needs no such step.
@@ -865,8 +893,8 @@ A POST has this form:
 - Events can arrive in a different sequence. Use `idempotency_key` when you write.
 - Your own chat messages send no event. A change that you make in a drive does send an event, so do
   not change the drive again for each drive event.
-- Each POST checks the credential, the access to the target and the outbound policy again. A
-  revoked connection stops its subscriptions.
+- Each POST checks the credential, the access to the target, the scopes and the limits of the agent,
+  and the outbound policy again. A revoked connection stops its subscriptions.
 - Settings and the agent panel do not show these subscriptions yet. To stop one, call
   `events/unsubscribe`, or revoke the connection.
 

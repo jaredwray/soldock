@@ -9,6 +9,7 @@ import nameFoldedMigration from "../migrations/0018_name_folded.sql?raw";
 import serviceAccountMigration from "../migrations/0024_service_accounts.sql?raw";
 import serviceTokenMigration from "../migrations/0025_service_tokens.sql?raw";
 import serviceAccessMigration from "../migrations/0026_service_access.sql?raw";
+import agentAccessMigration from "../migrations/0027_agent_access.sql?raw";
 import {
 	api,
 	callTool,
@@ -161,6 +162,7 @@ describe("mail domain settings", () => {
 				...serviceAccountMigration.split("--> statement-breakpoint"),
 				...serviceTokenMigration.split("--> statement-breakpoint"),
 				...serviceAccessMigration.split("--> statement-breakpoint"),
+				...agentAccessMigration.split("--> statement-breakpoint"),
 			].map((sql) => env.DIRECTORY.prepare(sql)),
 		);
 		expect(await (await domains(owner.key)).json()).toEqual({ mail_domains: ["dock.test"] });

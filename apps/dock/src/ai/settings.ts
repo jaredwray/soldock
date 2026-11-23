@@ -83,7 +83,7 @@ async function readVersioned(db: D1Database): Promise<{ config: AiConfig; update
 	};
 }
 
-/** The settings of the organization. Migration 0027 writes the one row, so a missing row means AI is off. */
+/** The settings of the organization. Migration 0028 writes the one row, so a missing row means AI is off. */
 export async function readConfig(db: D1Database): Promise<AiConfig> {
 	return (await readVersioned(db)).config;
 }

@@ -260,6 +260,60 @@ describe("pins, saved messages, drafts, scheduled messages, and reminders", () =
 		).toBe("invalid");
 	});
 
+	// The scopes and the limits are on the agent, and the sponsor can change them after the agent schedules.
+	it("posts no scheduled message of an agent after the agent gets limits or loses chat.write", async () => {
+		const room = await createRoom(ada, "private", "Billing", [bot.id]);
+		const principal = env.PRINCIPAL.get(env.PRINCIPAL.idFromName(bot.id));
+		const schedule = async (text: string) =>
+			(
+				await bot.call("chat.schedule_message", {
+					room_id: room.id,
+					text,
+					send_at: new Date(Date.now() + 120_000).toISOString(),
+				})
+			).scheduled;
+		/** Makes the message due, and runs the alarm that sends due messages. */
+		const fire = async (id: string) => {
+			await runInDurableObject(principal, async (_instance, state) => {
+				state.storage.sql.exec("UPDATE chat_scheduled_messages SET send_at = ? WHERE id = ?", Date.now() - 1000, id);
+				await state.storage.setAlarm(Date.now() + 60_000);
+			});
+			await runDurableObjectAlarm(principal);
+		};
+		const texts = async () =>
+			(await ada.call("chat.list_messages", { room_id: room.id })).messages.map((message) => message.text);
+		const statusOf = async (id: string) =>
+			runInDurableObject(
+				principal,
+				(_instance, state) =>
+					state.storage.sql
+						.exec<{ status: string }>("SELECT status FROM chat_scheduled_messages WHERE id = ?", id)
+						.one().status,
+			);
+
+		// With chat.write and no limits, the message posts.
+		const sent = await schedule("Invoice 1 is paid.");
+		await fire(sent.id);
+		expect(await statusOf(sent.id)).toBe("sent");
+
+		// The agent gets limits, also with the room in its list: a limited agent cannot schedule a message.
+		const limited = await schedule("Invoice 2 is paid.");
+		await ada.call("directory.set_agent_access", {
+			principal_id: bot.id,
+			resources: { mailbox_ids: [], drive_ids: [], room_ids: [room.id] },
+		});
+		await fire(limited.id);
+		expect(await statusOf(limited.id)).toBe("failed");
+
+		// The agent loses chat.write.
+		await ada.call("directory.set_agent_access", { principal_id: bot.id, resources: null });
+		const unscoped = await schedule("Invoice 3 is paid.");
+		await ada.call("directory.set_agent_access", { principal_id: bot.id, scopes: ["account.read", "chat.read"] });
+		await fire(unscoped.id);
+		expect(await statusOf(unscoped.id)).toBe("failed");
+		expect(await texts()).toEqual(["Invoice 1 is paid."]);
+	});
+
 	it("creates reminders, fires due reminders into Activity, and completes or deletes them", async () => {
 		const room = await createRoom(ada, "public", "Tasks");
 		const msg = await post(ada, room.id, "Check deploy logs");

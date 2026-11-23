@@ -1,10 +1,10 @@
 import {
 	AGENT_SCOPES,
+	AgentResources,
 	ALL_SCOPES,
 	nameAliasParts,
 	type Scope,
 	SERVICE_SCOPES,
-	ServiceResources,
 	searchFold,
 } from "@asterra/contracts";
 import { log, newId, OperationError, randomToken, sha256Hex } from "../platform/index.ts";
@@ -41,15 +41,15 @@ export interface PrincipalRecord {
 	/** Who created the principal. A record only: it gives no rights. */
 	created_by: string | null;
 	/**
-	 * The scopes of a service account. Each token of the account has them: a token has no scopes of its
-	 * own. Empty for each other principal.
+	 * The scopes of an agent or a service account. Each API key and each OAuth connection of the agent has
+	 * them: a credential of an agent has no scopes of its own. Empty for a person, whose keys have scopes.
 	 */
-	service_scopes: Scope[];
-	/** The mailboxes, drives and rooms that a service account is limited to. Null: not limited. */
-	service_resources: ServiceResources | null;
+	agent_scopes: Scope[];
+	/** The mailboxes, drives and rooms that an agent or a service account is limited to. Null: not limited. */
+	agent_resources: AgentResources | null;
 	/**
-	 * The number of changes of the scopes and the limits of a service account. A live connection keeps the
-	 * number of its open, and stops when the number changes.
+	 * The number of changes of the scopes and the limits of an agent. A live connection keeps the number of
+	 * its open, and stops when the number changes.
 	 */
 	access_version: number;
 }
@@ -78,14 +78,14 @@ export interface ApiKeyRecord {
 interface PrincipalRow
 	extends Omit<
 		PrincipalRecord,
-		"outbound_allowlist" | "password_set" | "totp_enabled" | "service" | "service_scopes" | "service_resources"
+		"outbound_allowlist" | "password_set" | "totp_enabled" | "service" | "agent_scopes" | "agent_resources"
 	> {
 	outbound_allowlist: string;
 	password_set: number;
 	totp_enabled: number;
 	service: number;
-	service_scopes: string | null;
-	service_resources: string | null;
+	agent_scopes: string | null;
+	agent_resources: string | null;
 }
 
 interface ApiKeyRow extends Omit<ApiKeyRecord, "scopes"> {
@@ -98,7 +98,7 @@ interface ApiKeyRow extends Omit<ApiKeyRecord, "scopes"> {
  */
 const PRINCIPAL_COLUMNS = `p.id, p.kind, p.display_name, p.org_role, p.sponsor_id, p.outbound_mode, p.outbound_allowlist,
 	p.password_hash IS NOT NULL AS password_set, p.totp_secret IS NOT NULL AS totp_enabled, p.created_at, p.archived_at,
-	p.service, p.description, p.created_by, p.service_scopes, p.service_resources, p.access_version`;
+	p.service, p.description, p.created_by, p.agent_scopes, p.agent_resources, p.access_version`;
 
 const PRINCIPAL_SELECT = `SELECT ${PRINCIPAL_COLUMNS}, a.address
 	FROM principals p JOIN addresses a ON a.principal_id = p.id AND a.is_primary = 1`;
@@ -129,54 +129,53 @@ export const API_KEY_PREFIX = "sdk_";
 /** A session lasts 30 days. */
 export const SESSION_TTL_SECONDS = 30 * 24 * 60 * 60;
 
-/** No mailbox, no drive and no room: the limits of an account whose stored limits are not valid. */
-const NOTHING: ServiceResources = { mailbox_ids: [], drive_ids: [], room_ids: [] };
+/** No mailbox, no drive and no room: the limits of an agent whose stored limits are not valid. */
+const NOTHING: AgentResources = { mailbox_ids: [], drive_ids: [], room_ids: [] };
 
 /**
- * The stored limits of a service account. Null: not limited. Stored text that is not valid limits gives an
- * account that reaches nothing, never an account without limits.
+ * The stored limits of an agent. Null: not limited. Stored text that is not valid limits gives an agent that
+ * reaches nothing, never an agent without limits.
  */
-function parseResources(id: string, text: string | null): ServiceResources | null {
+function parseResources(id: string, text: string | null): AgentResources | null {
 	if (text === null) return null;
 	try {
-		const parsed = ServiceResources.safeParse(JSON.parse(text));
+		const parsed = AgentResources.safeParse(JSON.parse(text));
 		if (parsed.success) return parsed.data;
 	} catch {
 		// Not JSON. The next lines fail closed.
 	}
-	log("error", "service account: the stored resource limits are not valid; the account reaches nothing", {
-		principalId: id,
-	});
+	log("error", "agent: the stored resource limits are not valid; the agent reaches nothing", { principalId: id });
 	return NOTHING;
 }
 
 /**
- * The stored scopes of a service account, without each value that is not a service scope. Stored text that
- * is not a list gives no scope.
+ * The stored scopes of an agent, without each value outside the ceiling of its kind. Stored text that is not a
+ * list gives no scope. The order is the order of the ceiling.
  */
-function parseServiceScopes(id: string, text: string | null): Scope[] {
+function parseAgentScopes(id: string, text: string | null, ceiling: readonly Scope[]): Scope[] {
 	if (text === null) return [];
 	try {
 		const parsed: unknown = JSON.parse(text);
-		if (Array.isArray(parsed)) return SERVICE_SCOPES.filter((scope) => parsed.includes(scope));
+		if (Array.isArray(parsed)) return ceiling.filter((scope) => parsed.includes(scope));
 	} catch {
 		// Not JSON. The next lines fail closed.
 	}
-	log("error", "service account: the stored scopes are not valid; the account has no scope", { principalId: id });
+	log("error", "agent: the stored scopes are not valid; the agent has no scope", { principalId: id });
 	return [];
 }
 
 function toPrincipal(row: PrincipalRow): PrincipalRecord {
 	const service = row.service === 1;
+	const agent = row.kind === "agent";
 	return {
 		...row,
 		outbound_allowlist: JSON.parse(row.outbound_allowlist) as string[],
 		password_set: row.password_set === 1,
 		totp_enabled: row.totp_enabled === 1,
 		service,
-		// Only a service account has scopes and limits of its own. A value on a different row is ignored.
-		service_scopes: service ? parseServiceScopes(row.id, row.service_scopes) : [],
-		service_resources: service ? parseResources(row.id, row.service_resources) : null,
+		// Only an agent has scopes and limits of its own. A value on the row of a person is ignored.
+		agent_scopes: agent ? parseAgentScopes(row.id, row.agent_scopes, service ? SERVICE_SCOPES : AGENT_SCOPES) : [],
+		agent_resources: agent ? parseResources(row.id, row.agent_resources) : null,
 	};
 }
 
@@ -243,8 +242,8 @@ export function domainOf(address: string): string {
 }
 
 /**
- * The scopes that a key for this principal can hold at most. A service account holds less than an agent:
- * no keys, no directory changes and no webhooks.
+ * The scopes that a principal of this kind can hold at most: on a key of a person, or on an agent. A service
+ * account holds less than an agent: no keys, no directory changes and no webhooks.
  */
 export function scopeCeiling(principal: Pick<PrincipalRecord, "kind" | "service">): readonly Scope[] {
 	if (principal.service) return SERVICE_SCOPES;
@@ -569,8 +568,8 @@ export interface NewPrincipal {
 	description?: string | null;
 	/** Who creates the principal. Null for the owner from setup. */
 	created_by?: string | null;
-	/** The scopes of a new service account. */
-	service_scopes?: readonly Scope[];
+	/** The scopes of a new agent or service account. Values outside the ceiling of its kind are left out. */
+	agent_scopes?: readonly Scope[];
 }
 
 /** Turns a directory constraint failure into an error that the caller can read. */
@@ -596,7 +595,7 @@ export function conflictOf(error: unknown): OperationError | null {
 
 export interface NewApiKey {
 	label: string;
-	/** The scopes of the key. Empty for a token of a service account, which has the scopes of its account. */
+	/** The scopes of the key of a person. Empty for a key of an agent, which has the scopes of its agent. */
 	scopes: readonly Scope[];
 	created_by: string | null;
 	description?: string | null;
@@ -688,7 +687,7 @@ export async function createPrincipal(
 			db
 				.prepare(
 					`INSERT INTO principals (id, kind, display_name, org_role, sponsor_id, outbound_mode, outbound_allowlist,
-						password_hash, created_at, service, description, created_by, service_scopes)
+						password_hash, created_at, service, description, created_by, agent_scopes)
 					SELECT ?1, ?2, ?3, ?4, ?5, ?6, '[]', ?7, ?8, ?9, ?10, ?11, ?16
 					WHERE NOT EXISTS (SELECT 1 FROM setup_lock WHERE token IS NOT NULL)
 						AND (?12 = 0 OR NOT EXISTS (SELECT 1 FROM principals))
@@ -713,7 +712,11 @@ export async function createPrincipal(
 					options.liveSponsorId ?? null,
 					options.pendingRequest?.id ?? null,
 					options.pendingRequest?.now ?? null,
-					service ? JSON.stringify(SERVICE_SCOPES.filter((scope) => principal.service_scopes?.includes(scope))) : null,
+					principal.kind === "agent"
+						? JSON.stringify(
+								scopeCeiling({ kind: "agent", service }).filter((s) => principal.agent_scopes?.includes(s)),
+							)
+						: null,
 				),
 			// The name aliases of the mention read, in the same transaction. A lost guard inserted no row, so
 			// this update then changes nothing.
@@ -799,32 +802,37 @@ export async function updateOutboundPolicy(
 }
 
 /**
- * Sets the scopes and the resource limits of a service account. A field that is undefined does not
- * change, and `resources: null` removes the limits. Each write adds one to `access_version`, so each live
- * connection of the account stops at its next check. Returns the new record, or null when no live service
- * account has that id.
+ * Sets the scopes and the resource limits of an agent or a service account. A field that is undefined does
+ * not change, and `resources: null` removes the limits. Scopes outside the ceiling of the kind are left out.
+ * Each write adds one to `access_version`, so each live connection of the agent stops at its next check.
+ * With `sponsorId`, the write matches only while that person still sponsors the agent, so a sponsor that a
+ * parallel change replaced cannot change the access. Returns the new record, or null when no live agent with
+ * that id (and that sponsor) exists.
  */
-export async function setServiceAccess(
+export async function setAgentAccess(
 	db: D1Database,
-	id: string,
-	changes: { scopes?: readonly Scope[] | undefined; resources?: ServiceResources | null | undefined },
+	target: Pick<PrincipalRecord, "id" | "service">,
+	changes: { scopes?: readonly Scope[] | undefined; resources?: AgentResources | null | undefined },
+	sponsorId: string | null = null,
 ): Promise<PrincipalRecord | null> {
+	const ceiling = scopeCeiling({ kind: "agent", service: target.service });
 	const scopes =
-		changes.scopes === undefined ? null : JSON.stringify(SERVICE_SCOPES.filter((s) => changes.scopes?.includes(s)));
+		changes.scopes === undefined ? null : JSON.stringify(ceiling.filter((s) => changes.scopes?.includes(s)));
 	const setResources = changes.resources !== undefined ? 1 : 0;
 	const resources = changes.resources == null ? null : JSON.stringify(changes.resources);
+	// The kind and the service flag of the read must still hold, so the ceiling of the scopes is right.
 	const result = await db
 		.prepare(
 			`UPDATE principals SET
-				service_scopes = CASE WHEN ?2 IS NULL THEN service_scopes ELSE ?2 END,
-				service_resources = CASE WHEN ?3 = 1 THEN ?4 ELSE service_resources END,
+				agent_scopes = CASE WHEN ?2 IS NULL THEN agent_scopes ELSE ?2 END,
+				agent_resources = CASE WHEN ?3 = 1 THEN ?4 ELSE agent_resources END,
 				access_version = access_version + 1
-			WHERE id = ?1 AND service = 1 AND deleted_at IS NULL`,
+			WHERE id = ?1 AND kind = 'agent' AND service = ?5 AND deleted_at IS NULL AND (?6 IS NULL OR sponsor_id = ?6)`,
 		)
-		.bind(id, scopes, setResources, resources)
+		.bind(target.id, scopes, setResources, resources, target.service ? 1 : 0, sponsorId)
 		.run();
 	if (result.meta.changes !== 1) return null;
-	return getPrincipal(db, id);
+	return getPrincipal(db, target.id);
 }
 
 /** The changes of `updatePrincipal`. A field that is undefined does not change. */

@@ -675,7 +675,8 @@ export function chatFilePath(roomId: string, messageId: string, itemId: string, 
 export const CHAT_SOCKET_CLOSE = {
 	/**
 	 * The server must authenticate the credential again. Open a new socket now. An OAuth client gets this
-	 * code when its access token expired or when a refresh replaced the token: use the new token.
+	 * code when its access token expired or when a refresh replaced the token: use the new token. A key or a
+	 * token of an agent gets it when the scopes or the limits of the agent changed: the new socket has them.
 	 */
 	reconnect: 4001,
 	/** The member opened more sockets than `CHAT_LIMITS.socketsPerMember`. Do not open a new socket for this one. */

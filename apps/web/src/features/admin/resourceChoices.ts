@@ -1,19 +1,19 @@
-import type { OutputOf, Principal, ServiceResources } from "@asterra/contracts";
+import type { AgentResources, OutputOf, Principal } from "@asterra/contracts";
 
-/** One mailbox, drive or room that a limited service account can name, with the name to show. */
+/** One mailbox, drive or room that a limited agent or service account can name, with the name to show. */
 export interface ResourceChoice {
 	id: string;
 	label: string;
 }
 
-/** What a service account can be limited to: the resources that it can reach. */
+/** What an agent or a service account can be limited to: the resources that it can reach. */
 export interface ResourceChoices {
 	mailboxes: readonly ResourceChoice[];
 	drives: readonly ResourceChoice[];
 	rooms: readonly ResourceChoice[];
 }
 
-type Access = OutputOf<"directory.get_service_account_access">;
+type Access = OutputOf<"directory.get_agent_access">;
 
 /** The name of a room: `#name`, or the other member of a direct message. */
 export function roomLabel(room: Access["chat_rooms"][number]): string {
@@ -23,9 +23,9 @@ export function roomLabel(room: Access["chat_rooms"][number]): string {
 }
 
 /**
- * The choices for the limits of a service account, from its access: its own mailbox and drive (the id of
- * the account), its team mailboxes, its shared drives and its rooms. A listed resource that is not in
- * these lists comes last, with its id as the name, so an admin can see it and remove it. The account is
+ * The choices for the limits of an agent or a service account, from its access: its own mailbox and drive
+ * (the id of the agent), its team mailboxes, its shared drives and its rooms. A listed resource that is not
+ * in these lists comes last, with its id as the name, so a manager can see it and remove it. The agent is
  * not a member of it now, or the access has more rooms than it shows.
  */
 export function resourceChoicesOf(account: Pick<Principal, "id" | "address">, access: Access): ResourceChoices {
@@ -57,8 +57,8 @@ export function resourceChoicesOf(account: Pick<Principal, "id" | "address">, ac
 	};
 }
 
-/** The text for the limits of an account: "All its memberships", or the names of the listed resources. */
-export function limitText(resources: ServiceResources | null, choices: ResourceChoices | undefined): string {
+/** The text for the limits of an agent: "All its memberships", or the names of the listed resources. */
+export function limitText(resources: AgentResources | null, choices: ResourceChoices | undefined): string {
 	if (resources === null) return "All its memberships";
 	const name = (list: readonly ResourceChoice[] | undefined, id: string) =>
 		list?.find((choice) => choice.id === id)?.label ?? id;

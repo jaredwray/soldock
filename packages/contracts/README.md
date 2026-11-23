@@ -23,7 +23,8 @@ runtime-agnostic (no Workers, DOM or Node APIs).
 | `src/chat-notifications.ts` | The Chat notification settings, Web Push subscriptions, quiet hours, presence and custom status. A browser reports its activity with `ChatActivity` on its events socket. |
 | `src/oauth.ts` | The OAuth approval and connection operations, `OAuthAuthorization`, `OAuthGrant` and `OAUTH_LIMITS`. The `/oauth/*` routes create credentials for a client without one, so they are not operations |
 | `src/errors.ts` | The error catalogue: code → HTTP status and title |
-| `src/scopes.ts` | The scope catalogue, and `AGENT_SCOPES`, the most that an agent key can hold |
+| `src/scopes.ts` | The scope catalogue, and `AGENT_SCOPES`, the most that an agent can hold. Each API key and each OAuth connection of an agent has the scopes of the agent |
+| `src/restrictions.ts` | The resource limits of an agent or a service account (`AgentResources`, `AGENT_RESOURCE_LIMITS`), and `RESOURCE_RULES`: how each operation treats a limited agent |
 | `src/domains.ts` | The domain schema and admin operations to list, add, and remove mail domains |
 | `src/setup.ts` | The schemas of setup (`/auth/setup`), including the first `mail_domain`. Token verification (`POST /auth/setup/verify`) returns `SetupVerifyResult`, the directory state. Setup creates a credential, so it is not an operation |
 | `src/signin.ts` | The schemas and limits of sign-in with a password and an optional TOTP code (`/auth/session`): `Password`, `TotpCode`, `SignInInput`, `SignInResult`. Sign-in creates a credential, so it is not an operation |
@@ -34,6 +35,7 @@ runtime-agnostic (no Workers, DOM or Node APIs).
 - Each capability is one operation here. The REST route, the MCP tool and the client come from it.
 - GET inputs other than path parameters are scalars, because they come from the query string.
 - An operation that agents can call needs only scopes in `AGENT_SCOPES`.
+- An operation that an agent or a service account can call has one rule in `RESOURCE_RULES`.
 - A resource kind reads and lists with read-only operations. Each variable of its URI template is an
   input field of the read operation and one whole path segment of the URI.
 - `test/registry.test.ts` checks these rules, and that each schema converts to JSON Schema for MCP.

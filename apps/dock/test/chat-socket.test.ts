@@ -7,6 +7,7 @@ import {
 	type Actor,
 	bearer,
 	connectRoomSocket as connect,
+	createActor,
 	ORIGIN,
 	readSocket,
 	request,
@@ -148,11 +149,7 @@ describe("a room socket", () => {
 	it("closes when its credential stops, and after its longest life", async () => {
 		const room = await privateRoom(owner, [ada.id, bot.id]);
 		const cookie = await signIn(ada.address);
-		const { api_key: second } = await ada.call("account.create_api_key", {
-			principal_id: bot.id,
-			label: "Second",
-			scopes: ["chat.read"],
-		});
+		const { api_key: second } = await ada.call("account.create_api_key", { principal_id: bot.id, label: "Second" });
 		// Only the clock is fake: the room checks the age of a socket and of its last check against Date.now().
 		vi.useFakeTimers({ toFake: ["Date"] });
 		const signedOut = await connect(room.id, { cookie, origin: ORIGIN });
@@ -360,20 +357,18 @@ describe("a room socket", () => {
 	});
 
 	it("requires write access to announce typing and checks the sender again after revocation", async () => {
-		const room = await privateRoom(ada, [bot.id]);
-		const { api_key: reader } = await ada.call("account.create_api_key", {
-			principal_id: bot.id,
-			label: "Read",
+		// The scopes are on the agent: a reader agent holds only chat.read.
+		const reader = await createActor(owner, {
+			kind: "agent",
+			display_name: "Reader",
+			address: "reader@dock.test",
 			scopes: ["chat.read"],
 		});
-		const { api_key: writer } = await ada.call("account.create_api_key", {
-			principal_id: bot.id,
-			label: "Write",
-			scopes: ["chat.read", "chat.write"],
-		});
+		const room = await privateRoom(ada, [bot.id, reader.id]);
+		const { api_key: writer } = await ada.call("account.create_api_key", { principal_id: bot.id, label: "Write" });
 		vi.useFakeTimers({ toFake: ["Date"] });
 		const viewer = await connect(room.id, bearer(ada.key));
-		const read = await connect(room.id, bearer(reader.secret));
+		const read = await connect(room.id, bearer(reader.key));
 		const write = await connect(room.id, bearer(writer.secret));
 		for (const socket of [viewer, read, write]) socket.socket.send("show");
 		await waitForViews(room.id, 3);
