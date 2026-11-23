@@ -8,6 +8,7 @@ export {
 	AiConnectionTest,
 	type AiFeature,
 	AiGatewayId,
+	AiGatewayToken,
 	type AiModel,
 	type AiModelId,
 	AiModelIdSchema,

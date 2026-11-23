@@ -8,7 +8,7 @@
 | | |
 | --- | --- |
 | **Purpose** | One place for AI calls: the settings of the organization, the gateway call, the budget stop and the usage that Admin › AI shows. |
-| **Owns** | D1 tables `ai_settings` and `ai_usage` (migration `0028`). The Worker secret `AI_GATEWAY_TOKEN` is the operator's. |
+| **Owns** | D1 tables `ai_settings` (with the API token of the gateway) and `ai_usage` (migration `0028`). The optional Worker secret `AI_GATEWAY_TOKEN` is the operator's. |
 | **Depends on** | `platform`, `identity`. |
 | **Operations** | `ai.get_settings`, `ai.update_settings`, `ai.test_connection`, `ai.get_usage` |
 | **Data inventory** | See [Data inventory](#data-inventory). Backups: not built yet. |
@@ -34,6 +34,7 @@ The read operations audit each refusal.
 | --- | --- |
 | On or off | Off: no feature calls the gateway |
 | Account ID and gateway ID | The Cloudflare account (32 hexadecimal characters) and the AI Gateway (lowercase letters, digits and hyphens). Strict patterns keep them from changing the URL |
+| API token | Write-only. `api_token` saves it, and null removes it. Letters, digits, `_` and `-` only, so it cannot break a header |
 | Allowed models | Models of `AI_MODELS` in `packages/contracts` only. Workers AI models only, so the AI stays in Cloudflare |
 | Monthly budget | USD, from 0.01. The default is 10 |
 | Inbox auto labels | On or off, and its model, which must be an allowed model |
@@ -45,8 +46,11 @@ time both stay.
 To turn on AI, the account ID, the gateway ID and one allowed model must be set. The token is not a
 condition: without it, AI makes no calls, the rules of auto labels still apply, and Admin › AI says why.
 
-The token is the Worker secret `AI_GATEWAY_TOKEN`. It is never in D1, in an answer or in a log. An
-answer says only whether it exists (`token_configured`).
+The API token comes from the settings (`ai_settings.api_token`), else from the Worker secret
+`AI_GATEWAY_TOKEN`. A token of the settings wins, because an owner or an admin entered it on purpose. No
+answer and no log contains it: an answer says only whether a token exists (`token_configured`) and where
+it comes from (`token_source`). A change of the token gets its own audit line, without the token. D1 keeps
+the token as it keeps the signing secrets of webhooks: encryption at rest is not built yet.
 
 ## The gateway call
 
@@ -107,7 +111,7 @@ A connection test counts for the person who ran it. A deleted mailbox shows as `
 | --- | --- | --- |
 | AI settings | D1 `ai_settings` (migration `0028`) | One row. No secret. A directory reset makes a new row with AI off |
 | Usage ledger | D1 `ai_usage` (migration `0028`) | One row for each UTC day, feature, model and resource (a mailbox id, or the id of the person who tested). Requests, failures, tokens and the cost in micro-USD. No content. The hourly cron trigger deletes days older than 400 days. A directory reset deletes it |
-| API token | Worker secret `AI_GATEWAY_TOKEN` | Set with `wrangler secret put`. Not in a backup of Asterra |
+| API token | D1 `ai_settings.api_token`, or the Worker secret `AI_GATEWAY_TOKEN` | Entered in Admin › AI, or set with `wrangler secret put`. Never in an answer or a log. A backup of D1 holds the token of the settings, so a backup must be kept as a secret. A directory reset deletes it |
 | Prompts and answers | Not stored | Asterra stores neither, and each request asks AI Gateway to keep no body (`cf-aig-collect-log-payload: false`). The gateway log keeps the metadata only. The header does not change what a Logpush job of the gateway exports: an operator who turns on Logpush must examine that export separately |
 
 ## Safety
@@ -117,7 +121,7 @@ A connection test counts for the person who ran it. A deleted mailbox shows as `
 - Only owners and admins change the settings or test the connection. Agents and service accounts cannot
   hold `directory.write`, and the operations refuse them, so no agent can change the AI policy or the
   budget.
-- The token is a Worker secret only.
+- The token is write-only: no answer and no log contains it. Only owners and admins can save or remove it.
 - The budget bounds what inbound mail can cost: a hostile sender can send much mail, but the calls stop
   at the budget, and rules decide most bulk mail with no call.
 

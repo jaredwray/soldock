@@ -3,6 +3,7 @@ import {
 	AI_MODELS,
 	AiAccountId,
 	AiGatewayId,
+	AiGatewayToken,
 	type AiNotReadyReason,
 	type AiSettings,
 	type InputOf,
@@ -13,6 +14,10 @@ export interface AiDraft {
 	enabled: boolean;
 	accountId: string;
 	gatewayId: string;
+	/** A new API token, as typed. Empty: no change. The saved token never comes back to the web app. */
+	token: string;
+	/** True when the person removes the token of the settings at the next save. */
+	removeToken: boolean;
 	allowedModels: string[];
 	/** The monthly budget in USD, as typed. */
 	budget: string;
@@ -25,6 +30,8 @@ export function draftOf(settings: AiSettings): AiDraft {
 		enabled: settings.enabled,
 		accountId: settings.account_id ?? "",
 		gatewayId: settings.gateway_id ?? "",
+		token: "",
+		removeToken: false,
 		allowedModels: [...settings.allowed_models],
 		budget: String(settings.monthly_budget_usd),
 		autoLabelEnabled: settings.features.mail_auto_label.enabled,
@@ -60,6 +67,10 @@ export function settingsPatch(saved: AiSettings, draft: AiDraft): DraftCheck {
 	if (account && !AiAccountId.safeParse(account).success) {
 		return { ok: false, error: "The account ID has 32 characters: digits and the letters a to f." };
 	}
+	const token = draft.token.trim();
+	if (token && !AiGatewayToken.safeParse(token).success) {
+		return { ok: false, error: "Paste the whole API token: letters, digits, _ and -, at least 20 characters." };
+	}
 	if (gateway && !AiGatewayId.safeParse(gateway).success) {
 		return { ok: false, error: "The gateway ID has lowercase letters, digits and hyphens only." };
 	}
@@ -86,6 +97,8 @@ export function settingsPatch(saved: AiSettings, draft: AiDraft): DraftCheck {
 	if (draft.enabled !== saved.enabled) patch.enabled = draft.enabled;
 	if (account !== (saved.account_id ?? "")) patch.account_id = account || null;
 	if (gateway !== (saved.gateway_id ?? "")) patch.gateway_id = gateway || null;
+	if (token) patch.api_token = token;
+	else if (draft.removeToken && saved.token_source === "settings") patch.api_token = null;
 	if (allowed.join(",") !== inCatalogOrder(saved.allowed_models).join(",")) {
 		patch.allowed_models = allowed as NonNullable<typeof patch.allowed_models>;
 	}
@@ -107,7 +120,7 @@ export function notReadyText(reason: AiNotReadyReason | null): string | null {
 		case "no_gateway":
 			return "Enter the account ID and the gateway ID.";
 		case "no_token":
-			return "The Worker secret AI_GATEWAY_TOKEN is not set, so AI makes no calls. Inbox auto labels use their rules only.";
+			return "No API token is saved, so AI makes no calls. Inbox auto labels use their rules only.";
 		case "no_models":
 			return "Allow at least one model.";
 		default:

@@ -1,10 +1,12 @@
--- AI through Cloudflare AI Gateway. One row of settings for the organization. The API token is a Worker
--- secret (AI_GATEWAY_TOKEN). It is never in the directory.
+-- AI through Cloudflare AI Gateway. One row of settings for the organization.
 CREATE TABLE ai_settings (
 	id INTEGER PRIMARY KEY CHECK (id = 1),
 	enabled INTEGER NOT NULL DEFAULT 0,
 	account_id TEXT,
 	gateway_id TEXT,
+	-- The Cloudflare API token for the gateway, which an owner or an admin enters in Admin › AI. No answer
+	-- and no log contains it. Null: the Worker uses the secret AI_GATEWAY_TOKEN, if it is set.
+	api_token TEXT,
 	-- A JSON array of Workers AI model ids.
 	allowed_models TEXT NOT NULL DEFAULT '[]',
 	monthly_budget_micro_usd INTEGER NOT NULL DEFAULT 10000000,

@@ -19,6 +19,8 @@ export interface AiConfig {
 	allowedModels: AiModelId[];
 	budgetMicroUsd: number;
 	autoLabel: { enabled: boolean; model: AiModelId | null };
+	/** The API token from Admin › AI, or null. Never in an answer or a log. */
+	apiToken: string | null;
 }
 
 interface SettingsRow extends Record<string, unknown> {
@@ -29,6 +31,7 @@ interface SettingsRow extends Record<string, unknown> {
 	monthly_budget_micro_usd: number;
 	auto_label_enabled: number;
 	auto_label_model: string | null;
+	api_token: string | null;
 	updated_at: number;
 }
 
@@ -54,7 +57,7 @@ async function readVersioned(db: D1Database): Promise<{ config: AiConfig; update
 	const row = await db
 		.prepare(
 			`SELECT enabled, account_id, gateway_id, allowed_models, monthly_budget_micro_usd, auto_label_enabled,
-				auto_label_model, updated_at FROM ai_settings WHERE id = 1`,
+				auto_label_model, api_token, updated_at FROM ai_settings WHERE id = 1`,
 		)
 		.first<SettingsRow>();
 	if (!row) {
@@ -66,6 +69,7 @@ async function readVersioned(db: D1Database): Promise<{ config: AiConfig; update
 				allowedModels: [],
 				budgetMicroUsd: 0,
 				autoLabel: { enabled: false, model: null },
+				apiToken: null,
 			},
 			updatedAt: null,
 		};
@@ -78,6 +82,7 @@ async function readVersioned(db: D1Database): Promise<{ config: AiConfig; update
 			allowedModels: parseModels(row.allowed_models),
 			budgetMicroUsd: row.monthly_budget_micro_usd,
 			autoLabel: { enabled: row.auto_label_enabled === 1, model: catalogModel(row.auto_label_model) },
+			apiToken: row.api_token || null,
 		},
 		updatedAt: row.updated_at,
 	};
@@ -88,22 +93,34 @@ export async function readConfig(db: D1Database): Promise<AiConfig> {
 	return (await readVersioned(db)).config;
 }
 
+/**
+ * The API token of the gateway: the token from Admin › AI, else the Worker secret AI_GATEWAY_TOKEN. The
+ * token of the settings wins, because an owner or an admin entered it on purpose.
+ */
+export function gatewayToken(env: Env, config: AiConfig): { token: string; source: "settings" | "secret" } | null {
+	if (config.apiToken) return { token: config.apiToken, source: "settings" };
+	if (env.AI_GATEWAY_TOKEN) return { token: env.AI_GATEWAY_TOKEN, source: "secret" };
+	return null;
+}
+
 /** Why AI cannot make calls now, or null when it can. */
 export function notReadyReason(env: Env, config: AiConfig): AiNotReadyReason | null {
 	if (!config.enabled) return "off";
 	if (!config.accountId || !config.gatewayId) return "no_gateway";
-	if (!env.AI_GATEWAY_TOKEN) return "no_token";
+	if (!gatewayToken(env, config)) return "no_token";
 	if (config.allowedModels.length === 0) return "no_models";
 	return null;
 }
 
 export function toSettingsOutput(env: Env, config: AiConfig): AiSettings {
 	const reason = notReadyReason(env, config);
+	const token = gatewayToken(env, config);
 	return {
 		enabled: config.enabled,
 		account_id: config.accountId,
 		gateway_id: config.gatewayId,
-		token_configured: Boolean(env.AI_GATEWAY_TOKEN),
+		token_configured: token !== null,
+		token_source: token?.source ?? null,
 		ready: reason === null,
 		not_ready_reason: reason,
 		allowed_models: config.allowedModels,
@@ -118,6 +135,8 @@ export interface ConfigPatch {
 	enabled?: boolean | undefined;
 	account_id?: string | null | undefined;
 	gateway_id?: string | null | undefined;
+	/** A new API token, or null to remove the token of the settings. */
+	api_token?: string | null | undefined;
 	allowed_models?: AiModelId[] | undefined;
 	monthly_budget_usd?: number | undefined;
 	features?:
@@ -146,6 +165,7 @@ function applyPatch(config: AiConfig, patch: ConfigPatch): AiConfig {
 			enabled: feature?.enabled ?? config.autoLabel.enabled,
 			model: feature?.model === undefined ? config.autoLabel.model : feature.model,
 		},
+		apiToken: patch.api_token === undefined ? config.apiToken : patch.api_token,
 	};
 	if (next.enabled && (!next.accountId || !next.gatewayId)) {
 		throw new OperationError("invalid", "To turn on AI, enter the account ID and the gateway ID.");
@@ -183,6 +203,7 @@ export async function updateConfig(db: D1Database, patch: ConfigPatch): Promise<
 			next.budgetMicroUsd,
 			next.autoLabel.enabled ? 1 : 0,
 			next.autoLabel.model,
+			next.apiToken,
 		];
 		// Each write has a later time than the one before, so a write always changes `updated_at`.
 		const now = Math.max(Date.now(), (updatedAt ?? 0) + 1);
@@ -191,15 +212,16 @@ export async function updateConfig(db: D1Database, patch: ConfigPatch): Promise<
 				? await db
 						.prepare(
 							`INSERT OR IGNORE INTO ai_settings (id, enabled, account_id, gateway_id, allowed_models,
-								monthly_budget_micro_usd, auto_label_enabled, auto_label_model, updated_at)
-							VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?)`,
+								monthly_budget_micro_usd, auto_label_enabled, auto_label_model, api_token, updated_at)
+							VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 						)
 						.bind(...values, now)
 						.run()
 				: await db
 						.prepare(
 							`UPDATE ai_settings SET enabled = ?, account_id = ?, gateway_id = ?, allowed_models = ?,
-								monthly_budget_micro_usd = ?, auto_label_enabled = ?, auto_label_model = ?, updated_at = ?
+								monthly_budget_micro_usd = ?, auto_label_enabled = ?, auto_label_model = ?, api_token = ?,
+								updated_at = ?
 							WHERE id = 1 AND updated_at = ?`,
 						)
 						.bind(...values, now, updatedAt)

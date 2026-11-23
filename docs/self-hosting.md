@@ -158,24 +158,19 @@ is inbox auto labels. AI is off until an owner or an admin turns it on in **Admi
 1. In the Cloudflare dashboard, open **AI › AI Gateway**. Create a gateway, for example `asterra`.
 2. In the settings of the gateway, turn on **Authenticated Gateway**.
 3. Create an API token with the permissions **Workers AI: Read** and **AI Gateway: Run**, for your
-   account only. Keep it in your secret store.
-4. Set the token as a secret of the dock Worker, for each environment:
-
-   ```sh
-   pnpm --filter @asterra/dock exec wrangler secret put AI_GATEWAY_TOKEN
-   ```
-
-   ```sh
-   pnpm --filter @asterra/dock exec wrangler secret put AI_GATEWAY_TOKEN --env development
-   ```
-
-5. In **Admin › AI**, enter the account ID and the gateway ID. Select **Test connection**.
-6. Allow the models, choose the model of **Inbox auto labels**, set the monthly budget, and turn on AI.
-7. Each person turns on auto labels for their mailbox in Mail, with the spark button next to
+   account only.
+4. In **Admin › AI**, enter the account ID, the gateway ID and the API token. Save, then select
+   **Test connection**.
+5. Allow the models, choose the model of **Inbox auto labels**, set the monthly budget, and turn on AI.
+6. Each person turns on auto labels for their mailbox in Mail, with the spark button next to
    **Labels**.
 
-- The token is never in the directory, in an API answer or in a log. Admin › AI shows only whether
-  the secret exists. Without it, AI makes no calls, and auto labels use their rules only.
+- Asterra keeps the token in the AI settings in D1, as it keeps the signing secrets of webhooks. No API
+  answer and no log contains it. Admin › AI shows only that a token is saved, with **Replace** and
+  **Remove**. Without a token, AI makes no calls, and auto labels use their rules only.
+- To keep the token out of D1, set it as the Worker secret `AI_GATEWAY_TOKEN` instead
+  (`wrangler secret put AI_GATEWAY_TOKEN`, and again with `--env development`). A token saved in
+  Admin › AI wins over the secret.
 - Only Workers AI models are on the list, so the AI stays in Cloudflare.
 - AI stops when the estimated cost of the month (UTC) reaches the budget. The estimate uses the
   published Workers AI prices. The AI Gateway dashboard is the source for billing.
@@ -189,7 +184,8 @@ is inbox auto labels. AI is off until an owner or an admin turns it on in **Admi
   body.
 - The deploy creates the queue `soldock-mail-autolabel`. Migration `0028` adds the AI tables: run
   `wrangler d1 migrations apply` as for each migration.
-- For local work, put `AI_GATEWAY_TOKEN=<token>` in `apps/dock/.dev.vars`. Never commit that file.
+- For local work, enter a token in Admin › AI of `wrangler dev`, or put `AI_GATEWAY_TOKEN=<token>` in
+  `apps/dock/.dev.vars`. Never commit that file.
 
 ## Mail
 

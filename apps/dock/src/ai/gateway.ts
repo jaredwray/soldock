@@ -1,6 +1,6 @@
 import { AI_MODELS, type AiFeature, type AiModelId, aiModel, estimateCostMicroUsd } from "@asterra/contracts";
 import { log } from "../platform/index.ts";
-import { type AiConfig, readConfig } from "./settings.ts";
+import { type AiConfig, gatewayToken, readConfig } from "./settings.ts";
 import { monthCostMicroUsd, recordUsage } from "./usage.ts";
 
 /**
@@ -156,7 +156,7 @@ export async function chat(env: Env, request: ChatRequest, options: { test?: boo
 		return failure("disabled");
 	}
 	if (!config.accountId || !config.gatewayId) return failure("not_configured", { missing: "no_gateway" });
-	const token = env.AI_GATEWAY_TOKEN;
+	const token = gatewayToken(env, config)?.token;
 	if (!token) return failure("not_configured", { missing: "no_token" });
 	const model = modelFor(config, request, test);
 	if (!model || !aiModel(model) || (!test && !config.allowedModels.includes(model))) {

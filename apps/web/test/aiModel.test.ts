@@ -10,6 +10,7 @@ const SAVED: AiSettings = {
 	account_id: "0123456789abcdef0123456789abcdef",
 	gateway_id: "asterra",
 	token_configured: true,
+	token_source: "settings",
 	ready: true,
 	not_ready_reason: null,
 	allowed_models: [LLAMA],
@@ -29,6 +30,22 @@ describe("the AI settings form", () => {
 		// Models compare as a set in catalog order, so a new order is no change.
 		const both = { ...SAVED, allowed_models: [LLAMA, SMALL] };
 		expect(settingsPatch(both, { ...draftOf(both), allowedModels: [SMALL, LLAMA] })).toEqual({ ok: true, patch: {} });
+	});
+
+	it("sends a new API token, removes only a token of the settings, and never sends an empty one", () => {
+		const token = "abcdefghij0123456789_-xyz";
+		expect(settingsPatch(SAVED, { ...draftOf(SAVED), token: ` ${token} ` })).toEqual({
+			ok: true,
+			patch: { api_token: token },
+		});
+		expect(settingsPatch(SAVED, { ...draftOf(SAVED), removeToken: true })).toEqual({
+			ok: true,
+			patch: { api_token: null },
+		});
+		// The Worker secret is not a token of the settings, so there is nothing to remove.
+		const secret = { ...SAVED, token_source: "secret" as const };
+		expect(settingsPatch(secret, { ...draftOf(secret), removeToken: true })).toEqual({ ok: true, patch: {} });
+		expect(settingsPatch(SAVED, { ...draftOf(SAVED), token: "short" }).ok).toBe(false);
 	});
 
 	it("moves a feature to an allowed model when its model is no longer allowed", () => {

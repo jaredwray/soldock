@@ -5383,3 +5383,12 @@ fieldset {
 	flex-direction: column;
 	gap: 8px;
 }
+
+/* A saved API token: a line of text and its buttons, in place of the field. */
+.ai-token-saved {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 8px 12px;
+	min-height: 38px;
+}

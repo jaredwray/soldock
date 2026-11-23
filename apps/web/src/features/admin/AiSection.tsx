@@ -49,7 +49,7 @@ function testResultText(result: AiConnectionTest): string {
 		case "no_gateway":
 			return "Enter and save the account ID and the gateway ID first.";
 		case "no_token":
-			return "The Worker secret AI_GATEWAY_TOKEN is not set. Set it with wrangler secret put AI_GATEWAY_TOKEN.";
+			return "Enter and save the API token of the gateway first.";
 		case "timeout":
 			return "The gateway did not answer in 20 seconds.";
 		case "http":
@@ -74,11 +74,14 @@ export function AiSection() {
 	const [testing, setTesting] = useState(false);
 	const [test, setTest] = useState<AiConnectionTest | null>(null);
 	const [usageVersion, setUsageVersion] = useState(0);
+	const [replacingToken, setReplacingToken] = useState(false);
 	const toast = useToast();
 	const ids = {
 		connection: useId(),
 		account: useId(),
 		gateway: useId(),
+		token: useId(),
+		tokenHint: useId(),
 		models: useId(),
 		features: useId(),
 		featureModel: useId(),
@@ -133,6 +136,7 @@ export function AiSection() {
 			const next = await api.call("ai.update_settings", result.patch);
 			setSaved(next);
 			setDraft(draftOf(next));
+			setReplacingToken(false);
 			setUsageVersion((value) => value + 1);
 			toast({ message: "AI settings saved." });
 		} catch (caught) {
@@ -173,8 +177,8 @@ export function AiSection() {
 						account, and the budget stops it each month.
 					</p>
 					<p className="panel-note">
-						Create an AI Gateway in the Cloudflare dashboard, and set its API token as the Worker secret
-						AI_GATEWAY_TOKEN. The self-hosting guide has the steps.
+						Create an AI Gateway and an API token in the Cloudflare dashboard, and enter them below. The self-hosting
+						guide has the steps.
 					</p>
 				</div>
 				<div className={saved.ready ? "notice notice-ok" : "notice notice-warning"} role="status">
@@ -224,16 +228,68 @@ export function AiSection() {
 								disabled={busy}
 							/>
 						</div>
-						<p className="field-hint">
-							API token:{" "}
-							{saved.token_configured ? (
-								<strong>the Worker secret AI_GATEWAY_TOKEN is set.</strong>
+						<div className="field">
+							<label htmlFor={ids.token} className="field-label">
+								API token
+							</label>
+							{saved.token_source === "settings" && !replacingToken ? (
+								<div className="ai-token-saved">
+									<span>
+										{draft.removeToken
+											? "The token goes when you save."
+											: "A token is saved. Asterra never shows it again."}
+									</span>
+									{draft.removeToken ? (
+										<button
+											type="button"
+											className="button button-small"
+											onClick={() => change({ removeToken: false })}
+											disabled={busy}
+										>
+											Keep the token
+										</button>
+									) : (
+										<>
+											<button
+												type="button"
+												className="button button-small"
+												onClick={() => setReplacingToken(true)}
+												disabled={busy}
+											>
+												Replace
+											</button>
+											<button
+												type="button"
+												className="button button-small"
+												onClick={() => change({ removeToken: true })}
+												disabled={busy}
+											>
+												Remove
+											</button>
+										</>
+									)}
+								</div>
 							) : (
-								<strong>
-									the Worker secret AI_GATEWAY_TOKEN is not set. Run <code>wrangler secret put AI_GATEWAY_TOKEN</code>.
-								</strong>
+								<input
+									id={ids.token}
+									className="input input-mono"
+									type="password"
+									autoComplete="off"
+									autoCapitalize="none"
+									spellCheck={false}
+									placeholder={saved.token_source === "settings" ? "Paste the new token" : "Paste the token"}
+									value={draft.token}
+									onChange={(event) => change({ token: event.target.value })}
+									aria-describedby={ids.tokenHint}
+									disabled={busy}
+								/>
 							)}
-						</p>
+							<p id={ids.tokenHint} className="field-hint">
+								{saved.token_source === "secret"
+									? "The Worker secret AI_GATEWAY_TOKEN is in use. A token saved here replaces it."
+									: "A token with the permissions Workers AI: Read and AI Gateway: Run, for this account only."}
+							</p>
+						</div>
 						<div className="ai-test">
 							<button type="button" className="button" onClick={() => void runTest()} disabled={testing || busy}>
 								{testing ? "Testing…" : "Test connection"}
@@ -361,6 +417,7 @@ export function AiSection() {
 								className="button"
 								onClick={() => {
 									setDraft(draftOf(saved));
+									setReplacingToken(false);
 									setError(null);
 								}}
 								disabled={busy}

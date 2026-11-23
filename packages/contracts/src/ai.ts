@@ -120,6 +120,17 @@ export const AiGatewayId = z
 	);
 
 /**
+ * A Cloudflare API token for AI Gateway and Workers AI. Cloudflare tokens use letters, digits, `_` and `-`.
+ * The pattern keeps line breaks and spaces out of a request header.
+ */
+export const AiGatewayToken = z
+	.string()
+	.trim()
+	.min(20, "Paste the whole API token from the Cloudflare dashboard.")
+	.max(200)
+	.regex(/^[A-Za-z0-9_-]+$/, "An API token has only letters, digits, _ and -.");
+
+/**
  * The estimated cost of one call, in millionths of a USD. Prices are for 1 million tokens, so one token
  * at a price of P costs P micro-USD. A model that is not in the catalog costs 0.
  */
@@ -149,10 +160,12 @@ export const AiSettings = z.object({
 	account_id: z.string().nullable(),
 	gateway_id: z.string().nullable(),
 	/**
-	 * True when the Worker secret AI_GATEWAY_TOKEN exists. The token itself is never in an answer, in the
-	 * directory or in a log.
+	 * True when the gateway has an API token: one that an owner or an admin saved here, or the Worker
+	 * secret AI_GATEWAY_TOKEN. The token itself is never in an answer or a log.
 	 */
 	token_configured: z.boolean(),
+	/** Where the token comes from: `settings` (saved here, it wins), `secret` (the Worker secret), or null. */
+	token_source: z.enum(["settings", "secret"]).nullable(),
 	/** True when AI can make calls: it is on, the gateway and the token are set, and a model is allowed. */
 	ready: z.boolean(),
 	not_ready_reason: AiNotReadyReason.nullable(),
@@ -222,7 +235,7 @@ export const aiOperations = {
 	"ai.get_settings": defineOperation({
 		name: "ai.get_settings",
 		summary: "Get the AI settings of the organization",
-		description: `${ADMIN_ONLY} Returns whether AI is on, the AI Gateway, the allowed Workers AI models, the monthly budget and the features that use AI. The answer tells whether the Worker secret AI_GATEWAY_TOKEN exists, but never contains it.`,
+		description: `${ADMIN_ONLY} Returns whether AI is on, the AI Gateway, the allowed Workers AI models, the monthly budget and the features that use AI. The answer tells whether the gateway has an API token and where it comes from, but never contains it.`,
 		http: { method: "GET", path: "/api/v1/ai/settings" },
 		scopes: ["directory.read"],
 		callers: ["human"],
@@ -235,7 +248,7 @@ export const aiOperations = {
 	"ai.update_settings": defineOperation({
 		name: "ai.update_settings",
 		summary: "Change the AI settings of the organization",
-		description: `${ADMIN_ONLY} Changes the settings that the request names and keeps the others. To turn on AI, set the account and the gateway, and allow at least one model. A feature must use an allowed model. Set the token with wrangler secret put AI_GATEWAY_TOKEN, never through this operation.`,
+		description: `${ADMIN_ONLY} Changes the settings that the request names and keeps the others. To turn on AI, set the account and the gateway, and allow at least one model. A feature must use an allowed model. api_token saves the Cloudflare API token of the gateway (Workers AI and AI Gateway permissions); null removes it. No answer returns the token: token_configured and token_source say whether one is set.`,
 		http: { method: "POST", path: "/api/v1/ai/settings" },
 		scopes: ["directory.write"],
 		callers: ["human"],
@@ -244,6 +257,7 @@ export const aiOperations = {
 			enabled: z.boolean().optional(),
 			account_id: AiAccountId.nullable().optional(),
 			gateway_id: AiGatewayId.nullable().optional(),
+			api_token: AiGatewayToken.nullable().optional(),
 			allowed_models: z.array(AiModelIdSchema).max(AI_LIMITS.allowedModels).optional(),
 			monthly_budget_usd: BudgetUsd.optional(),
 			features: z

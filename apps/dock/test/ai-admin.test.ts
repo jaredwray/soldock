@@ -60,6 +60,7 @@ describe("the AI settings", () => {
 			account_id: null,
 			gateway_id: null,
 			token_configured: true,
+			token_source: "secret",
 			ready: false,
 			not_ready_reason: "off",
 			allowed_models: [],
@@ -181,7 +182,43 @@ describe("the AI settings", () => {
 		const res = await withEnv({ AI_GATEWAY_TOKEN: undefined }, "/api/v1/ai/settings", {
 			headers: { authorization: `Bearer ${owner.key}`, origin: ORIGIN },
 		});
-		expect(await res.json()).toMatchObject({ token_configured: false, ready: false, not_ready_reason: "no_token" });
+		expect(await res.json()).toMatchObject({
+			token_configured: false,
+			token_source: null,
+			ready: false,
+			not_ready_reason: "no_token",
+		});
+	});
+
+	it("keep an API token from Admin, use it before the Worker secret, and never return it", async () => {
+		const token = "settings-token_0123456789-abcdef";
+		const saved = await enableAi(owner, { api_token: token });
+		expect(saved).toMatchObject({ token_configured: true, token_source: "settings", ready: true });
+		expect(JSON.stringify(saved)).not.toContain(token);
+		expect(JSON.stringify(await owner.call("ai.get_settings"))).not.toContain(token);
+		expect(JSON.stringify((await callTool(owner.key, "ai_get_settings")).structuredContent)).not.toContain(token);
+		// A later change that does not name the token keeps it.
+		expect(await owner.call("ai.update_settings", { monthly_budget_usd: 20 })).toMatchObject({
+			token_source: "settings",
+		});
+
+		// The token of the settings wins over the Worker secret, and works without it.
+		const calls = fakeGateway(() => gatewayAnswer("OK"));
+		await owner.call("ai.test_connection", {});
+		expect(calls[0]?.headers.get("authorization")).toBe(`Bearer ${token}`);
+		expect(calls[0]?.headers.get("cf-aig-authorization")).toBe(`Bearer ${token}`);
+		const res = await withEnv({ AI_GATEWAY_TOKEN: undefined }, "/api/v1/ai/settings", {
+			headers: { authorization: `Bearer ${owner.key}`, origin: ORIGIN },
+		});
+		expect(await res.json()).toMatchObject({ token_configured: true, token_source: "settings", ready: true });
+
+		// Null removes it: the Worker secret is in use again.
+		expect(await owner.call("ai.update_settings", { api_token: null })).toMatchObject({ token_source: "secret" });
+		// A value that could break a header is refused.
+		const refused = await owner
+			.call("ai.update_settings", { api_token: "a token with spaces in it" })
+			.catch((e: unknown) => e);
+		expect(refused).toMatchObject({ code: "invalid" });
 	});
 });
 

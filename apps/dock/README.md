@@ -86,7 +86,7 @@ The entire backend as one deployable Worker (modular monolith): `fetch`, `email`
 | `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`, `VAPID_SUBJECT` | Worker secrets | The VAPID key pair and contact address for browser push. See [Web Push setup](../../docs/self-hosting.md#web-push) |
 | `CHAT_PREVIEWS` | Queue producer | The jobs of link previews of Chat: a room id and a message id. The Worker consumes `soldock-chat-previews`. The room sends a job again without a result, so the queue has no dead letter queue |
 | `MAIL_AUTOLABEL` | Queue producer | The jobs of the classifier of auto labels: a mailbox id and a message id. The Worker consumes `soldock-mail-autolabel`. The mailbox sends a job again without a result, so the queue has no dead letter queue. See [auto labels](src/mail/README.md#auto-labels) |
-| `AI_GATEWAY_TOKEN` | Worker secret (optional) | The Cloudflare API token for Workers AI through AI Gateway. Never in D1 or in an answer. See [AI setup](../../docs/self-hosting.md#ai) |
+| `AI_GATEWAY_TOKEN` | Worker secret (optional) | The Cloudflare API token for Workers AI through AI Gateway, when it is not saved in Admin › AI. A token of the settings wins. Never in an answer. See [AI setup](../../docs/self-hosting.md#ai) |
 | `EMAIL` | `send_email` | Outbound mail through Email Service |
 | `MAILBOX` | Durable Object `MailboxDO` (SQLite) | One mailbox for each principal and each team mailbox. It also accepts the hibernatable watch sockets of MCP subscriptions |
 | `DRIVE_SPACE` | Durable Object `DriveSpaceDO` (SQLite) | One drive for each principal, and one for each shared drive |
@@ -132,7 +132,7 @@ with injected inbound mail.
 | Webhooks (URL, signing secret, creator, credential, delivery state) | [`mail`](src/mail/README.md#webhooks) | D1 `DIRECTORY`, table `webhooks` |
 | Webhook events and jobs | [`mail`](src/mail/README.md#webhooks) | `MailboxDO` table `event_outbox`; queues `soldock-webhooks` and `soldock-webhooks-dlq` |
 | Auto labels (marks, header signals, settings, corrections, classifier outbox) | [`mail`](src/mail/README.md#auto-labels) | `MailboxDO` SQLite; queue `soldock-mail-autolabel` |
-| AI settings and usage ledger | [`ai`](src/ai/README.md#data-inventory) | D1 `DIRECTORY`, tables `ai_settings` and `ai_usage`; Worker secret `AI_GATEWAY_TOKEN` |
+| AI settings and usage ledger | [`ai`](src/ai/README.md#data-inventory) | D1 `DIRECTORY`, tables `ai_settings` (with the API token) and `ai_usage`; optional Worker secret `AI_GATEWAY_TOKEN` |
 | Drives (items, versions, grants, search index, stars, shared-with-me index, outbox, idempotency keys, and the members of a shared drive) | [`drive`](src/drive/README.md) | `DriveSpaceDO` SQLite |
 | The index of the shared drives (a copy for the lists) | [`drive`](src/drive/README.md#the-index-in-d1) | D1 `DIRECTORY`, tables `shared_drives` and `shared_drive_members` |
 | File bytes | [`drive`](src/drive/README.md) | R2 `BLOBS`, `drive/<space id>/<item id>/<version id>`, and the small picture with `.thumb-<id>` |
