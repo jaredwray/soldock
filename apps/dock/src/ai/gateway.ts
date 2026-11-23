@@ -12,6 +12,11 @@ const GATEWAY_ORIGIN = "https://gateway.ai.cloudflare.com";
 const TIMEOUT_MS = 20_000;
 /** The characters of the error text of the gateway that a connection test returns. */
 const DETAIL_CHARS = 200;
+/**
+ * The least tokens of the answer of a reasoning model. Such a model uses tokens of the answer to reason,
+ * so a small limit gives an empty answer.
+ */
+const REASONING_TOKENS = 1200;
 
 export interface ChatMessage {
 	role: "system" | "user";
@@ -56,7 +61,7 @@ export type ChatResult =
 			reason: ChatFailure;
 			/** Why the call is not configured: no gateway, no token or no model. */
 			missing?: "no_gateway" | "no_token" | "no_model";
-			/** True when a later attempt can succeed: a timeout, 408, 429 or 5xx. */
+			/** True when a later attempt can succeed: a timeout, a network error, 408, 429 or 5xx. */
 			retryable: boolean;
 			status: number | null;
 			model: AiModelId | null;
@@ -106,7 +111,7 @@ async function post(
 	token: string,
 	metadata: string,
 	body: Record<string, unknown>,
-): Promise<{ response: Response } | { timeout: true }> {
+): Promise<{ response: Response } | { timeout: true } | { unreachable: true }> {
 	try {
 		const response = await fetch(url, {
 			method: "POST",
@@ -123,7 +128,8 @@ async function post(
 	} catch (error) {
 		if (error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError"))
 			return { timeout: true };
-		throw error;
+		// A network error (DNS, TLS or the connection): the request did not get an answer.
+		return { unreachable: true };
 	}
 }
 
@@ -160,7 +166,7 @@ export async function chat(env: Env, request: ChatRequest, options: { test?: boo
 		model: `workers-ai/${model}`,
 		messages: request.messages,
 		temperature: 0,
-		max_tokens: request.maxTokens,
+		max_tokens: aiModel(model)?.reasoning ? Math.max(request.maxTokens, REASONING_TOKENS) : request.maxTokens,
 	};
 	const withSchema = Boolean(request.jsonSchema && aiModel(model)?.json_schema);
 	if (withSchema && request.jsonSchema) {
@@ -175,6 +181,17 @@ export async function chat(env: Env, request: ChatRequest, options: { test?: boo
 	// A model can refuse the schema form. One more try without it: the caller validates the answer anyway.
 	if (withSchema && "response" in sent && sent.response.status === 400) {
 		await sent.response.body?.cancel();
+		// The refused attempt is a request of the gateway too, so the ledger counts it as a failure.
+		await recordUsage(env.DIRECTORY, {
+			now,
+			feature: request.feature,
+			model,
+			resourceId: request.resourceId,
+			ok: false,
+			inputTokens: 0,
+			outputTokens: 0,
+			costMicroUsd: 0,
+		});
 		delete body.response_format;
 		sent = await post(url, token, metadata, body);
 	}
@@ -210,6 +227,12 @@ export async function chat(env: Env, request: ChatRequest, options: { test?: boo
 
 	if ("timeout" in sent) {
 		return await finish(failure("timeout", { retryable: true, model }), { input: 0, output: 0 });
+	}
+	if ("unreachable" in sent) {
+		return await finish(
+			failure("http", { retryable: true, model, detail: "The request did not reach the gateway." }),
+			{ input: 0, output: 0 },
+		);
 	}
 	const { response } = sent;
 	if (!response.ok) {

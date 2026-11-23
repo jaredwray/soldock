@@ -29,6 +29,7 @@ interface SettingsRow extends Record<string, unknown> {
 	monthly_budget_micro_usd: number;
 	auto_label_enabled: number;
 	auto_label_model: string | null;
+	updated_at: number;
 }
 
 /** A model id from storage, or null when the catalog does not have it. */
@@ -48,32 +49,43 @@ function parseModels(json: string): AiModelId[] {
 	}
 }
 
-/** The settings of the organization. Migration 0027 writes the one row, so a missing row means AI is off. */
-export async function readConfig(db: D1Database): Promise<AiConfig> {
+/** The settings with the time of their last write. A missing row has the time null. */
+async function readVersioned(db: D1Database): Promise<{ config: AiConfig; updatedAt: number | null }> {
 	const row = await db
 		.prepare(
 			`SELECT enabled, account_id, gateway_id, allowed_models, monthly_budget_micro_usd, auto_label_enabled,
-				auto_label_model FROM ai_settings WHERE id = 1`,
+				auto_label_model, updated_at FROM ai_settings WHERE id = 1`,
 		)
 		.first<SettingsRow>();
 	if (!row) {
 		return {
-			enabled: false,
-			accountId: null,
-			gatewayId: null,
-			allowedModels: [],
-			budgetMicroUsd: 0,
-			autoLabel: { enabled: false, model: null },
+			config: {
+				enabled: false,
+				accountId: null,
+				gatewayId: null,
+				allowedModels: [],
+				budgetMicroUsd: 0,
+				autoLabel: { enabled: false, model: null },
+			},
+			updatedAt: null,
 		};
 	}
 	return {
-		enabled: row.enabled === 1,
-		accountId: row.account_id,
-		gatewayId: row.gateway_id,
-		allowedModels: parseModels(row.allowed_models),
-		budgetMicroUsd: row.monthly_budget_micro_usd,
-		autoLabel: { enabled: row.auto_label_enabled === 1, model: catalogModel(row.auto_label_model) },
+		config: {
+			enabled: row.enabled === 1,
+			accountId: row.account_id,
+			gatewayId: row.gateway_id,
+			allowedModels: parseModels(row.allowed_models),
+			budgetMicroUsd: row.monthly_budget_micro_usd,
+			autoLabel: { enabled: row.auto_label_enabled === 1, model: catalogModel(row.auto_label_model) },
+		},
+		updatedAt: row.updated_at,
 	};
+}
+
+/** The settings of the organization. Migration 0027 writes the one row, so a missing row means AI is off. */
+export async function readConfig(db: D1Database): Promise<AiConfig> {
+	return (await readVersioned(db)).config;
 }
 
 /** Why AI cannot make calls now, or null when it can. */
@@ -118,7 +130,7 @@ export interface ConfigPatch {
  * model, or a feature with a model that is not allowed. The token is not a condition: without it, the
  * rules of auto labels still apply, and the Admin page shows why the AI makes no calls.
  */
-export function applyPatch(config: AiConfig, patch: ConfigPatch): AiConfig {
+function applyPatch(config: AiConfig, patch: ConfigPatch): AiConfig {
 	const feature = patch.features?.mail_auto_label;
 	const next: AiConfig = {
 		enabled: patch.enabled ?? config.enabled,
@@ -150,28 +162,51 @@ export function applyPatch(config: AiConfig, patch: ConfigPatch): AiConfig {
 	return next;
 }
 
-export async function writeConfig(db: D1Database, config: AiConfig): Promise<void> {
-	await db
-		.prepare(
-			`INSERT INTO ai_settings (id, enabled, account_id, gateway_id, allowed_models, monthly_budget_micro_usd,
-				auto_label_enabled, auto_label_model, updated_at)
-			VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?)
-			ON CONFLICT (id) DO UPDATE SET enabled = excluded.enabled, account_id = excluded.account_id,
-				gateway_id = excluded.gateway_id, allowed_models = excluded.allowed_models,
-				monthly_budget_micro_usd = excluded.monthly_budget_micro_usd, auto_label_enabled = excluded.auto_label_enabled,
-				auto_label_model = excluded.auto_label_model, updated_at = excluded.updated_at`,
-		)
-		.bind(
-			config.enabled ? 1 : 0,
-			config.accountId,
-			config.gatewayId,
-			JSON.stringify(config.allowedModels),
-			config.budgetMicroUsd,
-			config.autoLabel.enabled ? 1 : 0,
-			config.autoLabel.model,
-			Date.now(),
-		)
-		.run();
+/** The attempts of one change of the settings when other changes arrive at the same time. */
+const UPDATE_ATTEMPTS = 5;
+
+/**
+ * Applies `patch` to the newest settings and writes the result. The write succeeds only when no other
+ * write came after the read (a compare-and-set on `updated_at`). If one came, the function reads the
+ * settings again and applies the patch again, so two changes at the same time both stay. Throws
+ * `invalid` as `applyPatch` does, and `conflict` when each attempt lost.
+ */
+export async function updateConfig(db: D1Database, patch: ConfigPatch): Promise<AiConfig> {
+	for (let attempt = 0; attempt < UPDATE_ATTEMPTS; attempt++) {
+		const { config, updatedAt } = await readVersioned(db);
+		const next = applyPatch(config, patch);
+		const values = [
+			next.enabled ? 1 : 0,
+			next.accountId,
+			next.gatewayId,
+			JSON.stringify(next.allowedModels),
+			next.budgetMicroUsd,
+			next.autoLabel.enabled ? 1 : 0,
+			next.autoLabel.model,
+		];
+		// Each write has a later time than the one before, so a write always changes `updated_at`.
+		const now = Math.max(Date.now(), (updatedAt ?? 0) + 1);
+		const result =
+			updatedAt === null
+				? await db
+						.prepare(
+							`INSERT OR IGNORE INTO ai_settings (id, enabled, account_id, gateway_id, allowed_models,
+								monthly_budget_micro_usd, auto_label_enabled, auto_label_model, updated_at)
+							VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?)`,
+						)
+						.bind(...values, now)
+						.run()
+				: await db
+						.prepare(
+							`UPDATE ai_settings SET enabled = ?, account_id = ?, gateway_id = ?, allowed_models = ?,
+								monthly_budget_micro_usd = ?, auto_label_enabled = ?, auto_label_model = ?, updated_at = ?
+							WHERE id = 1 AND updated_at = ?`,
+						)
+						.bind(...values, now, updatedAt)
+						.run();
+		if ((result.meta.changes ?? 0) > 0) return next;
+	}
+	throw new OperationError("conflict", "Other changes of the AI settings came at the same time. Try again.");
 }
 
 /**

@@ -11,7 +11,9 @@ export const AI_PRICE_DATE = "2026-06";
  * The models that an owner or an admin can allow. Each one is a Workers AI model that Asterra calls
  * through AI Gateway, so the AI stays in the Cloudflare account of the deployment. `input` and `output`
  * are the prices in USD for 1 million tokens. `json_schema` is true when the model accepts a JSON
- * schema for its answer. Asterra validates each answer, with or without a schema.
+ * schema for its answer. Asterra validates each answer, with or without a schema. `reasoning` is true
+ * when the model reasons before it answers. The reasoning uses tokens of the answer, so the Worker gives
+ * such a model a higher token limit.
  */
 export const AI_MODELS = [
 	{
@@ -20,6 +22,7 @@ export const AI_MODELS = [
 		input: 0.293,
 		output: 2.253,
 		json_schema: true,
+		reasoning: false,
 		recommended: true,
 	},
 	{
@@ -28,6 +31,7 @@ export const AI_MODELS = [
 		input: 0.35,
 		output: 0.75,
 		json_schema: false,
+		reasoning: true,
 		recommended: false,
 	},
 	{
@@ -36,6 +40,7 @@ export const AI_MODELS = [
 		input: 0.27,
 		output: 0.85,
 		json_schema: false,
+		reasoning: false,
 		recommended: false,
 	},
 	{
@@ -44,6 +49,7 @@ export const AI_MODELS = [
 		input: 0.351,
 		output: 0.555,
 		json_schema: false,
+		reasoning: false,
 		recommended: false,
 	},
 	{
@@ -52,6 +58,7 @@ export const AI_MODELS = [
 		input: 0.051,
 		output: 0.335,
 		json_schema: false,
+		reasoning: true,
 		recommended: false,
 	},
 	{
@@ -60,6 +67,7 @@ export const AI_MODELS = [
 		input: 0.045,
 		output: 0.384,
 		json_schema: true,
+		reasoning: false,
 		recommended: false,
 	},
 ] as const;
@@ -250,7 +258,7 @@ export const aiOperations = {
 				.optional(),
 		}),
 		output: AiSettings,
-		errors: ["invalid"],
+		errors: ["invalid", "conflict"],
 	}),
 	"ai.test_connection": defineOperation({
 		name: "ai.test_connection",

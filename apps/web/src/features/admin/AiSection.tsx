@@ -53,6 +53,7 @@ function testResultText(result: AiConnectionTest): string {
 		case "timeout":
 			return "The gateway did not answer in 20 seconds.";
 		case "http":
+			if (result.status === null) return result.detail ?? "The request did not reach the gateway.";
 			return `The gateway refused the request (HTTP ${result.status}).${result.detail ? ` ${result.detail}` : ""}`;
 		default:
 			return "The answer of the gateway was not valid.";

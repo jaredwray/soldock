@@ -2,7 +2,7 @@ import type { AiConnectionTest } from "@asterra/contracts";
 import { auditOk, type CallContext, isAdmin } from "../identity/index.ts";
 import { type HandlerMap, OperationError } from "../platform/index.ts";
 import { chat } from "./gateway.ts";
-import { applyPatch, readConfig, toSettingsOutput, writeConfig } from "./settings.ts";
+import { readConfig, toSettingsOutput, updateConfig } from "./settings.ts";
 import { monthOf, usageReport } from "./usage.ts";
 
 type AiOperation = "ai.get_settings" | "ai.update_settings" | "ai.test_connection" | "ai.get_usage";
@@ -20,8 +20,8 @@ export const aiHandlers: Pick<HandlerMap<CallContext>, AiOperation> = {
 
 	async "ai.update_settings"(call, input) {
 		requireAdmin(call, "change the AI settings");
-		const next = applyPatch(await readConfig(call.env.DIRECTORY), input);
-		await writeConfig(call.env.DIRECTORY, next);
+		// The patch goes on the newest settings, so a change by another admin at the same time stays.
+		const next = await updateConfig(call.env.DIRECTORY, input);
 		auditOk(call, "ai.update_settings", next.enabled ? "on" : "off");
 		return toSettingsOutput(call.env, next);
 	},
