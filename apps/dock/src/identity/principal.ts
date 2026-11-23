@@ -1289,6 +1289,20 @@ export class PrincipalDO extends DurableObject<Env> {
 					}
 					continue;
 				}
+				// The scopes and the limits of a service account can change after it scheduled the message. The
+				// send needs the access that a new schedule needs now: `chat.write`, and no limits, because a
+				// limited account cannot schedule a message.
+				const account = checked.principal;
+				if (account.service && (!account.service_scopes.includes("chat.write") || account.service_resources !== null)) {
+					if (this.personal.claimScheduledForSend(item.id, item.send_at, item.text, item.body_json, now)) {
+						this.personal.markScheduledFailed(
+							item.id,
+							"The service account no longer has the access to post this message.",
+						);
+						events.push({ type: "chat.scheduled", scheduled_id: item.id, room_id: item.room_id });
+					}
+					continue;
+				}
 				actor = {
 					principal_id: checked.principal.id,
 					kind: checked.principal.kind,

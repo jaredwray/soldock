@@ -1,4 +1,4 @@
-import { runInDurableObject } from "cloudflare:test";
+import { runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import {
 	EVENTS_SOCKET_CLOSE,
@@ -299,9 +299,23 @@ describe("tokens of a service account", () => {
 			label: "writer",
 			scopes: ["directory.write", "account.read"],
 		});
-		expect(await codeOf(api(writer.api_key.secret)("directory.set_service_account_access", change))).toBe("forbidden");
+		const asWriter = api(writer.api_key.secret);
+		expect(await codeOf(asWriter("directory.set_service_account_access", change))).toBe("forbidden");
+		// The limits say where each scope applies. So the same key cannot change the limits of an account that
+		// has mail.read, which the key does not hold.
+		expect(
+			await codeOf(
+				asWriter("directory.set_service_account_access", {
+					principal_id: service.id,
+					resources: { mailbox_ids: [], drive_ids: [], room_ids: [] },
+				}),
+			),
+		).toBe("forbidden");
 
-		expect(await owner.call("directory.set_service_account_access", change)).toEqual({
+		// The owner changes the scopes through MCP: the operation has REST and MCP.
+		const viaMcp = await callTool(owner.key, "directory_set_service_account_access", change);
+		expect(viaMcp.isError).toBeFalsy();
+		expect(viaMcp.structuredContent).toEqual({
 			principal_id: service.id,
 			scopes: ["account.read", "chat.read"],
 			resources: null,
@@ -328,6 +342,63 @@ describe("tokens of a service account", () => {
 		});
 	});
 
+	// A scheduled message is a lasting effect of a token. It must not post with access that the account lost.
+	it("post no scheduled message after the account loses chat.write or gets limits", async () => {
+		const { admin, service } = await seedService(["account.read", "chat.read", "chat.write"]);
+		const token = await serviceToken(admin, service.id);
+		const { room } = await admin.call("chat.create_room", { kind: "private", name: "ci", member_ids: [service.id] });
+		const principal = env.PRINCIPAL.get(env.PRINCIPAL.idFromName(service.id));
+		const schedule = async (text: string) =>
+			(
+				await token.call("chat.schedule_message", {
+					room_id: room.id,
+					text,
+					send_at: new Date(Date.now() + 120_000).toISOString(),
+				})
+			).scheduled;
+		/** Makes the message due, and runs the alarm that sends due messages. */
+		const fire = async (id: string) => {
+			await runInDurableObject(principal, async (_instance, state) => {
+				state.storage.sql.exec("UPDATE chat_scheduled_messages SET send_at = ? WHERE id = ?", Date.now() - 1000, id);
+				await state.storage.setAlarm(Date.now() + 60_000);
+			});
+			await runDurableObjectAlarm(principal);
+		};
+		const texts = async () =>
+			(await admin.call("chat.list_messages", { room_id: room.id })).messages.map((message) => message.text);
+		const statusOf = async (id: string) =>
+			runInDurableObject(
+				principal,
+				(_instance, state) =>
+					state.storage.sql
+						.exec<{ status: string }>("SELECT status FROM chat_scheduled_messages WHERE id = ?", id)
+						.one().status,
+			);
+
+		// With chat.write and no limits, the message posts.
+		const sent = await schedule("Build 1 passed.");
+		await fire(sent.id);
+		expect(await texts()).toEqual(["Build 1 passed."]);
+
+		// The account loses chat.write: the message does not post.
+		const unscoped = await schedule("Build 2 passed.");
+		await setScopes(admin, service.id, ["account.read", "chat.read"]);
+		await fire(unscoped.id);
+		expect(await statusOf(unscoped.id)).toBe("failed");
+
+		// The account gets limits, also with the room in its list: a limited account cannot schedule, so the
+		// message of before the limits does not post.
+		await setScopes(admin, service.id, ["account.read", "chat.read", "chat.write"]);
+		const limited = await schedule("Build 3 passed.");
+		await admin.call("directory.set_service_account_access", {
+			principal_id: service.id,
+			resources: { mailbox_ids: [], drive_ids: [], room_ids: [room.id] },
+		});
+		await fire(limited.id);
+		expect(await statusOf(limited.id)).toBe("failed");
+		expect(await texts()).toEqual(["Build 1 passed."]);
+	});
+
 	it("lose their live connections when the scopes or the limits of the account change", async () => {
 		const { admin, service } = await seedService(["account.read", "chat.read"]);
 		const token = await serviceToken(admin, service.id);
@@ -352,11 +423,28 @@ describe("tokens of a service account", () => {
 		expect(before.map((ref) => ref.av)).toEqual([undefined]);
 		expect(await checkCredentials(env.DIRECTORY, before)).toEqual(["live"]);
 
+		// A save of the access that the account has changes nothing: the connections stay live. So a script can
+		// send the wanted access again and again.
+		const version = async () =>
+			(
+				await env.DIRECTORY.prepare("SELECT access_version FROM principals WHERE id = ?")
+					.bind(service.id)
+					.first<{ access_version: number }>()
+			)?.access_version;
+		await admin.call("directory.set_service_account_access", {
+			principal_id: service.id,
+			scopes: ["chat.read", "account.read"],
+			resources: null,
+		});
+		expect(await version()).toBe(0);
+		expect(await checkCredentials(env.DIRECTORY, before)).toEqual(["live"]);
+
 		// A change of the limits closes the events socket at once, and ends the reference of the room socket.
 		await admin.call("directory.set_service_account_access", {
 			principal_id: service.id,
 			resources: { mailbox_ids: [], drive_ids: [], room_ids: [room.id] },
 		});
+		expect(await version()).toBe(1);
 		expect(await events.next()).toEqual({ closed: EVENTS_SOCKET_CLOSE.ended });
 		expect(await checkCredentials(env.DIRECTORY, before)).toEqual(["ended"]);
 		// A new socket has the number of the new access, and is live.

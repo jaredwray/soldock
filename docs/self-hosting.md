@@ -284,6 +284,39 @@ migration. Do one of these steps:
 Then sign in. Open each other person under **Admin › Members**, and set a password with **Reset sign-in**.
 Without a session or the owner key, start fresh with `SETUP_TOKEN`.
 
+### Upgrade to permissions on the service account
+
+Migration `0026_service_access.sql` moves the scopes and the resource limits of a service account from
+each token to the account. After it, each token of an account has the scopes and the limits of the
+account.
+
+What the migration does to an account that has tokens:
+
+- The account gets each scope of its live tokens (not revoked and not expired). So a token with fewer
+  scopes gets the scopes of the other live tokens of its account.
+- The account gets limits only when each of its live tokens had limits. The limits are then each
+  mailbox, drive and room that one of those tokens named. An account with one live token without limits
+  has no limits.
+- An account without a live token has no scope. Set its scopes before you create a token.
+- When the limits of the tokens of one account name more than 20 mailboxes, 20 drives or 20 rooms
+  together, the account reaches nothing after the migration. Save new limits for it.
+
+After the deploy, open each service account under **Admin › Members**, and examine **Permissions**.
+Remove each scope that the account does not need.
+
+What changes for a script that calls the API:
+
+- `directory.create_service_account` needs `scopes`.
+- `account.create_api_key` refuses `scopes` for a service account, and it has no `resources` field. Set
+  the scopes and the limits with `directory.set_service_account_access`.
+- `account.list_api_keys` has no `resources` field. The tokens of
+  `directory.get_service_account_access` have no `scopes` and no `resources`: the account has them.
+
+Between the migration and the deploy, the old Worker keeps working with the scopes and the limits of
+each token. A service account or a token that the old Worker creates in that time has no scope on the
+account after the deploy: set the scopes of the account. If you deploy the old Worker again, a token
+from after the migration has no scope there, and a token from before gets its old scopes and limits.
+
 ### Recover a sign-in
 
 - A person who forgot the password, or lost the phone with the authenticator app, asks an owner or an

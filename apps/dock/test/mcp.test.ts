@@ -65,6 +65,27 @@ describe("the MCP endpoint", () => {
 		expect(narrow).not.toContain("account.keys");
 	});
 
+	// A token of a service account has the scopes of its account. A new token cannot have more scopes, so the
+	// text must not tell an agent to ask for a new token.
+	it("tells a service token that an admin adds a missing scope to the account", async () => {
+		const { owner } = await seedOrg();
+		const { principal } = await owner.call("directory.create_service_account", {
+			display_name: "CI",
+			address: "ci@dock.test",
+			scopes: ["account.read", "mail.read"],
+		});
+		const { api_key } = await owner.call("account.create_api_key", { principal_id: principal.id, label: "ci" });
+		const answer = await mcp(api_key.secret, "initialize", {
+			protocolVersion: "2025-06-18",
+			capabilities: {},
+			clientInfo: { name: "t", version: "1" },
+		});
+		const instructions = ((answer.body?.result ?? {}) as { instructions?: string }).instructions ?? "";
+		expect(instructions).toContain("mail.send (1 tool)");
+		expect(instructions).toContain("can add a scope to this service account");
+		expect(instructions).not.toContain("create a token with more scopes");
+	});
+
 	// An agent must not see tools that would only refuse it, such as its own policy.
 	it("lists only the tools that the credential can call", async () => {
 		const { owner, bot } = await seedOrg();

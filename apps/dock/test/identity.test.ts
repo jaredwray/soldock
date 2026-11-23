@@ -867,6 +867,8 @@ describe("directory upgrade", () => {
 		// - CI has two live tokens with limits, a revoked token and an expired token.
 		// - Ops has one token with limits and one without.
 		// - New has no token.
+		// - Bad has a token with scopes that are not JSON, and a token with limits that are not JSON.
+		// - Big has two tokens that name 25 rooms together, more than the 20 that an account can have.
 		const at = "2026-01-01T00:00:00.000Z";
 		const account = (id: string, local: string) => [
 			`INSERT INTO principals (id, kind, display_name, sponsor_id, outbound_mode, created_at, service)
@@ -874,21 +876,25 @@ describe("directory upgrade", () => {
 			`INSERT INTO addresses VALUES ('${local}@dock.test', '${id}', 1, '${at}')`,
 		];
 		const ciSecret = `sdk_${"c".repeat(43)}`;
+		// An operation takes only an id of the usual form. This id also comes first in the order of the ids.
+		const BIG = "prn_01ARZ3NDEKTSV4RRFFQ69G5BGG";
 		const tokenRow = async (
 			id: string,
 			principalId: string,
 			scopes: string[],
 			resources: string | null,
-			extra: { secret?: string; revoked?: boolean; expired?: boolean } = {},
+			extra: { secret?: string; revoked?: boolean; expired?: boolean; rawScopes?: string } = {},
 		) =>
 			`INSERT INTO api_keys (id, principal_id, key_hash, label, scopes, created_by, created_at, revoked_at, expires_at,
 					resources)
-				VALUES ('${id}', '${principalId}', '${await hash(extra.secret ?? id)}', '${id}', '${JSON.stringify(scopes)}',
+				VALUES ('${id}', '${principalId}', '${await hash(extra.secret ?? id)}', '${id}', '${extra.rawScopes ?? JSON.stringify(scopes)}',
 					'prn_owner', '${at}', ${extra.revoked ? `'${at}'` : "NULL"},
 					${extra.expired ? "'2026-02-01T00:00:00.000Z'" : "'2999-01-01T00:00:00.000Z'"},
 					${resources === null ? "NULL" : `'${resources}'`})`;
-		const limits = (mailboxes: string[], drives: string[], rooms: string[]) =>
-			JSON.stringify({ mailbox_ids: mailboxes, drive_ids: drives, room_ids: rooms });
+		const limits = (mailboxes: string[], drives: string[], roomIds: string[]) =>
+			JSON.stringify({ mailbox_ids: mailboxes, drive_ids: drives, room_ids: roomIds });
+		const rooms = (from: number, to: number) =>
+			Array.from({ length: to - from }, (_, index) => `rm_${String(from + index).padStart(2, "0")}`);
 		await run([
 			...account("prn_ci", "ci"),
 			...account("prn_ops", "ops"),
@@ -901,6 +907,12 @@ describe("directory upgrade", () => {
 			await tokenRow("key_ci_d", "prn_ci", ["mail.send"], null, { expired: true }),
 			await tokenRow("key_ops_a", "prn_ops", ["mail.send"], limits(["prn_ops"], [], [])),
 			await tokenRow("key_ops_b", "prn_ops", ["account.read"], null),
+			...account("prn_bad", "bad"),
+			...account(BIG, "big"),
+			await tokenRow("key_bad_a", "prn_bad", [], limits([], [], ["rm_9"]), { rawScopes: "{bad" }),
+			await tokenRow("key_bad_b", "prn_bad", ["account.read"], "{bad"),
+			await tokenRow("key_big_a", BIG, ["chat.read"], limits([], [], rooms(0, 15))),
+			await tokenRow("key_big_b", BIG, ["chat.read"], limits([], [], rooms(15, 25))),
 		]);
 		await run(serviceAccessMigration.split("--> statement-breakpoint"));
 		// 0026 moves the scopes and the limits to the account. An account gets each scope of its live tokens. It
@@ -917,6 +929,10 @@ describe("directory upgrade", () => {
 				: Object.fromEntries(Object.entries(value).map(([key, ids]) => [key, [...ids].sort()]));
 		};
 		expect(moved.results.map((row) => [row.id, sorted(row.service_scopes), sorted(row.service_resources)])).toEqual([
+			// A row that is not JSON does not stop the migration, and gives nothing. Limits that are not JSON
+			// name nothing, and their token still counts as a token with limits.
+			[BIG, ["chat.read"], { mailbox_ids: [], drive_ids: [], room_ids: rooms(0, 25) }],
+			["prn_bad", ["account.read"], { mailbox_ids: [], drive_ids: [], room_ids: ["rm_9"] }],
 			[
 				"prn_ci",
 				["account.read", "chat.read", "mail.read"],
@@ -925,6 +941,12 @@ describe("directory upgrade", () => {
 			["prn_new", [], null],
 			["prn_ops", ["account.read", "mail.send"], null],
 		]);
+		// An account can have at most 20 ids of one kind. Big has 25 rooms, so its stored limits are not valid:
+		// it reaches nothing, never each room, until an admin saves new limits.
+		expect(await api(key)("directory.get_service_account_access", { principal_id: BIG })).toMatchObject({
+			scopes: ["chat.read"],
+			resources: { mailbox_ids: [], drive_ids: [], room_ids: [] },
+		});
 		// A token from before the migration works, with the scopes and the limits of its account.
 		expect(await api(ciSecret)("account.whoami")).toMatchObject({
 			principal: { id: "prn_ci", kind: "service" },

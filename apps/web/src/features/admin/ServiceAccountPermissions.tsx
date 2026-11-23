@@ -23,8 +23,11 @@ interface ServiceAccountPermissionsProps {
 	access: Access | null;
 	/** True when the read of the access failed. The Access part shows the reason and "Try again". */
 	failed: boolean;
-	/** Called after a save, so the access loads again. */
-	onSaved: () => void;
+	/**
+	 * Called after a save with the saved scopes and limits. The card shows them at once, and loads the access
+	 * again.
+	 */
+	onSaved: (saved: OutputOf<"directory.set_service_account_access">) => void;
 }
 
 /**
@@ -39,11 +42,14 @@ export function ServiceAccountPermissions({ account, access, failed, onSaved }: 
 	const [busy, setBusy] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 	const limitHintId = useId();
+	const headingId = useId();
 
 	if (access === null) {
 		return (
-			<section>
-				<h2 className="subpanel-title">Permissions</h2>
+			<section aria-labelledby={headingId}>
+				<h2 id={headingId} className="subpanel-title">
+					Permissions
+				</h2>
 				{failed ? (
 					<p className="form-error" role="alert">
 						The permissions did not load. Select “Try again” under Access.
@@ -78,10 +84,12 @@ export function ServiceAccountPermissions({ account, access, failed, onSaved }: 
 		setBusy(true);
 		setError(null);
 		try {
-			await api.call("directory.set_service_account_access", { principal_id: account.id, ...change });
+			const saved = await api.call("directory.set_service_account_access", { principal_id: account.id, ...change });
 			toast({ message: `Permissions of ${account.display_name} saved.` });
+			// The card gets the saved values before the draft goes away. So the form never shows the values of
+			// before the save, also when the next read of the access is slow or fails.
+			onSaved(saved);
 			setEdited(null);
-			onSaved();
 		} catch (caught) {
 			setError(errorMessage(caught));
 		} finally {
@@ -125,13 +133,16 @@ export function ServiceAccountPermissions({ account, access, failed, onSaved }: 
 	}
 
 	return (
-		<form className="admin-card-form" onSubmit={submit} noValidate>
+		<form className="admin-card-form" onSubmit={submit} noValidate aria-labelledby={headingId}>
+			<h2 id={headingId} className="subpanel-title">
+				Permissions
+			</h2>
+			<p className="field-hint">
+				The scopes say what the account can do. Each token of the account has them. A change applies to each token at
+				its next call.
+			</p>
 			<fieldset className="scope-list">
-				<legend className="subpanel-title">Permissions</legend>
-				<p className="field-hint">
-					The scopes say what the account can do. Each token of the account has them. A change applies to each token at
-					its next call.
-				</p>
+				<legend className="field-label">Scopes</legend>
 				{SERVICE_SCOPES.map((scope) => (
 					<label key={scope} className="check-row">
 						<input
@@ -168,11 +179,10 @@ export function ServiceAccountPermissions({ account, access, failed, onSaved }: 
 			{draft.limited && pickList("mailbox", "Mailboxes", "Mail", choices.mailboxes)}
 			{draft.limited && pickList("drive", "Drives", "Drive", choices.drives)}
 			{draft.limited && pickList("room", "Rooms", "Chat", choices.rooms)}
-			{change !== null && (
-				<p className="field-hint" role="status">
-					These choices are not saved. The saved permissions stay in force until you save.
-				</p>
-			)}
+			{/* The status region stays in the page, so a screen reader announces the text when it comes. */}
+			<p className="field-hint" role="status">
+				{change !== null && "These choices are not saved. The saved permissions stay in force until you save."}
+			</p>
 			{error && (
 				<p className="form-error" role="alert">
 					{error}

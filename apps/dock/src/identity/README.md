@@ -494,7 +494,11 @@ them. A token is only a credential.
   scope of `SERVICE_SCOPES`. `resources: null` removes the limits.
 - **No escalation.** The credential of the call must hold each scope of the new list (`grantableScopes`),
   so a narrow key with `directory.write` cannot give an account a scope that the key does not hold. The
-  same rule applies to `directory.create_service_account`, to a new token and to a rotation.
+  limits say where each scope applies, so a change of `resources` needs a credential that holds each scope
+  of the account too. The same rule applies to `directory.create_service_account`, to a new token and to a
+  rotation.
+- **No change.** A call that sends the scopes and the limits that the account has writes nothing: the
+  live connections stay open, and the log gets no entry. So a script can send the wanted access again.
 - **A wider account widens each token.** A token follows its account. When an owner or an admin adds a
   scope to an account, each token of the account gets the scope, also a token that a narrower credential
   created before. The admin who adds the scope makes that decision, and the log records it. So the
@@ -513,12 +517,20 @@ them. A token is only a credential.
   `SERVICE_SCOPES` is left out. Stored limits that are not valid give an account that reaches nothing.
 - **Log.** A change adds an audit line and an `admin` entry (`directory.set_service_account_access`) to
   the activity log of the account.
+- **Scheduled messages.** A scheduled chat message is a lasting effect of a token. When it is due, the
+  `PrincipalDO` reads the account again. The message fails, and does not post, when the account has no
+  `chat.write` or has limits: a limited account cannot schedule a message.
 - **Accounts from before migration `0026`.** The migration gives an account each scope of its live
   tokens (not revoked and not expired), so no script loses a scope. A token with fewer scopes then gets
   the scopes of the other live tokens of its account. A revoked token and an expired token give nothing:
   their access ended. An account gets limits only when each of its live tokens had limits: then each
   mailbox, drive and room that one of them named. An account with one live token without limits stays
   without limits. An account without a live token gets no scope: set its scopes before a new token.
+  When the limits of the tokens of one account name more than 20 ids of one kind together, the stored
+  limits are not valid, and the account reaches nothing until an admin saves new limits. The same applies
+  to an account or a token that the old Worker creates between the migration and the deploy: it has no
+  scope on the account. [Self-hosting](../../../../docs/self-hosting.md#upgrade-to-permissions-on-the-service-account)
+  has the steps for an operator.
   `api_keys.scopes` and `api_keys.resources` keep their old values for a rollback, and the sign-in path
   does not read them for a service account.
 

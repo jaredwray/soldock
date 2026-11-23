@@ -149,7 +149,7 @@ export function ApiKeyManager({
 							<caption className="visually-hidden">{heading}</caption>
 							<thead>
 								<tr>
-									<th scope="col">Label and scopes</th>
+									<th scope="col">{accountScoped ? "Label" : "Label and scopes"}</th>
 									<th scope="col" className="col-optional">
 										Created
 									</th>
@@ -281,8 +281,8 @@ export function ApiKeyManager({
 					}}
 				>
 					<p>
-						<strong>{rotating.label}</strong> gets a new secret. It keeps its scopes and its end. Change the secret in
-						each script before the old one stops.
+						<strong>{rotating.label}</strong> gets a new secret. It keeps its{" "}
+						{accountScoped ? "end" : "scopes and its end"}. Change the secret in each script before the old one stops.
 					</p>
 					<div className="field">
 						<label htmlFor={overlapId} className="field-label">

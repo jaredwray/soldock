@@ -24,15 +24,16 @@ export function roomLabel(room: Access["chat_rooms"][number]): string {
 
 /**
  * The choices for the limits of a service account, from its access: its own mailbox and drive (the id of
- * the account), its team mailboxes, its shared drives and its rooms. A listed resource that the account
- * is not a member of now comes last, with its id as the name, so an admin can see it and remove it.
+ * the account), its team mailboxes, its shared drives and its rooms. A listed resource that is not in
+ * these lists comes last, with its id as the name, so an admin can see it and remove it. The account is
+ * not a member of it now, or the access has more rooms than it shows.
  */
 export function resourceChoicesOf(account: Pick<Principal, "id" | "address">, access: Access): ResourceChoices {
 	const withListed = (choices: ResourceChoice[], listed: readonly string[] | undefined): ResourceChoice[] => [
 		...choices,
 		...(listed ?? [])
 			.filter((id) => !choices.some((choice) => choice.id === id))
-			.map((id) => ({ id, label: `${id} (not a member)` })),
+			.map((id) => ({ id, label: `${id} (not in the list above)` })),
 	];
 	return {
 		mailboxes: withListed(

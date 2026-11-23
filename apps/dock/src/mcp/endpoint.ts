@@ -66,7 +66,7 @@ function addScopeHint(caller: AuthContext): string {
 		return "The sponsor of this agent, an owner or an admin can add a scope in Admin › Members. You do not need a new connection.";
 	}
 	if (caller.kind === "service") {
-		return "The scopes of a token do not change. An owner or an admin can create a token with more scopes for this service account in Admin › Members.";
+		return "The scopes are on the service account, not on this token. An owner or an admin can add a scope to this service account in Admin › Members. This token then has the scope, without a new token.";
 	}
 	return caller.kind === "agent"
 		? "The scopes of an API key do not change. The sponsor of this agent, an owner or an admin can create a key with more scopes in Admin › Members."

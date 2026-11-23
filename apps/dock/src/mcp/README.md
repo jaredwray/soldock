@@ -91,6 +91,8 @@ SDK. Protocol 2026-07-28 has no sessions, so a hand-written server stays small.
     and adds the scope (`oauth.add_grant_scopes`). The connection stays.
   - An API key: its scopes do not change, so the key holder needs a new key. For an agent, its
     sponsor, an owner or an admin creates the key.
+  - A token of a service account: the scopes are on the account. An owner or an admin adds the scope to
+    the account in Admin › Members (`directory.set_service_account_access`). The token stays.
 
   `account_whoami` names the tools of each missing scope (`missing_scopes`). A credential that
   holds each scope of its kind gets no such sentence.

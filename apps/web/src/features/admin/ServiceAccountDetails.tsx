@@ -1,5 +1,5 @@
 import type { OutputOf, Principal } from "@asterra/contracts";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { api, errorMessage } from "../../lib/api.ts";
 import { fullDate, shortDate } from "../../lib/format.ts";
 import { ApiKeyManager } from "../settings/ApiKeys.tsx";
@@ -30,12 +30,18 @@ export function ServiceAccountDetails({ account, principals, onChanged }: Servic
 	const [accessError, setAccessError] = useState<string | null>(null);
 	// The id keeps the read the same when the directory loads again, so the access does not load again.
 	const { id } = account;
+	// The number of the newest read. An answer of an older read must not replace a newer one: a token change
+	// and a save of the permissions can each start a read.
+	const newestRead = useRef(0);
 	const loadAccess = useCallback(async () => {
+		newestRead.current += 1;
+		const read = newestRead.current;
 		setAccessError(null);
 		try {
-			setAccess(await api.call("directory.get_service_account_access", { principal_id: id }));
+			const loaded = await api.call("directory.get_service_account_access", { principal_id: id });
+			if (read === newestRead.current) setAccess(loaded);
 		} catch (caught) {
-			setAccessError(errorMessage(caught));
+			if (read === newestRead.current) setAccessError(errorMessage(caught));
 		}
 	}, [id]);
 	useEffect(() => {
@@ -66,7 +72,19 @@ export function ServiceAccountDetails({ account, principals, onChanged }: Servic
 				policy={account.outbound_policy ?? { mode: "internal-only", allowlist: [] }}
 				onChanged={onChanged}
 			/>
-			<ServiceAccountPermissions account={account} access={access} failed={accessError !== null} onSaved={changed} />
+			<ServiceAccountPermissions
+				account={account}
+				access={access}
+				failed={accessError !== null}
+				onSaved={(saved) => {
+					// The saved values show at once. A read that started before the save is then too old.
+					newestRead.current += 1;
+					setAccess((current) =>
+						current === null ? current : { ...current, scopes: saved.scopes, resources: saved.resources },
+					);
+					changed();
+				}}
+			/>
 			<ApiKeyManager
 				principalId={account.id}
 				allowedScopes={[]}

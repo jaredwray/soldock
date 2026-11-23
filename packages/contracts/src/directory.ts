@@ -722,9 +722,9 @@ export const setServiceAccountAccess = defineOperation({
 	description: [
 		SERVICE_ACCOUNT_RULES,
 		"Sets what the service account can do (scopes) and where (resources). Each token of the account gets the change at its next call. A token has no scopes or limits of its own.",
-		"Send only the fields to change. scopes replaces the list of scopes. The credential of the call must hold each scope of the new list.",
+		"Send only the fields to change. scopes replaces the list of scopes. The credential of the call must hold each scope of the new list, and each scope of the account for a change of resources.",
 		"resources limits the account to listed mailboxes (the id of the account for its own, or team mailboxes), drives (the id of the account, or shared drives) and rooms, on top of its memberships. Each list is complete, and an empty list allows nothing of that product. A limited account cannot call the operations that read across rooms. Send null to remove the limits.",
-		"A change closes the live sockets and feeds of the account within one minute. A client then opens them again.",
+		"A change closes the events sockets of the account at once, and each other live socket and feed at its next check, about one minute later. A client then opens them again. A call that changes nothing closes nothing.",
 	].join(" "),
 	http: { method: "POST", path: "/api/v1/directory/service-accounts/{principal_id}/access" },
 	scopes: ["directory.write"],
@@ -745,7 +745,7 @@ export const setServiceAccountAccess = defineOperation({
 		/** The mailboxes, drives and rooms that the account is limited to. Null: not limited. */
 		resources: ServiceResources.nullable(),
 	}),
-	errors: ["not_found", "conflict"],
+	errors: ["not_found"],
 });
 
 export const listServiceAccountActivity = defineOperation({

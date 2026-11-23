@@ -333,11 +333,12 @@ MCP clients. The app has no UI-only path.
       The scopes and the limits are on the account. Each token of the account has them, and a token has none of its own.
       The scope texts are the texts for a service account (`SERVICE_SCOPE_DESCRIPTIONS`), without "your".
       With the limit, the form shows a list of check boxes for each product: the own mailbox, the team mailboxes, the own drive, the shared drives and the rooms.
-      The choices come from the access of the account (`admin/resourceChoices.ts`). A listed resource that is not a membership now shows with its id, so an admin can remove it.
+      The choices come from the access of the account (`admin/resourceChoices.ts`). A listed resource that is not in these lists shows with its id, so an admin can remove it.
       A selection key has the kind and the id, because the own mailbox and the own drive have the same id.
       A list stops a further selection at 20 (`SERVICE_RESOURCE_LIMITS.perKind`), with a count when it has more choices.
       A direct message shows the name of its other member (`peer_name`).
       **Save permissions** sends only the fields that changed (`admin/permissionsDraft.ts`), and is off when nothing changed. A line tells when the choices are not saved.
+      After a save, the form shows the saved values from the answer of the save at once, also when the next read of the access is slow or fails. The card ignores the answer of a read that is older than its newest read.
       **Tokens of …**: the API key manager with the word "token", a lifetime of 90 days first, and the creator and the revoker of each token.
       The token form has a label, a description and a lifetime, and no scopes (`accountScoped`). A token row shows no scopes.
       **Access** (`directory.get_service_account_access`): the live tokens, the limits, the own mailbox and drive, the team mailboxes, the shared drives, the rooms with the role, and **Shared directly in Drive** (the items that a member shared with the account).

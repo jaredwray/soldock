@@ -158,6 +158,17 @@ function keyExpiry(input: { expires_in_days?: number | undefined; expires_at?: s
 	return new Date(end).toISOString();
 }
 
+/** True when the two lists have the same ids, in any order. */
+function sameIds(a: readonly string[], b: readonly string[]): boolean {
+	return a.length === b.length && a.every((id) => b.includes(id));
+}
+
+/** True when the two limits allow the same mailboxes, drives and rooms. Null: no limits. */
+function sameResources(a: ServiceResources | null, b: ServiceResources | null): boolean {
+	if (a === null || b === null) return a === b;
+	return sameIds(a.mailbox_ids, b.mailbox_ids) && sameIds(a.drive_ids, b.drive_ids) && sameIds(a.room_ids, b.room_ids);
+}
+
 /**
  * Checks the resource limits of a service account. A mailbox is the own mailbox of the account (its id) or
  * a team mailbox that exists. A drive is the own drive of the account or a shared drive. A room is a room
@@ -494,8 +505,22 @@ export const identityHandlers: Pick<HandlerMap<CallContext>, IdentityOperation |
 		if (!target?.service) throw new OperationError("not_found", "No service account has that id.");
 		// Each token of the account gets the new scopes. So the credential of the call must hold each one.
 		const scopes = input.scopes === undefined ? undefined : grantableScopes(call.caller, target, input.scopes);
+		// The limits say where each scope of the account applies. So a change of the limits also needs a
+		// credential that holds each scope of the account: a narrow key with `directory.write` cannot remove
+		// the limits for a scope that it does not hold.
+		if (input.resources !== undefined) grantableScopes(call.caller, target, scopes ?? target.service_scopes);
 		if (input.resources != null) await assertServiceResources(call, target, input.resources);
-		const updated = await setServiceAccess(call.env.DIRECTORY, target.id, { scopes, resources: input.resources });
+		// A call that changes nothing writes nothing. So the live connections of the account stay open, and
+		// the log gets no entry: a script can send the wanted access again and again.
+		const newScopes = scopes !== undefined && !sameIds(scopes, target.service_scopes);
+		const newResources = input.resources !== undefined && !sameResources(input.resources, target.service_resources);
+		if (!newScopes && !newResources) {
+			return { principal_id: target.id, scopes: target.service_scopes, resources: target.service_resources };
+		}
+		const updated = await setServiceAccess(call.env.DIRECTORY, target.id, {
+			scopes: newScopes ? scopes : undefined,
+			resources: newResources ? input.resources : undefined,
+		});
 		if (!updated) throw new OperationError("not_found", "No service account has that id.");
 		// Each live connection of the account has the access of its open. The events sockets close at once,
 		// and a room socket closes at its next check (`access_version`). A client then opens them again.

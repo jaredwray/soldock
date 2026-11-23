@@ -26,7 +26,9 @@ UPDATE principals SET service_scopes = (
 --> statement-breakpoint
 -- An account gets limits only when each of its live tokens had limits: then the limits are each mailbox,
 -- drive and room that one of those tokens named. An account with one live token without limits stays
--- without limits, so no script loses a resource. Limits that are not valid JSON name nothing.
+-- without limits, so no script loses a resource. Limits that are not valid JSON name nothing. The Worker
+-- takes at most 20 ids of one kind: when the tokens of one account name more together, the account
+-- reaches nothing until an admin saves new limits (docs/self-hosting.md).
 UPDATE principals SET service_resources = json_object(
 	'mailbox_ids', json((
 		SELECT json_group_array(DISTINCT id.value) FROM api_keys k,
