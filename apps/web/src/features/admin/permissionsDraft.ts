@@ -1,4 +1,5 @@
 import {
+	AGENT_RESOURCE_LIMITS,
 	AGENT_SCOPES,
 	type AgentResources,
 	type InputOf,
@@ -50,6 +51,33 @@ export function draftOf(access: Access, offered: readonly Scope[]): PermissionsD
 		scopes: offered.filter((scope) => access.scopes.includes(scope)),
 		limited: access.resources !== null,
 		picked,
+	};
+}
+
+/**
+ * The draft after a change of the limit check box. An agent without saved limits has nothing picked, and a
+ * limit to nothing stops the agent. So a limit that goes on for such an agent selects what the agent reaches
+ * now: its own mailbox and drive, and each membership of the choices. The server takes at most
+ * `AGENT_RESOURCE_LIMITS.perKind` ids of one kind, so the selection has the first ones of each kind. Picks
+ * that the manager made stay as they are.
+ */
+export function withLimit(
+	draft: PermissionsDraft,
+	limited: boolean,
+	access: Access,
+	choices: ResourceChoices,
+): PermissionsDraft {
+	if (!limited || access.resources !== null || draft.picked.size > 0) return { ...draft, limited };
+	const first = (kind: ResourceKind, list: readonly ResourceChoice[]) =>
+		list.slice(0, AGENT_RESOURCE_LIMITS.perKind).map((choice) => pickKey(kind, choice.id));
+	return {
+		...draft,
+		limited,
+		picked: new Set([
+			...first("mailbox", choices.mailboxes),
+			...first("drive", choices.drives),
+			...first("room", choices.rooms),
+		]),
 	};
 }
 

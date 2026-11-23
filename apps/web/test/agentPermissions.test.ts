@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { draftOf, permissionsChange, pickKey, scopesFor } from "../src/features/admin/permissionsDraft.ts";
+import { draftOf, permissionsChange, pickKey, scopesFor, withLimit } from "../src/features/admin/permissionsDraft.ts";
 import { limitText, resourceChoicesOf } from "../src/features/admin/resourceChoices.ts";
 
 const account = { id: "prn_ci", address: "ci@example.com" };
@@ -96,6 +96,50 @@ describe("the Permissions form of an agent or a service account", () => {
 		expect(permissionsChange(draft, access, choices)).toEqual({
 			resources: { mailbox_ids: ["prn_ci"], drive_ids: [], room_ids: [] },
 		});
+	});
+
+	// A limit to nothing stops the agent. So the check box of the limit must not give an empty limit to an
+	// agent that reaches its memberships now.
+	it("selects what an agent without limits reaches now when the limit goes on", () => {
+		const on = withLimit(draftOf(access, serviceScopes), true, access, choices);
+		expect(permissionsChange(on, access, choices)).toEqual({
+			resources: {
+				mailbox_ids: ["prn_ci", "tmb_1"],
+				drive_ids: ["prn_ci", "drv_1"],
+				room_ids: ["rm_1", "rm_2", "rm_3"],
+			},
+		});
+		// The limit goes off and on again: the picks of the manager stay.
+		const picked = { ...on, picked: new Set([pickKey("room", "rm_2")]) };
+		const again = withLimit(withLimit(picked, false, access, choices), true, access, choices);
+		expect(permissionsChange(again, access, choices)).toEqual({
+			resources: { mailbox_ids: [], drive_ids: [], room_ids: ["rm_2"] },
+		});
+		// The server takes at most 20 ids of one kind, so the selection stops there.
+		const many = {
+			...access,
+			chat_rooms: Array.from({ length: 25 }, (_, index) => ({
+				id: `rm_${index}`,
+				kind: "private",
+				name: `room-${index}`,
+				peer_name: null,
+				role: "member",
+			})),
+		};
+		const manyChoices = resourceChoicesOf(account, many);
+		const capped = permissionsChange(
+			withLimit(draftOf(many, serviceScopes), true, many, manyChoices),
+			many,
+			manyChoices,
+		);
+		expect(capped?.resources?.room_ids).toEqual(many.chat_rooms.slice(0, 20).map((room) => room.id));
+	});
+
+	// A saved limit to nothing is a choice of a manager. The check box must not replace it with each membership.
+	it("keeps a saved limit to nothing when the limit goes off and on", () => {
+		const nothing = { ...access, resources: { mailbox_ids: [], drive_ids: [], room_ids: [] } };
+		const off = withLimit(draftOf(nothing, serviceScopes), false, nothing, choices);
+		expect(permissionsChange(withLimit(off, true, nothing, choices), nothing, choices)).toBeNull();
 	});
 
 	it("shows saved limits as picked, and sends null to remove them", () => {

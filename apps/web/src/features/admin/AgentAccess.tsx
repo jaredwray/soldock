@@ -1,4 +1,4 @@
-import type { Principal } from "@asterra/contracts";
+import { allowsResource, type Principal, type ResourceKind } from "@asterra/contracts";
 import { useId } from "react";
 import { expiryPhrase } from "../settings/ttl.ts";
 import { limitText, resourceChoicesOf, roomLabel } from "./resourceChoices.ts";
@@ -31,6 +31,12 @@ export function AgentAccess({ agent, access, error, onRetry }: AgentAccessProps)
 	const service = agent.kind === "service";
 	// The word for the agent in the text: a service account is an "account".
 	const noun = service ? "account" : "agent";
+	// A new agent has limits, and a membership alone gives it nothing. So each membership that the limits do
+	// not name gets a mark: the agent does not reach it until a manager selects it under Permissions.
+	const outside = (kind: ResourceKind, id: string, text = "Not in the limits") =>
+		access !== null && !allowsResource(access.resources, kind, id) ? (
+			<span className="chip chip-small">{text}</span>
+		) : null;
 
 	return (
 		<section aria-labelledby={headingId}>
@@ -72,13 +78,18 @@ export function AgentAccess({ agent, access, error, onRetry }: AgentAccessProps)
 					<dt>Limits</dt>
 					<dd>
 						{access.resources === null ? (
-							<span className="muted">None. The {noun} reaches each membership below.</span>
+							<span className="muted">
+								None. The {noun} reaches each membership below, and each room that it joins or opens.
+							</span>
 						) : (
 							<>Only: {limitText(access.resources, resourceChoicesOf(agent, access))}</>
 						)}
 					</dd>
 					<dt>Own mailbox and drive</dt>
-					<dd>{agent.address}</dd>
+					<dd>
+						{agent.address} {outside("mailbox", agent.id, "Mailbox not in the limits")}{" "}
+						{outside("drive", agent.id, "Drive not in the limits")}
+					</dd>
 					<dt>Team mailboxes</dt>
 					<dd>
 						{access.team_mailboxes.length === 0 ? (
@@ -87,7 +98,8 @@ export function AgentAccess({ agent, access, error, onRetry }: AgentAccessProps)
 							<ul>
 								{access.team_mailboxes.map((mailbox) => (
 									<li key={mailbox.id}>
-										{mailbox.display_name} <span className="muted">{mailbox.address}</span>
+										{mailbox.display_name} <span className="muted">{mailbox.address}</span>{" "}
+										{outside("mailbox", mailbox.id)}
 									</li>
 								))}
 							</ul>
@@ -101,7 +113,7 @@ export function AgentAccess({ agent, access, error, onRetry }: AgentAccessProps)
 							<ul>
 								{access.shared_drives.map((drive) => (
 									<li key={drive.id}>
-										{drive.name} <span className="muted">{drive.role}</span>
+										{drive.name} <span className="muted">{drive.role}</span> {outside("drive", drive.id)}
 									</li>
 								))}
 							</ul>
@@ -120,6 +132,11 @@ export function AgentAccess({ agent, access, error, onRetry }: AgentAccessProps)
 								))}
 							</ul>
 						)}
+						{access.resources !== null && access.drive_shared_items.length > 0 && (
+							<p className="field-hint">
+								The {noun} has limits, so it does not reach these items. Limits name a drive, not one item.
+							</p>
+						)}
 						{access.drive_shared_items_truncated && (
 							<p className="field-hint">Others shared more items. The list shows the newest shares.</p>
 						)}
@@ -136,7 +153,8 @@ export function AgentAccess({ agent, access, error, onRetry }: AgentAccessProps)
 										<span className="muted">
 											{ROOM_KINDS[room.kind] && room.name ? `${ROOM_KINDS[room.kind]}, ` : ""}
 											{room.role}
-										</span>
+										</span>{" "}
+										{outside("room", room.id)}
 									</li>
 								))}
 							</ul>

@@ -16,6 +16,7 @@ import {
 	pickedIds,
 	pickKey,
 	scopesFor,
+	withLimit,
 } from "./permissionsDraft.ts";
 import { type ResourceChoice, resourceChoicesOf } from "./resourceChoices.ts";
 import type { AgentAccess } from "./useAgentAccess.ts";
@@ -35,9 +36,10 @@ interface AgentPermissionsProps {
 }
 
 /**
- * The permissions of an agent or a service account (`directory.set_agent_access`): its scopes, and an
- * optional limit to listed mailboxes, drives and rooms. Each API key and each OAuth connection of an
- * agent, and each token of a service account, has these permissions. A key has none of its own.
+ * The permissions of an agent or a service account (`directory.set_agent_access`): its scopes, and a limit
+ * to listed mailboxes, drives and rooms. A new agent has the limit, with its own mailbox and its own drive,
+ * and a manager can remove it. Each API key and each OAuth connection of an agent, and each token of a
+ * service account, has these permissions. A key has none of its own.
  */
 export function AgentPermissions({ agent, access, failed, onSaved }: AgentPermissionsProps) {
 	const toast = useToast();
@@ -178,15 +180,17 @@ export function AgentPermissions({ agent, access, failed, onSaved }: AgentPermis
 						type="checkbox"
 						className="checkbox"
 						checked={draft.limited}
-						onChange={() => setEdited({ ...draft, limited: !draft.limited })}
+						onChange={() => setEdited(withLimit(draft, !draft.limited, access, choices))}
 						aria-describedby={limitHintId}
 						disabled={busy}
 					/>
 					<span>Limit this {noun} to specific mailboxes, drives and rooms</span>
 				</label>
 				<p id={limitHintId} className="field-hint">
-					Without a limit, the {noun} reaches each mailbox, drive and room that it is a member of. With a limit, it
-					reaches only the selected ones, and it cannot use the views that read across rooms.
+					A new {noun} has this limit, with its own mailbox and its own drive. With a limit, the {noun} reaches only the
+					selected ones, and it cannot use the views that read across rooms. Select a team mailbox, a shared drive or a
+					room here after the {noun} is a member of it. Without a limit, the {noun} reaches each mailbox, drive and room
+					that it is a member of.
 				</p>
 			</div>
 			{draft.limited && pickList("mailbox", "Mailboxes", "Mail", choices.mailboxes)}

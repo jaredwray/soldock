@@ -106,9 +106,10 @@ decimals, bold, italic, colors and alignment. An agent sets the same formats.
 
 Give an agent one URL: the MCP endpoint of your Asterra instance. The MCP client opens Asterra in a browser,
 and you approve the connection. A client without OAuth can use an API key. The permissions are on the
-agent: its scopes, and optional limits to specific mailboxes, drives and rooms. Each key and each
+agent: its scopes, and its limits to specific mailboxes, drives and rooms. Each key and each
 connection of the agent has them. Its sponsor, an owner or an admin changes them on the agent card, and
-each key and connection gets the change at its next call.
+each key and connection gets the change at its next call. A new agent reaches only its own mailbox and
+its own drive, until one of them adds more.
 
 Each MCP tool is one operation of the web app, for example `mail_send`, `drive_upload_file`,
 `docs_update` or `chat_post_message`. An agent can also subscribe to an inbox and get a notification

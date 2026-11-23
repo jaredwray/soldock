@@ -61,7 +61,8 @@ const KIND_HINTS: Record<Kind, string> = {
 
 /**
  * Creates a person, an agent or a service account. An agent and a service account get their scopes here.
- * Each key of the agent and each token of the account has these scopes, and none of its own. The result of
+ * Each key of the agent and each token of the account has these scopes, and none of its own. A new agent or
+ * service account is limited to its own mailbox and its own drive, unless the admin clears the limit. The result of
  * an agent holds a first API key, which shows once. A person gets no key: the person signs in with the
  * password and creates keys in Settings. A service account gets its tokens in its card, with a lifetime
  * for each.
@@ -82,6 +83,9 @@ function CreatePrincipalForm({ me, humans, onBusy, onCancel, onCreated }: Create
 	// rest. The kinds share one selection, and a submit sends only the selected scopes that the kind can hold.
 	const [scopes, setScopes] = useState<ReadonlySet<Scope>>(() => new Set<Scope>(["account.read"]));
 	const selected = offered.filter((scope) => scopes.has(scope));
+	// A new agent or service account starts with a limit to its own mailbox and its own drive: the default of
+	// the server. Without the check, the form sends `limits: "none"`, and the new member has no limits.
+	const [limited, setLimited] = useState(true);
 	const [busy, setBusy] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 	const ids = {
@@ -93,6 +97,7 @@ function CreatePrincipalForm({ me, humans, onBusy, onCancel, onCreated }: Create
 		sponsor: useId(),
 		description: useId(),
 		kindHint: useId(),
+		limitHint: useId(),
 	};
 
 	async function submit(event: FormEvent<HTMLFormElement>) {
@@ -117,6 +122,7 @@ function CreatePrincipalForm({ me, humans, onBusy, onCancel, onCreated }: Create
 					// `scopesFor` gives `SERVICE_SCOPES` for a service account, which are the scopes that the operation takes.
 					scopes: selected as InputOf<"directory.create_service_account">["scopes"],
 					...(description.trim() ? { description: description.trim() } : {}),
+					...(limited ? {} : { limits: "none" as const }),
 				});
 				onCreated(result.principal, null);
 			} catch (caught) {
@@ -141,6 +147,7 @@ function CreatePrincipalForm({ me, humans, onBusy, onCancel, onCreated }: Create
 						address: address.trim(),
 						sponsor_id: sponsorId,
 						scopes: selected,
+						...(limited ? {} : { limits: "none" as const }),
 					};
 		try {
 			const result = await api.call("directory.create_principal", input);
@@ -181,6 +188,28 @@ function CreatePrincipalForm({ me, humans, onBusy, onCancel, onCreated }: Create
 				</label>
 			))}
 		</fieldset>
+	);
+
+	/** The limit of a new agent or service account. `noun` is the word for it in the text. */
+	const limitChoice = (noun: "agent" | "account") => (
+		<div className="field form-grid-wide">
+			<label className="check-row">
+				<input
+					type="checkbox"
+					className="checkbox"
+					checked={limited}
+					onChange={() => setLimited((current) => !current)}
+					aria-describedby={ids.limitHint}
+					disabled={busy}
+				/>
+				<span>Limit this {noun} to its own mailbox and its own drive</span>
+			</label>
+			<p id={ids.limitHint} className="field-hint">
+				With the limit, the {noun} reaches no chat room, no team mailbox and no shared drive. Open the {noun} under
+				Members to select the ones that it can reach, after it is a member of them. Without the limit, the {noun}{" "}
+				reaches each mailbox, drive and room that it is a member of.
+			</p>
+		</div>
 	);
 
 	return (
@@ -304,11 +333,11 @@ function CreatePrincipalForm({ me, humans, onBusy, onCancel, onCreated }: Create
 							/>
 						</div>
 						{scopeList("Scopes of the account")}
+						{limitChoice("account")}
 						<p className="field-hint form-grid-wide">
 							The scopes say what the account can do. Each token of the account has them, and you can change them later.
 							The sponsor is the person to ask about the account. Only owners and admins create its tokens. Open the
-							account under Members after you create it to add a token, or to limit it to specific mailboxes, drives and
-							rooms.
+							account under Members after you create it to add a token, or to change its limits.
 						</p>
 					</>
 				) : (
@@ -330,10 +359,11 @@ function CreatePrincipalForm({ me, humans, onBusy, onCancel, onCreated }: Create
 							/>
 						</div>
 						{scopeList("Scopes of the agent")}
+						{limitChoice("agent")}
 						<p className="field-hint form-grid-wide">
 							The scopes say what the agent can do. Each API key of the agent and each app that connects as it with
 							OAuth has them. You can change them later. A new agent can send mail only inside this organization. Open
-							the agent under Members to change its policy, or to limit it to specific mailboxes, drives and rooms.
+							the agent under Members to change its policy or its limits.
 						</p>
 					</>
 				)}

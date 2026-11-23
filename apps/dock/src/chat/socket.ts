@@ -37,7 +37,7 @@ export async function openRoomSocket(
 	// A service account with resource limits gets a socket only to a listed room. The route and the feeds of MCP both
 	// come here.
 	if (!allowsResource(caller.restriction, "room", roomId)) {
-		throw new OperationError("forbidden", "This service account is limited, and its list does not name this room.");
+		throw new OperationError("forbidden", "This agent is limited, and its list does not name this room.");
 	}
 	const open: SocketOpen = {
 		roomId,
