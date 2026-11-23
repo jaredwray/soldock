@@ -45,7 +45,8 @@ afterEach(() => {
 
 /**
  * The owner, an admin, a member (Ada), the agent of Ada, and a service account that Ada sponsors. The
- * account has each service scope, unless `scopes` names its scopes.
+ * account has each service scope, unless `scopes` names its scopes. It has no limits, so the tests reach
+ * each membership of the account.
  */
 async function seedService(scopes: Scope[] = [...SERVICE_SCOPES]) {
 	const { owner, ada, bot } = await seedOrg();
@@ -62,6 +63,7 @@ async function seedService(scopes: Scope[] = [...SERVICE_SCOPES]) {
 		description: "Posts build results",
 		sponsor_id: ada.id,
 		scopes: scopes as never,
+		resources: null,
 	});
 	return { owner, admin, ada, bot, service: principal };
 }
@@ -115,7 +117,7 @@ describe("service accounts", () => {
 			outbound_policy: { mode: "internal-only", allowlist: [] },
 		});
 		expect((await admin.call("account.list_api_keys", { principal_id: service.id })).api_keys).toEqual([]);
-		// The account has the scopes of its creation, and no limits.
+		// The account has the scopes of its creation. `resources: null` of the call gave it no limits.
 		expect(await admin.call("directory.get_agent_access", { principal_id: service.id })).toMatchObject({
 			scopes: ["account.read", "chat.read"],
 			resources: null,
@@ -129,6 +131,13 @@ describe("service accounts", () => {
 		});
 		expect(viaMcp.isError).toBeFalsy();
 		expect(viaMcp.structuredContent).toMatchObject({ principal: { kind: "service", sponsor_id: owner.id } });
+		// A call without `resources` limits the new account to its own mailbox and its own drive.
+		const backupId = (viaMcp.structuredContent as { principal: { id: string } }).principal.id;
+		expect((await owner.call("directory.get_agent_access", { principal_id: backupId })).resources).toEqual({
+			mailbox_ids: [backupId],
+			drive_ids: [backupId],
+			room_ids: [],
+		});
 
 		const input = { display_name: "Nope", address: "nope@dock.test", scopes: ["account.read" as const] };
 		// An account needs a scope, and only a scope that a service account can hold.

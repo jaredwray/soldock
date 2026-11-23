@@ -46,6 +46,8 @@ test("an admin creates a person with no API key, and an agent with scopes and a 
 		await expect(dialog.getByRole("checkbox", { name: /^account\.read/ })).toBeChecked();
 		await expect(dialog.getByRole("checkbox", { name: /^chat\.read/ })).not.toBeChecked();
 		await dialog.getByRole("checkbox", { name: /^mail\.read/ }).check();
+		// A new agent is limited to its own mailbox and its own drive, unless the admin clears the limit.
+		await expect(dialog.getByLabel("Limit this agent to its own mailbox and its own drive")).toBeChecked();
 		const agentId = await submit(page, "Create agent");
 		ids.push(agentId);
 		const keyDialog = page.getByRole("dialog", { name: `${agent} is ready` });
@@ -57,7 +59,9 @@ test("an admin creates a person with no API key, and an agent with scopes and a 
 			expect(response.status()).toBe(200);
 			return (await response.json()) as { scopes: string[]; resources: unknown };
 		};
-		expect((await scopesOfKey()).scopes.sort()).toEqual(["account.read", "mail.read"]);
+		const first = await scopesOfKey();
+		expect(first.scopes.sort()).toEqual(["account.read", "mail.read"]);
+		expect(first.resources).toEqual({ mailbox_ids: [agentId], drive_ids: [agentId], room_ids: [] });
 
 		// The Permissions part of the agent card changes the scopes and the limits of the agent. The first key
 		// gets them at its next call, without a new secret.
@@ -66,8 +70,10 @@ test("an admin creates a person with no API key, and an agent with scopes and a 
 		await card.locator("summary").click();
 		await expect(card.getByRole("checkbox", { name: /^mail\.read/ })).toBeChecked();
 		await card.getByRole("checkbox", { name: /^chat\.read/ }).check();
-		await card.getByLabel("Limit this agent to specific mailboxes, drives and rooms").check();
-		await card.getByLabel(/^Own mailbox/).check();
+		// The form shows the limits of the new agent. The admin removes the own drive from them.
+		await expect(card.getByLabel("Limit this agent to specific mailboxes, drives and rooms")).toBeChecked();
+		await expect(card.getByLabel(/^Own mailbox/)).toBeChecked();
+		await card.getByLabel("Own drive").uncheck();
 		await card.getByRole("button", { name: "Save permissions" }).click();
 		await expect(card.getByText(`Only: Own mailbox (helper-${local}@example.com)`)).toBeVisible();
 		const changed = await scopesOfKey();

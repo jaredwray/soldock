@@ -305,6 +305,8 @@ MCP clients. The app has no UI-only path.
       A toast tells the admin to open it to add a token.
       An agent (`directory.create_principal`) gets its scopes in the same way: the form shows `AGENT_SCOPES` with the texts for a person (`scopeDescription` with the kind `agent`), selects only `account.read` first, and sends the selected scopes as `scopes`.
       The first API key of the agent has no scopes of its own. It has the scopes of the agent.
+      For an agent and a service account, the form has the check box **Limit this agent to its own mailbox and its own drive** (**Limit this account …**), which is on first.
+      With it, the form sends no `resources`, and the server gives the default limits. Without it, the form sends `resources: null`, and the new member has no limits.
       A credential cannot grant a scope that it does not hold.
       The form offers only the scopes of the session.
       A person also needs a first password. The admin gives the password to the person.
@@ -331,7 +333,9 @@ MCP clients. The app has no UI-only path.
       **Permissions** (`directory.set_agent_access`, `AgentPermissions.tsx`): the scopes of the agent, and **Limit this agent to specific mailboxes, drives and rooms** (**Limit this account …** for a service account).
       The form offers `AGENT_SCOPES` for an agent and `SERVICE_SCOPES` for a service account (`scopesFor` of `admin/permissionsDraft.ts`).
       The scope texts come from `scopeDescription`: the texts for a person for an agent, and the texts for a service account (`SERVICE_SCOPE_DESCRIPTIONS`, without "your") for a service account.
+      A new agent or service account has the limit, with its own mailbox and its own drive selected: the default of the server.
       With the limit, the form shows a list of check boxes for each product: the own mailbox, the team mailboxes, the own drive, the shared drives and the rooms.
+      When the limit goes on for an agent without saved limits, the form selects what the agent reaches now: its own mailbox and drive, and its memberships, at most 20 of each kind (`withLimit`). So the check box alone never saves a limit to nothing.
       The choices come from the access of the agent (`admin/resourceChoices.ts`). A listed resource that is not in these lists shows with its id, so a manager can remove it.
       A selection key has the kind and the id, because the own mailbox and the own drive have the same id.
       A list stops a further selection at 20 (`AGENT_RESOURCE_LIMITS.perKind`), with a count when it has more choices.
@@ -339,6 +343,7 @@ MCP clients. The app has no UI-only path.
       **Save permissions** sends only the fields that changed (`admin/permissionsDraft.ts`), and is off when nothing changed. A line tells when the choices are not saved.
       After a save, the form shows the saved values from the answer of the save at once, also when the next read of the access is slow or fails. The card ignores the answer of a read that is older than its newest read.
       **Access** (`directory.get_agent_access`, `AgentAccess.tsx`): the live API keys (**Live tokens** for a service account), the limits, the own mailbox and drive, the team mailboxes, the shared drives, the rooms with the role, and **Shared directly in Drive** (the items that a member shared with the agent).
+      For a limited agent, each membership that the limits do not name has the mark **Not in the limits**: the agent does not reach it. A line under **Shared directly in Drive** tells that a limited agent does not reach these items.
       The list of live API keys of an agent does not show the apps that connect with OAuth.
       The card reads the access one time for **Permissions** and for **Access** (`admin/useAgentAccess.ts`).
       A create, a rotation or a revoke of a key, and a save of the permissions, load the access again.
@@ -431,6 +436,8 @@ MCP clients. The app has no UI-only path.
   - For a new agent, the scopes are the agent scopes that the session holds. The page selects the
     requested scopes and `account.read` first, or each scope when the client asked for none. The app
     sends them as `scopes` with `new_agent`.
+  - For a new agent, the check box **Limit this agent to its own mailbox and its own drive** is on first.
+    Without it, the page sends `resources: null` with `new_agent`, and the new agent has no limits.
   - For an agent that exists, the page offers no scopes and sends only `agent_id`. A line tells that
     the app gets each permission of the agent, and that the agent card in Admin › Members changes them.
     The page reads the selected agent (`directory.get_agent_access`) and lists each scope of the agent.

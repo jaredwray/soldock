@@ -28,6 +28,23 @@ export const AgentResources = z.strictObject({
 });
 export type AgentResources = z.infer<typeof AgentResources>;
 
+/**
+ * The limits of a new agent or service account: its own mailbox and its own drive, and no room. A new agent
+ * has no membership, so these limits name each resource that it reaches. A manager adds a team mailbox, a
+ * shared drive or a room, or removes the limits, with `directory.set_agent_access`.
+ */
+export function defaultAgentResources(agentId: string): AgentResources {
+	return { mailbox_ids: [agentId], drive_ids: [agentId], room_ids: [] };
+}
+
+/**
+ * The `resources` field of an operation that creates an agent or a service account. The only value is null:
+ * the new agent then has no limits. Without the field, the new agent gets `defaultAgentResources`. A list is
+ * not possible here, because the own mailbox and the own drive have the id of the agent, which does not
+ * exist before the call.
+ */
+export const NoAgentResources = z.null();
+
 export type ResourceKind = "mailbox" | "drive" | "room";
 
 /**

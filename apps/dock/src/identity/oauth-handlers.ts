@@ -118,6 +118,7 @@ export const oauthHandlers: Pick<HandlerMap<CallContext>, OAuthOperation> = {
 					password_hash: null,
 					created_by: call.caller.principal.id,
 					agent_scopes: scopes,
+					no_limits: input.resources === null,
 				},
 				null,
 				{

@@ -82,12 +82,13 @@ test("an admin creates a service account with scopes and a 7-day token, sees its
 		const old = await context.request.get("/api/v1/account", { headers: { authorization: `Bearer ${secret}` } });
 		expect(old.status()).toBe(401);
 
-		// A change of the permissions applies to the token at once, without a new secret. The own mailbox and
-		// the own drive have the same id, so the limit to the own mailbox must not select the own drive.
+		// A change of the permissions applies to the token at once, without a new secret. A new account is
+		// limited to its own mailbox and its own drive. They have the same id, so the removal of the own drive
+		// from the limits must not remove the own mailbox.
 		await card.getByRole("checkbox", { name: /^chat\.read/ }).check();
-		await card.getByLabel("Limit this account to specific mailboxes, drives and rooms").check();
-		await card.getByLabel(/^Own mailbox/).check();
-		await expect(card.getByLabel("Own drive")).not.toBeChecked();
+		await expect(card.getByLabel("Limit this account to specific mailboxes, drives and rooms")).toBeChecked();
+		await card.getByLabel("Own drive").uncheck();
+		await expect(card.getByLabel(/^Own mailbox/)).toBeChecked();
 		await card.getByRole("button", { name: "Save permissions" }).click();
 		await expect(card.getByText(`Only: Own mailbox (${local}@example.com)`)).toBeVisible();
 		const changed = await context.request.get("/api/v1/account", { headers: { authorization: `Bearer ${rotated}` } });

@@ -180,7 +180,8 @@ The directory stores these fields in `chat_status_json`. Each read checks the en
   or an admin can also create a key for the person. A new agent needs `scopes`: the scopes of the
   agent, inside `AGENT_SCOPES`. The credential of the call must hold each one (`grantableScopes`). The
   agent also gets a first key, `First key`, with no scopes of its own. Its secret shows once. A human
-  with `scopes` is `invalid`.
+  with `scopes` is `invalid`. A new agent gets the default limits, or no limits with `resources: null`
+  ([Resource limits of an agent](#resource-limits-of-an-agent)). A human with `resources` is `invalid`.
 - Owners and admins can read the own mailbox of each agent (`canReadAgentMailboxes`). They cannot
   change it or send from it. The mailbox of a person stays private. The sponsor of an agent does not
   get this access. The [`mail`](../mail/README.md#agent-mailboxes) module applies the rule.
@@ -342,7 +343,8 @@ the API, with tokens. Nobody signs in as it, and it never connects through OAuth
   admins return them, and `account.whoami` returns them for the record of the caller.
 - **Scopes.** The account holds the scopes, not its tokens, as each agent does (`principals.agent_scopes`,
   migrations `0026` and `0027`). `directory.create_service_account` takes `scopes` (at least one), and
-  `directory.set_agent_access` changes them. An account can hold only `SERVICE_SCOPES`:
+  `directory.set_agent_access` changes them. A new account gets the default limits of a new agent, or no
+  limits with `resources: null`. An account can hold only `SERVICE_SCOPES`:
   `account.read`, `directory.read`, `mail.read`, `mail.modify`, `mail.send`, `drive.read`, `drive.write`,
   `drive.share`, `chat.read` and `chat.write`. It never holds `account.keys`, `directory.write` or a
   webhook scope, so it cannot widen its own access and it cannot create a webhook. Its outbound policy
@@ -520,6 +522,14 @@ own. A key of a person keeps its own scopes (`api_keys.scopes`).
 - **First scopes.** `directory.create_principal` takes the `scopes` of a new agent.
   `oauth.approve_authorization` with `new_agent` takes the `scopes` of the agent of a new connection.
   `directory.create_service_account` takes the `scopes` of a service account.
+- **First limits.** The same three operations give a new agent or service account the default limits:
+  its own mailbox and its own drive, and no room (`defaultAgentResources`). So a new agent reaches only
+  what it has at its start, and a later membership gives nothing until a manager adds it to the limits.
+  `resources: null` in the call creates the agent without limits. No other value is possible, because
+  the own mailbox and the own drive have the id of the agent, which does not exist before the call.
+  `resources` with `agent_id` of `oauth.approve_authorization`, or for a human, is `invalid`.
+  `createPrincipal` writes the limits in the insert of the agent, so no agent exists without them for a
+  moment.
 - **No escalation.** The credential of the call must hold each scope of the new list (`grantableScopes`),
   so a narrow key with `directory.write` cannot give an agent a scope that the key does not hold. The
   limits say where each scope applies, so a change of `resources` needs a credential that holds each scope
@@ -613,6 +623,20 @@ of the agent has the same limits. The limits apply on top of the memberships of 
 that the agent left gives nothing. An agent without `resources` reaches each membership. The limits also
 stop a wider reach. A limited agent cannot join or create a room, and it does not reach an item that a
 person shared directly with it.
+
+**A new agent is limited.** A new agent or service account gets `defaultAgentResources`: its own mailbox
+and its own drive, and no room ([Access of an agent](#access-of-an-agent), First limits).
+
+- Why: the least access is the default. A person who adds an agent to a room, or shares a drive with it,
+  does not widen what the agent reaches. Only a manager of the agent does, in one place.
+- A membership of a team mailbox, a shared drive or a room gives a limited agent nothing. A manager adds
+  the resource to the limits after the agent is a member (`directory.set_agent_access`).
+- A person can open a direct message with a limited agent. The agent does not see the room until a
+  manager adds it to the limits.
+- `resources: null` in the create call, or in `directory.set_agent_access` later, gives an agent without
+  limits.
+- No migration changes an agent or a service account from before this default. Its `agent_resources`
+  stays as it is, also when it is null.
 
 - `resources` has three lists: `mailbox_ids`, `drive_ids` and `room_ids`, each at most 20 ids
   (`AGENT_RESOURCE_LIMITS`). Each list is complete: an empty list allows nothing of that product. The own
@@ -894,6 +918,8 @@ with `account.keys`.
     decided request creates no agent.
   - `scopes` is necessary with `new_agent`: they become the scopes of the new agent. They must be agent
     scopes that the credential of the approver holds (`grantableScopes`).
+  - A new agent gets the default limits: its own mailbox and its own drive. `resources: null` with
+    `new_agent` creates it without limits. `resources` with `agent_id` is `invalid`.
   - An agent that exists follows the rules of API keys: its sponsor, an owner or an admin. `scopes`
     with `agent_id` is `invalid`. The credential of the approver must hold each scope of the agent,
     because the tokens give each one.

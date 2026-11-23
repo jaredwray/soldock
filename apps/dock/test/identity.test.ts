@@ -1094,6 +1094,8 @@ describe("directory authorization", () => {
 		expect(await denied(owner.call("directory.create_principal", { ...person, scopes: ["mail.read"] }))).toBe(
 			"invalid",
 		);
+		// Only an agent has resource limits.
+		expect(await denied(owner.call("directory.create_principal", { ...person, resources: null }))).toBe("invalid");
 		const eve = await owner.call("directory.create_principal", person);
 		expect(eve.api_key).toBeNull();
 		expect((await owner.call("account.list_api_keys", { principal_id: eve.principal.id })).api_keys).toEqual([]);
@@ -1115,7 +1117,29 @@ describe("directory authorization", () => {
 		// The first key is only a credential: it has the scopes of the agent.
 		expect(agent.api_key).toMatchObject({ label: "First key", scopes: ["account.read", "mail.read"] });
 		expect((await owner.call("account.list_api_keys", { principal_id: agent.principal.id })).api_keys).toHaveLength(1);
-		expect((await api(agent.api_key?.secret ?? "")("account.whoami")).scopes).toEqual(["account.read", "mail.read"]);
+		// A new agent is limited to its own mailbox and its own drive.
+		expect(await api(agent.api_key?.secret ?? "")("account.whoami")).toMatchObject({
+			scopes: ["account.read", "mail.read"],
+			resources: { mailbox_ids: [agent.principal.id], drive_ids: [agent.principal.id], room_ids: [] },
+		});
+		// `resources: null` creates an agent without limits. The call takes no list: the own mailbox and the own
+		// drive have the id of the agent, which the caller does not know yet.
+		const free = {
+			kind: "agent" as const,
+			display_name: "Free",
+			address: "free@dock.test",
+			scopes: ["account.read" as const],
+		};
+		expect(
+			await denied(
+				owner.call("directory.create_principal", {
+					...free,
+					resources: { mailbox_ids: [], drive_ids: [], room_ids: [] } as never,
+				}),
+			),
+		).toBe("invalid");
+		const unlimited = await owner.call("directory.create_principal", { ...free, resources: null });
+		expect((await api(unlimited.api_key?.secret ?? "")("account.whoami")).resources).toBeNull();
 		// An agent needs scopes.
 		expect(
 			await denied(

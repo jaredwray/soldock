@@ -30,6 +30,8 @@ OAuth is the main way to add an agent. The agent needs only one URL.
    asked for show **Requested**. You can give fewer or more. For an agent that exists, the page shows
    no scopes: the connection gets the [permissions of the agent](#permissions-of-an-agent). Select
    **Approve and connect**.
+   - A new agent is limited to its own mailbox and its own drive. Clear **Limit this agent to its own
+     mailbox and its own drive** for an agent without limits (`resources: null`).
 
 The client then gets an access token for one hour and a refresh token. Each refresh gives a new
 refresh token. A connection that the client does not refresh for 30 days stops. The tokens act as
@@ -110,6 +112,20 @@ each OAuth connection of the agent has them. A key or a connection is only a cre
   agent.
 - For two clients that need different permissions, create two agents.
 
+**A new agent is limited.** A new agent reaches only its own mailbox and its own drive, and no chat room.
+Its limits name them. This is the default of each way to create an agent: **New member**, the
+**Connect an agent** page, `directory.create_principal` and `oauth.approve_authorization`.
+
+- A membership alone gives a limited agent nothing. Add the agent to a team mailbox, a shared drive or a
+  room first. Then open the agent in **Admin › Members**, and select the resource under **Permissions**.
+  **Access** on the card marks each membership that is **Not in the limits**.
+- A person can start a direct message with a limited agent, but the agent does not see the room. Add the
+  room of the direct message to the limits of the agent.
+- For an agent without limits, clear **Limit this agent to its own mailbox and its own drive** when you
+  create it, or send `resources: null` with the create call. Such an agent reaches each mailbox, drive and
+  room that it is a member of. You can also remove the limits later.
+- An agent from before this default keeps its access. Its limits do not change.
+
 **Limit an agent.** `resources` of `directory.set_agent_access` has three lists: `mailbox_ids`,
 `drive_ids` and `room_ids`, each with at most 20 ids. The own mailbox and the own drive have the id of
 the agent. An empty list allows nothing of that product, and `null` removes the limits. A limited agent
@@ -128,6 +144,7 @@ Drive and Chat it acts as an agent, so its outbound policy applies.
 1. An owner or an admin opens **Admin › Members**, selects **New member**, then **Service account**.
    The account gets a display name, an address on a mail domain, a description, a sponsor and its
    scopes. The REST and MCP operation is `directory.create_service_account`. It has no token yet.
+   A new account is limited to its own mailbox and its own drive, as a new agent is.
 2. The owner or the admin opens the account and creates a token: a label, an optional description, and
    a lifetime of 1, 7, 30, 90 or 180 days, a custom date or Never (`account.create_api_key` with
    `principal_id`, and `expires_in_days` or `expires_at`). The secret shows once.
@@ -163,7 +180,8 @@ at once.
 
 **Limit an account.** A service account has the limits of an agent: see
 [Limit an agent](#permissions-of-an-agent). The own mailbox and the own drive have the id of the
-account.
+account. A new account starts with these two in its limits. Send `resources: null` to
+`directory.create_service_account` for an account without limits.
 
 **Notice before the end.** Seven days before a token ends, each owner and admin gets one internal mail
 with the account, the label of the token and its end. The key list shows **Expires soon**. A token
