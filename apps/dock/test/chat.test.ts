@@ -919,6 +919,34 @@ describe("the scopes of a member of a room", () => {
 		expect(await texts(ada, room.id)).not.toContain("One more thing.");
 	});
 
+	// The owner of a room limits a member. Each principal can join a public room, and each member with
+	// chat.add_members can add a principal. Neither must give the member its scopes back.
+	it("keeps the limit of a member that leaves a room and comes back, until the owner of the room gives more", async () => {
+		const person = await cy();
+		const room = await createRoom(ada, "public", "Launch", [person.id, owner.id]);
+		const all = ["chat.read", "chat.write", "chat.add_members"];
+		const leave = () => person.call("chat.remove_member", { room_id: room.id, principal_id: person.id });
+		const add = { room_id: room.id, principal_ids: [person.id] };
+		const scopesNow = async () =>
+			(await ada.call("chat.get_room", { room_id: room.id })).members.find((m) => m.principal_id === person.id)?.scopes;
+		await setScopes(ada, room.id, person, READ);
+		await leave();
+		await person.call("chat.join_room", { room_id: room.id });
+		expect(await scopesNow()).toEqual([...READ]);
+		expect(await codeOf(person.call("chat.post_message", { room_id: room.id, text: "Back." }))).toBe("forbidden");
+		// A member that is not the owner of the room adds the person again, and gives no more than it had.
+		await leave();
+		await owner.call("chat.add_members", add);
+		expect(await scopesNow()).toEqual([...READ]);
+		// The owner of the room gives the scopes of a person again. A leave and a join then keep them.
+		await leave();
+		await ada.call("chat.add_members", add);
+		expect(await scopesNow()).toEqual(all);
+		await leave();
+		await person.call("chat.join_room", { room_id: room.id });
+		expect(await scopesNow()).toEqual(all);
+	});
+
 	it("lets a member give only the scopes that its own membership has", async () => {
 		const person = await cy();
 		const room = await createRoom(ada, "private", "Hiring", [bot.id]);

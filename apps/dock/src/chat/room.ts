@@ -612,8 +612,12 @@ const MIGRATIONS: string[][] = [
 		"ALTER TABLE messages ADD COLUMN cards_json TEXT",
 		"CREATE INDEX IF NOT EXISTS messages_active_created ON messages (created_at) WHERE deleted_at IS NULL",
 	],
-	// The scopes of each member in the room. Null: the scopes of the kind of the member.
-	["ALTER TABLE members ADD COLUMN scopes TEXT"],
+	// The scopes of each member in the room. Null: the scopes of the kind of the member. `left_scopes` keeps
+	// the scopes of a principal that left the room with fewer scopes than its kind, for a later join.
+	[
+		"ALTER TABLE members ADD COLUMN scopes TEXT",
+		"CREATE TABLE IF NOT EXISTS left_scopes (principal_id TEXT PRIMARY KEY, scopes TEXT NOT NULL) WITHOUT ROWID",
+	],
 ];
 
 /**
@@ -923,6 +927,39 @@ export class ChatRoomDO extends DurableObject<Env> {
 
 	private hasScope(member: MemberRow, scope: RoomMemberScope): boolean {
 		return this.scopesOf(member).includes(scope);
+	}
+
+	/**
+	 * Keeps the scopes of a member that leaves the room, or that the owner removes, when it has fewer scopes
+	 * than its kind. Without this, a member of a public room that the owner limited leaves, joins again and
+	 * has the scopes of its kind. The row goes away when the principal is a member again.
+	 */
+	private keepScopes(member: MemberRow): void {
+		const held = this.scopesOf(member);
+		const usual = defaultRoomMemberScopes((JSON.parse(member.actor_json) as ActorRecord).kind);
+		if (usual.every((scope) => held.includes(scope))) {
+			this.sql.exec("DELETE FROM left_scopes WHERE principal_id = ?", member.principal_id);
+			return;
+		}
+		this.sql.exec(
+			"INSERT INTO left_scopes (principal_id, scopes) VALUES (?, ?) ON CONFLICT (principal_id) DO UPDATE SET scopes = excluded.scopes",
+			member.principal_id,
+			JSON.stringify(held),
+		);
+	}
+
+	/** The scopes that a principal had when it left the room with fewer scopes than its kind, or null. */
+	private keptScopes(principalId: string): RoomMemberScope[] | null {
+		const row = this.one<{ scopes: string }>("SELECT scopes FROM left_scopes WHERE principal_id = ?", principalId);
+		if (!row) return null;
+		let stored: unknown;
+		try {
+			stored = JSON.parse(row.scopes);
+		} catch {
+			stored = null;
+		}
+		const list = Array.isArray(stored) ? stored : [];
+		return ROOM_MEMBER_SCOPES.filter((scope) => scope === "chat.read" || list.includes(scope));
 	}
 
 	private memberRecord(row: MemberRow): MemberRecord {
@@ -1307,6 +1344,8 @@ export class ChatRoomDO extends DurableObject<Env> {
 			crypto.randomUUID(),
 			scopes === null ? null : JSON.stringify(ROOM_MEMBER_SCOPES.filter((scope) => scopes.includes(scope))),
 		);
+		// The member row has the scopes now, so the scopes from an earlier membership are not necessary.
+		this.sql.exec("DELETE FROM left_scopes WHERE principal_id = ?", actor.principal_id);
 		this.touch(`member:${actor.principal_id}`);
 	}
 
@@ -1437,8 +1476,10 @@ export class ChatRoomDO extends DurableObject<Env> {
 		if (this.memberCount() >= CHAT_LIMITS.membersPerRoom) return refuse("conflict", FULL);
 		const hasOwner = this.one("SELECT 1 AS found FROM members WHERE role = 'owner' LIMIT 1") !== null;
 		const lastSeq = (this.room() as RoomRow).last_seq;
+		// A principal that left with fewer scopes than its kind joins with those scopes: only the owner gives more.
+		const kept = this.keptScopes(call.actor.principal_id);
 		this.ctx.storage.transactionSync(() => {
-			this.insertMember(call.actor, hasOwner ? "member" : "owner", Date.now(), lastSeq);
+			this.insertMember(call.actor, hasOwner ? "member" : "owner", Date.now(), lastSeq, kept);
 			this.roomChanged(call.actor.principal_id);
 		});
 		await this.publish({ type: "room" });
@@ -1486,11 +1527,15 @@ export class ChatRoomDO extends DurableObject<Env> {
 		const room = this.room() as RoomRow;
 		const held = this.scopesOf(this.member(call.actor.principal_id) as MemberRow);
 		/** The scopes to store for a new member. Null: the scopes of its kind. */
+		const byOwner = (this.member(call.actor.principal_id) as MemberRow).role === "owner";
 		const given = (actor: ActorRecord): readonly RoomMemberScope[] | null => {
-			if (scopes) return scopes;
 			const usual = defaultRoomMemberScopes(actor.kind);
-			const allowed = usual.filter((scope) => held.includes(scope));
-			return allowed.length === usual.length ? null : allowed;
+			const allowed = scopes ?? usual.filter((scope) => held.includes(scope));
+			// A principal that left with fewer scopes than its kind gets no more from a member: only the owner
+			// gives more. So a member cannot undo a limit of the owner with a remove and an add.
+			const kept = byOwner ? null : this.keptScopes(actor.principal_id);
+			const result = kept ? allowed.filter((scope) => kept.includes(scope)) : allowed;
+			return !scopes && result.length === usual.length ? null : result;
 		};
 		const fresh = new Map<string, ActorRecord>();
 		for (const actor of actors) if (!this.member(actor.principal_id)) fresh.set(actor.principal_id, actor);
@@ -1589,6 +1634,7 @@ export class ChatRoomDO extends DurableObject<Env> {
 			return refuse("conflict", "You are the last member of this room, so you cannot leave it.");
 		}
 		this.ctx.storage.transactionSync(() => {
+			this.keepScopes(target);
 			this.sql.exec("DELETE FROM members WHERE principal_id = ?", principalId);
 			this.sql.exec("DELETE FROM thread_follows WHERE principal_id = ?", principalId);
 			this.sql.exec("DELETE FROM post_allowed WHERE principal_id = ?", principalId);
@@ -3995,6 +4041,10 @@ export class ChatRoomDO extends DurableObject<Env> {
 		}
 		// All sockets of the member share this limit, also after a reconnect or a restart of the room.
 		const member = state.credential.principalId;
+		// A typing event tells the other members that a message comes. A member without chat.write in its
+		// membership cannot post, so its sockets send no such event, also a socket from before the change.
+		const row = this.member(member);
+		if (!row || !this.hasScope(row, "chat.write")) return;
 		const at = Date.now();
 		const sent = this.sql.exec(
 			`UPDATE members SET last_typed_at = ? WHERE principal_id = ?

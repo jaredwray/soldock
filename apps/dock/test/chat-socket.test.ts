@@ -265,6 +265,23 @@ describe("a room socket", () => {
 		});
 	});
 
+	// A typing event tells the members that a message comes. A member that cannot post must not send one,
+	// also on a socket that it opens with a credential that holds chat.write.
+	it("sends no typing event for a member without chat.write in its membership", async () => {
+		const room = await privateRoom(ada, [bot.id]);
+		await ada.call("chat.set_member_scopes", { room_id: room.id, principal_id: bot.id, scopes: ["chat.read"] });
+		const reader = await connect(room.id, bearer(bot.key));
+		const viewer = await connect(room.id, bearer(ada.key));
+		for (const socket of [reader, viewer]) socket.socket.send("show");
+		await waitForViews(room.id, 2);
+		// The room handles the frames of one socket in order, so the close tells that it handled the typing frame.
+		reader.socket.send("typing");
+		reader.socket.send("unknown");
+		expect(await reader.next()).toEqual({ closed: 1008 });
+		viewer.socket.send("ping");
+		expect(await viewer.next()).toBe("pong");
+	});
+
 	it("sends one temporary typing event to other visible views without a member call", async () => {
 		vi.useFakeTimers({ toFake: ["Date"], now: Date.now() + 3_600_000 });
 		const room = await privateRoom(ada, [bot.id]);

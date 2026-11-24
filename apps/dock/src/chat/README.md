@@ -148,6 +148,12 @@ person, an agent and a service account. This is the model of a
 - **Without `chat.write`,** a member reads the room and sets its own state: what it read, its star, the
   threads that it follows and its notification level. It can leave the room. The room refuses each change
   of what the members see (`openAsWriter`), and `can_post` of the room is false for that member.
+- **A member that leaves** with fewer scopes than its kind keeps them for its next membership (table
+  `left_scopes`). So a member of a public room that the owner limited cannot leave, join again and have
+  the scopes of its kind. A member that adds the principal again gives no more than it had. Only the owner
+  of the room gives more, with an add or with `chat.set_member_scopes`.
+- **Typing.** A socket sends no typing event for a member without `chat.write` in its membership. The room
+  reads the membership for each typing frame, so the rule applies to a socket from before the change.
 - **With the posting rules.** The posting rules of a room say who can post a new message. A post needs
   `chat.write` in the membership and the posting rules. The other changes need only `chat.write`.
 - **With the credential.** `chat.add_members` is a scope of a membership only: no credential holds it. A
@@ -1203,7 +1209,7 @@ Known limits:
 | State | Where | Notes |
 | --- | --- | --- |
 | The room (kind, name, topic, creator, `last_seq`, `version`) | `ChatRoomDO` table `room` | One object for each room, keyed by the room id |
-| Members, their roles, their scopes, read markers and stars | `ChatRoomDO` table `members` | With a unique membership id and the name of each member at the time of the join. `scopes` has the scopes of the member in the room as a JSON list, or null for the scopes of its kind ([Member scopes](#member-scopes)). `starred` is 1 for a member that put its star on the room. The star goes away with the row when the member leaves. `last_typed_at` records the last accepted typing event for the three-second limit. `addressed_json` has the newest change that is for the member: ids, the reason, the version and the time, and no message text. It goes away with the row too |
+| Members, their roles, their scopes, read markers and stars | `ChatRoomDO` table `members` | With a unique membership id and the name of each member at the time of the join. `scopes` has the scopes of the member in the room as a JSON list, or null for the scopes of its kind ([Member scopes](#member-scopes)). The table `left_scopes` has the scopes of a principal that left the room with fewer scopes than its kind, until it is a member again. `starred` is 1 for a member that put its star on the room. The star goes away with the row when the member leaves. `last_typed_at` records the last accepted typing event for the three-second limit. `addressed_json` has the newest change that is for the member: ids, the reason, the version and the time, and no message text. It goes away with the row too |
 | Messages | `ChatRoomDO` table `messages` | The plain text, and the body as JSON (`body_json`, null for a message from before the bodies). The text and the body of a deleted message are gone. The row stays. Each row has the idempotency key of its send, or null. A delete removes the key. A reply has `parent_id` and `also_in_room`. A parent keeps the summary of its replies (`reply_count`, `last_reply_at`, `reply_authors_json`) |
 | Mentions | `ChatRoomDO` table `mentions` | One row for each principal that a message mentions, without its author, and one row (`group:here`, `group:channel`) for each group that it mentions, with the `seq` of the message. A post and an edit write the rows of the message again. A delete of the message removes its rows. The migration that adds the table fills it from the stored messages |
 | Thread follows | `ChatRoomDO` table `thread_follows` | One row for each member and thread that it follows, stopped, or read: the follow (1, 0 after a stop, or null for a marker only), the `seq` of the newest reply that the member read, and the time of the newest reply of the thread (`last_reply_at`, which each new or deleted reply writes for each follow of its thread). A new reply, `chat.follow_thread` and `chat.mark_thread_read` write it. The migration that adds the table fills it from the stored replies. A member that leaves loses its rows |
