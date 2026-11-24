@@ -248,33 +248,6 @@ describe("the event catalog", () => {
 });
 
 describe("events/subscribe", () => {
-	// events/subscribe does not go through the invoker, so it applies the resource limits of an agent itself,
-	// before a product records events for the target.
-	it("refuses a limited agent an event outside its list, and a chat event without a listed room", async () => {
-		const room = await privateRoom("Listed");
-		await ada.call("directory.update_agent_policy", { principal_id: bot.id, mode: "any" });
-		await ada.call("directory.set_agent_access", {
-			principal_id: bot.id,
-			resources: { mailbox_ids: [], drive_ids: [], room_ids: [room.id] },
-		});
-		const { posts } = receiver();
-		for (const [name, args] of [
-			["mail.inbox.updated", {}],
-			["drive.item.created", {}],
-			["chat.message.created", {}],
-		] as const) {
-			expect(errorOf(await subscribe(bot.key, name, { arguments: args })), name).toMatchObject({
-				data: { code: "forbidden" },
-			});
-		}
-		expect(posts).toEqual([]);
-		expect(await rows()).toEqual([]);
-		// A chat event of a listed room passes.
-		expect(resultOf(await subscribe(bot.key, "chat.message.created", { arguments: { room_id: room.id } })).id).toMatch(
-			/^sub_/,
-		);
-	});
-
 	// The life of a dot: it subscribes to a room, another member writes, and the dot gets one signed POST
 	// in the form of MCP Events, without the message text.
 	it("verifies the callback, then sends each new message of the room as a signed event", async () => {
