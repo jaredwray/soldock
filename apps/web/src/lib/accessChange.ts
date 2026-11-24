@@ -56,5 +56,5 @@ export function roomAccessText(result: RoomAccessResult, nameOf: (principalId: s
 
 /** `memberAccessText` for a shared drive. */
 export function driveAccessText(result: RoomAccessResult, nameOf: (principalId: string) => string): string {
-	return memberAccessText(result, nameOf, "shared drive", "Set its role again.");
+	return memberAccessText(result, nameOf, "shared drive", "Correct its limits, then select Try again in its row.");
 }

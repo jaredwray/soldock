@@ -417,6 +417,9 @@ A new agent or service account is limited to its own mailbox and its own drive. 
 and no shared drive until a person who manages it makes it a member. No migration is necessary.
 
 - An agent or a service account from before this change keeps its access. Its limits do not change.
+- The limits of an agent can name a shared drive that it is not a member of now, from a remove before this
+  change. A person who then adds the agent gives it access from these limits. To prevent this, read the
+  limits of each agent in **Admin › Members**, and remove such a drive.
 - A shared drive needs no change of the limits when a manager of the agent gives it a role with
   `drive.add_shared_drive_members` or `drive.create_shared_drive`. The credential must hold
   `directory.write` and each Drive scope of the role. The results of these two operations have the new

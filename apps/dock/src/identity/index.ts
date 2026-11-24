@@ -45,6 +45,7 @@ export {
 	dropLimits,
 	LIMIT_DROPS_TABLE,
 	type LimitDropsHost,
+	markLimitDrop,
 	releaseLimits,
 } from "./limit-drops.ts";
 export { mountOAuthRoutes, protectedResourceMetadataUrl } from "./oauth-routes.ts";

@@ -225,7 +225,7 @@ async function toSharedDrive(
 	);
 	const members = record.members
 		.filter((member) => !gone.has(member.principal_id))
-		.map((member) => ({ ...member, created_at: new Date(member.created_at).toISOString() }));
+		.map(({ added_version: _, ...member }) => ({ ...member, created_at: new Date(member.created_at).toISOString() }));
 	return {
 		shared_drive: {
 			id: record.id,
@@ -237,6 +237,9 @@ async function toSharedDrive(
 		members,
 	};
 }
+
+/** The result fields of a call that changed no agent. */
+const NO_ACCESS_CHANGE = accessOutput({ changes: [], pending: [] });
 
 /** A member of an input: the principal and its role. */
 type MemberRole = { principal_id: string; role: MemberInput["role"] };
@@ -267,10 +270,9 @@ async function memberInputs(call: CallContext, members: MemberRole[], first: boo
 }
 
 /**
- * A shared drive for the output of a call that gave `members` their roles. Each agent of them that the
- * caller manages gets the access of its membership: the drive scopes of its role, and the drive in its
- * limits (`giveMemberAccess`). Only a member that has the role of the input now counts: a retry of a create
- * call can come after a change of the members.
+ * A shared drive for the output of a call that gave `members` their roles in this call. Each agent of them
+ * that the caller manages gets the access of its membership: the drive scopes of its role, and the drive in
+ * its limits (`giveMemberAccess`).
  */
 async function withAgentAccess(
 	call: CallContext,
@@ -278,12 +280,15 @@ async function withAgentAccess(
 	record: SharedDriveRecord,
 	members: MemberRole[],
 ) {
-	const roles = new Map(record.members.map((member) => [member.principal_id, member.role]));
-	const memberships = members
-		.filter((member) => roles.get(member.principal_id) === member.role)
-		.map((member) => ({ principal_id: member.principal_id, scopes: SHARED_DRIVE_ROLE_SCOPES[member.role] }));
+	const current = new Map(record.members.map((member) => [member.principal_id, member]));
+	const memberships = members.map((member) => ({
+		principal_id: member.principal_id,
+		scopes: SHARED_DRIVE_ROLE_SCOPES[member.role],
+	}));
+	// The access is for the membership of this result. A different person can remove the member and add it
+	// again before the write of the access. The drive then takes the access back: see `releaseLimits`.
 	const access = await giveMemberAccess(call, "drive", record.id, memberships, (agent) =>
-		opened.space.releaseLimits(opened.ctx, agent.id),
+		opened.space.releaseLimits(opened.ctx, agent.id, current.get(agent.id)?.added_version ?? null),
 	);
 	return { ...(await toSharedDrive(call, record)), ...accessOutput(access) };
 }
@@ -715,8 +720,7 @@ export const driveHandlers: Pick<HandlerMap<CallContext>, DriveOperation> = {
 			if (earlier !== null) {
 				const first = spaceOf(call, accept(earlier).id);
 				const drive = await first.space.createdSharedDrive(first.ctx);
-				// A retry also completes the access of an agent that the first call did not complete.
-				if (drive !== null) return withAgentAccess(call, first, accept(drive), input.members);
+				if (drive !== null) return { ...(await toSharedDrive(call, accept(drive))), ...NO_ACCESS_CHANGE };
 			}
 		}
 		// The check of the members comes before the id and the object of a new drive, so a refused call
@@ -740,6 +744,9 @@ export const driveHandlers: Pick<HandlerMap<CallContext>, DriveOperation> = {
 				driveId,
 			);
 		}
+		// A retry changes no agent. The members can be different now: a person who does not manage an agent
+		// can be the one who made it a member again. `drive.add_shared_drive_members` completes an access.
+		if (created.duplicate) return { ...(await toSharedDrive(call, created.drive)), ...NO_ACCESS_CHANGE };
 		return withAgentAccess(call, opened, created.drive, input.members);
 	},
 
@@ -785,6 +792,8 @@ export const driveHandlers: Pick<HandlerMap<CallContext>, DriveOperation> = {
 
 	async "drive.add_shared_drive_members"(call, input) {
 		const opened = await openSpace(call, input.drive_id);
+		// The drive comes first. A caller that cannot change its members gets the same answer for each list.
+		accept(await opened.space.checkSetMembers(opened.ctx));
 		const members = await memberInputs(call, input.members, false);
 		const result = accept(await opened.space.setMembers(opened.ctx, members));
 		// One line for each change, so the audit log shows an admin who adds themselves.

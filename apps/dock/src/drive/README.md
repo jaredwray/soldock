@@ -365,22 +365,35 @@ and the drive in its limits when it has limits ([`identity`](../identity/README.
   (`assertMemberGrants`, before the drive writes the member). A refused call changes no member.
 - **Two stores.** The drive object owns the members, and the directory owns the access of an agent, so
   the two writes are not one transaction. The member comes first. The write of the access is idempotent.
-  When it does not complete, the result names the agent in `agent_access_pending`, and a later call
-  with the same role completes it. A retry of `drive.create_shared_drive` completes it too.
+  When it does not complete, the result names the agent in `agent_access_pending`, and a later
+  `drive.add_shared_drive_members` call with the same role completes it. A retry of
+  `drive.create_shared_drive` with its idempotency key changes no agent: the members can be different
+  at that time.
+- **The order of the refusals.** `drive.add_shared_drive_members` asks the drive first if the caller can
+  change its members (`checkSetMembers`). Then it reads the directory and checks the list. So a caller
+  without access to the drive gets `not_found` for each list.
 - **A lower role.** A change from editor to viewer does not take `drive.write` from the account of the
   agent: the scope also applies to its own drive. The role still limits what it does in this drive.
 - **A remove.** The limits of an agent must not name a drive that it is not a member of. If they did, a
   manager of the drive who does not manage the agent would add it, and the old limits would give it
   access. So the drive object removes the member and takes the drive out of the limits in one
   `blockConcurrencyWhile` step (`dropLimits` of `identity/limit-drops.ts`). No other call of the drive
-  runs between the two writes.
+  runs between the two writes. The transaction that deletes the member also puts the principal into
+  the table `limit_drops`, and the row goes away when the write of the limits completes. So when the
+  object stops between the two writes, the row is there.
 - **A remove during an add.** A different call can remove the agent between the write of the drive and
   the write of the access. So after `giveMemberAccess` put the drive into the limits, the drive takes it
-  out again for a principal that is not a member now (`releaseLimits`).
-- **When the directory fails during that write,** the limits still name the drive. The drive keeps the
-  principal in its table `limit_drops`. Before that principal is a member again, the drive completes the
-  write, in one step with the write of the member (`afterLimitDrops`). When the directory fails again,
-  the call gets `conflict`.
+  out again when the membership of the add is gone (`releaseLimits`). A different manager can also
+  remove the agent and add it again in that time. Each member has `added_version`, the change counter
+  of the drive at its add, so the drive knows that this membership is a new one, and takes the access
+  back too.
+- **When the directory fails during the write of a remove, or the object stops,** the limits still name
+  the drive, and the principal is in `limit_drops`. Before that principal is a member again, the drive
+  completes the write, in one step with the write of the member (`afterLimitDrops`). When the directory
+  fails again, the call gets `conflict`.
+- Known limit: the write of the access and `releaseLimits` are two calls of the Worker. When the Worker
+  stops between them, and a remove came in that time, the limits name the drive of a principal that is
+  not a member. A later call of a person who manages the agent corrects it.
 - Known limit: a shared drive that an owner or an admin deletes stays in the limits, and gives nothing.
 
 ### The index in D1
@@ -671,8 +684,8 @@ See the [webhook module](../webhooks/README.md).
 | Idempotency keys | `DriveSpaceDO` table `idempotency` | Kept 24 hours, with the SHA-256 hash of the request |
 | Change counter and space id | `DriveSpaceDO` table `meta` | |
 | Name, creator, time of creation and `deleted_at` of a shared drive | `DriveSpaceDO` table `meta`, row `drive` | A personal drive has no such row |
-| Members of a shared drive | `DriveSpaceDO` table `members` | The principal, the role and who added it. The source of the access |
-| Agents whose limits still name the shared drive after a remove | `DriveSpaceDO` table `limit_drops` | The principal id. The row goes away when the drive completes the write of the limits. See [An agent as a member](#an-agent-as-a-member) |
+| Members of a shared drive | `DriveSpaceDO` table `members` | The principal, the role, who added it, and `added_version`: the change counter of the drive at the add. The source of the access |
+| Principals whose limits can still name the shared drive after a remove | `DriveSpaceDO` table `limit_drops` | The principal id. The remove writes the row, and the row goes away when the drive completes the write of the limits. See [An agent as a member](#an-agent-as-a-member) |
 | Rows of the D1 index that are behind | `DriveSpaceDO` table `index_outbox` | Rows are deleted after the write to D1 |
 | Moves to a different drive that are not complete | `DriveSpaceDO` tables `transfers` and `transfer_items`, in the source drive | The target, the folder, the actor, the totals, the next step, and each item of the move. Deleted when the move is complete or stopped |
 | Where a moved item went | `DriveSpaceDO` table `moved`, in the source drive | The item id, the target drive and the time. Kept 30 days |

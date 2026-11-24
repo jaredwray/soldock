@@ -33,6 +33,7 @@ import {
 	checkCredentials,
 	dropFromLimits,
 	getPrincipals,
+	markLimitDrop,
 	THREADS_PER_ROOM,
 	UNREAD_COUNT_MAX,
 } from "../identity/index.ts";
@@ -1699,6 +1700,9 @@ export class ChatRoomDO extends DurableObject<Env> {
 		this.ctx.storage.transactionSync(() => {
 			this.keepScopes(target);
 			this.sql.exec("DELETE FROM members WHERE principal_id = ?", principalId);
+			// The record of the write of the limits is in the transaction of the remove. So when the object stops
+			// before that write completes, `afterDrops` completes it. `dropLimits` makes the write for an agent only.
+			if ((JSON.parse(target.actor_json) as ActorRecord).kind === "agent") markLimitDrop(this.sql, principalId);
 			this.sql.exec("DELETE FROM thread_follows WHERE principal_id = ?", principalId);
 			this.sql.exec("DELETE FROM post_allowed WHERE principal_id = ?", principalId);
 			this.sql.exec("DELETE FROM activity_outbox WHERE target_principal_id = ?", principalId);
@@ -1727,19 +1731,20 @@ export class ChatRoomDO extends DurableObject<Env> {
 	 * members and the write of the directory. So the room gives the order of the two stores: after this
 	 * write, a new membership finds no room in the limits, and only a manager of the agent puts it back.
 	 *
-	 * Returns true when the limits named the room. When the directory fails, the room keeps the principal in
-	 * `limit_drops`, and `afterDrops` completes the write before that principal is a member again.
+	 * Returns true when the limits named the room. The principal is in `limit_drops` from before the write of
+	 * the directory until that write completes. When the directory fails, or the object stops, the row stays,
+	 * and `afterDrops` completes the write before that principal is a member again.
 	 */
 	private async dropLimits(member: Pick<MemberRow, "principal_id" | "actor_json">): Promise<boolean> {
 		if ((JSON.parse(member.actor_json) as ActorRecord).kind !== "agent") return false;
 		const room = this.rawRoom();
 		if (!room) return false;
+		markLimitDrop(this.sql, member.principal_id);
 		try {
-			const dropped = (await dropFromLimits(this.env.DIRECTORY, member.principal_id, "room", room.room_id)) !== null;
+			const dropped = await dropFromLimits(this.env.DIRECTORY, member.principal_id, "room", room.room_id);
 			this.sql.exec("DELETE FROM limit_drops WHERE principal_id = ?", member.principal_id);
 			return dropped;
 		} catch (error) {
-			this.sql.exec("INSERT OR IGNORE INTO limit_drops (principal_id) VALUES (?)", member.principal_id);
 			log("warn", "chat room: the limits of an agent still name the room after a remove", {
 				error: error instanceof Error ? error.message : String(error),
 			});

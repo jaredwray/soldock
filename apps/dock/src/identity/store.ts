@@ -900,15 +900,16 @@ export async function widenAgentAccess(db: D1Database, widening: AgentWidening):
 
 /**
  * Takes a room or a shared drive out of the limits of an agent or a service account, in one statement, so a
- * parallel change of the access is not lost. Returns the agent after the write, or null when its limits did
- * not name the resource. The write adds one to `access_version`.
+ * parallel change of the access is not lost. Returns true when the limits named the resource. The write adds
+ * one to `access_version`. The function has one statement and no read after it: a caller must know that the
+ * write changed the limits, also when the directory fails a moment later.
  */
 export async function dropFromLimits(
 	db: D1Database,
 	principalId: string,
 	kind: "room" | "drive",
 	id: string,
-): Promise<PrincipalRecord | null> {
+): Promise<boolean> {
 	// `kind` is one of two fixed words, so it is safe in the text of the statement.
 	const list = `'$.${kind}_ids'`;
 	const result = await db
@@ -922,7 +923,7 @@ export async function dropFromLimits(
 		)
 		.bind(principalId, id)
 		.run();
-	return result.meta.changes === 1 ? getPrincipal(db, principalId) : null;
+	return result.meta.changes === 1;
 }
 
 /** The changes of `updatePrincipal`. A field that is undefined does not change. */

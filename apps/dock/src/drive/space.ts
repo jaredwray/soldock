@@ -13,6 +13,7 @@ import {
 	dropLimits,
 	LIMIT_DROPS_TABLE,
 	type LimitDropsHost,
+	markLimitDrop,
 	releaseLimits,
 } from "../identity/index.ts";
 import { audit, log, newId } from "../platform/index.ts";
@@ -80,6 +81,11 @@ export interface MemberRecord {
 	role: SharedDriveRole;
 	added_by: ActorRecord | null;
 	created_at: number;
+	/**
+	 * The change counter of the drive at the add of this member. A principal that leaves and comes back gets a
+	 * higher number, so the number names one membership. Null for a member from before this column.
+	 */
+	added_version: number | null;
 }
 
 /** A shared drive with its members, as the object returns it. */
@@ -656,8 +662,9 @@ const MIGRATIONS: string[][] = [
 			named TEXT NOT NULL
 		) WITHOUT ROWID`,
 	],
-	// The agents whose limits in the directory still name this shared drive after a remove.
-	[LIMIT_DROPS_TABLE],
+	// The agents whose limits in the directory still name this shared drive after a remove. And the change
+	// counter of the drive at the add of each member, which names one membership.
+	[LIMIT_DROPS_TABLE, "ALTER TABLE members ADD COLUMN added_version INTEGER"],
 ];
 
 const OUTBOX_MAX_ATTEMPTS = 8;
@@ -731,7 +738,7 @@ const NO_UPLOAD = "No upload has that id, or it is not your upload, or it expire
 const CHAT_FOLDER = "Chat";
 /** The uploads that one alarm removes after their time. The next alarm removes more. */
 const UPLOAD_SWEEP = 50;
-const UNSETTLED_DROP = "The directory did not complete an earlier remove of this agent. Try again.";
+const UNSETTLED_DROP = "The directory did not complete an earlier remove of this member. Try again.";
 const LAST_MANAGER =
 	"A shared drive needs at least one manager who is a person. Give a different person the manager role first.";
 
@@ -2620,13 +2627,20 @@ export class DriveSpaceDO extends DurableObject<Env> {
 	}
 
 	private memberRows(): MemberRecord[] {
-		return this.all<{ principal_id: string; role: SharedDriveRole; added_by_json: string | null; created_at: number }>(
-			"SELECT principal_id, role, added_by_json, created_at FROM members ORDER BY created_at, principal_id",
+		return this.all<{
+			principal_id: string;
+			role: SharedDriveRole;
+			added_by_json: string | null;
+			created_at: number;
+			added_version: number | null;
+		}>(
+			"SELECT principal_id, role, added_by_json, created_at, added_version FROM members ORDER BY created_at, principal_id",
 		).map((row) => ({
 			principal_id: row.principal_id,
 			role: row.role,
 			added_by: parseActor(row.added_by_json),
 			created_at: row.created_at,
+			added_version: row.added_version,
 		}));
 	}
 
@@ -2693,7 +2707,10 @@ export class DriveSpaceDO extends DurableObject<Env> {
 
 	private putMember(member: MemberInput, actor: string, now: number): void {
 		const changed = this.sql.exec(
-			`INSERT INTO members (principal_id, role, added_by_json, created_at) VALUES (?1, ?2, ?3, ?4)
+			// Each change of the members adds one to the change counter (`bump`), so a principal that comes back
+			// gets a higher `added_version`. A change of the role keeps the number.
+			`INSERT INTO members (principal_id, role, added_by_json, created_at, added_version)
+			VALUES (?1, ?2, ?3, ?4, (SELECT CAST(value AS INTEGER) FROM meta WHERE key = 'version'))
 			ON CONFLICT (principal_id) DO UPDATE SET role = excluded.role WHERE role != excluded.role`,
 			member.principalId,
 			member.role,
@@ -2776,6 +2793,17 @@ export class DriveSpaceDO extends DurableObject<Env> {
 		});
 		await this.flush();
 		return this.driveRecord(call, renamed);
+	}
+
+	/**
+	 * Refuses a caller that cannot change the members of this drive. The handler asks this before it reads
+	 * the directory and checks the list. So a caller without access to the drive gets `not_found` for each
+	 * list, and learns nothing about a principal id.
+	 */
+	checkSetMembers(call: SpaceCall): { ok: true } | Refusal {
+		this.enter(call);
+		const facts = this.manage(call, "manager");
+		return "error" in facts ? facts : { ok: true };
 	}
 
 	/**
@@ -2863,6 +2891,8 @@ export class DriveSpaceDO extends DurableObject<Env> {
 			}
 			this.ctx.storage.transactionSync(() => {
 				this.sql.exec("DELETE FROM members WHERE principal_id = ?", principalId);
+				// The record of the write of the limits is in the transaction of the remove: see `markLimitDrop`.
+				markLimitDrop(this.sql, principalId);
 				this.touch(`member:${principalId}`);
 				this.bump();
 				this.noteWebhook("drive.members.changed", call.spaceId, boundary);
@@ -2882,17 +2912,23 @@ export class DriveSpaceDO extends DurableObject<Env> {
 			directory: () => this.env.DIRECTORY,
 			kind: "drive",
 			resourceId: call.spaceId,
-			isMember: (principalId) => this.memberRole(principalId) !== null,
 		};
 	}
 
 	/**
-	 * Takes the drive out of the limits of a principal that is not a member now. The handler of an add calls
-	 * this after it put the drive into the limits of an agent: see `releaseLimits` in `limit-drops.ts`.
+	 * Takes the drive out of the limits of a principal whose membership is not the membership of the add. The
+	 * handler of an add calls this after it put the drive into the limits of an agent: see `releaseLimits` in
+	 * `limit-drops.ts`. `addedVersion` is the `added_version` of the member in the result of the add.
 	 */
-	async releaseLimits(call: SpaceCall, principalId: string): Promise<boolean> {
+	async releaseLimits(call: SpaceCall, principalId: string, addedVersion: number | null): Promise<boolean> {
 		this.enter(call);
-		return releaseLimits(this.limitsHost(call), principalId);
+		return releaseLimits(this.limitsHost(call), principalId, () => {
+			const member = this.one<{ added_version: number | null }>(
+				"SELECT added_version FROM members WHERE principal_id = ?",
+				principalId,
+			);
+			return member !== null && member.added_version === addedVersion;
+		});
 	}
 
 	/**

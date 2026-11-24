@@ -128,6 +128,8 @@ export function SharedDriveMembersPart({
 	const [busy, setBusy] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 	const [removing, setRemoving] = useState<Principal | null>(null);
+	// The agents that did not get the access of their membership in a call of this page.
+	const [pending, setPending] = useState<ReadonlySet<string>>(new Set());
 	const ids = { heading: useId(), select: useId(), role: useId(), hint: useId(), lastManager: useId() };
 	const byId = useMemo(() => new Map(principals.map((principal) => [principal.id, principal])), [principals]);
 
@@ -167,6 +169,12 @@ export function SharedDriveMembersPart({
 			});
 			setMembers(result.members);
 			onChanged(result.shared_drive);
+			setPending((current) => {
+				const next = new Set(current);
+				next.delete(principal.id);
+				for (const id of result.agent_access_pending) next.add(id);
+				return next;
+			});
 			// An agent that the person manages gets the scopes of its role and the drive in its limits.
 			const access = driveAccessText(result, () => principal.display_name);
 			toast({
@@ -270,6 +278,20 @@ export function SharedDriveMembersPart({
 												{last && (canManage || self) && (
 													<div id={ids.lastManager} className="row-note">
 														A shared drive keeps at least one manager.
+													</div>
+												)}
+												{/* The role menu sends no call for the role that the member has. This button does. */}
+												{canManage && principal && pending.has(member.principal_id) && (
+													<div className="row-note">
+														{name} cannot use this shared drive yet.{" "}
+														<button
+															type="button"
+															className="link-button"
+															onClick={() => void setMemberRole(principal, member.role, false)}
+															disabled={busy}
+														>
+															Try again
+														</button>
 													</div>
 												)}
 											</td>

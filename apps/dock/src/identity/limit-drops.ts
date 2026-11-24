@@ -21,7 +21,15 @@ export interface LimitDropsHost {
 	kind: "room" | "drive";
 	/** The id of the resource of the object. */
 	resourceId: string;
-	isMember: (principalId: string) => boolean;
+}
+
+/**
+ * Records that the limits of a principal can still name the resource. A remove writes this in the
+ * transaction that deletes the member. So when the object stops before the write of the directory
+ * completes, the record is there, and `afterLimitDrops` completes the write.
+ */
+export function markLimitDrop(sql: SqlStorage, principalId: string): void {
+	sql.exec("INSERT OR IGNORE INTO limit_drops (principal_id) VALUES (?)", principalId);
 }
 
 function waits(host: LimitDropsHost, principalId: string): boolean {
@@ -35,17 +43,18 @@ function waits(host: LimitDropsHost, principalId: string): boolean {
  * with `blockConcurrencyWhile`. Returns true when the limits named the resource. The statement changes only
  * an agent or a service account, so a person needs no check here.
  *
- * When the directory fails, the object keeps the principal in `limit_drops`, and `afterLimitDrops` completes
- * the write before that principal is a member again.
+ * The principal is in `limit_drops` from before the write of the directory until that write completes. When
+ * the directory fails, or the object stops, the row stays, and `afterLimitDrops` completes the write before
+ * that principal is a member again.
  */
 export async function dropLimits(host: LimitDropsHost, principalId: string): Promise<boolean> {
 	const { sql } = host.ctx.storage;
+	markLimitDrop(sql, principalId);
 	try {
-		const dropped = (await dropFromLimits(host.directory(), principalId, host.kind, host.resourceId)) !== null;
+		const dropped = await dropFromLimits(host.directory(), principalId, host.kind, host.resourceId);
 		sql.exec("DELETE FROM limit_drops WHERE principal_id = ?", principalId);
 		return dropped;
 	} catch (error) {
-		sql.exec("INSERT OR IGNORE INTO limit_drops (principal_id) VALUES (?)", principalId);
 		log("warn", `${host.kind}: the limits of an agent still name the ${host.kind} after a remove`, {
 			error: error instanceof Error ? error.message : String(error),
 		});
@@ -80,14 +89,16 @@ export async function afterLimitDrops<T>(
 }
 
 /**
- * Takes the resource out of the limits of a principal that is not a member now. The handler of an add calls
- * this after it put the resource into the limits: a remove can come between the write of the object and that
- * write. The object reads its members and writes the directory in one step. Returns true when the principal
- * is not a member, so the access that the handler wrote is gone.
+ * Takes the resource out of the limits of a principal whose membership is not the membership of the add. The
+ * handler of an add calls this after it put the resource into the limits: a remove can come between the write
+ * of the object and that write. `keeps` tells if the object still has the membership that the add wrote or
+ * found. A different person can remove the member and add it again in that time, and that new membership
+ * does not get the access of the first add. The object reads its members and writes the directory in one
+ * step. Returns true when the membership is gone, so the access that the handler wrote is gone too.
  */
-export async function releaseLimits(host: LimitDropsHost, principalId: string): Promise<boolean> {
+export async function releaseLimits(host: LimitDropsHost, principalId: string, keeps: () => boolean): Promise<boolean> {
 	return host.ctx.blockConcurrencyWhile(async () => {
-		if (host.isMember(principalId)) return false;
+		if (keeps()) return false;
 		await dropLimits(host, principalId);
 		return true;
 	});

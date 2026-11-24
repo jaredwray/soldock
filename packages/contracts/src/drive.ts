@@ -952,7 +952,7 @@ export const createSharedDrive = defineOperation({
 			.max(255)
 			.optional()
 			.describe(
-				"Makes a retry safe: a second call with the same key and the same input returns the first shared drive and creates nothing.",
+				"Makes a retry safe: a second call with the same key and the same input returns the first shared drive and creates nothing. It changes no agent: agent_access_changes is empty.",
 			),
 	}),
 	output: z.object({ shared_drive: SharedDrive, members: z.array(SharedDriveMember), ...AGENT_ACCESS }),
@@ -1036,7 +1036,7 @@ export const removeSharedDriveMember = defineOperation({
 	name: "drive.remove_shared_drive_member",
 	summary: "Remove a member from a shared drive",
 	description:
-		"The access of the member to the drive ends at once. The drive also goes out of the resource limits of an agent or a service account. A grant that a manager gave that principal for one item stays: remove it with drive.unshare_item. The managers of the drive, and the owners and admins of the organization, can call this. You can also remove yourself. The last manager cannot be removed: add a different manager first.",
+		"The access of the member to the drive ends at once. The drive also goes out of the resource limits of an agent or a service account. A grant that a manager gave that principal for one item stays: remove it with drive.unshare_item. An agent with limits cannot use such a grant while the drive is not in its limits. The managers of the drive, and the owners and admins of the organization, can call this. You can also remove yourself. The last manager cannot be removed: add a different manager first.",
 	http: { method: "DELETE", path: "/api/v1/drive/shared-drives/{drive_id}/members/{principal_id}" },
 	scopes: ["drive.share"],
 	callers: ["human"],

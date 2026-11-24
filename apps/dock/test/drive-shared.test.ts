@@ -6,6 +6,7 @@ import {
 	type Actor,
 	api,
 	base64,
+	callTool,
 	codeOf,
 	createActor,
 	drainDrive,
@@ -322,6 +323,24 @@ describe("the members of a shared drive", () => {
 		expect(await codeOf(add(eve, nora.id, "viewer"))).toBe("forbidden");
 		expect(await codeOf(add(vic, vic.id, "manager"))).toBe("forbidden");
 		expect(await codeOf(add(nora, nora.id, "viewer"))).toBe("not_found");
+		// The drive answers first. A caller that cannot change the members gets the same answer for a list
+		// that is not valid, and for a principal that does not exist.
+		const twice = [
+			{ principal_id: vic.id, role: "viewer" as const },
+			{ principal_id: vic.id, role: "editor" as const },
+		];
+		const lists = { drive_id: driveId, members: twice };
+		expect(await codeOf(nora.call("drive.add_shared_drive_members", lists))).toBe("not_found");
+		expect(await codeOf(eve.call("drive.add_shared_drive_members", lists))).toBe("forbidden");
+		expect(await codeOf(ada.call("drive.add_shared_drive_members", lists))).toBe("invalid");
+		expect(
+			await codeOf(
+				eve.call("drive.add_shared_drive_members", {
+					drive_id: driveId,
+					members: [{ principal_id: "prn_01JD0000000000000000000000", role: "viewer" }],
+				}),
+			),
+		).toBe("forbidden");
 
 		const added = await add(ada, nora.id, "viewer");
 		expect(added.shared_drive.member_count).toBe(5);
@@ -473,8 +492,13 @@ describe("an agent in a shared drive", () => {
 			{ principal_id: agent.id, scopes_added: ["drive.write"], limits_widened: false },
 		]);
 		expect((await upload(agent as Actor, "notes.txt", "v1")).name).toBe("notes.txt");
-		// A second call has nothing to add.
+		// A second call has nothing to add. The MCP tool returns the same fields.
 		expect((await add(ada, agent.id, "editor")).agent_access_changes).toEqual([]);
+		const viaMcp = await callTool(ada.key, "drive_add_shared_drive_members", {
+			drive_id: driveId,
+			members: [{ principal_id: agent.id, role: "editor" }],
+		});
+		expect(viaMcp.structuredContent).toMatchObject({ agent_access_changes: [], agent_access_pending: [] });
 
 		// A new drive gives the same to the agents of its first members.
 		const created = await owner.call("drive.create_shared_drive", {
@@ -643,6 +667,71 @@ describe("an agent in a shared drive", () => {
 		});
 		expect(await added.json()).toMatchObject({ agent_access_changes: [] });
 		expect(Object.keys(await rolesOf(ada))).not.toContain(agent.id);
+		expect((await access(agent.id)).resources?.drive_ids).toEqual([agent.id]);
+	});
+
+	// The access of an add is for the membership of that add. A different manager can remove the agent and add
+	// it again before the write of the access. That new membership comes from a person who does not manage
+	// the agent, so it must not get the access of the first add.
+	it("gets no access for a membership that a different manager made during the add of its sponsor", async () => {
+		const agent = await newAgent(["account.read", "drive.read"]);
+		await add(ada, eve.id, "manager");
+		// The write of the access waits for the remove and the add of Eve.
+		const directory = new Proxy(env.DIRECTORY, {
+			get(target, property) {
+				if (property === "prepare") {
+					return (sql: string) => {
+						const statement = target.prepare(sql);
+						if (!sql.includes("UPDATE principals SET agent_scopes")) return statement;
+						return {
+							bind: (...values: unknown[]) => ({
+								run: async () => {
+									await remove(eve, agent.id);
+									await add(eve, agent.id, "viewer");
+									return statement.bind(...values).run();
+								},
+							}),
+						};
+					};
+				}
+				const value = Reflect.get(target, property);
+				return typeof value === "function" ? value.bind(target) : value;
+			},
+		});
+		const added = await withEnv({ DIRECTORY: directory }, `/api/v1/drive/shared-drives/${driveId}/members`, {
+			method: "POST",
+			headers: { authorization: `Bearer ${ada.key}`, "content-type": "application/json" },
+			body: JSON.stringify({ members: [{ principal_id: agent.id, role: "viewer" }] }),
+		});
+		expect(await added.json()).toMatchObject({ agent_access_changes: [] });
+		expect((await rolesOf(ada))[agent.id]).toBe("viewer");
+		expect((await access(agent.id)).resources?.drive_ids).toEqual([agent.id]);
+		expect(await codeOf(agent.call("drive.get_about", { space_id: driveId }))).toBe("forbidden");
+	});
+
+	// A retry of a create call returns the first drive. The members can be different at that time: here a
+	// manager who does not manage the agent made it a member again. So the retry must change no agent.
+	it("gets no access from a retry of the create call, after a different manager made it a member again", async () => {
+		const agent = await newAgent(["account.read", "drive.read"]);
+		const input = {
+			name: "Plans",
+			members: [
+				{ principal_id: eve.id, role: "manager" as const },
+				{ principal_id: agent.id, role: "viewer" as const },
+			],
+			idempotency_key: "plans-1",
+		};
+		const created = await owner.call("drive.create_shared_drive", input);
+		const plans = created.shared_drive.id;
+		expect(created.agent_access_changes).toEqual([{ principal_id: agent.id, scopes_added: [], limits_widened: true }]);
+		const member = { drive_id: plans, principal_id: agent.id };
+		await owner.call("drive.remove_shared_drive_member", member);
+		await eve.call("drive.add_shared_drive_members", {
+			drive_id: plans,
+			members: [{ principal_id: agent.id, role: "viewer" }],
+		});
+		const retry = await owner.call("drive.create_shared_drive", input);
+		expect(retry).toMatchObject({ shared_drive: { id: plans }, agent_access_changes: [], agent_access_pending: [] });
 		expect((await access(agent.id)).resources?.drive_ids).toEqual([agent.id]);
 	});
 
