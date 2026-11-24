@@ -48,6 +48,7 @@ import {
 	listMemberRequestsFor,
 	type MemberRequestRow,
 	memberRequestActivityId,
+	memberRequestsOfRoom,
 	setMemberRequestNotified,
 	toMemberRequest,
 } from "./member-requests.ts";
@@ -233,6 +234,17 @@ async function removeMemberRequest(call: CallContext, request: MemberRequestRow)
 		}
 	}
 	return removed;
+}
+
+/**
+ * Removes the requests of a room for accounts that are members now. A person can add the account, or a new
+ * request can come between the delete of an approval and the write of the room. Such a request has nothing
+ * to decide, and it must not use a place of the room.
+ */
+async function settleMemberRequests(call: CallContext, roomId: string, principalIds: readonly string[]): Promise<void> {
+	for (const request of await memberRequestsOfRoom(call.env.DIRECTORY, roomId, principalIds)) {
+		await removeMemberRequest(call, request);
+	}
 }
 
 /**
@@ -726,6 +738,12 @@ export const chatHandlers: Pick<HandlerMap<CallContext>, ChatOperation> = {
 		const result = accept(await opened.room.addMembers(opened.ctx, principals.map(toActor), input.scopes));
 		if (result.added.length > 0) auditOk(call, "chat.add_members", `${input.room_id}:${result.added.join(",")}`);
 		recordServiceMemberships(call, result.added, "chat.add_members", input.room_id);
+		// A request for an account that is a member now has nothing to decide.
+		await settleMemberRequests(
+			call,
+			input.room_id,
+			result.members.map((member) => member.principal_id),
+		);
 		// Each named agent that the caller manages gets the access of its membership, also a member from
 		// before. So a second call completes a write that failed.
 		const access = await giveMemberAccess(call, result.members);
@@ -831,6 +849,9 @@ export const chatHandlers: Pick<HandlerMap<CallContext>, ChatOperation> = {
 			// The room is gone, or the agent that asked cannot add this member now. The request cannot complete.
 			throw new OperationError("conflict", `${admitted.error.message} The request is gone.`);
 		}
+		// A new request can come between the delete above and the write of the room. The account is a member now,
+		// so such a request has nothing to decide.
+		await settleMemberRequests(call, request.room_id, [target.id]);
 		// The account was a member before the approval: a person added it in the meantime. That membership is not
 		// the one of the request, so the approval gives the account no scope.
 		if (!admitted.added) return { request: toMemberRequest(request), ...accessOutput({ changes: [], pending: [] }) };

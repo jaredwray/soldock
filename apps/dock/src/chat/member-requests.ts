@@ -180,6 +180,23 @@ export async function liveMemberRequestIds(
 	return new Set(results.map((row) => row.id));
 }
 
+/** The requests of a room for these accounts. */
+export async function memberRequestsOfRoom(
+	db: D1Database,
+	roomId: string,
+	principalIds: readonly string[],
+): Promise<MemberRequestRow[]> {
+	if (principalIds.length === 0) return [];
+	const { results } = await db
+		.prepare(
+			`SELECT ${COLUMNS} FROM chat_member_requests r JOIN json_each(?2) wanted ON wanted.value = r.principal_id
+			WHERE r.room_id = ?1`,
+		)
+		.bind(roomId, JSON.stringify([...new Set(principalIds)]))
+		.all<StoredRow>();
+	return results.map(toRow);
+}
+
 /** Records a different person as the one who got the request in the activity list. */
 export async function setMemberRequestNotified(db: D1Database, id: string, personId: string | null): Promise<void> {
 	await db.prepare("UPDATE chat_member_requests SET notified_id = ? WHERE id = ?").bind(personId, id).run();

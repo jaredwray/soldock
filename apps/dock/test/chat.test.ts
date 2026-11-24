@@ -1648,9 +1648,49 @@ describe("a request of an agent to add an agent", () => {
 		const dan = await newPerson("Dan");
 		await bot.call("chat.add_members", { room_id: room.id, principal_ids: [dan.id] });
 		await dan.call("chat.add_members", { room_id: room.id, principal_ids: [moved.id], scopes: ["chat.read"] });
-		const approved = await cy.call("chat.approve_member_request", { request_id: request.id });
-		expect(approved).toMatchObject({ agent_access_changes: [], agent_access_pending: [] });
+		// The account is a member now, so its request has nothing to decide, and it goes away.
+		expect(await requestsOf(cy)).toEqual([]);
+		expect(await requestItems(cy)).toEqual([]);
 		expect(await scopesOf(moved.id)).toEqual(["account.read"]);
+
+		// An approval also removes a new request that came while the room wrote the member.
+		const late = await newAgent("Late");
+		const first = await ask(bot, room.id, late);
+		let asked = false;
+		const directory = new Proxy(env.DIRECTORY, {
+			get(target, property) {
+				if (property === "prepare") {
+					return (sql: string) => {
+						const statement = target.prepare(sql);
+						if (!sql.startsWith("DELETE FROM chat_member_requests WHERE id")) return statement;
+						return {
+							bind: (...values: unknown[]) => ({
+								run: async () => {
+									const result = await statement.bind(...values).run();
+									// The agent asks again after the first delete, before the room writes the member.
+									if (!asked) {
+										asked = true;
+										await bot.call("chat.request_member", { room_id: room.id, principal_id: late.id });
+									}
+									return result;
+								},
+							}),
+						};
+					};
+				}
+				const value = Reflect.get(target, property);
+				return typeof value === "function" ? value.bind(target) : value;
+			},
+		});
+		const approved = await withEnv({ DIRECTORY: directory }, `/api/v1/chat/member-requests/${first.id}/approve`, {
+			method: "POST",
+			headers: { authorization: `Bearer ${ada.key}`, "content-type": "application/json" },
+			body: "{}",
+		});
+		expect(approved.status).toBe(200);
+		expect(await membersOf(bot, room.id)).toContain(late.id);
+		expect(await requestsOf(ada)).toEqual([]);
+		expect(await requestsOf(bot)).toEqual([]);
 	});
 
 	it("makes no member when a denial deletes the request before the approval does", async () => {
