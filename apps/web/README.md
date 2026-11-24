@@ -85,6 +85,9 @@ MCP clients. The app has no UI-only path.
   - The rail has the mark of Asterra, which goes to the inbox, and a link to each product: Mail,
     Chat and Drive. The link of the product on screen has `aria-current`. The editors of Docs and
     Sheets are part of Drive.
+  - When the pointer is on the mark, a tooltip shows `Asterra - <version>`, for example
+    `Asterra - 0.0.0`. The version comes from the root `package.json`. The Vite build puts only
+    this string into the bundle ([`vite.config.ts`](vite.config.ts), [`version.ts`](src/lib/version.ts)).
   - Below a rule, the rail has **Admin** for owners, admins and the sponsors of agents. At the
     bottom, the rail has **Settings** and the account button. For a member, the rail asks for one
     agent of that sponsor (`directory.list_principals` with `sponsor_id`, the kind `agent` and a limit
