@@ -1,5 +1,6 @@
 import { type Principal, SHARED_DRIVE_LIMITS, type SharedDrive, type SharedDriveRole } from "@asterra/contracts";
 import { type FormEvent, useCallback, useEffect, useId, useState } from "react";
+import { driveAccessText } from "../../lib/accessChange.ts";
 import { api, errorMessage } from "../../lib/api.ts";
 import { ConfirmDialog } from "../../lib/ConfirmDialog.tsx";
 import { Dialog } from "../../lib/Dialog.tsx";
@@ -250,7 +251,9 @@ function CreateSharedDriveDialog({ principals, selfId, onClose, onCreated }: Cre
 				idempotency_key: idempotencyKey,
 			});
 			onCreated(result.shared_drive);
-			toast({ message: `Shared drive ${result.shared_drive.name} created.` });
+			const nameOf = (id: string) =>
+				members.find(({ principal }) => principal.id === id)?.principal.display_name ?? "An agent";
+			toast({ message: `Shared drive ${result.shared_drive.name} created.${driveAccessText(result, nameOf)}` });
 		} catch (caught) {
 			setError(errorMessage(caught));
 			setBusy(false);

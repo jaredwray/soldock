@@ -31,7 +31,7 @@ import {
 	type CredentialCheck,
 	type CredentialRef,
 	checkCredentials,
-	dropRoomFromLimits,
+	dropFromLimits,
 	getPrincipals,
 	THREADS_PER_ROOM,
 	UNREAD_COUNT_MAX,
@@ -1735,7 +1735,7 @@ export class ChatRoomDO extends DurableObject<Env> {
 		const room = this.rawRoom();
 		if (!room) return false;
 		try {
-			const dropped = (await dropRoomFromLimits(this.env.DIRECTORY, member.principal_id, room.room_id)) !== null;
+			const dropped = (await dropFromLimits(this.env.DIRECTORY, member.principal_id, "room", room.room_id)) !== null;
 			this.sql.exec("DELETE FROM limit_drops WHERE principal_id = ?", member.principal_id);
 			return dropped;
 		} catch (error) {

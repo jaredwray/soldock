@@ -6,14 +6,15 @@ import {
 	type SharedDriveRole,
 } from "@asterra/contracts";
 import { type FormEvent, useCallback, useEffect, useId, useMemo, useState } from "react";
+import { driveAccessText } from "../../lib/accessChange.ts";
 import { api, errorMessage } from "../../lib/api.ts";
 import { ConfirmDialog } from "../../lib/ConfirmDialog.tsx";
 import { Dialog } from "../../lib/Dialog.tsx";
-import { KIND_NAMES } from "../../lib/principalKind.ts";
+import { isAutomated, KIND_NAMES } from "../../lib/principalKind.ts";
 import { Select } from "../../lib/Select.tsx";
 import { useToast } from "../../lib/toast.tsx";
 import { principalOption, usePrincipals } from "../../lib/usePrincipals.ts";
-import { isLastManager, memberRoles, ROLE_HINT, ROLE_NAMES, roleOptions } from "./sharedDrives.ts";
+import { AGENT_ROLE_HINT, isLastManager, memberRoles, ROLE_HINT, ROLE_NAMES, roleOptions } from "./sharedDrives.ts";
 
 // The members and the name of one shared drive. Admin › Shared drives shows these parts in a card.
 // Drive shows them in a dialog. The parts use only the styles of the shell, because Admin does not
@@ -166,10 +167,14 @@ export function SharedDriveMembersPart({
 			});
 			setMembers(result.members);
 			onChanged(result.shared_drive);
+			// An agent that the person manages gets the scopes of its role and the drive in its limits.
+			const access = driveAccessText(result, () => principal.display_name);
 			toast({
-				message: added
-					? `${principal.display_name} is now a member of ${driveName}.`
-					: `${principal.display_name} is now ${next === "editor" ? "an" : "a"} ${next} of ${driveName}.`,
+				message: `${
+					added
+						? `${principal.display_name} is now a member of ${driveName}.`
+						: `${principal.display_name} is now ${next === "editor" ? "an" : "a"} ${next} of ${driveName}.`
+				}${access}`,
 			});
 			return true;
 		} catch (caught) {
@@ -331,6 +336,7 @@ export function SharedDriveMembersPart({
 						</div>
 						<p id={ids.hint} className="field-hint">
 							{full ? `A shared drive can have at most ${SHARED_DRIVE_LIMITS.members} members.` : ROLE_HINT}
+							{!full && candidate && isAutomated(candidate.kind) && ` ${AGENT_ROLE_HINT}`}
 						</p>
 						<button type="submit" className="button button-primary" disabled={busy || full || candidates.length === 0}>
 							{busy ? "Please wait…" : "Add member"}

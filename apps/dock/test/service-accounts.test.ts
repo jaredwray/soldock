@@ -1240,9 +1240,9 @@ describe("the access of a service account", () => {
 			drive_shared_items_truncated: false,
 			// A token has no scopes of its own: the scopes and the limits are those of the account.
 			tokens: [{ key_id: live.keyId, label: "deploy", expires_at: null }],
-			// The membership of the team mailbox gave the account mail.modify and mail.send, and the membership
-			// of the room gave it chat.write.
-			scopes: ["mail.read", "mail.modify", "mail.send", "chat.read", "chat.write"],
+			// The membership of the team mailbox gave the account mail.modify and mail.send. The editor role in
+			// the shared drive gave it drive.read and drive.write, and the membership of the room gave it chat.write.
+			scopes: ["mail.read", "mail.modify", "mail.send", "drive.read", "drive.write", "chat.read", "chat.write"],
 			resources: null,
 		});
 		const viaMcp = await callTool(admin.key, "directory_get_agent_access", { principal_id: service.id });

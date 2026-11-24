@@ -414,12 +414,16 @@ problem with a new deploy.
 ### Limits of a new agent
 
 A new agent or service account is limited to its own mailbox and its own drive. It reaches no chat room
-and no shared drive until a manager adds them to its limits. No migration is necessary.
+and no shared drive until a person who manages it makes it a member. No migration is necessary.
 
 - An agent or a service account from before this change keeps its access. Its limits do not change.
-- A script that creates an agent and then uses a shared drive must change. Send
-  `limits: "none"` to `directory.create_principal` or `directory.create_service_account` for an agent
-  without limits. Or set its limits with `directory.set_agent_access` after you add the memberships.
+- A shared drive needs no change of the limits when a manager of the agent gives it a role with
+  `drive.add_shared_drive_members` or `drive.create_shared_drive`. The credential must hold
+  `directory.write` and each Drive scope of the role. The results of these two operations have the new
+  fields `agent_access_changes` and `agent_access_pending`.
+- A script whose credential does not manage the agent must change. Send `limits: "none"` to
+  `directory.create_principal` or `directory.create_service_account` for an agent without limits. Or set
+  its limits with `directory.set_agent_access` after you add the memberships.
 - A team mailbox needs no change of the limits: see [Scopes of a member of a team mailbox](#scopes-of-a-member-of-a-team-mailbox).
 - A room needs no change of the limits when a manager of the agent adds it: see [Scopes of a member of a room](#scopes-of-a-member-of-a-room).
 

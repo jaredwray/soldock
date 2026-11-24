@@ -8,6 +8,13 @@ import {
 	SHARED_DRIVE_LIMITS,
 	type SharedDriveRole,
 } from "@asterra/contracts";
+import {
+	afterLimitDrops,
+	dropLimits,
+	LIMIT_DROPS_TABLE,
+	type LimitDropsHost,
+	releaseLimits,
+} from "../identity/index.ts";
 import { audit, log, newId } from "../platform/index.ts";
 import { type DriveWebhookEventJob, driveWebhookBoundary } from "../webhooks/index.ts";
 
@@ -649,6 +656,8 @@ const MIGRATIONS: string[][] = [
 			named TEXT NOT NULL
 		) WITHOUT ROWID`,
 	],
+	// The agents whose limits in the directory still name this shared drive after a remove.
+	[LIMIT_DROPS_TABLE],
 ];
 
 const OUTBOX_MAX_ATTEMPTS = 8;
@@ -722,6 +731,7 @@ const NO_UPLOAD = "No upload has that id, or it is not your upload, or it expire
 const CHAT_FOLDER = "Chat";
 /** The uploads that one alarm removes after their time. The next alarm removes more. */
 const UPLOAD_SWEEP = 50;
+const UNSETTLED_DROP = "The directory did not complete an earlier remove of this agent. Try again.";
 const LAST_MANAGER =
 	"A shared drive needs at least one manager who is a person. Give a different person the manager role first.";
 
@@ -2789,60 +2799,100 @@ export class DriveSpaceDO extends DurableObject<Env> {
 		// A member that the directory deleted is no manager, and does not count for the limit.
 		const gone = demotes || full ? await this.goneMembers() : new Set<string>();
 		const boundary = await this.captureWebhookBoundary();
-		// The reads above let other calls in. Each check from here is in one step with the change.
-		const facts = this.manage(call, "manager");
-		if ("error" in facts) return facts;
-		const changed = members.filter((member) => this.memberRole(member.principalId) !== member.role);
-		const added = changed.filter((member) => this.memberRole(member.principalId) === null).length;
-		if (this.memberCount(gone) + added > SHARED_DRIVE_LIMITS.members) {
-			return refuse("invalid", `A shared drive can have at most ${SHARED_DRIVE_LIMITS.members} members.`);
-		}
-		// The managers after the change: a new manager counts, and a manager with a lower role does not.
-		const demoted = new Set(changed.filter((member) => member.role !== "manager").map((member) => member.principalId));
-		if (!changed.some((member) => member.role === "manager") && !this.hasManager(new Set([...gone, ...demoted]))) {
-			return refuse("invalid", LAST_MANAGER);
-		}
-		if (changed.length > 0) {
-			this.ctx.storage.transactionSync(() => {
-				const actor = JSON.stringify(call.actor);
-				const now = Date.now();
-				for (const member of changed) this.putMember(member, actor, now);
-				this.bump();
-				this.noteWebhook("drive.members.changed", call.spaceId, boundary);
-			});
-		}
+		// The reads above let other calls in. Each check from here is in one step with the change. A principal
+		// whose limits still name the drive after a remove is a member only after the drive completed that write.
+		const ids = members.map((member) => member.principalId);
+		const settled = await afterLimitDrops(this.limitsHost(call), ids, () => {
+			const facts = this.manage(call, "manager");
+			if ("error" in facts) return facts;
+			const changed = members.filter((member) => this.memberRole(member.principalId) !== member.role);
+			const added = changed.filter((member) => this.memberRole(member.principalId) === null).length;
+			if (this.memberCount(gone) + added > SHARED_DRIVE_LIMITS.members) {
+				return refuse("invalid", `A shared drive can have at most ${SHARED_DRIVE_LIMITS.members} members.`);
+			}
+			// The managers after the change: a new manager counts, and a manager with a lower role does not.
+			const demoted = new Set(
+				changed.filter((member) => member.role !== "manager").map((member) => member.principalId),
+			);
+			if (!changed.some((member) => member.role === "manager") && !this.hasManager(new Set([...gone, ...demoted]))) {
+				return refuse("invalid", LAST_MANAGER);
+			}
+			if (changed.length > 0) {
+				this.ctx.storage.transactionSync(() => {
+					const actor = JSON.stringify(call.actor);
+					const now = Date.now();
+					for (const member of changed) this.putMember(member, actor, now);
+					this.bump();
+					this.noteWebhook("drive.members.changed", call.spaceId, boundary);
+				});
+			}
+			return { facts, changed };
+		});
+		if ("unsettled" in settled) return refuse("conflict", UNSETTLED_DROP);
+		const result = settled.written;
+		if ("error" in result) return result;
 		await this.schedule();
 		await this.flush();
-		return { drive: this.driveRecord(call, facts), changed };
+		return { drive: this.driveRecord(call, result.facts), changed: result.changed };
 	}
 
 	/**
 	 * Removes a member. A manager, an owner or an admin removes each member. A member removes itself.
-	 * The last manager stays.
+	 * The last manager stays. `limitsDropped` is true when the limits of an agent named the drive: the drive
+	 * took itself out of them.
 	 */
-	async removeMember(call: SpaceCall, principalId: string): Promise<{ removed: boolean } | Refusal> {
+	async removeMember(
+		call: SpaceCall,
+		principalId: string,
+	): Promise<{ removed: boolean; limitsDropped?: boolean } | Refusal> {
 		this.enter(call);
 		const self = call.actor.principal_id === principalId;
 		const allowed = this.manage(call, self ? "member" : "manager");
 		if ("error" in allowed) return allowed;
 		const gone = this.memberRole(principalId) === "manager" ? await this.goneMembers() : new Set<string>();
 		const boundary = await this.captureWebhookBoundary();
-		const facts = this.manage(call, self ? "member" : "manager");
-		if ("error" in facts) return facts;
-		const role = this.memberRole(principalId);
-		if (role === null) return { removed: false };
-		if (role === "manager" && !this.hasManager(new Set([...gone, principalId]))) {
-			return refuse("invalid", LAST_MANAGER);
-		}
-		this.ctx.storage.transactionSync(() => {
-			this.sql.exec("DELETE FROM members WHERE principal_id = ?", principalId);
-			this.touch(`member:${principalId}`);
-			this.bump();
-			this.noteWebhook("drive.members.changed", call.spaceId, boundary);
+		// The remove and the write of the limits are one step of the drive: no other call of the drive runs
+		// between them. See `limit-drops.ts`. The checks are in that step too, after the reads above.
+		const result = await this.ctx.blockConcurrencyWhile(async () => {
+			const facts = this.manage(call, self ? "member" : "manager");
+			if ("error" in facts) return facts;
+			const role = this.memberRole(principalId);
+			if (role === null) return { removed: false };
+			if (role === "manager" && !this.hasManager(new Set([...gone, principalId]))) {
+				return refuse("invalid", LAST_MANAGER);
+			}
+			this.ctx.storage.transactionSync(() => {
+				this.sql.exec("DELETE FROM members WHERE principal_id = ?", principalId);
+				this.touch(`member:${principalId}`);
+				this.bump();
+				this.noteWebhook("drive.members.changed", call.spaceId, boundary);
+			});
+			return { removed: true, limitsDropped: await dropLimits(this.limitsHost(call), principalId) };
 		});
+		if ("error" in result || !result.removed) return result;
 		await this.schedule();
 		await this.flush();
-		return { removed: true };
+		return result;
+	}
+
+	/** What `limit-drops.ts` needs from this drive. */
+	private limitsHost(call: SpaceCall): LimitDropsHost {
+		return {
+			ctx: this.ctx,
+			directory: () => this.env.DIRECTORY,
+			kind: "drive",
+			resourceId: call.spaceId,
+			isMember: (principalId) => this.memberRole(principalId) !== null,
+		};
+	}
+
+	/**
+	 * Takes the drive out of the limits of a principal that is not a member now. The handler of an add calls
+	 * this after it put the drive into the limits of an agent: see `releaseLimits` in `limit-drops.ts`.
+	 */
+	async releaseLimits(call: SpaceCall, principalId: string): Promise<boolean> {
+		this.enter(call);
+		return releaseLimits(this.limitsHost(call), principalId);
 	}
 
 	/**

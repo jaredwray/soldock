@@ -4,13 +4,18 @@ import {
 	driveDownloadPath,
 	listedIds,
 	type OperationName,
+	SHARED_DRIVE_ROLE_SCOPES,
 	type SharedDrive,
 	type SharedDriveMember,
 } from "@asterra/contracts";
 import { type AttachmentRecord, attachmentKey, documentStub } from "../collab/index.ts";
 import {
+	accessOutput,
+	afterLimitsDrop,
+	assertMemberGrants,
 	type CallContext,
 	getPrincipals,
+	giveMemberAccess,
 	isAdmin,
 	recordServiceMemberships,
 	unknownPrincipalIds,
@@ -233,26 +238,54 @@ async function toSharedDrive(
 	};
 }
 
+/** A member of an input: the principal and its role. */
+type MemberRole = { principal_id: string; role: MemberInput["role"] };
+
 /**
  * The members of an input, with the kind of each principal from the directory. The object of the drive
- * needs the kind, because an agent cannot be a manager.
+ * needs the kind, because an agent cannot be a manager. The call refuses a list that the rules do not allow,
+ * and a role that gives an agent a scope that the credential of the call does not hold. Both checks come
+ * before the write of the drive. `first` is true for the members of a new drive.
  */
-async function memberInputs(
-	call: CallContext,
-	members: { principal_id: string; role: MemberInput["role"] }[],
-): Promise<MemberInput[]> {
+async function memberInputs(call: CallContext, members: MemberRole[], first: boolean): Promise<MemberInput[]> {
 	const ids = members.map((member) => member.principal_id);
 	if ((await unknownPrincipalIds(call.env.DIRECTORY, ids)).length > 0) {
 		throw new OperationError("not_found", "No person or agent has one of the ids in members.");
 	}
-	const kinds = new Map(
-		(await getPrincipals(call.env.DIRECTORY, ids)).map((principal) => [principal.id, principal.kind]),
-	);
-	return members.map((member) => ({
+	const principals = await getPrincipals(call.env.DIRECTORY, ids);
+	const kinds = new Map(principals.map((principal) => [principal.id, principal.kind]));
+	const inputs = members.map((member) => ({
 		principalId: member.principal_id,
 		kind: kinds.get(member.principal_id) ?? "agent",
 		role: member.role,
 	}));
+	const bad = memberRefusal(inputs, first);
+	if (bad) accept(bad);
+	const roles = new Map(members.map((member) => [member.principal_id, member.role]));
+	assertMemberGrants(call, principals, (principal) => SHARED_DRIVE_ROLE_SCOPES[roles.get(principal.id) ?? "viewer"]);
+	return inputs;
+}
+
+/**
+ * A shared drive for the output of a call that gave `members` their roles. Each agent of them that the
+ * caller manages gets the access of its membership: the drive scopes of its role, and the drive in its
+ * limits (`giveMemberAccess`). Only a member that has the role of the input now counts: a retry of a create
+ * call can come after a change of the members.
+ */
+async function withAgentAccess(
+	call: CallContext,
+	opened: Pick<OpenSpace, "space" | "ctx">,
+	record: SharedDriveRecord,
+	members: MemberRole[],
+) {
+	const roles = new Map(record.members.map((member) => [member.principal_id, member.role]));
+	const memberships = members
+		.filter((member) => roles.get(member.principal_id) === member.role)
+		.map((member) => ({ principal_id: member.principal_id, scopes: SHARED_DRIVE_ROLE_SCOPES[member.role] }));
+	const access = await giveMemberAccess(call, "drive", record.id, memberships, (agent) =>
+		opened.space.releaseLimits(opened.ctx, agent.id),
+	);
+	return { ...(await toSharedDrive(call, record)), ...accessOutput(access) };
 }
 
 export const driveHandlers: Pick<HandlerMap<CallContext>, DriveOperation> = {
@@ -682,14 +715,13 @@ export const driveHandlers: Pick<HandlerMap<CallContext>, DriveOperation> = {
 			if (earlier !== null) {
 				const first = spaceOf(call, accept(earlier).id);
 				const drive = await first.space.createdSharedDrive(first.ctx);
-				if (drive !== null) return toSharedDrive(call, accept(drive));
+				// A retry also completes the access of an agent that the first call did not complete.
+				if (drive !== null) return withAgentAccess(call, first, accept(drive), input.members);
 			}
 		}
-		const members = await memberInputs(call, input.members);
 		// The check of the members comes before the id and the object of a new drive, so a refused call
 		// leaves no object.
-		const bad = memberRefusal(members, true);
-		if (bad) accept(bad);
+		const members = await memberInputs(call, input.members, true);
 		let driveId = newId("drv");
 		if (own && idempotency) {
 			driveId = accept(await own.space.reserveId(own.ctx, idempotency.key, idempotency.requestHash, driveId)).id;
@@ -708,7 +740,7 @@ export const driveHandlers: Pick<HandlerMap<CallContext>, DriveOperation> = {
 				driveId,
 			);
 		}
-		return toSharedDrive(call, created.drive);
+		return withAgentAccess(call, opened, created.drive, input.members);
 	},
 
 	async "drive.list_shared_drives"(call, input) {
@@ -753,7 +785,7 @@ export const driveHandlers: Pick<HandlerMap<CallContext>, DriveOperation> = {
 
 	async "drive.add_shared_drive_members"(call, input) {
 		const opened = await openSpace(call, input.drive_id);
-		const members = await memberInputs(call, input.members);
+		const members = await memberInputs(call, input.members, false);
 		const result = accept(await opened.space.setMembers(opened.ctx, members));
 		// One line for each change, so the audit log shows an admin who adds themselves.
 		for (const member of result.changed) {
@@ -765,7 +797,9 @@ export const driveHandlers: Pick<HandlerMap<CallContext>, DriveOperation> = {
 			"drive.add_shared_drive_members",
 			input.drive_id,
 		);
-		return toSharedDrive(call, result.drive);
+		// Each named agent that the caller manages gets the access of its membership, also a member from
+		// before. So a second call completes a write that failed.
+		return withAgentAccess(call, opened, result.drive, input.members);
 	},
 
 	async "drive.remove_shared_drive_member"(call, input) {
@@ -774,9 +808,11 @@ export const driveHandlers: Pick<HandlerMap<CallContext>, DriveOperation> = {
 		if (result.removed) {
 			auditOk(call, opened, "drive.remove_shared_drive_member", input.principal_id);
 			recordServiceMemberships(call, [input.principal_id], "drive.remove_shared_drive_member", input.drive_id);
+			// The drive took itself out of the limits of an agent, in one step with the remove.
+			if (result.limitsDropped) await afterLimitsDrop(call, input.principal_id);
 			await loseDriveAccess(call.env.DIRECTORY, input.drive_id, input.principal_id);
 		}
-		return result;
+		return { removed: result.removed };
 	},
 
 	async "drive.delete_shared_drive"(call, input) {

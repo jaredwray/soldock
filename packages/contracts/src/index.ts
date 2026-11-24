@@ -146,6 +146,7 @@ export {
 	Permission,
 	RoomGrant,
 	SHARED_DRIVE_LIMITS,
+	SHARED_DRIVE_ROLE_SCOPES,
 	SHARED_DRIVE_ROLES,
 	SharedDrive,
 	SharedDriveId,
