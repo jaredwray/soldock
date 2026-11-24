@@ -188,8 +188,10 @@ and the room in its limits when it has limits ([`identity`](../identity/README.m
   (`settleOwner`). The remove, that read and the write of the owner are one step of the room, so each
   member is in the read. Without this, an archived person as the owner stops each change of the room.
 - **No escalation.** The credential of the call must hold each chat scope that the agent gets
-  (`assertMemberGrants`, before the room writes the membership). A call that gives the agent nothing, for
-  example one that removes a scope, needs no scope for it. A sponsor who is not an admin changes the agent
+  (`assertMemberGrants`, before the room writes the membership). When the room goes into the limits of
+  the agent, the credential must hold each chat scope of the membership: the limits then let these
+  scopes reach the room, also a scope that the agent held before. A call that gives the agent nothing,
+  for example one that removes a scope, needs no scope for it. A sponsor who is not an admin changes the agent
   only while that person is still its sponsor: the write has this condition.
 - **Two stores.** The room object owns the members, and the directory owns the access of an agent. So the
   two writes are not one transaction: the membership comes first. The write of the access matches only

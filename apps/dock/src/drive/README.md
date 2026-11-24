@@ -362,7 +362,9 @@ and the drive in its limits when it has limits ([`identity`](../identity/README.
   (`giveMemberAccess`). A viewer needs `drive.read`. An editor also needs `drive.write`
   (`SHARED_DRIVE_ROLE_SCOPES` of the contracts). The result has each change in `agent_access_changes`.
 - **No escalation.** The credential of the call must hold each scope that the agent gets
-  (`assertMemberGrants`, before the drive writes the member). A refused call changes no member.
+  (`assertMemberGrants`, before the drive writes the member). When the drive goes into the limits of
+  the agent, the credential must hold each scope of the role: the limits then let these scopes reach
+  the drive, also a scope that the agent held before. A refused call changes no member.
 - **Two stores.** The drive object owns the members, and the directory owns the access of an agent, so
   the two writes are not one transaction. The member comes first. The write of the access is idempotent.
   When it does not complete, the result names the agent in `agent_access_pending`, and a later

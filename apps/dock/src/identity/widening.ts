@@ -144,20 +144,43 @@ export function managedAgents(call: CallContext, principals: readonly PrincipalR
 }
 
 /**
- * Refuses a membership of a room or a shared drive that gives an agent a scope that the credential of the call
- * does not hold (`grantableScopes`), before the object of the resource writes the membership. Only the scopes that the agent would get
- * count: a call that gives the agent nothing, for example one that removes a scope, needs no scope for it.
- * `scopes` gives the scopes that the membership of a principal gets.
+ * The scopes that the credential of a call must hold for the access that a membership gives to an agent. A
+ * narrow key cannot give what it does not hold.
+ *
+ * - The resource goes into the limits of the agent: each scope of the membership. The limits then let each of
+ *   these scopes reach the resource, also a scope that the agent held before.
+ * - The limits do not change: only the scopes that the agent gets. A call that gives the agent nothing, for
+ *   example one that removes a scope, needs no scope for it.
+ *
+ * `id` is undefined for a resource that does not exist yet.
+ */
+function scopesToGrant(
+	agent: PrincipalRecord,
+	kind: "room" | "drive",
+	id: string | undefined,
+	scopes: readonly Scope[],
+): Scope[] {
+	const limits = agent.agent_resources;
+	const widens = limits !== null && (id === undefined || !limits[LISTS[kind]].includes(id));
+	return widens ? [...scopes] : scopes.filter((scope) => !agent.agent_scopes.includes(scope));
+}
+
+/**
+ * Refuses a membership of a room or a shared drive that gives an agent an access that the credential of the
+ * call cannot give (`scopesToGrant`, `grantableScopes`), before the object of the resource writes the
+ * membership. `scopes` gives the scopes that the membership of a principal gets. `id` is the id of the
+ * resource, or undefined for a new one.
  */
 export function assertMemberGrants(
 	call: CallContext,
+	kind: "room" | "drive",
+	id: string | undefined,
 	principals: readonly PrincipalRecord[],
 	scopes: (principal: PrincipalRecord) => readonly string[],
 ): void {
 	for (const agent of managedAgents(call, principals)) {
-		const held = agent.agent_scopes;
-		const added = credentialScopes(scopes(agent)).filter((scope) => !held.includes(scope));
-		if (added.length > 0) grantableScopes(call.caller, agent, added);
+		const needed = scopesToGrant(agent, kind, id, credentialScopes(scopes(agent)));
+		if (needed.length > 0) grantableScopes(call.caller, agent, needed);
 	}
 }
 
@@ -216,7 +239,8 @@ export async function giveMemberAccess(
 			try {
 				// The handler checked the scopes before the write of the membership. A parallel change of the
 				// agent can make the check fail now. The limits can have no place for one more resource.
-				if (widening.added.length > 0) grantableScopes(call.caller, agent, widening.added);
+				const needed = scopesToGrant(agent, kind, id, scopesOf.get(agent.id) ?? []);
+				if (needed.length > 0) grantableScopes(call.caller, agent, needed);
 				if (widening.resources !== agent.agent_resources) assertPlaceInLimits(agent, kind, id);
 			} catch (error) {
 				if (!(error instanceof OperationError)) throw error;

@@ -547,10 +547,18 @@ describe("an agent in a shared drive", () => {
 		const noWrite = await keyOf(ada, ["directory.write", "drive.read", "drive.share"]);
 		expect(await codeOf(add(noWrite, second.id, "editor"))).toBe("forbidden");
 		expect(Object.keys(await rolesOf(ada))).not.toContain(second.id);
-		// The same key gives the viewer role: the agent holds drive.read, so the key gives only the limits.
+		// The same key gives the viewer role: it holds drive.read, the only scope of that role.
 		expect((await add(noWrite, second.id, "viewer")).agent_access_changes).toEqual([
 			{ principal_id: second.id, scopes_added: [], limits_widened: true },
 		]);
+
+		// The drive goes into the limits of the agent, and the limits then let drive.read reach the drive. So a
+		// key that does not hold drive.read cannot give the drive, also to an agent that holds drive.read.
+		const third = await newAgent(["account.read", "drive.read"], "Third");
+		const shareOnly = await keyOf(ada, ["directory.write", "drive.share"]);
+		expect(await codeOf(add(shareOnly, third.id, "viewer"))).toBe("forbidden");
+		expect(Object.keys(await rolesOf(ada))).not.toContain(third.id);
+		expect((await access(third.id)).resources?.drive_ids).toEqual([third.id]);
 	});
 
 	// Only an owner or an admin manages a service account. A manager of the drive who is not one of them

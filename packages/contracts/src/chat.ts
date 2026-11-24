@@ -760,6 +760,7 @@ const AGENT_MEMBER = [
 	"The call also changes each agent and each service account that it makes a member and that you manage.",
 	"You manage an agent when you are its sponsor, an owner or an admin, and your credential holds directory.write.",
 	"The agent gets the chat scopes of its membership that it does not hold. The room goes into its resource limits when it has limits.",
+	"Your credential must hold each scope that the agent gets. When the room goes into the limits, it must hold each chat scope of the membership.",
 	"agent_access_changes has these changes. agent_access_pending names each agent that did not get them.",
 	"For such an agent, call chat.add_members with the id of the room. Do not call chat.create_room again: that makes a second room.",
 	"A membership gives no new access to an agent that you do not manage. Its sponsor, an owner or an admin gives it.",

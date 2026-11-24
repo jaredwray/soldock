@@ -913,6 +913,7 @@ const AGENT_MEMBER = [
 	"The call also changes each agent and each service account that it makes a member and that you manage.",
 	"You manage an agent when you are its sponsor, an owner or an admin, and your credential holds directory.write.",
 	"The agent gets the drive scopes of its role that it does not hold: drive.read for a viewer, and also drive.write for an editor. The drive goes into its resource limits when it has limits.",
+	"Your credential must hold each scope that the agent gets. When the drive goes into the limits, it must hold each scope of the role.",
 	"agent_access_changes has these changes. agent_access_pending names each agent that did not get them.",
 	"For such an agent, call drive.add_shared_drive_members with the same role again.",
 	"A membership gives no new access to an agent that you do not manage. Its sponsor, an owner or an admin gives it.",

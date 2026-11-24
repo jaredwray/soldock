@@ -562,7 +562,7 @@ export const chatHandlers: Pick<HandlerMap<CallContext>, ChatOperation> = {
 		const members = principals.map(toActor);
 		// An agent that the caller manages gets the access of its membership. Refuse what the caller cannot
 		// give before the room exists.
-		assertMemberGrants(call, principals, (principal) => defaultRoomMemberScopes(principal.kind));
+		assertMemberGrants(call, "room", undefined, principals, (principal) => defaultRoomMemberScopes(principal.kind));
 		const opened = openRoom(call, newId("rm"));
 		const room = accept(
 			await opened.room.create(opened.ctx, {
@@ -599,7 +599,7 @@ export const chatHandlers: Pick<HandlerMap<CallContext>, ChatOperation> = {
 		const roomId = await dmRoomId(call.caller.id, input.principal_id);
 		// A person who manages the agent and opens a direct message with it decided that the agent can use
 		// the room. Each call does this, so a second call completes a write that failed.
-		assertMemberGrants(call, principals, (principal) => defaultRoomMemberScopes(principal.kind));
+		assertMemberGrants(call, "room", roomId, principals, (principal) => defaultRoomMemberScopes(principal.kind));
 		const opened = openRoom(call, roomId);
 		const result = accept(await opened.room.openDm(opened.ctx, toActor(principals[0] as PrincipalRecord)));
 		if (result.created) {
@@ -646,7 +646,13 @@ export const chatHandlers: Pick<HandlerMap<CallContext>, ChatOperation> = {
 		// The room comes first. A caller without access gets the same answer for each principal id.
 		accept(await opened.room.checkAddMembers(opened.ctx, input.scopes));
 		const principals = await principalsOf(call, input.principal_ids);
-		assertMemberGrants(call, principals, (principal) => input.scopes ?? defaultRoomMemberScopes(principal.kind));
+		assertMemberGrants(
+			call,
+			"room",
+			input.room_id,
+			principals,
+			(principal) => input.scopes ?? defaultRoomMemberScopes(principal.kind),
+		);
 		const result = accept(await opened.room.addMembers(opened.ctx, principals.map(toActor), input.scopes));
 		if (result.added.length > 0) auditOk(call, "chat.add_members", `${input.room_id}:${result.added.join(",")}`);
 		recordServiceMemberships(call, result.added, "chat.add_members", input.room_id);
@@ -660,7 +666,7 @@ export const chatHandlers: Pick<HandlerMap<CallContext>, ChatOperation> = {
 		const opened = openRoom(call, input.room_id);
 		// A principal that left the directory can still be a member. The room decides if the member exists.
 		const principals = await getPrincipals(call.env.DIRECTORY, [input.principal_id]);
-		assertMemberGrants(call, principals, () => input.scopes);
+		assertMemberGrants(call, "room", input.room_id, principals, () => input.scopes);
 		const result = accept(
 			await opened.room.setMemberScopes(opened.ctx, {
 				principalId: input.principal_id,

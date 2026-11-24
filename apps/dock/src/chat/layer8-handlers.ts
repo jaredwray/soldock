@@ -722,7 +722,7 @@ export const chatLayer8Handlers: Pick<HandlerMap<CallContext>, Layer8ChatOperati
 		if (peers.length === 1) {
 			const peer = peers[0] as ActorRecord;
 			const dmId = await dmRoomId(call.caller.id, peer.principal_id);
-			assertMemberGrants(call, principals, scopesOf);
+			assertMemberGrants(call, "room", dmId, principals, scopesOf);
 			const opened = openRoom(call, dmId);
 			const res = accept(await opened.room.openDm(opened.ctx, peer));
 			if (res.created) {
@@ -733,7 +733,7 @@ export const chatLayer8Handlers: Pick<HandlerMap<CallContext>, Layer8ChatOperati
 			return { room: toRoom(res.room), agent_access_changes: access.changes, agent_access_pending: access.pending };
 		}
 		const roomId = await groupDmRoomId([call.caller.id, ...uniqueOthers]);
-		assertMemberGrants(call, principals, scopesOf);
+		assertMemberGrants(call, "room", roomId, principals, scopesOf);
 		const opened = openRoom(call, roomId);
 		const res = accept(await opened.room.openGroupDm(opened.ctx, peers));
 		if (res.created) {

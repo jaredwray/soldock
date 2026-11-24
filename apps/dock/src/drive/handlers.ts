@@ -247,10 +247,14 @@ type MemberRole = { principal_id: string; role: MemberInput["role"] };
 /**
  * The members of an input, with the kind of each principal from the directory. The object of the drive
  * needs the kind, because an agent cannot be a manager. The call refuses a list that the rules do not allow,
- * and a role that gives an agent a scope that the credential of the call does not hold. Both checks come
- * before the write of the drive. `first` is true for the members of a new drive.
+ * and a role that gives an agent an access that the credential of the call cannot give. Both checks come
+ * before the write of the drive. `driveId` is undefined for the members of a new drive.
  */
-async function memberInputs(call: CallContext, members: MemberRole[], first: boolean): Promise<MemberInput[]> {
+async function memberInputs(
+	call: CallContext,
+	members: MemberRole[],
+	driveId: string | undefined,
+): Promise<MemberInput[]> {
 	const ids = members.map((member) => member.principal_id);
 	if ((await unknownPrincipalIds(call.env.DIRECTORY, ids)).length > 0) {
 		throw new OperationError("not_found", "No person or agent has one of the ids in members.");
@@ -262,10 +266,16 @@ async function memberInputs(call: CallContext, members: MemberRole[], first: boo
 		kind: kinds.get(member.principal_id) ?? "agent",
 		role: member.role,
 	}));
-	const bad = memberRefusal(inputs, first);
+	const bad = memberRefusal(inputs, driveId === undefined);
 	if (bad) accept(bad);
 	const roles = new Map(members.map((member) => [member.principal_id, member.role]));
-	assertMemberGrants(call, principals, (principal) => SHARED_DRIVE_ROLE_SCOPES[roles.get(principal.id) ?? "viewer"]);
+	assertMemberGrants(
+		call,
+		"drive",
+		driveId,
+		principals,
+		(principal) => SHARED_DRIVE_ROLE_SCOPES[roles.get(principal.id) ?? "viewer"],
+	);
 	return inputs;
 }
 
@@ -725,7 +735,7 @@ export const driveHandlers: Pick<HandlerMap<CallContext>, DriveOperation> = {
 		}
 		// The check of the members comes before the id and the object of a new drive, so a refused call
 		// leaves no object.
-		const members = await memberInputs(call, input.members, true);
+		const members = await memberInputs(call, input.members, undefined);
 		let driveId = newId("drv");
 		if (own && idempotency) {
 			driveId = accept(await own.space.reserveId(own.ctx, idempotency.key, idempotency.requestHash, driveId)).id;
@@ -794,7 +804,7 @@ export const driveHandlers: Pick<HandlerMap<CallContext>, DriveOperation> = {
 		const opened = await openSpace(call, input.drive_id);
 		// The drive comes first. A caller that cannot change its members gets the same answer for each list.
 		accept(await opened.space.checkSetMembers(opened.ctx));
-		const members = await memberInputs(call, input.members, false);
+		const members = await memberInputs(call, input.members, input.drive_id);
 		const result = accept(await opened.space.setMembers(opened.ctx, members));
 		// One line for each change, so the audit log shows an admin who adds themselves.
 		for (const member of result.changed) {
