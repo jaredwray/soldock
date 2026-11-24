@@ -1013,7 +1013,7 @@ export const requestMember = defineOperation({
 		"Your membership of the room must have chat.add_members, as for chat.add_members. The owner of a room has it.",
 		REQUEST_DECIDER,
 		"That person gets the request in the activity list of Chat. After the approval, the account is a member with scopes: chat.read and chat.write without scopes. A request cannot give chat.add_members.",
-		"A second call for the same room and account returns the same request, and sends it again to the person who decides now, for example after a change of the sponsor. To see your requests, call chat.list_member_requests: a request that is not there is approved or denied, or its account is archived or deleted, so nobody can decide it. chat.get_room tells if the account is a member.",
+		"A second call for the same room and account returns the same request. It sends the request to the person who decides now when that person does not have it, for example after a change of the sponsor. To see your requests, call chat.list_member_requests: a request that is not there is approved or denied, or its account is archived or deleted, so nobody can decide it. chat.get_room tells if the account is a member.",
 		`A room has at most ${CHAT_LIMITS.memberRequestsPerRoom} requests at the same time. Add a person with chat.add_members.`,
 	].join(" "),
 	http: { method: "POST", path: "/api/v1/chat/rooms/{room_id}/member-requests" },
@@ -1040,7 +1040,7 @@ export const listMemberRequests = defineOperation({
 	description: [
 		"For a person: the requests for the agents and the service accounts that you manage, the newest first. Set principal_id to get the requests for one account.",
 		"For an agent or a service account: the requests that it made.",
-		"A request stays in the list until a person approves or denies it. A request for an account that is archived or deleted is not in the list: nobody can decide it, and it never makes a member. A person sees only the requests for the accounts that the person manages now.",
+		"A request waits until a person approves or denies it. A person sees only the waiting requests for the accounts that the person manages now: after a change of the sponsor, the request is in the list of the new sponsor, not of the former one. A request for an account that is archived or deleted is in no list: nobody can decide it, and it never makes a member.",
 	].join(" "),
 	http: { method: "GET", path: "/api/v1/chat/member-requests" },
 	scopes: ["chat.read"],
