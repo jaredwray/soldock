@@ -56,14 +56,24 @@ async function auditLines(run: () => Promise<unknown>): Promise<Record<string, u
 
 describe("the mailbox of an agent", () => {
 	it("lists each agent mailbox for owners and admins, and for nobody else", async () => {
-		// An owner or an admin can only read the mailbox of an agent, and its scopes say so.
+		const { principal: service } = await owner.call("directory.create_service_account", {
+			display_name: "CI Pipeline",
+			address: "ci@dock.test",
+			description: "Posts build results",
+			sponsor_id: ada.id,
+			scopes: ["mail.read"],
+		});
+		// An owner or an admin can only read the mailbox of an agent, and its scopes say so. A service
+		// account is an agent in mail, and `service` tells its mailbox from the mailbox of an agent.
 		const agentMailbox = {
 			id: bot.id,
 			kind: "agent",
 			address: "bot@dock.test",
 			display_name: "Billing Bot",
+			service: false,
 			scopes: ["mail.read"],
 		};
+		const serviceMailbox = { ...agentMailbox, id: service.id, address: "ci@dock.test", display_name: "CI Pipeline" };
 		for (const reader of [owner, admin]) {
 			const { mailboxes } = await reader.call("mail.list_mailboxes");
 			expect(mailboxes).toEqual([
@@ -72,15 +82,19 @@ describe("the mailbox of an agent", () => {
 					kind: "personal",
 					address: reader.address,
 					display_name: expect.any(String),
+					service: false,
 					scopes: ["mail.read", "mail.modify", "mail.send"],
 				},
 				agentMailbox,
+				{ ...serviceMailbox, service: true },
 			]);
 		}
-		// Ada sponsors the bot, but she is a member, not an admin. The bot is an agent.
-		for (const other of [ada, bot]) {
-			expect((await other.call("mail.list_mailboxes")).mailboxes.map((m) => m.kind)).toEqual(["personal"]);
-		}
+		// Ada sponsors the bot, but she is a member, not an admin. The bot and the service account are agents.
+		const own = async (list: Actor["call"]) =>
+			(await list("mail.list_mailboxes")).mailboxes.map((mailbox) => [mailbox.kind, mailbox.service]);
+		for (const other of [ada, bot]) expect(await own(other.call)).toEqual([["personal", false]]);
+		const token = (await owner.call("account.create_api_key", { principal_id: service.id, label: "ci" })).api_key;
+		expect(await own(api(token.secret))).toEqual([["personal", true]]);
 	});
 
 	it("lets an owner and an admin read it, through REST and MCP, and audits each read of mail", async () => {

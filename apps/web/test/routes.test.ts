@@ -193,11 +193,18 @@ describe("routes", () => {
 		}
 	});
 
-	// A mention in a message links to the profile, so the link must open that profile after a reload.
-	it("parses the path of a profile in Chat back to that principal", () => {
-		const profileId = "prn_01JD0000000000000000000000";
-		expect(parseRoute(profilePath(profileId))).toEqual({ page: "chat", roomId: null, seq: null, profileId });
-		for (const path of ["/chat/people", "/chat/people/rm_01JD0000000000000000000000", `/chat/people/${profileId}/x`]) {
+	// A mention in a message and the account menu link to the profile, so the link must open that profile
+	// after a reload. The profile is a page of the workspace, so the old path in Chat opens no page.
+	it("parses the path of a profile back to that principal, and the old path in Chat to not-found", () => {
+		const principalId = "prn_01JD0000000000000000000000";
+		expect(parseRoute(`/people/${principalId}`)).toEqual({ page: "profile", principalId });
+		expect(parseRoute(profilePath(principalId))).toEqual({ page: "profile", principalId });
+		for (const path of [
+			"/people",
+			"/people/rm_01JD0000000000000000000000",
+			`/people/${principalId}/x`,
+			`/chat/people/${principalId}`,
+		]) {
 			expect(parseRoute(path), path).toEqual({ page: "not-found" });
 		}
 	});

@@ -3,6 +3,7 @@ import { useAdminAccess } from "../features/admin/access.ts";
 import { useSession } from "../features/auth/session.tsx";
 import { Icon, type IconName } from "../lib/icons.tsx";
 import { Link } from "../lib/router.tsx";
+import { ASTERRA_VERSION } from "../lib/version.ts";
 import { CHAT_PATH, DRIVE_PATH, INBOX_PATH, type Route } from "../routes.ts";
 import { AccountMenu } from "./AccountMenu.tsx";
 import { BrandMark } from "./BrandMark.tsx";
@@ -49,7 +50,12 @@ export function Rail({ route, open, hasSidebar }: RailProps) {
 
 	return (
 		<nav id={RAIL_ID} ref={navRef} className={open ? "rail rail-open" : "rail"} aria-label="Products">
-			<Link to={INBOX_PATH} className="rail-brand" aria-label="Asterra, go to the inbox">
+			<Link
+				to={INBOX_PATH}
+				className="rail-brand"
+				aria-label="Asterra, go to the inbox"
+				title={`Asterra - ${ASTERRA_VERSION}`}
+			>
 				<BrandMark />
 			</Link>
 			{PRODUCTS.map((entry) => (

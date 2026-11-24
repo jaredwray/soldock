@@ -52,9 +52,8 @@ export type Route =
 	| { page: "sheet"; spaceId: string; itemId: string }
 	/**
 	 * Chat. `roomId` is null for the page without an open room. `seq` is the message that a link
-	 * points to. `replySeq` is a reply in the thread of that message, for a link to a reply. `profileId`
-	 * is the person or the agent whose profile shows in the place of a room. `threads` is true for the
-	 * Threads view: the threads that the person follows. `search` is the Search view: the query, and the
+	 * points to. `replySeq` is a reply in the thread of that message, for a link to a reply. `threads`
+	 * is true for the Threads view: the threads that the person follows. `search` is the Search view: the query, and the
 	 * room of a search in one room, or null for a search in each room of the person.
 	 */
 	| {
@@ -62,11 +61,12 @@ export type Route =
 			roomId: string | null;
 			seq: number | null;
 			replySeq?: number;
-			profileId?: string;
 			threads?: true;
 			view?: ChatView;
 			search?: { query: string; roomId: string | null };
 	  }
+	/** The profile of a person or an agent. It is a page of the workspace, not a part of a product. */
+	| { page: "profile"; principalId: string }
 	/**
 	 * `section` is null for `/admin`. The page then shows the first section that the person can use.
 	 * `memberId` is the person, agent or service account whose page shows in the Members section.
@@ -83,6 +83,7 @@ export const INBOX_PATH = "/mail/inbox";
 export const DRIVE_PATH = "/drive";
 export const SHARED_DRIVES_PATH = "/drive/shared-drives";
 export const CHAT_PATH = "/chat";
+export const PEOPLE_PATH = "/people";
 export const ADMIN_PATH = "/admin";
 export const SETTINGS_PATH = "/settings";
 
@@ -133,6 +134,11 @@ export function parseRoute(location: string): Route {
 	if (first === "connect" && parts.length === 2 && second?.startsWith("oar_"))
 		return { page: "connect", requestId: second };
 	if (first === "drive") return parseDriveView(parts.slice(1), url);
+	if (first === "people") {
+		return parts.length === 2 && isPrincipalId(second)
+			? { page: "profile", principalId: second }
+			: { page: "not-found" };
+	}
 	if (first === "chat") {
 		if (parts.length === 1) return { page: "chat", roomId: null, seq: null };
 		if (second === "threads") {
@@ -146,11 +152,6 @@ export function parseRoute(location: string): Route {
 			const room = url.searchParams.get("room") ?? undefined;
 			const search = { query: url.searchParams.get("q") ?? "", roomId: isRoomId(room) ? room : null };
 			return { page: "chat", roomId: null, seq: null, search };
-		}
-		if (second === "people") {
-			return parts.length === 3 && isPrincipalId(third)
-				? { page: "chat", roomId: null, seq: null, profileId: third }
-				: { page: "not-found" };
 		}
 		if (!isRoomId(second)) return { page: "not-found" };
 		if (parts.length === 2) return { page: "chat", roomId: second, seq: null };
@@ -363,9 +364,12 @@ export function chatSearchPath(query = "", roomId: string | null = null): string
 	return text === "" ? `${CHAT_PATH}/search` : `${CHAT_PATH}/search?${text}`;
 }
 
-/** The path of the profile of a person or an agent, in Chat. A mention in a message links to it. */
+/**
+ * The path of the profile of a person or an agent. The profile is a page of the workspace, not of Chat.
+ * A mention in a message, the name of an author and the account menu link to it.
+ */
 export function profilePath(principalId: string): string {
-	return `${CHAT_PATH}/people/${encodeURIComponent(principalId)}`;
+	return `${PEOPLE_PATH}/${encodeURIComponent(principalId)}`;
 }
 
 /** The path of the thread list of a view, in the own mailbox, in a team mailbox or in the mailbox of an agent. */

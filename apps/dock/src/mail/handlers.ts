@@ -271,9 +271,9 @@ export const mailHandlers: Pick<HandlerMap<CallContext>, MailOperation> = {
 			canReadAgentMailboxes(call.caller) ? agentMailboxes(call.env.DIRECTORY) : [],
 		]);
 		const mailboxes = [
-			{ ...ownMailbox(call), scopes: [...MAILBOX_MEMBER_SCOPES] },
-			...teams,
-			// An owner or an admin can read the mailbox of an agent, and nothing more.
+			{ ...ownMailbox(call), service: call.caller.kind === "service", scopes: [...MAILBOX_MEMBER_SCOPES] },
+			...teams.map((mailbox) => ({ ...mailbox, service: false })),
+			// An owner or an admin can read the mailbox of an agent or a service account, and nothing more.
 			...agents.map((mailbox) => ({ ...mailbox, scopes: ["mail.read"] })),
 		];
 		return { mailboxes };

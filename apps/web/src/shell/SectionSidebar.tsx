@@ -19,7 +19,8 @@ interface SectionSidebarProps {
 	/** The accessible name of the navigation. */
 	label: string;
 	title: string;
-	subtitle: string;
+	/** The line under the title. Admin has none. */
+	subtitle?: string | undefined;
 	links: readonly SectionLink[];
 	open: boolean;
 	onClose: () => void;

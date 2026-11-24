@@ -48,8 +48,3 @@ export function productOf(route: Route): Product | null {
 			return null;
 	}
 }
-
-/** The mail domain of an address, for the line under the name of a sidebar. */
-export function domainOf(address: string): string {
-	return address.slice(address.lastIndexOf("@") + 1);
-}

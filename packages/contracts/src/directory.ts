@@ -559,9 +559,9 @@ export const endApiKeyRotation = defineOperation({
 const FULL_CREDENTIAL =
 	"The credential must hold every human scope, because a sign-in gives a session with every human scope.";
 
-/** A browser session proves the password again before it changes its own sign-in. */
+/** A browser session proves the password again before it changes its own second step. */
 const CURRENT_PASSWORD =
-	"A browser session that changes its own sign-in must also send current_password, when the person has a password. An API key does not need it.";
+	"A browser session that changes its own two-step verification must also send current_password, when the person has a password. An API key does not need it.";
 
 /** The password that the person signs in with now. Wrong guesses count toward the sign-in lock. */
 const CurrentPassword = z.string().min(1).max(PASSWORD_MAX_LENGTH).optional();
@@ -573,7 +573,7 @@ export const setPassword = defineOperation({
 		"Sets the password that a human signs in with: yourself by default.",
 		"Owners and admins can set it for anyone except the owner.",
 		FULL_CREDENTIAL,
-		CURRENT_PASSWORD,
+		"A browser session does not need the current password.",
 		"The change ends the other browser sessions of that person and clears a sign-in lock.",
 	].join(" "),
 	http: { method: "POST", path: "/api/v1/account/password" },
@@ -583,7 +583,6 @@ export const setPassword = defineOperation({
 	input: z.strictObject({
 		principal_id: PrincipalId.optional(),
 		password: Password,
-		current_password: CurrentPassword,
 	}),
 	output: z.object({ principal_id: z.string() }),
 	errors: ["not_found"],

@@ -22,25 +22,22 @@ export function newPasswordError(password: string, confirmation: string): string
 export function PasswordCard() {
 	const { whoami, refresh } = useSession();
 	const toast = useToast();
-	// A person from before the upgrade to passwords has none. The server asks for the current one otherwise.
+	// A person from before the upgrade to passwords has none.
 	const [hasPassword, setHasPassword] = useState(whoami.sign_in?.password_set !== false);
-	const [current, setCurrent] = useState("");
 	const [password, setPassword] = useState("");
 	const [confirmation, setConfirmation] = useState("");
 	const [busy, setBusy] = useState(false);
 	const [error, setError] = useState<string | null>(null);
-	const ids = { title: useId(), current: useId(), password: useId(), confirmation: useId(), hint: useId() };
+	const ids = { title: useId(), password: useId(), confirmation: useId(), hint: useId() };
 
 	async function submit(event: FormEvent<HTMLFormElement>) {
 		event.preventDefault();
-		if (hasPassword && !current) return setError("Enter your current password.");
 		const problem = newPasswordError(password, confirmation);
 		if (problem) return setError(problem);
 		setBusy(true);
 		setError(null);
 		try {
-			await api.call("account.set_password", { password, ...(hasPassword ? { current_password: current } : {}) });
-			setCurrent("");
+			await api.call("account.set_password", { password });
 			setPassword("");
 			setConfirmation("");
 			toast({
@@ -69,22 +66,6 @@ export function PasswordCard() {
 				</p>
 			)}
 			<form className="panel-card panel-form" onSubmit={submit} noValidate>
-				{hasPassword && (
-					<div className="field">
-						<label htmlFor={ids.current} className="field-label">
-							Current password
-						</label>
-						<input
-							id={ids.current}
-							className="input"
-							type="password"
-							autoComplete="current-password"
-							value={current}
-							onChange={(event) => setCurrent(event.target.value)}
-							disabled={busy}
-						/>
-					</div>
-				)}
 				<div className="field">
 					<label htmlFor={ids.password} className="field-label">
 						New password

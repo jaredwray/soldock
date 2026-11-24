@@ -14,13 +14,14 @@ import { MENU_BUTTON_ID, RAIL_ID, sidebarId } from "./nav.ts";
 import { PageHeader } from "./PageHeader.tsx";
 import { Rail } from "./Rail.tsx";
 
-// The editors, Chat, Drive, Admin, Settings and the OAuth approval page are separate chunks. A person who uses only Mail does
-// not load them.
+// The editors, Chat, Drive, the profile page, Admin, Settings and the OAuth approval page are separate chunks. A person who
+// uses only Mail does not load them.
 const AdminPage = lazyPage(() => import("../features/admin/AdminPage.tsx").then((module) => module.AdminPage));
 const SettingsPage = lazyPage(() =>
 	import("../features/settings/SettingsPage.tsx").then((module) => module.SettingsPage),
 );
 const ChatApp = lazyPage(() => import("../features/chat/ChatApp.tsx").then((module) => module.ChatApp));
+const ProfilePage = lazyPage(() => import("../features/people/ProfilePage.tsx").then((module) => module.ProfilePage));
 const DriveApp = lazyPage(() => import("../features/drive/DriveApp.tsx").then((module) => module.DriveApp));
 const ConnectPage = lazyPage(() => import("../features/connect/ConnectPage.tsx").then((module) => module.ConnectPage));
 const DocPage = lazyPage(() => import("../features/docs/DocPage.tsx").then((module) => module.DocPage));
@@ -146,7 +147,6 @@ export function Shell() {
 						roomId={route.roomId}
 						messageSeq={route.seq}
 						replySeq={route.replySeq ?? null}
-						profileId={route.profileId ?? null}
 						threads={route.threads === true}
 						view={route.view ?? null}
 						search={route.search ?? null}
@@ -154,6 +154,9 @@ export function Shell() {
 						onCloseNav={() => setNavOpen(false)}
 					/>
 				);
+			case "profile":
+				// The key gives each principal its own page, so the data of one never shows on a different one.
+				return <ProfilePage key={route.principalId} principalId={route.principalId} />;
 			case "admin":
 				return (
 					<AdminPage
