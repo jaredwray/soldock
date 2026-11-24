@@ -1,6 +1,6 @@
 import type { Mailbox } from "@asterra/contracts";
 import { describe, expect, it } from "vitest";
-import { isExpanded, mailboxNav, mailboxRights, rightsNotice } from "../src/features/mail/mailboxNav.ts";
+import { isExpanded, mailboxNav, mailboxRights, mailHomePath, rightsNotice } from "../src/features/mail/mailboxNav.ts";
 
 const ALL = ["mail.read", "mail.modify", "mail.send"];
 const own: Mailbox = {
@@ -119,5 +119,21 @@ describe("the rights of the person in the open mailbox", () => {
 		expect(rightsNotice({ modify: true, send: false })).toMatch(/cannot send from it/);
 		expect(rightsNotice({ modify: false, send: true })).toMatch(/send from it\. You cannot change it/);
 		expect(rightsNotice({ modify: false, send: false })).toMatch(/cannot change it or send from it/);
+	});
+});
+
+// Mail opens the inbox of the default mailbox of the person. A saved default that the person cannot read
+// now opens the own inbox, so a removed membership never opens a page that fails.
+describe("the start of Mail", () => {
+	it("opens the inbox of the saved team mailbox, or the own inbox without one", () => {
+		expect(mailHomePath(support.id, [own, support, sales])).toBe(`/mail/team/${support.id}/inbox`);
+		expect(mailHomePath(null, [own, support])).toBe("/mail/inbox");
+		expect(mailHomePath(own.id, [own, support])).toBe("/mail/inbox");
+	});
+
+	it("opens the own inbox for a membership that ended, lost mail.read, or an agent mailbox", () => {
+		expect(mailHomePath(support.id, [own, sales])).toBe("/mail/inbox");
+		expect(mailHomePath(support.id, [own, { ...support, scopes: ["mail.send"] }])).toBe("/mail/inbox");
+		expect(mailHomePath(bot.id, [own, bot])).toBe("/mail/inbox");
 	});
 });

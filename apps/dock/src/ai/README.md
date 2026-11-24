@@ -2,7 +2,8 @@
 
 > Status: **started**. The first layer exists: the AI settings of the organization, the call to Workers
 > AI through Cloudflare AI Gateway, the monthly budget and the usage ledger. Inbox auto labels in the
-> [mail module](../mail/README.md#auto-labels) are the first feature that uses it. Keep this README
+> [mail module](../mail/README.md#auto-labels) are the first feature that uses it. The **AI features**
+> switch in the mailbox settings of the web app is the switch of the auto labels of that mailbox. Keep this README
 > current as the module grows. It is the module's contract.
 
 | | |

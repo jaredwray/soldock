@@ -8,11 +8,13 @@ import {
 } from "@asterra/contracts";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, errorMessage } from "../../lib/api.ts";
-import type { MailView } from "../../routes.ts";
+import { INBOX_PATH, type MailView } from "../../routes.ts";
 import { applyToSummary, belongsInView, changeLabels, type LabelChange } from "./actions.ts";
 import { mailboxInput } from "./mailbox.tsx";
+import { mailHomePath } from "./mailboxNav.ts";
 
 export type Profile = OutputOf<"mail.get_profile">;
+export type MailboxSettings = OutputOf<"mail.get_mailbox_settings">;
 
 const POLL_MS = 15_000;
 const PAGE_SIZE = 50;
@@ -63,6 +65,47 @@ export function useProfilePoll(mailboxId: string | null, onVersionChange: () => 
 
 	const sync = useCallback(() => poll(false), [poll]);
 	return { profile, sync };
+}
+
+/**
+ * Reads the default mailbox of the person, and returns the path of its inbox. Without a saved default, it
+ * does not read the mailboxes. When a read fails, Mail opens the own inbox.
+ */
+export async function loadMailHomePath(): Promise<string> {
+	try {
+		const { default_mailbox_id } = await api.call("mail.get_settings");
+		if (default_mailbox_id === null) return INBOX_PATH;
+		const { mailboxes } = await api.call("mail.list_mailboxes");
+		return mailHomePath(default_mailbox_id, mailboxes);
+	} catch {
+		return INBOX_PATH;
+	}
+}
+
+/**
+ * The settings of the mailbox (`mail.get_mailbox_settings`), such as its signature. Null while they load,
+ * and when they do not load: the composer then starts with no signature. `set` keeps the settings that
+ * the settings dialog saved, so the next draft has the new signature.
+ */
+export function useMailboxSettings(mailboxId: string | null) {
+	const [settings, setSettings] = useState<MailboxSettings | null>(null);
+
+	useEffect(() => {
+		let active = true;
+		api.call("mail.get_mailbox_settings", mailboxInput(mailboxId)).then(
+			(result) => {
+				if (active) setSettings(result);
+			},
+			() => {
+				// Without the settings, a draft has no signature. A 401 shows the sign-in page through lib/api.ts.
+			},
+		);
+		return () => {
+			active = false;
+		};
+	}, [mailboxId]);
+
+	return { settings, set: setSettings };
 }
 
 export interface LabelsState {

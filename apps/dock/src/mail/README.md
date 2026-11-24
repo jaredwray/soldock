@@ -12,7 +12,7 @@
 | **Purpose** | Gmail replacement backend: address routing, inbound pipeline (`email()` → R2 → queue → `MailboxDO`), threading, labels, search, sanitization, outbound pipeline via Email Service, filters, vacation, groups, team mailboxes, delegation, agent outbound policy enforcement, webhooks for new mail. |
 | **Owns** | `MailboxDO` (messages, threads, labels, search index, delivery status, outbox, event outbox, idempotency keys, sent recipients, auto-label settings, corrections and classifier outbox); raw MIME in R2 `blobs`. The `webhooks` module owns the D1 subscriptions. The `ai` module owns the AI settings and the usage ledger. |
 | **Depends on** | `platform`, `identity`, `webhooks`, `ai`. Later: `drive` (attachments ↔ Drive). |
-| **Operations** | `mail.list_mailboxes`, `mail.get_settings`, `mail.update_settings`, `mail.get_profile`, `mail.list_labels`, `mail.create_label`, `mail.delete_label`, `mail.list_threads`, `mail.get_thread`, `mail.get_message`, `mail.modify_threads`, `mail.send`, `mail.suggest_recipients`, `mail.get_attachment`, `mail.create_webhook_subscription`, `mail.list_webhook_subscriptions`, `mail.delete_webhook_subscription`, `mail.get_auto_labels`, `mail.update_auto_labels`, `mail.create_auto_label`, `mail.delete_auto_label`, `mail.run_auto_labels` |
+| **Operations** | `mail.list_mailboxes`, `mail.get_settings`, `mail.update_settings`, `mail.get_mailbox_settings`, `mail.update_mailbox_settings`, `mail.get_profile`, `mail.list_labels`, `mail.create_label`, `mail.delete_label`, `mail.list_threads`, `mail.get_thread`, `mail.get_message`, `mail.modify_threads`, `mail.send`, `mail.suggest_recipients`, `mail.get_attachment`, `mail.create_webhook_subscription`, `mail.list_webhook_subscriptions`, `mail.delete_webhook_subscription`, `mail.get_auto_labels`, `mail.update_auto_labels`, `mail.create_auto_label`, `mail.delete_auto_label`, `mail.run_auto_labels` |
 | **Data inventory** | See [Data inventory](#data-inventory). Backups: not built yet. |
 
 Public surface: `index.ts` only. Other domains must not import files from this folder directly.
@@ -140,18 +140,69 @@ who can.
 
 ## Settings
 
-`mail.get_settings` and `mail.update_settings` read and change the mail settings of a person. For now,
-the settings are the collapsed sections of the sidebar of the web app
-(`sidebar.shared_mailboxes_collapsed`, `sidebar.agent_mailboxes_collapsed`).
+`mail.get_settings` and `mail.update_settings` read and change the mail settings of a person:
+
+- The collapsed sections of the sidebar of the web app (`sidebar.shared_mailboxes_collapsed`,
+  `sidebar.agent_mailboxes_collapsed`).
+- `default_mailbox_id`: the mailbox that the web app opens first, and so the address that a new message
+  comes from. Null means the own mailbox.
 
 - The settings live in the own mailbox of the caller, in the `meta` table. The operations take no
   `mailbox_id`, so a team mailbox and the mailbox of an agent never get settings.
-- Each setting has a default (`false`). A stored value that does not parse gets the defaults.
+- Each setting has a default (`false`, and null for `default_mailbox_id`). A stored value that does not
+  parse gets the defaults. A stored `default_mailbox_id` that is not a mailbox id gets null.
 - `mail.update_settings` changes only the settings that the request names, and returns all of them.
   A second call with the same values changes nothing.
+- `default_mailbox_id` accepts null, the own id (stored as null), or the id of a team mailbox that the
+  caller is a member of with `mail.read`. The check reads the directory. An unknown team mailbox gets
+  `not_found`, and a team mailbox without membership or without `mail.read` gets `forbidden`. Any other
+  id gets `invalid`: nobody sends from the mailbox of an agent, and the mailbox of a different person is
+  private.
+- `mail.get_settings` returns the stored `default_mailbox_id` without a check. A membership can end
+  after the save. The web app then opens the own mailbox: it opens a team mailbox only when
+  `mail.list_mailboxes` has it with `mail.read`. The server does not clear the stale value.
 - A change does not change the mailbox `version`, so the web app does not get the list again.
 - Only people can call them. An agent has no web app. A change writes no audit line, as for
   `chat.mark_read`: it changes the view of the person, not their data.
+
+### Settings of a mailbox
+
+`mail.get_mailbox_settings` and `mail.update_mailbox_settings` read and change the settings of one
+mailbox. For now, the only setting is the plain-text `signature`. The web app opens them from the gear
+in the header of Mail, with the AI switch (`mail.update_auto_labels`), the members of a team mailbox and
+the default address of the person.
+
+- The settings live in the mailbox, in the `meta` table (`mailbox_settings`). So the members of a team
+  mailbox share them, as they share the labels and the auto-label settings.
+- Both take `mailbox_id` and use `openMailbox`, with the scope of the operation in the credential and
+  in the membership: `mail.read` to read and `mail.modify` to change.
+- The signature is plain text of at most 2,000 characters. A line break and a tab are the only control
+  characters that it can hold. The mailbox stores `\n` for each line break. It removes the spaces at
+  the end of each line, and the empty lines at the start and the end. An empty string removes the
+  signature.
+- `mail.send` never adds the signature. The web composer puts it into each new draft, where the person
+  can change it. An agent reads it and adds it to `text` and `html` itself. So a send has exactly the
+  text of the request, and the idempotency hash does not change.
+- The signature holds no HTML. The composer makes the HTML part from the text with its own document
+  model, so no stored HTML needs a sanitizer.
+- An agent or a service account changes the signature of its own mailbox only. In a team mailbox, the
+  composer of each person adds the shared signature. An agent that a message tricks could put text into
+  the mail of the people, so a change by an agent there gets `forbidden`. It can read it.
+- An owner or an admin reads the settings of an agent mailbox, and cannot change them.
+- A read writes no audit line, as for `mail.get_profile`: the settings hold no mail content. A change
+  writes the line `mail.update_mailbox_settings` with the mailbox as `target`, and `mailbox` for a team
+  mailbox. The line never holds the signature.
+- A change does not change the mailbox `version`. Another open tab keeps the old signature until it
+  opens the mailbox again.
+
+| Caller | Read | Change |
+| --- | --- | --- |
+| A person, in the own mailbox | `mail.read` | `mail.modify` |
+| A member of a team mailbox (a person) | `mail.read` in the credential and the membership | `mail.modify` in the credential and the membership |
+| An agent or a service account, in its own mailbox | `mail.read` | `mail.modify` |
+| An agent or a service account, in a team mailbox | `mail.read` in the credential and the membership | `forbidden` |
+| An owner or an admin, in the mailbox of an agent | Yes | `forbidden` |
+| A principal who is not a member, or the id of a different person | `forbidden` | `forbidden` |
 
 ## Inbound
 
@@ -645,7 +696,8 @@ A disabled endpoint stays disabled. Delete it and create a new one.
 | Change counter | `MailboxDO` table `meta` (`version`) | |
 | Sent recipients | `MailboxDO` table `recipients` | One row for each address that the mailbox sent mail to: the address, the number of sent messages and the time of the last one. Rebuildable from the sent messages |
 | Watch sockets | `MailboxDO` hibernatable WebSockets, tag `watch` | Not stored. A socket ends with its `subscriptions/listen` stream, and a restart of the object ends it. No backup |
-| Mail settings of a person | `MailboxDO` table `meta` (`settings`) | JSON. Only in the own mailbox of a person. The sidebar sections that the person collapsed |
+| Mail settings of a person | `MailboxDO` table `meta` (`settings`) | JSON. Only in the own mailbox of a person. The sidebar sections that the person collapsed, and the default mailbox (`default_mailbox_id`) |
+| Settings of a mailbox | `MailboxDO` table `meta` (`mailbox_settings`) | JSON. In each mailbox: the plain-text signature, at most 2,000 characters. The members of a team mailbox share it |
 | Raw MIME of each message | R2 `blobs`, key `mail/raw/<mailbox id>/<sha256>` | One owner for each object: each mailbox has its own copy. Inbound: the key comes from the content, so a retry writes the same object. Sends: a duplicate attempt deletes its object. An error after the R2 write and before the mailbox answers can leave an orphan, which blob GC will collect |
 | Inbound jobs | Queue `soldock-mail-inbound`, dead letters in `soldock-mail-inbound-dlq` | Jobs hold ids, keys and the `+tag` of the recipient address, never message content |
 | Webhooks | D1 `webhook_endpoints` and `webhook_subscriptions` (migration `0013`). The old table `webhooks` stays for the previous Worker | The endpoint holds the URL and the secret. The subscription holds the mailbox. See the [webhook module](../webhooks/README.md#data-inventory) |
@@ -685,6 +737,7 @@ Backups: not built yet. mbox/EML export comes with Takeout.
 | Webhook POST | 15 seconds, 5 attempts | Standard Webhooks recommends a timeout of 15 to 30 seconds |
 | Webhook events | 1 for each mailbox in each 5 seconds | Mail in that time joins one event |
 | Custom auto labels | 10 for each mailbox | The size of the prompt |
+| Signature | 2,000 characters of plain text | A signature is a few lines. The limit keeps the `meta` row small |
 | Auto-label corrections | 500 for each mailbox, 6 in each prompt | The newest stay |
 | Body in the classifier prompt | 3,000 characters | The start and the end of a long body |
 | Messages in one `mail.run_auto_labels` | 200 | The budget of one call |
@@ -697,7 +750,10 @@ Backups: not built yet. mbox/EML export comes with Takeout.
   sent), the addresses of the directory that the mailbox never wrote to, and a way to remove a
   suggestion
 - Filters, vacation responder and forwarding
-- Aliases, groups, delegation and send-as
+- Aliases, groups, delegation and send-as. So the default address is the default mailbox: a person has
+  one address for the own mailbox and one for each team mailbox
+- For signatures: a signature for each member of a team mailbox, a signature with formatting or
+  pictures, and a signature that `mail.send` adds
 - For team mailboxes: a read state for each member, assignment of a thread to a member, unread
   counts for each mailbox in `mail.list_mailboxes`, and a change of address (with an alias for the
   old address) or removal of a team mailbox

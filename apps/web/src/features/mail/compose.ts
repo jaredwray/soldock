@@ -270,3 +270,17 @@ export function forwardDraft(message: Message): Draft {
 		text: `\n\n${header}\n\n${messageText(message)}`,
 	});
 }
+
+/** The line before a signature (RFC 3676): two dashes and a space. */
+export const SIGNATURE_SEPARATOR = "-- ";
+
+/**
+ * The draft with the signature of the mailbox. The text of a draft is the quote of a reply or the header of
+ * a forward, so the signature goes above it, after two empty lines for the message. An empty signature
+ * changes nothing.
+ */
+export function withSignature(draft: Draft, signature: string): Draft {
+	if (signature.trim() === "") return draft;
+	const rest = draft.text === "" || draft.text.startsWith("\n\n") ? draft.text : `\n\n${draft.text}`;
+	return { ...draft, text: `\n\n${SIGNATURE_SEPARATOR}\n${signature}${rest}` };
+}

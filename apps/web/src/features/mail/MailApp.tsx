@@ -1,5 +1,6 @@
 import type { Label, Mailbox } from "@asterra/contracts";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Dialog } from "../../lib/Dialog.tsx";
 import { setPageTitle } from "../../lib/pageTitle.ts";
 import { navigate } from "../../lib/router.tsx";
 import { useToast } from "../../lib/toast.tsx";
@@ -9,8 +10,8 @@ import { useSession } from "../auth/session.tsx";
 import { AutoLabelsDialog } from "./AutoLabelsDialog.tsx";
 import type { SendResult } from "./Composer.tsx";
 import { Composer, usePreloadComposer } from "./ComposerLoader.tsx";
-import { type Draft, newDraft } from "./compose.ts";
-import { useLabels, useProfilePoll } from "./data.ts";
+import { type Draft, newDraft, withSignature } from "./compose.ts";
+import { useLabels, useMailboxSettings, useProfilePoll } from "./data.ts";
 import { DeleteLabelDialog, NewLabelDialog } from "./LabelDialogs.tsx";
 import { MailPane } from "./MailPane.tsx";
 import { MailboxProvider, MailboxRightsProvider } from "./mailbox.tsx";
@@ -21,10 +22,48 @@ import { viewQuery, viewTitle } from "./views.ts";
 
 type MailDialog =
 	| { type: "help" }
+	| { type: "settings" }
 	| { type: "new-label" }
 	| { type: "auto-labels" }
 	| { type: "delete-label"; label: Label }
 	| null;
+
+// The settings dialog is a separate chunk: a person opens it seldom. A chunk that does not load asks for a reload.
+const MailboxSettingsDialog = lazy(() =>
+	import("./MailboxSettingsDialog.tsx").then(
+		(module) => ({ default: module.MailboxSettingsDialog }),
+		() => ({ default: SettingsUnavailable }),
+	),
+);
+
+function SettingsUnavailable({ onClose }: { onClose: () => void }) {
+	return (
+		<Dialog title="The settings did not load" onClose={onClose} className="dialog-small">
+			<div className="dialog-body">
+				<p>The connection can be down, or a new version of Asterra is available. Reload the page, then try again.</p>
+			</div>
+			<div className="dialog-actions">
+				<button type="button" className="button" onClick={onClose}>
+					Close
+				</button>
+				<button type="button" className="button button-primary" onClick={() => window.location.reload()} data-autofocus>
+					Reload
+				</button>
+			</div>
+		</Dialog>
+	);
+}
+
+function SettingsLoading({ onClose }: { onClose: () => void }) {
+	return (
+		<Dialog title="Mailbox settings" onClose={onClose} className="dialog-small">
+			<p className="dialog-body composer-loading" role="status">
+				<span className="spinner spinner-small" aria-hidden="true" />
+				Loading the settings…
+			</p>
+		</Dialog>
+	);
+}
 
 interface MailAppProps {
 	route: { mailboxId: string | null; view: MailView; threadId: string | null };
@@ -53,6 +92,7 @@ export function MailApp({ route, mailboxes, expandedMailboxes, onSetExpanded, na
 	const { mailboxId } = route;
 	const { profile, sync } = useProfilePoll(mailboxId, bump);
 	const { labels, error: labelsError, reload: reloadLabels } = useLabels(mailboxId);
+	const { settings: mailboxSettings, set: setMailboxSettings } = useMailboxSettings(mailboxId);
 	const listed = mailboxId ? (mailboxes?.find((mailbox) => mailbox.id === mailboxId) ?? null) : null;
 	const rights = useMemo(() => mailboxRights(mailboxes, mailboxId), [mailboxes, mailboxId]);
 	const [draft, setDraft] = useState<Draft | null>(null);
@@ -87,14 +127,16 @@ export function MailApp({ route, mailboxes, expandedMailboxes, onSetExpanded, na
 		setPageTitle(`${title}${inboxUnread > 0 ? ` (${inboxUnread})` : ""}${mailbox} – Asterra`);
 	}, [title, inboxUnread, mailboxName]);
 
+	const signature = mailboxSettings?.signature ?? "";
 	const compose = useCallback(
 		(next?: Draft) => {
 			// Nobody sends from the mailbox of an agent except the agent.
 			if (!rights.send) return;
 			closeNavRef.current();
-			setDraft(next ?? newDraft());
+			// The signature of the mailbox goes into each new message, reply and forward. The person can change it there.
+			setDraft(withSignature(next ?? newDraft(), signature));
 		},
-		[rights.send],
+		[rights.send, signature],
 	);
 
 	function sent(result: SendResult) {
@@ -148,6 +190,7 @@ export function MailApp({ route, mailboxes, expandedMailboxes, onSetExpanded, na
 						onChanged={onChanged}
 						onCompose={compose}
 						onShowHelp={() => setDialog({ type: "help" })}
+						onShowSettings={() => setDialog({ type: "settings" })}
 					/>
 					{draft && rights.send && (
 						<Composer
@@ -160,6 +203,24 @@ export function MailApp({ route, mailboxes, expandedMailboxes, onSetExpanded, na
 						/>
 					)}
 					{dialog?.type === "help" && <ShortcutHelp onClose={() => setDialog(null)} />}
+					{dialog?.type === "settings" && (
+						<Suspense fallback={<SettingsLoading onClose={() => setDialog(null)} />}>
+							<MailboxSettingsDialog
+								mailbox={{
+									id: mailboxId,
+									kind: mailboxId === null ? "personal" : isAgentMailbox(mailboxId) ? "agent" : "team",
+									address: myAddress,
+									display_name: mailboxName ?? whoami.principal.display_name,
+								}}
+								rights={rights}
+								mailboxes={mailboxes}
+								onSettingsSaved={setMailboxSettings}
+								onOpenAutoLabels={() => setDialog({ type: "auto-labels" })}
+								onChanged={onChanged}
+								onClose={() => setDialog(null)}
+							/>
+						</Suspense>
+					)}
 					{dialog?.type === "auto-labels" && (
 						<AutoLabelsDialog team={mailboxId !== null} onClose={() => setDialog(null)} onChanged={onChanged} />
 					)}

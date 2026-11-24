@@ -128,7 +128,7 @@ function NameForm({ mailbox, onChanged }: PartProps) {
  * service account. An agent or a service account also gets the scopes on its account, so it can use the
  * mailbox at once.
  */
-function MembersPart({ mailbox, principals, onChanged }: PartProps & { principals: readonly Principal[] }) {
+export function MembersPart({ mailbox, principals, onChanged }: PartProps & { principals: readonly Principal[] }) {
 	const toast = useToast();
 	const [candidateId, setCandidateId] = useState("");
 	const [newScopes, setNewScopes] = useState<MailboxMemberScope[]>([...MAILBOX_MEMBER_SCOPES]);

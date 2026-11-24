@@ -55,6 +55,8 @@ interface MailPaneProps {
 	onChanged: () => void;
 	onCompose: (draft?: Draft) => void;
 	onShowHelp: () => void;
+	/** Opens the settings of the mailbox. */
+	onShowSettings: () => void;
 }
 
 /** The main pane of one view: the toolbar, then the thread list or the open thread. */
@@ -312,6 +314,7 @@ export function MailPane(props: MailPaneProps) {
 					void list.refresh();
 					onChanged();
 				}}
+				onSettings={props.onShowSettings}
 			/>
 			{isAgentMailbox(mailboxId) ? (
 				<p className="notice read-only-notice">

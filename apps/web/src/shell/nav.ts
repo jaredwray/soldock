@@ -37,6 +37,7 @@ export type Product = "mail" | "drive" | "chat";
 export function productOf(route: Route): Product | null {
 	switch (route.page) {
 		case "mail":
+		case "mail-home":
 			return "mail";
 		case "drive":
 		case "doc":

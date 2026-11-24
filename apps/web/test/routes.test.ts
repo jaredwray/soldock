@@ -256,9 +256,9 @@ describe("routes", () => {
 		}
 	});
 
-	it("sends / and /mail to the inbox, and gives not-found for other paths", () => {
-		expect(parseRoute("/")).toEqual({ page: "redirect", to: "/mail/inbox" });
-		expect(parseRoute("/mail")).toEqual({ page: "redirect", to: "/mail/inbox" });
+	it("sends / and /mail to the inbox of the default mailbox, and gives not-found for other paths", () => {
+		expect(parseRoute("/")).toEqual({ page: "mail-home" });
+		expect(parseRoute("/mail")).toEqual({ page: "mail-home" });
 		expect(parseRoute("/connect/oar_01JD0000000000000000000000")).toEqual({
 			page: "connect",
 			requestId: "oar_01JD0000000000000000000000",

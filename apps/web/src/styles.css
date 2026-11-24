@@ -5412,6 +5412,108 @@ fieldset {
 	gap: 8px;
 }
 
+/* The settings of a mailbox, from the gear in the header of Mail. Each section saves on its own. */
+.mailbox-settings {
+	display: flex;
+	flex-direction: column;
+	gap: 16px;
+}
+
+.mailbox-settings .dialog-section {
+	display: flex;
+	flex-direction: column;
+	align-items: flex-start;
+	gap: 8px;
+	margin: 0;
+}
+
+.mailbox-settings .dialog-section > * {
+	margin: 0;
+}
+
+.mailbox-settings .dialog-section > .panel,
+.mailbox-settings .notice {
+	align-self: stretch;
+}
+
+/* The member editor of Admin › Shared mailboxes has its own title. Under Access it is a line of text. */
+.mailbox-settings .dialog-section > .panel .panel-title {
+	margin-bottom: 8px;
+	font-size: 13px;
+	font-weight: 400;
+	color: var(--muted-foreground);
+}
+
+.mailbox-member-list {
+	align-self: stretch;
+	margin: 0;
+	padding: 0;
+	list-style: none;
+}
+
+.mailbox-member {
+	display: flex;
+	flex-wrap: wrap;
+	justify-content: space-between;
+	gap: 4px 16px;
+	padding: 6px 0;
+	border-bottom: 1px solid var(--border);
+}
+
+.mailbox-member:last-child {
+	border-bottom: 0;
+}
+
+.mailbox-member-name {
+	display: flex;
+	flex-direction: column;
+	min-width: 0;
+	overflow-wrap: anywhere;
+}
+
+.mailbox-default {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	color: var(--positive);
+	overflow-wrap: anywhere;
+}
+
+.mailbox-default strong {
+	color: var(--foreground);
+}
+
+.signature-form {
+	display: flex;
+	flex-direction: column;
+	align-items: flex-start;
+	gap: 8px;
+	align-self: stretch;
+}
+
+.signature-input {
+	width: 100%;
+	resize: vertical;
+	font-family: inherit;
+}
+
+.signature-meta {
+	display: flex;
+	justify-content: space-between;
+	gap: 12px;
+	align-self: stretch;
+}
+
+.signature-hint {
+	margin: 0;
+}
+
+.signature-count {
+	flex: none;
+	margin: 0;
+	font-variant-numeric: tabular-nums;
+}
+
 /* A saved API token: a line of text and its buttons, in place of the field. */
 .ai-token-saved {
 	display: flex;

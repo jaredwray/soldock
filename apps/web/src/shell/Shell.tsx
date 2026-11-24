@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useSession } from "../features/auth/session.tsx";
-import { useMailboxes } from "../features/mail/data.ts";
+import { loadMailHomePath, useMailboxes } from "../features/mail/data.ts";
 import { MailApp } from "../features/mail/MailApp.tsx";
 import { Icon } from "../lib/icons.tsx";
 import { lazyPage } from "../lib/lazyPage.tsx";
@@ -74,6 +74,18 @@ export function Shell() {
 		if (route.page === "redirect") navigate(route.to, { replace: true });
 		else if (ownPath) navigate(ownPath, { replace: true });
 	}, [route, ownPath]);
+
+	// The start of Mail opens the inbox of the default mailbox of the person.
+	useEffect(() => {
+		if (route.page !== "mail-home") return;
+		let active = true;
+		void loadMailHomePath().then((path) => {
+			if (active) navigate(path, { replace: true });
+		});
+		return () => {
+			active = false;
+		};
+	}, [route.page]);
 
 	return (
 		<div className={needsPassword ? "app app-with-banner" : "app"}>
@@ -164,6 +176,7 @@ export function Shell() {
 			case "settings":
 				return <SettingsPage section={route.section} navOpen={navOpen} onCloseNav={() => setNavOpen(false)} />;
 			case "redirect":
+			case "mail-home":
 				return null;
 			case "not-found":
 				return <NotFound />;
