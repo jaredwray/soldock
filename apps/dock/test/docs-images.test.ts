@@ -121,6 +121,25 @@ async function drainDocument(itemId: string): Promise<void> {
 	);
 }
 
+/**
+ * Waits until the alarm of a change of the document has run, and the document set its next alarm, for the
+ * delete of the images. A change sets an alarm for the present time, and the runtime can run it at once. While
+ * it runs, the document has no alarm, so a check of the alarm in that time finds nothing.
+ */
+async function settleDocument(itemId: string): Promise<void> {
+	await vi.waitFor(
+		async () => {
+			await runDurableObjectAlarm(documentOf(itemId));
+			const state = await runInDurableObject(documentOf(itemId), async (_instance, storage) => ({
+				waiting: storage.storage.sql.exec("SELECT COUNT(*) AS n FROM pending").one().n,
+				alarm: await storage.storage.getAlarm(),
+			}));
+			if (state.waiting !== 0 || state.alarm === null) throw new Error("the alarm of the change runs");
+		},
+		{ timeout: 5000, interval: 20 },
+	);
+}
+
 /** Makes each image that the content does not use older by `ms`. */
 async function ageUnused(itemId: string, ms: number): Promise<void> {
 	await runInDurableObject(documentOf(itemId), (_instance, state) => {
@@ -436,6 +455,7 @@ describe("an image that the content does not use", () => {
 		const kept = (await upload(ada, item.id, png(10, 10))).image;
 		const unused = (await upload(ada, item.id, png(20, 20))).image;
 		await ada.call("docs.update", { item_id: item.id, content: imageIn({ id: kept.id }) });
+		await settleDocument(item.id);
 		// Before the time, the alarm deletes nothing.
 		await ageUnused(item.id, ATTACHMENT_KEEP_MS - 60_000);
 		expect(await runDurableObjectAlarm(documentOf(item.id))).toBe(true);
