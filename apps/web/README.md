@@ -1492,6 +1492,19 @@ MCP clients. The app has no UI-only path.
       goes, the focus goes to the X of the next preview, or to the box for a new message.
   - The members dialog lists the
     members, adds a person or an agent, lets the owner remove a member, and has **Leave the room**.
+    - It shows what each member can do in the room (`scopes` of `chat.get_room`, `roomScopes.ts`). Each
+      member reads the room. The owner of the room has two check boxes for each other member: **Post**
+      (`chat.write`) and **Add members** (`chat.add_members`). A click saves at once
+      (`chat.set_member_scopes`). An owner or an admin of the organization has them in a public room. A
+      different person sees **Reads only** for a member without `chat.write`.
+    - The form to add a member shows only for a member with `chat.add_members`. After the person selects
+      a principal, it asks what the new member can do, with the rights of its kind selected
+      (`offeredRights`): a person can post and add members, and an agent can post. The form does not offer
+      **Post** to a person who cannot post: a member gives only what its membership has.
+    - The toast names the scopes that an agent got on its account, and says when the room went into its
+      limits (`agent_access_changes`, `lib/accessChange.ts`).
+    - A member without `chat.write` has no box for a message. The room says **You can read this room. The
+      owner of the room can let you post.**
     The owner changes the name and the topic in a second dialog.
   - A public room that the person did not join shows **Join the room**, not its messages.
   - This layer shows the first 100 rooms of the person, and at most 100 rooms with a star after them.

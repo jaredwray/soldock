@@ -19,7 +19,7 @@
 | **Purpose** | Chat backend: rooms, direct messages, group direct messages, members and roles, messages, pins, forwarding, cards, read markers, stars, room lists, live room socket, replies in threads, follows and read markers of threads, files in messages (through Drive), link previews, search, notifications, presence, typing, room archive and delete, posting rules, retention, custom emoji, incoming webhooks, slash commands, admin tools, export, and personal activity, sections, saved messages, drafts, scheduled messages, and reminders. |
 | **Owns** | `ChatRoomDO` (the room, its members, messages, pins, `post_allowed`, `card_actions`, outboxes, idempotency keys, and live sockets); link preview pictures and custom emoji images in R2 `blobs`; D1 `DIRECTORY` tables `link_previews`, `link_preview_budget`, `chat_rooms`, `chat_members`, `chat_custom_emoji`, `chat_incoming_webhooks`, and `chat_slash_commands`; queues `soldock-chat-previews` and `soldock-chat-push`; `PrincipalDO` tables `chat_rooms`, `chat_threads`, `chat_addressed`, `chat_activity`, `chat_sections`, `chat_section_rooms`, `chat_saved_messages`, `chat_drafts`, `chat_scheduled_messages`, and `chat_reminders`; `ChatSearchDO` (organization search index). |
 | **Depends on** | `platform`, `webhooks` (the rules of a public address and the outbound policy of an agent), `identity` (the principals of new members, the credential of a request, the credential check of a socket, the `PrincipalDO` of each member), `drive` (the files of a message, and the grant of a room on a file), `api` (the call of a request on `/dl/` and slash command invocation). |
-| **Operations** | `chat.list_rooms`, `chat.create_room`, `chat.open_dm`, `chat.open_group_dm`, `chat.get_room`, `chat.update_room`, `chat.join_room`, `chat.add_members`, `chat.remove_member`, `chat.list_messages`, `chat.post_message`, `chat.list_replies`, `chat.follow_thread`, `chat.mark_thread_read`, `chat.list_threads`, `chat.list_addressed`, `chat.search_messages`, `chat.edit_message`, `chat.delete_message`, `chat.download_file`, `chat.remove_link_preview`, `chat.download_link_image`, `chat.list_message_edits`, `chat.add_reaction`, `chat.remove_reaction`, `chat.mark_read`, `chat.star_room`, `chat.pin_message`, `chat.unpin_message`, `chat.list_pins`, `chat.forward_message`, `chat.list_activity`, `chat.mark_activity_read`, `chat.list_sections`, `chat.create_section`, `chat.update_section`, `chat.delete_section`, `chat.set_room_section`, `chat.save_message`, `chat.unsave_message`, `chat.list_saved_messages`, `chat.save_draft`, `chat.delete_draft`, `chat.list_drafts`, `chat.schedule_message`, `chat.list_scheduled_messages`, `chat.update_scheduled_message`, `chat.cancel_scheduled_message`, `chat.create_reminder`, `chat.list_reminders`, `chat.complete_reminder`, `chat.delete_reminder`, `chat.archive_room`, `chat.unarchive_room`, `chat.delete_room`, `chat.set_posting_rules`, `chat.set_room_retention`, `chat.admin_list_rooms`, `chat.admin_assign_owner`, `chat.admin_remove_deleted_principal`, `chat.export_room`, `chat.create_custom_emoji`, `chat.list_custom_emoji`, `chat.delete_custom_emoji`, `chat.create_incoming_webhook`, `chat.list_incoming_webhooks`, `chat.delete_incoming_webhook`, `chat.create_slash_command`, `chat.list_slash_commands`, `chat.delete_slash_command`, `chat.invoke_slash_command`, `chat.trigger_card_action`, `chat.list_card_actions`, `chat.create_webhook_subscription`, `chat.list_webhook_subscriptions`, `chat.delete_webhook_subscription` |
+| **Operations** | `chat.list_rooms`, `chat.create_room`, `chat.open_dm`, `chat.open_group_dm`, `chat.get_room`, `chat.update_room`, `chat.join_room`, `chat.add_members`, `chat.set_member_scopes`, `chat.remove_member`, `chat.list_messages`, `chat.post_message`, `chat.list_replies`, `chat.follow_thread`, `chat.mark_thread_read`, `chat.list_threads`, `chat.list_addressed`, `chat.search_messages`, `chat.edit_message`, `chat.delete_message`, `chat.download_file`, `chat.remove_link_preview`, `chat.download_link_image`, `chat.list_message_edits`, `chat.add_reaction`, `chat.remove_reaction`, `chat.mark_read`, `chat.star_room`, `chat.pin_message`, `chat.unpin_message`, `chat.list_pins`, `chat.forward_message`, `chat.list_activity`, `chat.mark_activity_read`, `chat.list_sections`, `chat.create_section`, `chat.update_section`, `chat.delete_section`, `chat.set_room_section`, `chat.save_message`, `chat.unsave_message`, `chat.list_saved_messages`, `chat.save_draft`, `chat.delete_draft`, `chat.list_drafts`, `chat.schedule_message`, `chat.list_scheduled_messages`, `chat.update_scheduled_message`, `chat.cancel_scheduled_message`, `chat.create_reminder`, `chat.list_reminders`, `chat.complete_reminder`, `chat.delete_reminder`, `chat.archive_room`, `chat.unarchive_room`, `chat.delete_room`, `chat.set_posting_rules`, `chat.set_room_retention`, `chat.admin_list_rooms`, `chat.admin_assign_owner`, `chat.admin_remove_deleted_principal`, `chat.export_room`, `chat.create_custom_emoji`, `chat.list_custom_emoji`, `chat.delete_custom_emoji`, `chat.create_incoming_webhook`, `chat.list_incoming_webhooks`, `chat.delete_incoming_webhook`, `chat.create_slash_command`, `chat.list_slash_commands`, `chat.delete_slash_command`, `chat.invoke_slash_command`, `chat.trigger_card_action`, `chat.list_card_actions`, `chat.create_webhook_subscription`, `chat.list_webhook_subscriptions`, `chat.delete_webhook_subscription` |
 | **Live surface** | `GET /ws/chat/rooms/{room_id}` (WebSocket), and the MCP resources `chat.room`, `chat.rooms`, and `chat.addressed`. See [The socket of a room](#the-socket-of-a-room). |
 | **Downloads and hooks** | `GET /dl/chat/{room_id}/{message_id}/{item_id}` (a file, `?variant=preview` for its small picture), `GET /dl/chat/{room_id}/{message_id}/links/image?url=` (the picture of a link preview), `GET /dl/chat/emoji/{name}` (a custom emoji raster image), and `POST /hooks/chat/{webhook_id}` (signed incoming webhook endpoint). |
 | **Data inventory** | See [Data inventory](#data-inventory). Backups: not built yet. |
@@ -91,7 +91,8 @@ A room is one `ChatRoomDO`. The id of the room names the object.
   only as a member of it.
 - `chat.join_room` works for a public room only. A new member can read each message of the room,
   also the messages from before. A room has at most 500 members (`CHAT_LIMITS.membersPerRoom`).
-- Each member can add members (`chat.add_members`). The handler asks the directory for each id, so
+- A member with `chat.add_members` in its membership can add members (`chat.add_members`): see
+  [Member scopes](#member-scopes). The handler asks the directory for each id, so
   only a principal becomes a member. The room stores the name of each member at that time. The
   room checks the caller before the handler reads the directory, so a caller without access to
   the room gets the same answer for each id.
@@ -104,7 +105,7 @@ A room is one `ChatRoomDO`. The id of the room names the object.
   immediately and transfers ownership to the oldest remaining member. An admin can finish cleanup
   for larger memberships with `chat.admin_remove_deleted_principal`.
 - A direct message or group direct message keeps its members. `chat.add_members`,
-  `chat.remove_member` and `chat.update_room` refuse it with `invalid`.
+  `chat.set_member_scopes`, `chat.remove_member` and `chat.update_room` refuse it with `invalid`.
 - The scopes of the credential apply first: `chat.read` and `chat.write`. An agent key can hold
   the two scopes. An agent is a member like a person, with the same roles.
 - A [service account](../identity/README.md#service-accounts) is an agent here: a member, an author
@@ -119,6 +120,73 @@ A room is one `ChatRoomDO`. The id of the room names the object.
   (at most 20 calls), and gives no cursor to the place of the fill. A room membership that a different principal changes for a service account is an entry in its
   activity log: `admin` for an owner or an admin, and `member` for each other principal. A delete of a
   room, and an owner that an admin assigns, are entries too.
+
+## Member scopes
+
+A membership says what the member can do in the room (`ROOM_MEMBER_SCOPES`). The rule is the same for a
+person, an agent and a service account. This is the model of a
+[team mailbox](../identity/README.md#team-mailboxes), for a room.
+
+| Scope | The member can |
+| --- | --- |
+| `chat.read` | Read the room. Each member has it |
+| `chat.write` | Post, change and delete its messages, add reactions and pins, remove a link preview, and use a card action |
+| `chat.add_members` | Add members to the room |
+
+- **At the start.** A person gets the three scopes. An agent or a service account gets `chat.read` and
+  `chat.write` (`defaultRoomMemberScopes`). So an agent adds members only after somebody gives it
+  `chat.add_members`. The owner of a room has each scope. The members of a direct message have the scopes
+  of their kind.
+- **Members from before the scopes** have no stored scopes (`members.scopes` is null), and get the scopes
+  of their kind. So an agent that added members before this rule cannot add them now: the owner of the
+  room gives it `chat.add_members`. A stored value that is not a list of scopes gives only `chat.read`.
+- **Who sets them.** `chat.add_members` takes `scopes` for the new members. A member gives only the scopes
+  that its own membership has. Without `scopes`, a new member gets the scopes of its kind that the
+  membership of the caller has. `chat.set_member_scopes` changes the scopes of one member. Only the owner
+  of the room calls it, or an owner or an admin of the organization for a public room. The web app has
+  these in the members dialog of the room.
+- **Without `chat.write`,** a member reads the room and sets its own state: what it read, its star, the
+  threads that it follows and its notification level. It can leave the room. The room refuses each change
+  of what the members see (`openAsWriter`), and `can_post` of the room is false for that member.
+- **A member that leaves** with fewer scopes than its kind keeps them for its next membership (table
+  `left_scopes`). So a member of a public room that the owner limited cannot leave, join again and have
+  the scopes of its kind. A member that adds the principal again gives no more than it had. Only the owner
+  of the room gives more, with an add or with `chat.set_member_scopes`.
+- **Typing.** A socket sends no typing event for a member without `chat.write` in its membership. The room
+  reads the membership for each typing frame, so the rule applies to a socket from before the change.
+- **With the posting rules.** The posting rules of a room say who can post a new message. A post needs
+  `chat.write` in the membership and the posting rules. The other changes need only `chat.write`.
+- **With the credential.** `chat.add_members` is a scope of a membership only: no credential holds it. A
+  call needs `chat.read` or `chat.write` in its credential, as before, and its scope in the membership.
+- The room object stores the scopes and makes each check, in the step of the read or the change. The
+  index of the directory has no copy of them yet, so `directory.get_agent_access` shows the role only.
+
+### An agent as a new member
+
+A membership says what the agent can do in the room. The agent also needs the chat scopes on its account,
+and the room in its limits when it has limits ([`identity`](../identity/README.md#access-of-an-agent)).
+
+- A person who can change the access of the agent (its sponsor, an owner or an admin: `canManageAgent`)
+  and who makes it a member decided that the agent can use the room. That call gives the agent the chat
+  scopes of its membership that it does not hold, and puts the room into its limits (`widenAgentsForRoom`
+  of `identity`). The result has each change in `agent_access_changes`.
+- This applies to `chat.create_room`, `chat.add_members`, `chat.set_member_scopes`, `chat.open_dm` and
+  `chat.open_group_dm`. Each call does it, also for a member from before. So a sponsor who opens the
+  direct message with its agent again makes the agent see it.
+- A member that does not manage the agent can add it, but that membership gives the agent no new access.
+  An agent never widens a different agent. **Access** on the card of the agent marks the membership, and
+  its sponsor, an owner or an admin adds the member again or changes the limits.
+- No escalation: the credential of the call must hold each chat scope of the membership of an agent that
+  it manages (`grantableScopes`). The limits of an agent name at most 20 rooms: a membership that needs
+  place 21 gets `invalid`. The handler makes these checks before the room writes the membership.
+- The room object owns the members, and the directory owns the access of an agent. So the two writes are
+  not one transaction: the membership comes first. The write of the access matches only while
+  `access_version` is the one of the read, and the handler tries three times (`giveRoomAccess`). After
+  that, the call gets `conflict` with the members in the room, and the same call again completes the
+  access.
+- `chat.create_room` is different: a second call would make a second room. So it does not fail for an
+  agent that did not get its access. The result has the room, and `agent_access_pending` names the agent.
+  `chat.add_members` for that agent completes the access.
 
 ## Messages
 
@@ -1141,7 +1209,7 @@ Known limits:
 | State | Where | Notes |
 | --- | --- | --- |
 | The room (kind, name, topic, creator, `last_seq`, `version`) | `ChatRoomDO` table `room` | One object for each room, keyed by the room id |
-| Members, their roles, read markers and stars | `ChatRoomDO` table `members` | With a unique membership id and the name of each member at the time of the join. `starred` is 1 for a member that put its star on the room. The star goes away with the row when the member leaves. `last_typed_at` records the last accepted typing event for the three-second limit. `addressed_json` has the newest change that is for the member: ids, the reason, the version and the time, and no message text. It goes away with the row too |
+| Members, their roles, their scopes, read markers and stars | `ChatRoomDO` table `members` | With a unique membership id and the name of each member at the time of the join. `scopes` has the scopes of the member in the room as a JSON list, or null for the scopes of its kind ([Member scopes](#member-scopes)). The table `left_scopes` has the scopes of a principal that left the room with fewer scopes than its kind, until it is a member again. `starred` is 1 for a member that put its star on the room. The star goes away with the row when the member leaves. `last_typed_at` records the last accepted typing event for the three-second limit. `addressed_json` has the newest change that is for the member: ids, the reason, the version and the time, and no message text. It goes away with the row too |
 | Messages | `ChatRoomDO` table `messages` | The plain text, and the body as JSON (`body_json`, null for a message from before the bodies). The text and the body of a deleted message are gone. The row stays. Each row has the idempotency key of its send, or null. A delete removes the key. A reply has `parent_id` and `also_in_room`. A parent keeps the summary of its replies (`reply_count`, `last_reply_at`, `reply_authors_json`) |
 | Mentions | `ChatRoomDO` table `mentions` | One row for each principal that a message mentions, without its author, and one row (`group:here`, `group:channel`) for each group that it mentions, with the `seq` of the message. A post and an edit write the rows of the message again. A delete of the message removes its rows. The migration that adds the table fills it from the stored messages |
 | Thread follows | `ChatRoomDO` table `thread_follows` | One row for each member and thread that it follows, stopped, or read: the follow (1, 0 after a stop, or null for a marker only), the `seq` of the newest reply that the member read, and the time of the newest reply of the thread (`last_reply_at`, which each new or deleted reply writes for each follow of its thread). A new reply, `chat.follow_thread` and `chat.mark_thread_read` write it. The migration that adds the table fills it from the stored replies. A member that leaves loses its rows |

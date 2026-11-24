@@ -337,10 +337,10 @@ describe("a limited service account", () => {
 });
 
 describe("the limits of a new agent", () => {
-	// A new agent has no membership. Each member of a room can add the agent to the room. That membership must
-	// not widen what the agent reaches: only a manager of the agent does that, with the limits. Only an owner
-	// or an admin adds a member to a team mailbox, so that membership gives the access itself.
-	it("keep the agent in its own mailbox and drive until a manager adds a room to them or adds it to a team mailbox", async () => {
+	// A new agent has no membership. Each member of a room with chat.add_members can add the agent to the
+	// room. That membership must not widen what the agent reaches: only a manager of the agent does that. A
+	// manager who makes the agent a member of a room or of a team mailbox gives the access with the membership.
+	it("keep the agent in its own mailbox and drive until a manager makes it a member of a room or of a team mailbox", async () => {
 		const { owner, ada } = await seedOrg();
 		const created = await owner.call("directory.create_principal", {
 			kind: "agent",
@@ -357,7 +357,14 @@ describe("the limits of a new agent", () => {
 		expect((await agent("mail.list_threads", {})).threads).toEqual([]);
 		expect((await agent("drive.list_items", {})).items).toEqual([]);
 
-		const { room } = await ada.call("chat.create_room", { kind: "private", name: "Builds", member_ids: [id] });
+		// Cy does not manage the agent: Ada is its sponsor, and Cy is not an admin.
+		const cy = await createActor(owner, {
+			kind: "human",
+			display_name: "Cy",
+			address: "cy@dock.test",
+			password: PASSWORD,
+		});
+		const { room } = await cy.call("chat.create_room", { kind: "private", name: "Builds", member_ids: [id, ada.id] });
 		const { team_mailbox: team } = await owner.call("directory.create_team_mailbox", {
 			display_name: "Support",
 			address: "support@dock.test",
@@ -371,11 +378,13 @@ describe("the limits of a new agent", () => {
 		expect((await agent("mail.list_mailboxes")).mailboxes.map((mailbox) => mailbox.id)).toEqual([id, team.id]);
 		expect((await agent("mail.list_threads", { mailbox_id: team.id })).threads).toEqual([]);
 
-		// The sponsor adds the room, and names only the own mailbox. The agent reaches the room at its next
-		// call, and no longer the team mailbox: the limits still apply on top of the membership.
-		await setLimits(ada, id, { ...own, room_ids: [room.id] });
+		// The sponsor names the agent again in the room. The agent reaches the room at its next call.
+		await ada.call("chat.add_members", { room_id: room.id, principal_ids: [id] });
 		expect((await agent("chat.list_rooms", {})).rooms.map((listed) => listed.id)).toEqual([room.id]);
 		expect((await agent("chat.list_messages", { room_id: room.id })).messages).toEqual([]);
+		// The limits still apply on top of the memberships: the sponsor names only the own mailbox and the
+		// room, and the agent no longer reaches the team mailbox.
+		await setLimits(ada, id, { ...own, room_ids: [room.id] });
 		expect(await codeOf(agent("mail.list_threads", { mailbox_id: team.id }))).toBe("forbidden");
 	});
 });

@@ -17,6 +17,7 @@ import {
 import { prefixedId, Timestamp } from "./common.ts";
 import { Actor } from "./drive.ts";
 import { defineOperation } from "./operation.ts";
+import { AgentAccessChange } from "./restrictions.ts";
 import { z } from "./zod.ts";
 
 const READ = { readOnly: true, destructive: false, idempotent: true, openWorld: false } as const;
@@ -657,7 +658,7 @@ export const openGroupDm = defineOperation({
 	input: z.strictObject({
 		principal_ids: z.array(PrincipalId).min(1).max(CHAT_LIMITS.groupDmOthersMax),
 	}),
-	output: z.object({ room: ChatRoom }),
+	output: z.object({ room: ChatRoom, agent_access_changes: z.array(AgentAccessChange).default([]) }),
 	errors: ["not_found", "invalid"],
 });
 

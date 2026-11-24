@@ -52,6 +52,19 @@ export type NewAgentLimits = z.infer<typeof NewAgentLimits>;
 export type ResourceKind = "mailbox" | "drive" | "room";
 
 /**
+ * What a call changed on an agent or a service account, for its membership of a team mailbox or a room. The
+ * membership says what the agent can do in the resource. The agent also gets what it needs to use it.
+ */
+export const AgentAccessChange = z.object({
+	principal_id: z.string(),
+	/** The scopes that the agent got on its account. They also apply to its own mailbox, and to each room. */
+	scopes_added: z.array(z.string()),
+	/** True when the call added the mailbox or the room to the resource limits of the agent. */
+	limits_widened: z.boolean(),
+});
+export type AgentAccessChange = z.infer<typeof AgentAccessChange>;
+
+/**
  * One input field that names a resource. `absent` says what a call without the field means: `own` is the
  * own mailbox or drive of the caller, `none` names no resource, and `refuse` refuses the call for a limited
  * agent. `value: "own"` means that each value comes from the own drive of the caller (for example the files
@@ -187,6 +200,7 @@ export const RESOURCE_RULES: Readonly<Record<string, ResourceRule>> = {
 	"chat.join_room": IN_ROOM,
 	"chat.add_members": IN_ROOM,
 	"chat.remove_member": IN_ROOM,
+	"chat.set_member_scopes": IN_ROOM,
 	"chat.list_messages": IN_ROOM,
 	// The files of a message come from the own drive of the author.
 	"chat.post_message": check(ROOM, { field: "file_ids", resource: "drive", absent: "none", value: "own" }),

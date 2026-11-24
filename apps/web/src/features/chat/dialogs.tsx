@@ -10,6 +10,7 @@ import {
 	useRef,
 	useState,
 } from "react";
+import { accessChangeText } from "../../lib/accessChange.ts";
 import { accountChangeCount } from "../../lib/account.ts";
 import { api, errorMessage } from "../../lib/api.ts";
 import { useNotificationSettings } from "../../lib/chatNotificationSettings.tsx";
@@ -20,11 +21,12 @@ import { isAutomated, kindTag } from "../../lib/principalKind.ts";
 import { Select } from "../../lib/Select.tsx";
 import { useToast } from "../../lib/toast.tsx";
 import { principalOption, usePrincipals } from "../../lib/usePrincipals.ts";
-import { useSession } from "../auth/session.tsx";
+import { isOrgAdmin, useSession } from "../auth/session.tsx";
 import { roomTitle } from "./model.ts";
 import { Presence } from "./Presence.tsx";
 import { RoomAdvancedSettings } from "./RoomAdvancedSettings.tsx";
 import { type RoomNotificationChoice, RoomNotificationChoices } from "./RoomNotifications.tsx";
+import { type MemberRights, offeredRights, rightsOf, rightsText, scopesOf } from "./roomScopes.ts";
 
 /** Creates a public or a private room. The person becomes its owner. */
 export function NewRoomDialog({ onClose, onCreated }: { onClose: () => void; onCreated: (room: ChatRoom) => void }) {
@@ -419,18 +421,29 @@ interface MembersDialogProps {
 }
 
 /**
- * The members of a room. Each member adds people and agents. The owner removes a member. Each member
- * can leave. A direct message keeps its two members, so it shows the list only.
+ * The members of a room, with what each one can do in it. Each member reads the room. A member with
+ * `chat.write` posts, and a member with `chat.add_members` adds people and agents: the form asks what the
+ * new member can do. The owner of the room changes these scopes with the check boxes of a member
+ * (`chat.set_member_scopes`), and an owner or an admin of the organization does this in a public room. The
+ * owner removes a member. Each member can leave. A direct message keeps its two members, so it shows the
+ * list only.
  */
 export function MembersDialog({ room, onClose, onChanged, onLeft }: MembersDialogProps) {
-	const ownId = useSession().whoami.principal.id;
+	const self = useSession().whoami.principal;
+	const ownId = self.id;
+	const toast = useToast();
 	const principals = usePrincipals();
 	const [members, setMembers] = useState<ChatMember[] | null>(null);
 	const [error, setError] = useState<string | null>(null);
 	const [busy, setBusy] = useState(false);
 	const [principalId, setPrincipalId] = useState("");
+	/** The rights that the person selected for the new member. Null: the rights that the form offers for its kind. */
+	const [chosen, setChosen] = useState<MemberRights | null>(null);
 	const personId = useId();
-	const fixed = room.kind === "dm";
+	const fixed = room.kind === "dm" || room.kind === "group_dm";
+	// The owner of the room has each scope. The list tells what the membership of the person has.
+	const mine = rightsOf(members?.find((member) => member.principal_id === ownId)?.scopes ?? []);
+	const canSetScopes = !fixed && (room.role === "owner" || (room.kind === "public" && isOrgAdmin(self)));
 
 	const load = useCallback(async () => {
 		try {
@@ -455,16 +468,43 @@ export function MembersDialog({ room, onClose, onChanged, onLeft }: MembersDialo
 		setBusy(false);
 	}
 
+	const candidate = (principals ?? []).find((principal) => principal.id === principalId) ?? null;
+	const offered = offeredRights(candidate?.kind === "human" ? "human" : "agent", mine);
+	const rights = chosen ?? offered;
+
 	const add = (event: FormEvent<HTMLFormElement>) => {
 		event.preventDefault();
-		if (!principalId) return;
+		if (!candidate) return;
 		void run(async () => {
-			await api.call("chat.add_members", { room_id: room.id, principal_ids: [principalId] });
+			const result = await api.call("chat.add_members", {
+				room_id: room.id,
+				principal_ids: [candidate.id],
+				scopes: scopesOf(rights),
+			});
+			toast({
+				message: `${candidate.display_name} can now ${rightsText(rights)} in ${roomTitle(room)}.${accessChangeText(candidate.display_name, result.agent_access_changes, "room")}`,
+			});
 			setPrincipalId("");
+			setChosen(null);
 			await load();
 			onChanged();
 		});
 	};
+
+	/** Sets what a member can do in the room. The change applies at the next call of the member. */
+	const setRights = (member: ChatMember, next: MemberRights) =>
+		run(async () => {
+			const result = await api.call("chat.set_member_scopes", {
+				room_id: room.id,
+				principal_id: member.principal_id,
+				scopes: scopesOf(next),
+			});
+			toast({
+				message: `${member.display_name} can now ${rightsText(next)} in ${roomTitle(room)}.${accessChangeText(member.display_name, result.agent_access_changes, "room")}`,
+			});
+			await load();
+			onChanged();
+		});
 
 	const remove = (member: ChatMember) =>
 		run(async () => {
@@ -484,22 +524,59 @@ export function MembersDialog({ room, onClose, onChanged, onLeft }: MembersDialo
 
 	return (
 		<Dialog title={`Members of ${roomTitle(room)}`} onClose={onClose}>
-			{!fixed && room.role !== null && (
-				<form className="chat-browse-search" onSubmit={add} noValidate>
-					<label htmlFor={personId} className="visually-hidden">
-						Person or agent to add
-					</label>
-					<Select
-						id={personId}
-						value={principalId}
-						options={candidates.map(principalOption)}
-						placeholder="Add a person or an agent…"
-						onChange={setPrincipalId}
-						disabled={busy || principals === null}
-					/>
-					<button type="submit" className="button button-primary" disabled={busy || !principalId}>
-						Add
-					</button>
+			{!fixed && mine.addMembers && (
+				<form className="chat-member-add" onSubmit={add} noValidate>
+					<div className="chat-browse-search">
+						<label htmlFor={personId} className="visually-hidden">
+							Person or agent to add
+						</label>
+						<Select
+							id={personId}
+							value={principalId}
+							options={candidates.map(principalOption)}
+							placeholder="Add a person or an agent…"
+							onChange={(id) => {
+								setPrincipalId(id);
+								setChosen(null);
+							}}
+							disabled={busy || principals === null}
+						/>
+						<button type="submit" className="button button-primary" disabled={busy || !candidate}>
+							Add
+						</button>
+					</div>
+					{candidate && (
+						<fieldset className="scope-inline">
+							<legend className="field-label">{candidate.display_name} can read the room, and</legend>
+							<label className="check-row check-row-inline">
+								<input
+									type="checkbox"
+									className="checkbox"
+									checked={rights.write}
+									onChange={() => setChosen({ ...rights, write: !rights.write })}
+									// A member gives only what its own membership has.
+									disabled={busy || !mine.write}
+								/>
+								<span>Post</span>
+							</label>
+							<label className="check-row check-row-inline">
+								<input
+									type="checkbox"
+									className="checkbox"
+									checked={rights.addMembers}
+									onChange={() => setChosen({ ...rights, addMembers: !rights.addMembers })}
+									disabled={busy}
+								/>
+								<span>Add members</span>
+							</label>
+							{isAutomated(candidate.kind) && (
+								<p className="field-hint">
+									When you manage this agent, it also gets these chat scopes on its account, so it can use the room at
+									once.
+								</p>
+							)}
+						</fieldset>
+					)}
 				</form>
 			)}
 			{error && (
@@ -530,7 +607,42 @@ export function MembersDialog({ room, onClose, onChanged, onLeft }: MembersDialo
 								</span>
 								<Presence id={member.principal_id} agent={member.kind === "agent"} />
 								{member.role === "owner" && <span className="muted">Owner of the room</span>}
+								{member.role !== "owner" && !canSetScopes && !rightsOf(member.scopes).write && (
+									<span className="muted">Reads only</span>
+								)}
 							</span>
+							{canSetScopes && member.role !== "owner" && (
+								<fieldset className="scope-inline chat-member-scopes">
+									<legend className="visually-hidden">What {member.display_name} can do in the room</legend>
+									<label className="check-row check-row-inline">
+										<input
+											type="checkbox"
+											className="checkbox"
+											checked={rightsOf(member.scopes).write}
+											onChange={() =>
+												void setRights(member, { ...rightsOf(member.scopes), write: !rightsOf(member.scopes).write })
+											}
+											disabled={busy}
+										/>
+										<span>Post</span>
+									</label>
+									<label className="check-row check-row-inline">
+										<input
+											type="checkbox"
+											className="checkbox"
+											checked={rightsOf(member.scopes).addMembers}
+											onChange={() =>
+												void setRights(member, {
+													...rightsOf(member.scopes),
+													addMembers: !rightsOf(member.scopes).addMembers,
+												})
+											}
+											disabled={busy}
+										/>
+										<span>Add members</span>
+									</label>
+								</fieldset>
+							)}
 							{!fixed && room.role === "owner" && member.principal_id !== ownId && (
 								<button
 									type="button"

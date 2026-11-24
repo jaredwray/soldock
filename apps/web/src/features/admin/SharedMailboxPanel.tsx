@@ -6,6 +6,7 @@ import {
 	type TeamMailbox,
 } from "@asterra/contracts";
 import { type FormEvent, useId, useState } from "react";
+import { accessChangeText } from "../../lib/accessChange.ts";
 import { api, errorMessage } from "../../lib/api.ts";
 import { ConfirmDialog } from "../../lib/ConfirmDialog.tsx";
 import { actorKind, KIND_NAMES } from "../../lib/principalKind.ts";
@@ -14,7 +15,7 @@ import { useToast } from "../../lib/toast.tsx";
 import { principalOption } from "../../lib/usePrincipals.ts";
 import { TargetWebhooks } from "../settings/TargetWebhooks.tsx";
 import { AdminCard } from "./AdminCard.tsx";
-import { accessChangeText, MAILBOX_SCOPE_NAMES, memberScopes, scopesText, toggleMemberScope } from "./mailboxScopes.ts";
+import { MAILBOX_SCOPE_NAMES, memberScopes, scopesText, toggleMemberScope } from "./mailboxScopes.ts";
 
 // The UI says "shared mailbox". The operations and the mail paths keep the name "team mailbox".
 
@@ -153,7 +154,7 @@ function MembersPart({ mailbox, principals, onChanged }: PartProps & { principal
 			});
 			onChanged(result.team_mailbox);
 			toast({
-				message: `${principal.display_name} can now ${scopesText(scopes)} in ${mailbox.display_name}.${accessChangeText(principal.display_name, result.agent_access_changes)}`,
+				message: `${principal.display_name} can now ${scopesText(scopes)} in ${mailbox.display_name}.${accessChangeText(principal.display_name, result.agent_access_changes, "mailbox")}`,
 			});
 		} catch (caught) {
 			setError(errorMessage(caught));
@@ -183,7 +184,7 @@ function MembersPart({ mailbox, principals, onChanged }: PartProps & { principal
 			setNewScopes([...MAILBOX_MEMBER_SCOPES]);
 			onChanged(result.team_mailbox);
 			toast({
-				message: `${principal.display_name} can now ${scopesText(newScopes)} in ${mailbox.display_name}.${accessChangeText(principal.display_name, result.agent_access_changes)}`,
+				message: `${principal.display_name} can now ${scopesText(newScopes)} in ${mailbox.display_name}.${accessChangeText(principal.display_name, result.agent_access_changes, "mailbox")}`,
 			});
 		} catch (caught) {
 			setError(errorMessage(caught));

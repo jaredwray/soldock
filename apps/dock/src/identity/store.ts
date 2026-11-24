@@ -853,16 +853,18 @@ export interface AgentWidening {
 }
 
 /**
- * The statement that writes the scopes and the limits that a membership of a team mailbox gives to an agent.
- * It goes into the batch that writes the membership, so the two writes are one transaction. It matches only
+ * The statement that writes the scopes and the limits that a membership gives to an agent. It matches only
  * while the access of the agent is the access of the read (`access_version`), so a parallel change of the
- * access is never lost. It also matches only when the batch wrote the membership: an agent never gets the
- * access without it.
+ * access is never lost.
+ *
+ * With `mailboxId`, the statement goes into the batch that writes the membership of a team mailbox, so the
+ * two writes are one transaction. It then matches only when the batch wrote the membership: an agent never
+ * gets the access without it.
  */
 export function widenAgentAccessStatement(
 	db: D1Database,
 	widening: AgentWidening,
-	mailboxId: string,
+	mailboxId: string | null,
 ): D1PreparedStatement {
 	const { agent } = widening;
 	const ceiling = scopeCeiling({ kind: "agent", service: agent.service });
@@ -870,7 +872,7 @@ export function widenAgentAccessStatement(
 		.prepare(
 			`UPDATE principals SET agent_scopes = ?2, agent_resources = ?3, access_version = access_version + 1
 			WHERE id = ?1 AND kind = 'agent' AND service = ?4 AND deleted_at IS NULL AND access_version = ?5
-			AND EXISTS (SELECT 1 FROM team_mailbox_members WHERE mailbox_id = ?6 AND principal_id = ?1)`,
+			AND (?6 IS NULL OR EXISTS (SELECT 1 FROM team_mailbox_members WHERE mailbox_id = ?6 AND principal_id = ?1))`,
 		)
 		.bind(
 			agent.id,
@@ -880,6 +882,16 @@ export function widenAgentAccessStatement(
 			agent.access_version,
 			mailboxId,
 		);
+}
+
+/**
+ * Writes the access that a membership of a room gives to an agent. The room object owns the membership, so
+ * this write is not in a transaction with it. Returns false when a parallel change of the access came first:
+ * the caller reads the agent again.
+ */
+export async function widenAgentAccess(db: D1Database, widening: AgentWidening): Promise<boolean> {
+	const result = await widenAgentAccessStatement(db, widening, null).run();
+	return result.meta.changes === 1;
 }
 
 /** The changes of `updatePrincipal`. A field that is undefined does not change. */

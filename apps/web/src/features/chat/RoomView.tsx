@@ -1194,7 +1194,10 @@ export function RoomView({
 						<p className="chat-readonly-banner" role="status">
 							{room.archived_at !== null
 								? "This room is archived. Messages are read-only."
-								: "Posting in this room is restricted by its posting rules."}
+								: room.posting_policy === "members"
+									? // Each member can post by the rules of the room, so the membership has no chat.write.
+										"You can read this room. The owner of the room can let you post."
+									: "Posting in this room is restricted by its posting rules."}
 						</p>
 					) : (
 						<form
