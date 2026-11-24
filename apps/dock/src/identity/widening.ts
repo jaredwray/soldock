@@ -11,17 +11,21 @@ import type { CallContext } from "./auth.ts";
 import { endEventSockets } from "./principal.ts";
 import { type AgentWidening, getPrincipal, getPrincipals, type PrincipalRecord, widenAgentAccess } from "./store.ts";
 
-// What a membership gives to an agent or a service account. A membership of a team mailbox or a room says
-// what the agent can do in that resource. The agent also needs the scopes on its account, and the resource
+// What a membership gives to an agent or a service account. A membership of a team mailbox, a room or a shared
+// drive says what the agent can do in that resource. The agent also needs the scopes on its account, and the resource
 // in its limits when it has limits. A person who can change the access of the agent, and who makes it a
 // member, decided that the agent can use the resource. So that call gives the agent this access too, and
 // nobody sets its permissions a second time.
 
-/** The resources whose memberships widen an agent. A shared drive gets the same rule later. */
-type WidenedKind = "mailbox" | "room";
+/** The resources whose memberships widen an agent. */
+type WidenedKind = "mailbox" | "room" | "drive";
 
-const LISTS: Record<WidenedKind, "mailbox_ids" | "room_ids"> = { mailbox: "mailbox_ids", room: "room_ids" };
-const NAMES: Record<WidenedKind, string> = { mailbox: "mailboxes", room: "rooms" };
+const LISTS: Record<WidenedKind, "mailbox_ids" | "room_ids" | "drive_ids"> = {
+	mailbox: "mailbox_ids",
+	room: "room_ids",
+	drive: "drive_ids",
+};
+const NAMES: Record<WidenedKind, string> = { mailbox: "mailboxes", room: "rooms", drive: "drives" };
 
 /** The name of an agent or a service account in a refusal. */
 function agentNoun(agent: Pick<PrincipalRecord, "service">): string {
@@ -111,8 +115,8 @@ export function toAccessChange(widening: MemberWidening): AgentAccessChange {
 /** The tries of a write that a parallel change of the access of an agent made match nothing. */
 export const WIDENING_TRIES = 3;
 
-/** One member of a room, with the scopes of its membership. */
-export interface RoomMembership {
+/** One member of a room or a shared drive, with the scopes of its membership. */
+export interface Membership {
 	principal_id: string;
 	scopes: readonly string[];
 }
@@ -128,8 +132,8 @@ function credentialScopes(scopes: readonly string[]): Scope[] {
  * `directory.write`, as `directory.set_agent_access` needs it. So a key of a manager with only the chat
  * scopes changes no agent. An archived agent gets no change.
  *
- * A member of a room can add an agent that it does not manage. That membership gives the agent no new
- * access: only a manager of the agent does that.
+ * A member of a room, or a manager of a shared drive, can add an agent that it does not manage. That
+ * membership gives the agent no new access: only a manager of the agent does that.
  */
 export function managedAgents(call: CallContext, principals: readonly PrincipalRecord[]): PrincipalRecord[] {
 	if (!call.caller.scopes.has("directory.write")) return [];
@@ -140,53 +144,86 @@ export function managedAgents(call: CallContext, principals: readonly PrincipalR
 }
 
 /**
- * Refuses a membership of a room that gives an agent a scope that the credential of the call does not hold
- * (`grantableScopes`), before the room writes the membership. Only the scopes that the agent would get
- * count: a call that gives the agent nothing, for example one that removes a scope, needs no scope for it.
- * `scopes` gives the scopes that the membership of a principal gets.
+ * The scopes that the credential of a call must hold for the access that a membership gives to an agent. A
+ * narrow key cannot give what it does not hold.
+ *
+ * - The resource goes into the limits of the agent: each scope of the membership. The limits then let each of
+ *   these scopes reach the resource, also a scope that the agent held before.
+ * - The limits do not change: only the scopes that the agent gets. A call that gives the agent nothing, for
+ *   example one that removes a scope, needs no scope for it.
+ *
+ * `id` is undefined for a resource that does not exist yet.
  */
-export function assertRoomGrants(
+function scopesToGrant(
+	agent: PrincipalRecord,
+	kind: "room" | "drive",
+	id: string | undefined,
+	scopes: readonly Scope[],
+): Scope[] {
+	const limits = agent.agent_resources;
+	const widens = limits !== null && (id === undefined || !limits[LISTS[kind]].includes(id));
+	return widens ? [...scopes] : scopes.filter((scope) => !agent.agent_scopes.includes(scope));
+}
+
+/**
+ * Refuses a membership of a room or a shared drive that gives an agent an access that the credential of the
+ * call cannot give (`scopesToGrant`, `grantableScopes`), before the object of the resource writes the
+ * membership. `scopes` gives the scopes that the membership of a principal gets. `id` is the id of the
+ * resource, or undefined for a new one.
+ */
+export function assertMemberGrants(
 	call: CallContext,
+	kind: "room" | "drive",
+	id: string | undefined,
 	principals: readonly PrincipalRecord[],
 	scopes: (principal: PrincipalRecord) => readonly string[],
 ): void {
 	for (const agent of managedAgents(call, principals)) {
-		const held = agent.agent_scopes;
-		const added = credentialScopes(scopes(agent)).filter((scope) => !held.includes(scope));
-		if (added.length > 0) grantableScopes(call.caller, agent, added);
+		const needed = scopesToGrant(agent, kind, id, credentialScopes(scopes(agent)));
+		if (needed.length > 0) grantableScopes(call.caller, agent, needed);
 	}
 }
 
-/** The result of `giveRoomAccess`: the changes that it wrote, and the agents that still need their access. */
-export interface RoomAccessResult {
+/** The result of `giveMemberAccess`: the changes that it wrote, and the agents that still need their access. */
+export interface MemberAccessResult {
 	changes: AgentAccessChange[];
 	/**
-	 * The agents that the caller manages, that are members of the room, and that did not get the access of
-	 * their membership. Their limits have no place for the room, or a different call changed their access at
-	 * the same time. The membership is in the room. A later call for the member completes the access.
+	 * The agents that the caller manages, that are members of the resource, and that did not get the access of
+	 * their membership. Their limits have no place for the resource, or a different call changed their access
+	 * at the same time. The membership is in the resource. A later call for the member completes the access.
 	 */
 	pending: string[];
 }
 
+/** The fields of a result that tell what the call changed on the agents that the caller manages. */
+export function accessOutput(access: MemberAccessResult): {
+	agent_access_changes: AgentAccessChange[];
+	agent_access_pending: string[];
+} {
+	return { agent_access_changes: access.changes, agent_access_pending: access.pending };
+}
+
 /**
- * Gives each agent that the caller manages the access of its membership of a room: the chat scopes of the
- * membership that it does not hold, and the room in its limits when it has limits. The room object owns the
- * members, and the directory owns the access of an agent, so the two writes are not one transaction. The
- * membership comes first. This write is idempotent: when it does not complete, a later call completes it.
+ * Gives each agent that the caller manages the access of its membership of a room or a shared drive: the
+ * scopes of the membership that it does not hold, and the resource in its limits when it has limits. The
+ * object of the room or the drive owns the members, and the directory owns the access of an agent, so the
+ * two writes are not one transaction. The membership comes first. This write is idempotent: when it does
+ * not complete, a later call completes it.
  *
  * The write matches only while the access of the agent is the access of the read (`access_version`), so a
  * parallel change of the access is not lost. It also matches only while a sponsor who is not an admin is
  * still the sponsor. The function reads the agent and tries again.
  *
- * It does not throw for an agent that it cannot complete. The membership is in the room, so the call
- * returns its result, and `pending` names the agent. `release` is `releaseLimits` of the room.
+ * It does not throw for an agent that it cannot complete. The membership is in the resource, so the call
+ * returns its result, and `pending` names the agent. `release` is `releaseLimits` of the room or the drive.
  */
-export async function giveRoomAccess(
+export async function giveMemberAccess(
 	call: CallContext,
-	roomId: string,
-	members: readonly RoomMembership[],
+	kind: "room" | "drive",
+	id: string,
+	members: readonly Membership[],
 	release: (agent: PrincipalRecord) => Promise<boolean>,
-): Promise<RoomAccessResult> {
+): Promise<MemberAccessResult> {
 	const { DIRECTORY } = call.env;
 	const scopesOf = new Map(members.map((member) => [member.principal_id, credentialScopes(member.scopes)]));
 	// A sponsor who is not an admin acts only while the agent still has that sponsor, in the write itself.
@@ -197,13 +234,14 @@ export async function giveRoomAccess(
 	for (let attempt = 0; agents.length > 0 && attempt < WIDENING_TRIES; attempt++) {
 		const lost: string[] = [];
 		for (const agent of agents) {
-			const widening = agentWidening(agent, "room", roomId, scopesOf.get(agent.id) ?? []);
+			const widening = agentWidening(agent, kind, id, scopesOf.get(agent.id) ?? []);
 			if (!widening) continue;
 			try {
-				// The handler checked the scopes before the room wrote the membership. A parallel change of the
-				// agent can make the check fail now. The limits can have no place for one more room.
-				if (widening.added.length > 0) grantableScopes(call.caller, agent, widening.added);
-				if (widening.resources !== agent.agent_resources) assertPlaceInLimits(agent, "room", roomId);
+				// The handler checked the scopes before the write of the membership. A parallel change of the
+				// agent can make the check fail now. The limits can have no place for one more resource.
+				const needed = scopesToGrant(agent, kind, id, scopesOf.get(agent.id) ?? []);
+				if (needed.length > 0) grantableScopes(call.caller, agent, needed);
+				if (widening.resources !== agent.agent_resources) assertPlaceInLimits(agent, kind, id);
 			} catch (error) {
 				if (!(error instanceof OperationError)) throw error;
 				refused.push(agent.id);
@@ -214,9 +252,9 @@ export async function giveRoomAccess(
 				continue;
 			}
 			await afterWidening(call, widening);
-			// A different call can remove the member between the write of the room and this write. Its own write
-			// of the limits came first, and found no room in them. So the room takes the limits back for a
-			// principal that is not a member now. The room does that in one step with the read of its members.
+			// A different call can remove the member between the write of the membership and this write. Its own
+			// write of the limits came first, and found no resource in them. So the object of the resource takes
+			// the limits back for a principal that is not a member now, in one step with the read of its members.
 			if (widening.resources !== agent.agent_resources && (await release(agent))) continue;
 			changes.push(toAccessChange(widening));
 		}
@@ -226,8 +264,9 @@ export async function giveRoomAccess(
 }
 
 /**
- * The effects of a remove that took the room out of the limits of an agent: the log gets a line, and the live
- * connections of the agent end. The room object makes the write, in one step with the remove.
+ * The effects of a remove that took the room or the shared drive out of the limits of an agent: the log gets a
+ * line, and the live connections of the agent end. The object of the resource makes the write, in one step
+ * with the remove.
  */
 export async function afterLimitsDrop(call: CallContext, principalId: string): Promise<void> {
 	const agent = await getPrincipal(call.env.DIRECTORY, principalId);

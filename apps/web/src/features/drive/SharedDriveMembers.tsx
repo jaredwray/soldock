@@ -6,14 +6,15 @@ import {
 	type SharedDriveRole,
 } from "@asterra/contracts";
 import { type FormEvent, useCallback, useEffect, useId, useMemo, useState } from "react";
+import { driveAccessText } from "../../lib/accessChange.ts";
 import { api, errorMessage } from "../../lib/api.ts";
 import { ConfirmDialog } from "../../lib/ConfirmDialog.tsx";
 import { Dialog } from "../../lib/Dialog.tsx";
-import { KIND_NAMES } from "../../lib/principalKind.ts";
+import { isAutomated, KIND_NAMES } from "../../lib/principalKind.ts";
 import { Select } from "../../lib/Select.tsx";
 import { useToast } from "../../lib/toast.tsx";
 import { principalOption, usePrincipals } from "../../lib/usePrincipals.ts";
-import { isLastManager, memberRoles, ROLE_HINT, ROLE_NAMES, roleOptions } from "./sharedDrives.ts";
+import { AGENT_ROLE_HINT, isLastManager, memberRoles, ROLE_HINT, ROLE_NAMES, roleOptions } from "./sharedDrives.ts";
 
 // The members and the name of one shared drive. Admin › Shared drives shows these parts in a card.
 // Drive shows them in a dialog. The parts use only the styles of the shell, because Admin does not
@@ -99,6 +100,8 @@ interface MembersPartProps {
 	selfId: string;
 	/** True for a manager of the drive, an owner or an admin. Each other member sees the list only. */
 	canManage: boolean;
+	/** The agents that did not get the access of their membership in the call that created the drive. */
+	pendingIds?: readonly string[] | undefined;
 	/** Called after each change, with the drive as it is now. */
 	onChanged: (drive: SharedDrive) => void;
 	/** Called after the person removed themselves and has no other access to the drive. */
@@ -116,6 +119,7 @@ export function SharedDriveMembersPart({
 	principals,
 	selfId,
 	canManage,
+	pendingIds,
 	onChanged,
 	onLeft,
 }: MembersPartProps) {
@@ -127,6 +131,8 @@ export function SharedDriveMembersPart({
 	const [busy, setBusy] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 	const [removing, setRemoving] = useState<Principal | null>(null);
+	// The agents that did not get the access of their membership, in a call of this part or in the create call.
+	const [pending, setPending] = useState<ReadonlySet<string>>(() => new Set(pendingIds));
 	const ids = { heading: useId(), select: useId(), role: useId(), hint: useId(), lastManager: useId() };
 	const byId = useMemo(() => new Map(principals.map((principal) => [principal.id, principal])), [principals]);
 
@@ -166,10 +172,20 @@ export function SharedDriveMembersPart({
 			});
 			setMembers(result.members);
 			onChanged(result.shared_drive);
+			setPending((current) => {
+				const next = new Set(current);
+				next.delete(principal.id);
+				for (const id of result.agent_access_pending) next.add(id);
+				return next;
+			});
+			// An agent that the person manages gets the scopes of its role and the drive in its limits.
+			const access = driveAccessText(result, () => principal.display_name);
 			toast({
-				message: added
-					? `${principal.display_name} is now a member of ${driveName}.`
-					: `${principal.display_name} is now ${next === "editor" ? "an" : "a"} ${next} of ${driveName}.`,
+				message: `${
+					added
+						? `${principal.display_name} is now a member of ${driveName}.`
+						: `${principal.display_name} is now ${next === "editor" ? "an" : "a"} ${next} of ${driveName}.`
+				}${access}`,
 			});
 			return true;
 		} catch (caught) {
@@ -267,6 +283,20 @@ export function SharedDriveMembersPart({
 														A shared drive keeps at least one manager.
 													</div>
 												)}
+												{/* The role menu sends no call for the role that the member has. This button does. */}
+												{canManage && principal && pending.has(member.principal_id) && (
+													<div className="row-note">
+														{name} cannot use this shared drive yet.{" "}
+														<button
+															type="button"
+															className="link-button"
+															onClick={() => void setMemberRole(principal, member.role, false)}
+															disabled={busy}
+														>
+															Try again
+														</button>
+													</div>
+												)}
 											</td>
 											<td className="cell-actions">
 												{principal && (canManage || self) && (
@@ -331,6 +361,7 @@ export function SharedDriveMembersPart({
 						</div>
 						<p id={ids.hint} className="field-hint">
 							{full ? `A shared drive can have at most ${SHARED_DRIVE_LIMITS.members} members.` : ROLE_HINT}
+							{!full && candidate && isAutomated(candidate.kind) && ` ${AGENT_ROLE_HINT}`}
 						</p>
 						<button type="submit" className="button button-primary" disabled={busy || full || candidates.length === 0}>
 							{busy ? "Please wait…" : "Add member"}

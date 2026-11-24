@@ -1,5 +1,7 @@
 import { prefixedId, RoomId, Timestamp } from "./common.ts";
 import { defineOperation } from "./operation.ts";
+import { AgentAccessChange } from "./restrictions.ts";
+import type { Scope } from "./scopes.ts";
 import { DRIVE_WEBHOOK_EVENTS, DriveWebhookSubscription } from "./webhooks.ts";
 import { z } from "./zod.ts";
 
@@ -51,6 +53,16 @@ export type DriveRole = (typeof DRIVE_ROLES)[number];
 /** The roles of the members of a shared drive, from the most to the least. */
 export const SHARED_DRIVE_ROLES = ["manager", "editor", "viewer"] as const;
 export type SharedDriveRole = (typeof SHARED_DRIVE_ROLES)[number];
+
+/**
+ * The scopes that a member of a shared drive needs for its role. An agent or a service account gets them on
+ * its account when a person who manages it makes it a member.
+ */
+export const SHARED_DRIVE_ROLE_SCOPES = {
+	manager: ["drive.read", "drive.write", "drive.share"],
+	editor: ["drive.read", "drive.write"],
+	viewer: ["drive.read"],
+} as const satisfies Record<SharedDriveRole, readonly Scope[]>;
 
 export const SHARED_DRIVE_LIMITS = {
 	/** The members of one shared drive. */
@@ -896,6 +908,28 @@ const MemberInput = z.strictObject({ principal_id: PrincipalId, role: z.enum(SHA
 const SHARED_ROLES =
 	"A viewer can read, download and copy. An editor can also add and change items, move them in the drive, put them in the trash and restore them. A manager can also change the members, rename the drive, share an item with a principal that is not a member, delete permanently and move items out of the drive. A manager is a person: an agent can be an editor or a viewer.";
 
+/** What a membership changes on an agent or a service account. */
+const AGENT_MEMBER = [
+	"The call also changes each agent and each service account that it makes a member and that you manage.",
+	"You manage an agent when you are its sponsor, an owner or an admin, and your credential holds directory.write.",
+	"The agent gets the drive scopes of its role that it does not hold: drive.read for a viewer, and also drive.write for an editor. The drive goes into its resource limits when it has limits.",
+	"Your credential must hold each scope that the agent gets. When the drive goes into the limits, it must hold each scope of the role.",
+	"agent_access_changes has these changes. agent_access_pending names each agent that did not get them.",
+	"For such an agent, call drive.add_shared_drive_members with the same role again.",
+	"A membership gives no new access to an agent that you do not manage. Its sponsor, an owner or an admin gives it.",
+].join(" ");
+
+/** The fields of a result that tell what the call changed on the agents that the caller manages. */
+const AGENT_ACCESS = {
+	agent_access_changes: z.array(AgentAccessChange).default([]),
+	/**
+	 * The agents that you manage, that are members of the drive, and that did not get the access of their
+	 * membership. Their limits have no place for the drive, or a different call changed their access at the
+	 * same time. A later call for the member completes it.
+	 */
+	agent_access_pending: z.array(PrincipalId).default([]),
+};
+
 export const createSharedDrive = defineOperation({
 	name: "drive.create_shared_drive",
 	summary: "Create a shared drive",
@@ -904,6 +938,7 @@ export const createSharedDrive = defineOperation({
 		"Creates a drive that its members own together. The drive owns its items: they stay when a member leaves.",
 		"members must have at least one person with the manager role. You are a member only when members names you.",
 		SHARED_ROLES,
+		AGENT_MEMBER,
 	].join(" "),
 	http: { method: "POST", path: "/api/v1/drive/shared-drives" },
 	scopes: ["drive.write"],
@@ -918,10 +953,10 @@ export const createSharedDrive = defineOperation({
 			.max(255)
 			.optional()
 			.describe(
-				"Makes a retry safe: a second call with the same key and the same input returns the first shared drive and creates nothing.",
+				"Makes a retry safe: a second call with the same key and the same input returns the first shared drive and creates nothing. It changes no agent: agent_access_changes is empty.",
 			),
 	}),
-	output: z.object({ shared_drive: SharedDrive, members: z.array(SharedDriveMember) }),
+	output: z.object({ shared_drive: SharedDrive, members: z.array(SharedDriveMember), ...AGENT_ACCESS }),
 	errors: ["not_found", "conflict"],
 });
 
@@ -984,6 +1019,7 @@ export const addSharedDriveMembers = defineOperation({
 		"The managers of the drive, and the owners and admins of the organization, can call this.",
 		SHARED_ROLES,
 		`A drive always keeps one manager, and has at most ${SHARED_DRIVE_LIMITS.members} members. The call makes each change or no change.`,
+		AGENT_MEMBER,
 	].join(" "),
 	http: { method: "POST", path: "/api/v1/drive/shared-drives/{drive_id}/members" },
 	scopes: ["drive.share"],
@@ -993,15 +1029,15 @@ export const addSharedDriveMembers = defineOperation({
 		drive_id: SharedDriveId,
 		members: z.array(MemberInput).min(1).max(SHARED_DRIVE_LIMITS.members),
 	}),
-	output: z.object({ shared_drive: SharedDrive, members: z.array(SharedDriveMember) }),
-	errors: ["not_found"],
+	output: z.object({ shared_drive: SharedDrive, members: z.array(SharedDriveMember), ...AGENT_ACCESS }),
+	errors: ["not_found", "conflict"],
 });
 
 export const removeSharedDriveMember = defineOperation({
 	name: "drive.remove_shared_drive_member",
 	summary: "Remove a member from a shared drive",
 	description:
-		"The access of the member to the drive ends at once. A grant that a manager gave that principal for one item stays: remove it with drive.unshare_item. The managers of the drive, and the owners and admins of the organization, can call this. You can also remove yourself. The last manager cannot be removed: add a different manager first.",
+		"The access of the member to the drive ends at once. The drive also goes out of the resource limits of an agent or a service account. A grant that a manager gave that principal for one item stays: remove it with drive.unshare_item. An agent with limits cannot use such a grant while the drive is not in its limits. The managers of the drive, and the owners and admins of the organization, can call this. You can also remove yourself. The last manager cannot be removed: add a different manager first.",
 	http: { method: "DELETE", path: "/api/v1/drive/shared-drives/{drive_id}/members/{principal_id}" },
 	scopes: ["drive.share"],
 	callers: ["human"],

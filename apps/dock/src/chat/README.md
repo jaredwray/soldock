@@ -171,7 +171,7 @@ and the room in its limits when it has limits ([`identity`](../identity/README.m
   it (`managedAgents` of `identity`). So a key of a manager with only the chat scopes changes no agent.
 - **What.** A manager who makes the agent a member decided that the agent can use the room. That call
   gives the agent the chat scopes of its membership that it does not hold, and puts the room into its
-  limits (`giveRoomAccess`). The result has each change in `agent_access_changes`.
+  limits (`giveMemberAccess`). The result has each change in `agent_access_changes`.
 - **Which calls.** `chat.create_room`, `chat.add_members`, `chat.set_member_scopes`, `chat.open_dm` and
   `chat.open_group_dm`. Each call does it, also for a member from before. So a sponsor who opens the
   direct message with its agent again makes the agent see it.
@@ -188,8 +188,10 @@ and the room in its limits when it has limits ([`identity`](../identity/README.m
   (`settleOwner`). The remove, that read and the write of the owner are one step of the room, so each
   member is in the read. Without this, an archived person as the owner stops each change of the room.
 - **No escalation.** The credential of the call must hold each chat scope that the agent gets
-  (`assertRoomGrants`, before the room writes the membership). A call that gives the agent nothing, for
-  example one that removes a scope, needs no scope for it. A sponsor who is not an admin changes the agent
+  (`assertMemberGrants`, before the room writes the membership). When the room goes into the limits of
+  the agent, the credential must hold each chat scope of the membership: the limits then let these
+  scopes reach the room, also a scope that the agent held before. A call that gives the agent nothing,
+  for example one that removes a scope, needs no scope for it. A sponsor who is not an admin changes the agent
   only while that person is still its sponsor: the write has this condition.
 - **Two stores.** The room object owns the members, and the directory owns the access of an agent. So the
   two writes are not one transaction: the membership comes first. The write of the access matches only
@@ -206,10 +208,11 @@ and the room in its limits when it has limits ([`identity`](../identity/README.m
   room runs between the two writes. So after a remove, each new membership finds no room in the limits,
   and only a manager of the agent puts it back.
 - **A remove during an add.** A different call can remove the agent between the write of the room and the
-  write of the access. So after `giveRoomAccess` put the room into the limits, the room takes it out again
+  write of the access. So after `giveMemberAccess` put the room into the limits, the room takes it out again
   for a principal that is not a member now (`releaseLimits`), in one step with the read of its members.
-- **When the directory fails during that write,** the limits still name the room. The room keeps the
-  principal in its table `limit_drops`. Before that principal is a member again (an add, a join, or an
+- **When the directory fails during that write, or the object stops,** the limits still name the room.
+  The transaction of the remove puts the agent into the table `limit_drops`, and the row goes away when
+  the write of the limits completes. Before that principal is a member again (an add, a join, or an
   owner that an admin assigns), the room completes the write (`afterDrops`). When the directory fails
   again, the call gets `conflict`, and the principal does not become a member. So old limits never give
   access to a new membership. That write and the write of the new member are one step of the room too: no

@@ -40,6 +40,14 @@ export {
 	recordExpiryNotice,
 } from "./expiry-notice.ts";
 export { identityHandlers } from "./handlers.ts";
+export {
+	afterLimitDrops,
+	dropLimits,
+	LIMIT_DROPS_TABLE,
+	type LimitDropsHost,
+	markLimitDrop,
+	releaseLimits,
+} from "./limit-drops.ts";
 export { mountOAuthRoutes, protectedResourceMetadataUrl } from "./oauth-routes.ts";
 export { toPrincipalOutput } from "./output.ts";
 export { chatPresenceHandlers } from "./presence.ts";
@@ -63,7 +71,7 @@ export { mountAuthRoutes } from "./routes.ts";
 export {
 	addressTag,
 	domainOf,
-	dropRoomFromLimits,
+	dropFromLimits,
 	getPrincipal,
 	getPrincipals,
 	listPrincipals,
@@ -86,4 +94,4 @@ export {
 	teamMailboxFor,
 	teamMailboxMemberScopes,
 } from "./team-mailboxes.ts";
-export { afterLimitsDrop, assertRoomGrants, giveRoomAccess } from "./widening.ts";
+export { accessOutput, afterLimitsDrop, assertMemberGrants, giveMemberAccess } from "./widening.ts";

@@ -21,6 +21,10 @@ export const ROLE_NAMES: Record<DriveRole, string> = {
 export const ROLE_HINT =
 	"A manager also changes the members, shares items and deletes items forever. An editor adds and changes items. A viewer reads and copies.";
 
+/** What the role of an agent or a service account changes on its account, for the role control. */
+export const AGENT_ROLE_HINT =
+	"If you manage this account, it also gets the Drive scopes of its role, and this shared drive in its limits.";
+
 /**
  * The roles that a person, an agent or a service account can have. An agent and a service account are
  * never a manager: a manager is a person.

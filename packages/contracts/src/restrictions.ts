@@ -31,8 +31,8 @@ export type AgentResources = z.infer<typeof AgentResources>;
 /**
  * The limits of a new agent or service account: its own mailbox and its own drive, and no room. A new agent
  * has no membership, so these limits name each resource that it reaches. A manager who makes the agent a
- * member of a team mailbox or a room adds that resource to the limits. A manager adds a shared drive, or
- * removes the limits, with `directory.set_agent_access`.
+ * member of a team mailbox, a room or a shared drive adds that resource to the limits. A manager removes the
+ * limits with `directory.set_agent_access`.
  */
 export function defaultAgentResources(agentId: string): AgentResources {
 	return { mailbox_ids: [agentId], drive_ids: [agentId], room_ids: [] };
@@ -53,14 +53,15 @@ export type NewAgentLimits = z.infer<typeof NewAgentLimits>;
 export type ResourceKind = "mailbox" | "drive" | "room";
 
 /**
- * What a call changed on an agent or a service account, for its membership of a team mailbox or a room. The
- * membership says what the agent can do in the resource. The agent also gets what it needs to use it.
+ * What a call changed on an agent or a service account, for its membership of a team mailbox, a room or a
+ * shared drive. The membership says what the agent can do in the resource. The agent also gets what it needs
+ * to use it.
  */
 export const AgentAccessChange = z.object({
 	principal_id: z.string(),
-	/** The scopes that the agent got on its account. They also apply to its own mailbox, and to each room. */
+	/** The scopes that the agent got on its account. They also apply to its own mailbox and drive, and to each room. */
 	scopes_added: z.array(z.string()),
-	/** True when the call added the mailbox or the room to the resource limits of the agent. */
+	/** True when the call added the mailbox, the room or the drive to the resource limits of the agent. */
 	limits_widened: z.boolean(),
 });
 export type AgentAccessChange = z.infer<typeof AgentAccessChange>;

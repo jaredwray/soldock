@@ -1,5 +1,6 @@
 import { type Principal, SHARED_DRIVE_LIMITS, type SharedDrive, type SharedDriveRole } from "@asterra/contracts";
 import { type FormEvent, useCallback, useEffect, useId, useState } from "react";
+import { driveAccessText } from "../../lib/accessChange.ts";
 import { api, errorMessage } from "../../lib/api.ts";
 import { ConfirmDialog } from "../../lib/ConfirmDialog.tsx";
 import { Dialog } from "../../lib/Dialog.tsx";
@@ -34,6 +35,8 @@ export function SharedDrivesSection({ principals, selfId }: SectionProps) {
 	const [drives, setDrives] = useState<SharedDrive[] | null>(null);
 	const [error, setError] = useState<string | null>(null);
 	const [creating, setCreating] = useState(false);
+	// The agents of a new drive that did not get the access of their membership, by the id of the drive.
+	const [pending, setPending] = useState<ReadonlyMap<string, readonly string[]>>(new Map());
 
 	const load = useCallback(async () => {
 		setError(null);
@@ -96,6 +99,7 @@ export function SharedDrivesSection({ principals, selfId }: SectionProps) {
 							drive={drive}
 							principals={principals}
 							selfId={selfId}
+							pendingIds={pending.get(drive.id)}
 							onChanged={save}
 							onDeleted={() => {
 								setDrives((current) => (current ?? []).filter((item) => item.id !== drive.id));
@@ -110,8 +114,9 @@ export function SharedDrivesSection({ principals, selfId }: SectionProps) {
 					principals={principals}
 					selfId={selfId}
 					onClose={() => setCreating(false)}
-					onCreated={(drive) => {
+					onCreated={(drive, pendingIds) => {
 						save(drive);
+						if (pendingIds.length > 0) setPending((current) => new Map(current).set(drive.id, pendingIds));
 						setCreating(false);
 					}}
 				/>
@@ -124,12 +129,14 @@ interface PanelProps {
 	drive: SharedDrive;
 	principals: readonly Principal[];
 	selfId: string;
+	/** The agents that did not get the access of their membership when the drive was created. */
+	pendingIds?: readonly string[] | undefined;
 	onChanged: (drive: SharedDrive) => void;
 	onDeleted: () => void;
 }
 
 /** One shared drive, as a card: its name, its members and the control that deletes it. */
-function SharedDrivePanel({ drive, principals, selfId, onChanged, onDeleted }: PanelProps) {
+function SharedDrivePanel({ drive, principals, selfId, pendingIds, onChanged, onDeleted }: PanelProps) {
 	const [deleting, setDeleting] = useState(false);
 	return (
 		<AdminCard
@@ -145,6 +152,7 @@ function SharedDrivePanel({ drive, principals, selfId, onChanged, onDeleted }: P
 				principals={principals}
 				selfId={selfId}
 				canManage
+				pendingIds={pendingIds}
 				onChanged={onChanged}
 			/>
 			<TargetWebhooks
@@ -199,7 +207,8 @@ interface CreateProps {
 	principals: readonly Principal[];
 	selfId: string;
 	onClose: () => void;
-	onCreated: (drive: SharedDrive) => void;
+	/** Called with the new drive, and the agents that did not get the access of their membership. */
+	onCreated: (drive: SharedDrive, pendingIds: readonly string[]) => void;
 }
 
 /** A new shared drive: its name, and the first members with a role each. */
@@ -249,8 +258,10 @@ function CreateSharedDriveDialog({ principals, selfId, onClose, onCreated }: Cre
 				members: members.map(({ principal, role }) => ({ principal_id: principal.id, role })),
 				idempotency_key: idempotencyKey,
 			});
-			onCreated(result.shared_drive);
-			toast({ message: `Shared drive ${result.shared_drive.name} created.` });
+			onCreated(result.shared_drive, result.agent_access_pending);
+			const nameOf = (id: string) =>
+				members.find(({ principal }) => principal.id === id)?.principal.display_name ?? "An agent";
+			toast({ message: `Shared drive ${result.shared_drive.name} created.${driveAccessText(result, nameOf)}` });
 		} catch (caught) {
 			setError(errorMessage(caught));
 			setBusy(false);

@@ -422,7 +422,13 @@ MCP clients. The app has no UI-only path.
     - **Members of …**, a table of the members (`drive.get_shared_drive`). Each row has a role menu
       (`drive.add_shared_drive_members`, which also changes a role) and a **Remove** button, with a
       confirmation (`drive.remove_shared_drive_member`). A form below the table adds a person or an
-      agent with a role. The role menu of an agent has no Manager entry.
+      agent with a role. The role menu of an agent has no Manager entry. For an agent or a service
+      account, the form tells that the account also gets the Drive scopes of its role. The toast of
+      an add or a role change tells what the account got (`driveAccessText` of `lib/accessChange.ts`):
+      the new scopes, and the drive in its limits. It also names an agent that did not get its access.
+      The row of such an agent then has a note and a **Try again** button, which sends the role of the
+      member again. The role menu sends no call for the role that the member has.
+      The card of a new shared drive shows the same note for an agent that the create call named.
     - **Webhooks of …**, each webhook that gets a drive event of that drive (`drive.list_webhook_subscriptions`).
       **Edit events** opens the check boxes of the drive events. An owner or an admin can clear an event
       (`drive.delete_webhook_subscription`). A member creates a webhook with the API.

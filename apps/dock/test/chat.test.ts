@@ -1070,11 +1070,23 @@ describe("an agent in a room", () => {
 			scopes: ["account.read", "chat.read"],
 			resources: { room_ids: [] },
 		});
-		// The membership gives the agent chat.write. A key of a manager that does not hold chat.read gives it:
-		// the agent holds chat.read, so the key gives only what it holds.
-		const writer = await (await keyOf(["directory.write", "chat.write"]))("chat.create_room", ops);
+		// The room goes into the limits of the agent, and the limits then let chat.read reach the room. So a key
+		// that does not hold chat.read cannot give the room, also to an agent that holds chat.read.
+		const writerKey = await keyOf(["directory.write", "chat.write"]);
+		expect(await codeOf(writerKey("chat.create_room", ops))).toBe("forbidden");
+		expect((await access(agent.id)).resources?.room_ids).toEqual([]);
+		// An agent without limits gets only chat.write from the membership, and the key holds that scope.
+		const free = await owner.call("directory.create_principal", {
+			kind: "agent",
+			display_name: "Free",
+			address: "free@dock.test",
+			sponsor_id: ada.id,
+			scopes: ["account.read", "chat.read"],
+			limits: "none",
+		});
+		const writer = await writerKey("chat.create_room", { ...ops, member_ids: [free.principal.id] });
 		expect(writer.agent_access_changes).toEqual([
-			{ principal_id: agent.id, scopes_added: ["chat.write"], limits_widened: true },
+			{ principal_id: free.principal.id, scopes_added: ["chat.write"], limits_widened: false },
 		]);
 		// An agent without a chat scope needs chat.read too. The same key cannot give it, and the refused call
 		// makes no room.

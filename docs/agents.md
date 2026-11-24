@@ -116,9 +116,14 @@ each OAuth connection of the agent has them. A key or a connection is only a cre
 Its limits name them. This is the default of each way to create an agent: **New member**, the
 **Connect an agent** page, `directory.create_principal` and `oauth.approve_authorization`.
 
-- A membership of a shared drive alone gives a limited agent nothing. Add the agent to the shared drive
-  first. Then open the agent in **Admin › Members**, and select the drive under **Permissions**.
-  **Access** on the card marks each membership that is **Not in the limits**.
+- A shared drive needs no second step when its sponsor, an owner or an admin gives the agent a role in
+  it. The agent gets the Drive scopes of its role (`drive.read`, and `drive.write` for an editor) and
+  the drive in its limits, and the result of the call shows the change. A manager of the drive who does
+  not manage the agent can add it too, but the agent then cannot open the drive until a person who
+  manages it sets its role again. **Access** on the card of the agent in **Admin › Members** marks each
+  membership that is **Not in the limits**.
+  An API key needs `directory.write` for this change, and each Drive scope of the role. If it does not
+  hold a scope of the role, the call gets `403` and makes no member.
 - A room needs no second step when its sponsor, an owner or an admin adds the agent: see
   [Members of a room](#members-of-a-room). A member that does not manage the agent can add it too, but
   the agent then does not see the room until a manager adds it again.
@@ -376,6 +381,9 @@ account.
   - The result has each change in `agent_access_changes`, and the web app shows it.
   - An API key needs `directory.write` for this change, as `directory.set_agent_access` does. A key with
     only the chat scopes makes the member, and changes no agent.
+  - The key must also hold each scope that the agent gets. When the room goes into the limits of the
+    agent, the key must hold each chat scope of the membership. If not, the call gets `403` and makes no
+    member.
   - `agent_access_pending` names an agent that did not get its access: its limits name 20 rooms, or a
     different call changed its access at the same time. Add the member again.
   - For an agent that you do not manage, its sponsor, an owner or an admin adds it again.

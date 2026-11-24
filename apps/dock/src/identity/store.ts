@@ -889,9 +889,9 @@ export function widenAgentAccessStatement(
 }
 
 /**
- * Writes the access that a membership of a room gives to an agent. The room object owns the membership, so
- * this write is not in a transaction with it. Returns false when a parallel change of the access came first:
- * the caller reads the agent again.
+ * Writes the access that a membership of a room or a shared drive gives to an agent. The object of the
+ * room or the drive owns the membership, so this write is not in a transaction with it. Returns false when
+ * a parallel change of the access came first: the caller reads the agent again.
  */
 export async function widenAgentAccess(db: D1Database, widening: AgentWidening): Promise<boolean> {
 	const result = await widenAgentAccessStatement(db, widening, null).run();
@@ -899,27 +899,31 @@ export async function widenAgentAccess(db: D1Database, widening: AgentWidening):
 }
 
 /**
- * Takes a room out of the limits of an agent or a service account, in one statement, so a parallel change of
- * the access is not lost. Returns the agent after the write, or null when its limits did not name the room.
- * The write adds one to `access_version`.
+ * Takes a room or a shared drive out of the limits of an agent or a service account, in one statement, so a
+ * parallel change of the access is not lost. Returns true when the limits named the resource. The write adds
+ * one to `access_version`. The function has one statement and no read after it: a caller must know that the
+ * write changed the limits, also when the directory fails a moment later.
  */
-export async function dropRoomFromLimits(
+export async function dropFromLimits(
 	db: D1Database,
 	principalId: string,
-	roomId: string,
-): Promise<PrincipalRecord | null> {
+	kind: "room" | "drive",
+	id: string,
+): Promise<boolean> {
+	// `kind` is one of two fixed words, so it is safe in the text of the statement.
+	const list = `'$.${kind}_ids'`;
 	const result = await db
 		.prepare(
 			`UPDATE principals SET access_version = access_version + 1, agent_resources = json_set(
-				agent_resources, '$.room_ids',
-				json((SELECT json_group_array(room.value) FROM json_each(agent_resources, '$.room_ids') room WHERE room.value != ?2))
+				agent_resources, ${list},
+				json((SELECT json_group_array(${kind}.value) FROM json_each(agent_resources, ${list}) ${kind} WHERE ${kind}.value != ?2))
 			)
 			WHERE id = ?1 AND kind = 'agent' AND deleted_at IS NULL AND json_valid(agent_resources)
-			AND EXISTS (SELECT 1 FROM json_each(agent_resources, '$.room_ids') room WHERE room.value = ?2)`,
+			AND EXISTS (SELECT 1 FROM json_each(agent_resources, ${list}) ${kind} WHERE ${kind}.value = ?2)`,
 		)
-		.bind(principalId, roomId)
+		.bind(principalId, id)
 		.run();
-	return result.meta.changes === 1 ? getPrincipal(db, principalId) : null;
+	return result.meta.changes === 1;
 }
 
 /** The changes of `updatePrincipal`. A field that is undefined does not change. */
