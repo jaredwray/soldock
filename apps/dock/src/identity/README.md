@@ -527,8 +527,9 @@ own. A key of a person keeps its own scopes (`api_keys.scopes`).
   `directory.create_service_account` takes the `scopes` of a service account.
 - **First limits.** The same three operations give a new agent or service account the default limits:
   its own mailbox and its own drive, and no room (`defaultAgentResources`). So a new agent reaches only
-  what it has at its start. A later membership of a shared drive or a room gives nothing until a manager
-  adds it to the limits. A membership of a team mailbox adds the mailbox to the limits itself.
+  what it has at its start. A later membership of a shared drive gives nothing until a manager adds it to
+  the limits. A membership of a team mailbox, and a membership of a room that a manager of the agent
+  makes, add the resource to the limits themselves.
   `limits` in the call is `own` (the default) or `none`, which creates the agent without limits. The call
   takes no list, because the own mailbox and the own drive have the id of the agent, which does not exist
   before the call. The wide value is a word and not null: a client that sends null for a field that it did
@@ -645,13 +646,19 @@ person shared directly with it.
 and its own drive, and no room ([Access of an agent](#access-of-an-agent), First limits).
 
 - Why: the least access is the default. A person who adds an agent to a room, or shares a drive with it,
-  does not widen what the credentials of the agent reach. Only a manager of the agent does, in one place.
-- A membership of a shared drive or a room gives a limited agent nothing. A manager adds the resource to
-  the limits after the agent is a member (`directory.set_agent_access`).
-- A team mailbox is different: only an owner or an admin adds a member, and the add puts the mailbox
-  into the limits ([Team mailboxes](#team-mailboxes), Member scopes).
-- A person can open a direct message with a limited agent. The agent does not see the room until a
-  manager adds it to the limits.
+  does not widen what the credentials of the agent reach. Only a manager of the agent does.
+- A membership of a shared drive gives a limited agent nothing. A manager adds the drive to the limits
+  after the agent is a member (`directory.set_agent_access`).
+- A manager who makes the agent a member gives the access with the membership, so nobody sets the
+  permissions a second time (`widening.ts`):
+  - A team mailbox: only an owner or an admin adds a member, and the add puts the mailbox into the limits
+    ([Team mailboxes](#team-mailboxes), Member scopes).
+  - A room: a person who manages the agent and adds it to a room, or opens a direct message with it, puts
+    the room into the limits and gives the chat scopes of the membership
+    ([`chat`](../chat/README.md#an-agent-as-a-new-member)). A member that does not manage the agent can
+    add it, and that membership gives the agent nothing.
+- A person who does not manage a limited agent can open a direct message with it. The agent does not see
+  the room until a manager opens the direct message, or adds the room to the limits.
 - A limited agent cannot open the events socket, make a chat webhook, open a direct message or create a
   room (see the rules below). An agent that needs them gets no limits.
 - `limits: "none"` in the create call, or `resources: null` in `directory.set_agent_access` later, gives an

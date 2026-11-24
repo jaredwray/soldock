@@ -4,6 +4,7 @@ import {
 	type ChatSearchResult,
 	type ChatSearchRoom,
 	type ChatThreadFollow,
+	defaultRoomMemberScopes,
 	isCustomEmoji,
 	listedIds,
 	mentionDirectory,
@@ -13,12 +14,15 @@ import {
 } from "@asterra/contracts";
 import { filesForMessage } from "../drive/index.ts";
 import {
+	assertRoomMemberships,
 	type CallContext,
 	chatPresenceHandlers,
 	getPrincipals,
 	isAdmin,
 	mentionCandidates,
+	type PrincipalRecord,
 	recordServiceMemberships,
+	widenAgentsForRoom,
 } from "../identity/index.ts";
 import {
 	audit,
@@ -137,16 +141,21 @@ function auditOk(call: CallContext, op: string, target: string): void {
 }
 
 /** The principals of a list of ids, as a room stores its members. Each id must be in the directory. */
-async function actorsOf(call: CallContext, ids: readonly string[]): Promise<ActorRecord[]> {
+async function principalsOf(call: CallContext, ids: readonly string[]): Promise<PrincipalRecord[]> {
 	const principals = await getPrincipals(call.env.DIRECTORY, ids);
 	const known = new Set(principals.map((principal) => principal.id));
 	const unknown = ids.find((id) => !known.has(id));
 	if (unknown !== undefined) throw new OperationError("not_found", `No person or agent has the id ${unknown}.`);
-	return principals.map((principal) => ({
-		principal_id: principal.id,
-		kind: principal.kind,
-		display_name: principal.display_name,
-	}));
+	return principals;
+}
+
+function toActor(principal: PrincipalRecord): ActorRecord {
+	return { principal_id: principal.id, kind: principal.kind, display_name: principal.display_name };
+}
+
+/** A new member with the scopes of its kind, for the access that an agent gets with its membership. */
+function defaultMembership(principal: PrincipalRecord): { principal_id: string; scopes: string[] } {
+	return { principal_id: principal.id, scopes: defaultRoomMemberScopes(principal.kind) };
 }
 
 /**
@@ -542,7 +551,11 @@ export const chatHandlers: Pick<HandlerMap<CallContext>, ChatOperation> = {
 	},
 
 	async "chat.create_room"(call, input) {
-		const members = await actorsOf(call, input.member_ids ?? []);
+		const principals = await principalsOf(call, input.member_ids ?? []);
+		const members = principals.map(toActor);
+		// An agent that the caller manages gets the access of its membership. Refuse what the caller cannot
+		// give before the room exists.
+		assertRoomMemberships(call, principals, (principal) => defaultRoomMemberScopes(principal.kind));
 		const opened = openRoom(call, newId("rm"));
 		const room = accept(
 			await opened.room.create(opened.ctx, {
@@ -559,21 +572,27 @@ export const chatHandlers: Pick<HandlerMap<CallContext>, ChatOperation> = {
 			"chat.create_room",
 			room.id,
 		);
-		return { room: toRoom(room) };
+		const changes = await widenAgentsForRoom(call, room.id, principals.map(defaultMembership));
+		return { room: toRoom(room), agent_access_changes: changes };
 	},
 
 	async "chat.open_dm"(call, input) {
 		if (input.principal_id === call.caller.id) {
 			throw new OperationError("invalid", "A direct message needs a different person or agent than you.");
 		}
-		const [peer] = await actorsOf(call, [input.principal_id]);
-		const opened = openRoom(call, await dmRoomId(call.caller.id, input.principal_id));
-		const result = accept(await opened.room.openDm(opened.ctx, peer as ActorRecord));
+		const principals = await principalsOf(call, [input.principal_id]);
+		const roomId = await dmRoomId(call.caller.id, input.principal_id);
+		// A person who manages the agent and opens a direct message with it decided that the agent can use
+		// the room. Each call does this, so a second call completes a write that failed.
+		assertRoomMemberships(call, principals, (principal) => defaultRoomMemberScopes(principal.kind), roomId);
+		const opened = openRoom(call, roomId);
+		const result = accept(await opened.room.openDm(opened.ctx, toActor(principals[0] as PrincipalRecord)));
 		if (result.created) {
 			auditOk(call, "chat.open_dm", result.room.id);
 			recordServiceMemberships(call, [input.principal_id], "chat.open_dm", result.room.id);
 		}
-		return { room: toRoom(result.room) };
+		const changes = await widenAgentsForRoom(call, roomId, principals.map(defaultMembership));
+		return { room: toRoom(result.room), agent_access_changes: changes };
 	},
 
 	async "chat.get_room"(call, input) {
@@ -604,12 +623,43 @@ export const chatHandlers: Pick<HandlerMap<CallContext>, ChatOperation> = {
 	async "chat.add_members"(call, input) {
 		const opened = openRoom(call, input.room_id);
 		// The room comes first. A caller without access gets the same answer for each principal id.
-		accept(await opened.room.checkAddMembers(opened.ctx));
-		const members = await actorsOf(call, input.principal_ids);
-		const result = accept(await opened.room.addMembers(opened.ctx, members));
+		accept(await opened.room.checkAddMembers(opened.ctx, input.scopes));
+		const principals = await principalsOf(call, input.principal_ids);
+		assertRoomMemberships(
+			call,
+			principals,
+			(principal) => input.scopes ?? defaultRoomMemberScopes(principal.kind),
+			input.room_id,
+		);
+		const result = accept(await opened.room.addMembers(opened.ctx, principals.map(toActor), input.scopes));
 		if (result.added.length > 0) auditOk(call, "chat.add_members", `${input.room_id}:${result.added.join(",")}`);
 		recordServiceMemberships(call, result.added, "chat.add_members", input.room_id);
-		return { members_added: result.added.length, room: toRoom(result.room) };
+		// Each named agent that the caller manages gets the access of its membership, also a member from
+		// before. So a second call completes a write that failed.
+		const changes = await widenAgentsForRoom(call, input.room_id, result.members);
+		return { members_added: result.added.length, room: toRoom(result.room), agent_access_changes: changes };
+	},
+
+	async "chat.set_member_scopes"(call, input) {
+		const opened = openRoom(call, input.room_id);
+		// A principal that left the directory can still be a member. The room decides if the member exists.
+		const principals = await getPrincipals(call.env.DIRECTORY, [input.principal_id]);
+		assertRoomMemberships(call, principals, () => input.scopes, input.room_id);
+		const result = accept(
+			await opened.room.setMemberScopes(opened.ctx, {
+				principalId: input.principal_id,
+				scopes: input.scopes,
+				allowAdmin: isAdmin(call.caller),
+			}),
+		);
+		if (result.changed) {
+			const scopes = result.member.scopes.join(",");
+			auditOk(call, "chat.set_member_scopes", `${input.room_id}:${input.principal_id}:${scopes}`);
+			recordServiceMemberships(call, [input.principal_id], "chat.set_member_scopes", input.room_id);
+		}
+		// Each call for an agent that the caller manages gives the agent the access of its membership.
+		const changes = await widenAgentsForRoom(call, input.room_id, [result.member]);
+		return { member: { ...result.member, joined_at: iso(result.member.joined_at) }, agent_access_changes: changes };
 	},
 
 	async "chat.remove_member"(call, input) {

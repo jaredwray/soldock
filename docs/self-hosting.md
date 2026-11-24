@@ -417,10 +417,11 @@ A new agent or service account is limited to its own mailbox and its own drive. 
 and no shared drive until a manager adds them to its limits. No migration is necessary.
 
 - An agent or a service account from before this change keeps its access. Its limits do not change.
-- A script that creates an agent and then uses a shared drive or a room must change. Send
+- A script that creates an agent and then uses a shared drive must change. Send
   `limits: "none"` to `directory.create_principal` or `directory.create_service_account` for an agent
   without limits. Or set its limits with `directory.set_agent_access` after you add the memberships.
 - A team mailbox needs no change of the limits: see [Scopes of a member of a team mailbox](#scopes-of-a-member-of-a-team-mailbox).
+- A room needs no change of the limits when a manager of the agent adds it: see [Scopes of a member of a room](#scopes-of-a-member-of-a-room).
 
 ### Scopes of a member of a team mailbox
 
@@ -440,6 +441,21 @@ person, an agent and a service account.
   member again, or select the mailbox under **Permissions** of the agent.
 - [Agents](agents.md#team-mailboxes) has the rules.
 - [Agents](agents.md#permissions-of-an-agent) has the rules.
+
+### Scopes of a member of a room
+
+Each member of a room has scopes in the room: `chat.read`, `chat.write` and `chat.add_members`. The owner
+of the room sets them in the members dialog. No migration of the directory is necessary: each room object
+adds its column at its next start.
+
+- A person keeps each scope, so nothing changes for a person.
+- **An agent or a service account can no longer add members to a room,** also in a room where it is a
+  member now. The owner of the room gives it `chat.add_members` (`chat.set_member_scopes`). A script that
+  adds members with a token of a service account needs this change for each of its rooms.
+- `chat.create_room`, `chat.add_members`, `chat.open_dm` and `chat.open_group_dm` now also change an agent
+  that the caller manages: it gets the chat scopes of its membership, and the room goes into its limits.
+  Send `scopes: ["chat.read"]` to `chat.add_members` for a member that only reads.
+- [Agents](agents.md#members-of-a-room) has the rules.
 
 ### Recover a sign-in
 

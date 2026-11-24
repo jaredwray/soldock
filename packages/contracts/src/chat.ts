@@ -3,6 +3,7 @@ import { Href } from "./docs.ts";
 import { Actor, DownloadVariant, DRIVE_LIMITS, ItemId } from "./drive.ts";
 import { GROUP_MENTIONS } from "./mentions.ts";
 import { defineOperation } from "./operation.ts";
+import { AgentAccessChange } from "./restrictions.ts";
 import {
 	CHAT_ADDRESSED_REASONS,
 	CHAT_WEBHOOK_EVENTS,
@@ -301,6 +302,33 @@ export type PostingPolicy = (typeof POSTING_POLICIES)[number];
 export const ROOM_ROLES = ["owner", "member"] as const;
 export type RoomRole = (typeof ROOM_ROLES)[number];
 
+/**
+ * What a member can do in a room. The rule is the same for a person, an agent and a service account.
+ * - `chat.read`: read the room. Each member has it.
+ * - `chat.write`: post, change and delete messages, add reactions and pins, and use the actions of the room.
+ * - `chat.add_members`: add members to the room. It is a scope of a membership only: no credential holds it.
+ *
+ * The owner of a room has each scope. The scopes of the credential apply too: a call needs `chat.read` or
+ * `chat.write` in the credential, and its scope in the membership. A member without `chat.write` still sets
+ * what it read, its star and its notification level, and can leave the room.
+ */
+export const ROOM_MEMBER_SCOPES = ["chat.read", "chat.write", "chat.add_members"] as const;
+export type RoomMemberScope = (typeof ROOM_MEMBER_SCOPES)[number];
+
+/**
+ * The scopes of a new member, and of a member from before the scopes. A person gets each scope. An agent or a
+ * service account gets no `chat.add_members`: it adds members only when the owner of the room gives it that scope.
+ */
+export function defaultRoomMemberScopes(kind: "human" | "agent"): RoomMemberScope[] {
+	return kind === "human" ? [...ROOM_MEMBER_SCOPES] : ["chat.read", "chat.write"];
+}
+
+const RoomMemberScopes = z
+	.array(z.enum(ROOM_MEMBER_SCOPES))
+	.min(1)
+	.refine((scopes) => new Set(scopes).size === scopes.length, "must not name a scope two times")
+	.refine((scopes) => scopes.includes("chat.read"), "must have chat.read: each member can read the room");
+
 /** The id of a room. A `dm` or `group_dm` room has an id that starts with `dm_`. Each other room starts with `rm_`. */
 export { RoomId };
 
@@ -431,6 +459,8 @@ export const ChatMember = z.object({
 	kind: z.enum(["human", "agent"]),
 	display_name: z.string(),
 	role: z.enum(ROOM_ROLES),
+	/** What the member can do in the room: of `ROOM_MEMBER_SCOPES`. The owner has each scope. */
+	scopes: z.array(z.string()),
 	joined_at: Timestamp,
 });
 export type ChatMember = z.infer<typeof ChatMember>;
@@ -722,6 +752,12 @@ const CHANGE = { readOnly: false, destructive: false, idempotent: true, openWorl
 const REMOVE = { readOnly: false, destructive: true, idempotent: true, openWorld: false } as const;
 
 const MEMBERS_ONLY = "You must be a member of the room.";
+/** The scopes that a member gets when the call names none. */
+const NEW_MEMBER_SCOPES =
+	"A new member that is a person gets chat.read, chat.write and chat.add_members. An agent or a service account gets chat.read and chat.write.";
+/** What a membership changes on an agent or a service account. */
+const AGENT_MEMBER =
+	"When you manage an agent or a service account that the call makes a member, it also gets the chat scopes of its membership that it does not hold, and the room goes into its resource limits when it has limits. agent_access_changes has these changes. For an agent that you do not manage, its sponsor, an owner or an admin does this (directory.set_agent_access).";
 const MENTIONS = `To mention a person or an agent, write @ and the local part of its address in text or markdown, for example @ada. When two principals have the same local part, write the full address, for example @ada@example.org. The server stores each mention as a mention node with the id of the principal, and the message lists the ids in mentions. In a private room, a mention of a principal that is not a member stays text. In a body, write a mention node: { type: mention, attrs: { id, label } }. @here and @channel mention each member of the room, except you: the message lists them in group_mentions. In a room with more than ${CHAT_LIMITS.groupMentionMembers} members, only an owner of the room can mention a group: a different member gets forbidden. In a body, write { type: group_mention, attrs: { group } }.`;
 const RATE_LIMIT = `You can send ${CHAT_LIMITS.messageBurst} new or changed messages to one room at once, and then one in each ${CHAT_LIMITS.messageRefillSeconds === 1 ? "second" : `${CHAT_LIMITS.messageRefillSeconds} seconds`}. A call above that gets rate_limited: wait, then try again.`;
 
@@ -762,6 +798,8 @@ export const createRoom = defineOperation({
 		"Creates a room and makes you its owner. Each person and each agent of the organization can find and join a public room.",
 		"Only the members can find a private room, and a member must add each new member.",
 		`Set member_ids to add people and agents at once, at most ${CHAT_LIMITS.membersPerCall}.`,
+		NEW_MEMBER_SCOPES,
+		AGENT_MEMBER,
 		"Two rooms can have the same name. For a conversation with one person or one agent, use chat.open_dm.",
 	].join(" "),
 	http: { method: "POST", path: "/api/v1/chat/rooms" },
@@ -774,29 +812,28 @@ export const createRoom = defineOperation({
 		topic: RoomTopic.optional(),
 		member_ids: z.array(PrincipalId).max(CHAT_LIMITS.membersPerCall).optional(),
 	}),
-	output: z.object({ room: ChatRoom }),
-	errors: ["not_found"],
+	output: z.object({ room: ChatRoom, agent_access_changes: z.array(AgentAccessChange).default([]) }),
+	errors: ["not_found", "invalid"],
 });
 
 export const openDm = defineOperation({
 	name: "chat.open_dm",
 	summary: "Open the direct message room with one person or one agent",
-	description:
-		"Returns the room for direct messages between you and principal_id, and creates it when it does not exist. You and that principal have one such room, so a second call returns the same room. Then post with chat.post_message.",
+	description: `Returns the room for direct messages between you and principal_id, and creates it when it does not exist. You and that principal have one such room, so a second call returns the same room. Then post with chat.post_message. ${AGENT_MEMBER}`,
 	http: { method: "POST", path: "/api/v1/chat/dms" },
 	scopes: ["chat.write"],
 	callers: ["human", "agent", "service"],
 	annotations: CHANGE,
 	input: z.strictObject({ principal_id: PrincipalId }),
-	output: z.object({ room: ChatRoom }),
-	errors: ["not_found"],
+	output: z.object({ room: ChatRoom, agent_access_changes: z.array(AgentAccessChange).default([]) }),
+	errors: ["not_found", "invalid"],
 });
 
 export const getRoom = defineOperation({
 	name: "chat.get_room",
 	summary: "Get one room and its members",
 	description:
-		"Returns the room and each member with their role. You can get a public room without being a member. A private room and a direct message exist for their members only.",
+		"Returns the room and each member with their role and their scopes in the room. You can get a public room without being a member. A private room and a direct message exist for their members only.",
 	http: { method: "GET", path: "/api/v1/chat/rooms/{room_id}" },
 	scopes: ["chat.read"],
 	callers: ["human", "agent", "service"],
@@ -844,7 +881,14 @@ export const joinRoom = defineOperation({
 export const addMembers = defineOperation({
 	name: "chat.add_members",
 	summary: "Add people and agents to a room",
-	description: `Makes each principal a member of the room. Each member of a room can add members. A principal that is a member already is skipped. A room has at most ${CHAT_LIMITS.membersPerRoom} members. A direct message keeps its two members. ${MEMBERS_ONLY}`,
+	description: [
+		`Makes each principal a member of the room. Your membership must have chat.add_members: a person has it from the start, and the owner of the room gives it to an agent with chat.set_member_scopes.`,
+		`A principal that is a member already is skipped. A room has at most ${CHAT_LIMITS.membersPerRoom} members. A direct message keeps its two members.`,
+		"scopes says what each new member can do in the room. You cannot give a scope that your membership does not have.",
+		NEW_MEMBER_SCOPES,
+		AGENT_MEMBER,
+		MEMBERS_ONLY,
+	].join(" "),
 	http: { method: "POST", path: "/api/v1/chat/rooms/{room_id}/members" },
 	scopes: ["chat.write"],
 	callers: ["human", "agent", "service"],
@@ -852,13 +896,41 @@ export const addMembers = defineOperation({
 	input: z.strictObject({
 		room_id: RoomId,
 		principal_ids: z.array(PrincipalId).min(1).max(CHAT_LIMITS.membersPerCall),
+		/** What each new member can do in the room. The default follows the kind of the member. */
+		scopes: RoomMemberScopes.optional(),
 	}),
 	output: z.object({
 		/** The principals that the call made members. A principal that was a member already does not count. */
 		members_added: z.number().int(),
 		room: ChatRoom,
+		/** The change of each agent and each service account that you manage and that got new access. */
+		agent_access_changes: z.array(AgentAccessChange).default([]),
 	}),
 	errors: ["not_found", "invalid", "conflict"],
+});
+
+export const setMemberScopes = defineOperation({
+	name: "chat.set_member_scopes",
+	summary: "Change what a member can do in a room",
+	description: [
+		"Sets the scopes of one member of a room: chat.read, chat.write and chat.add_members. Each member has chat.read.",
+		"Without chat.write, the member reads the room and cannot post, change messages, or add reactions and pins.",
+		"With chat.add_members, the member can add members to the room.",
+		"Only the owner of the room can call this. An owner or an admin of the organization can also call it for a public room.",
+		"The owner of a room has each scope, and a direct message keeps the scopes of its members: both get invalid.",
+		AGENT_MEMBER,
+	].join(" "),
+	http: { method: "POST", path: "/api/v1/chat/rooms/{room_id}/members/{principal_id}/scopes" },
+	scopes: ["chat.write"],
+	callers: ["human", "agent", "service"],
+	annotations: CHANGE,
+	input: z.strictObject({ room_id: RoomId, principal_id: PrincipalId, scopes: RoomMemberScopes }),
+	output: z.object({
+		member: ChatMember,
+		/** The change of the agent or the service account, when you manage it and it got new access. */
+		agent_access_changes: z.array(AgentAccessChange).default([]),
+	}),
+	errors: ["not_found", "invalid"],
 });
 
 export const removeMember = defineOperation({
@@ -1480,6 +1552,7 @@ export const chatOperations = {
 	"chat.join_room": joinRoom,
 	"chat.add_members": addMembers,
 	"chat.remove_member": removeMember,
+	"chat.set_member_scopes": setMemberScopes,
 	"chat.list_messages": listMessages,
 	"chat.post_message": postMessage,
 	"chat.list_replies": listReplies,

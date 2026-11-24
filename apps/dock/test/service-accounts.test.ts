@@ -420,7 +420,10 @@ describe("tokens of a service account", () => {
 	it("lose their live connections when the scopes or the limits of the account change", async () => {
 		const { admin, service } = await seedService(["account.read", "chat.read"]);
 		const token = await serviceToken(admin, service.id);
-		const { room } = await admin.call("chat.create_room", { kind: "private", name: "ci", member_ids: [service.id] });
+		// A membership with only chat.read: the admin manages the account, so chat.write in the membership would
+		// change the access of the account before this test changes it.
+		const { room } = await admin.call("chat.create_room", { kind: "private", name: "ci" });
+		await admin.call("chat.add_members", { room_id: room.id, principal_ids: [service.id], scopes: ["chat.read"] });
 		const refsOf = () =>
 			runInDurableObject(env.CHAT_ROOM.get(env.CHAT_ROOM.idFromName(room.id)), (_instance, state) =>
 				state
@@ -1237,8 +1240,9 @@ describe("the access of a service account", () => {
 			drive_shared_items_truncated: false,
 			// A token has no scopes of its own: the scopes and the limits are those of the account.
 			tokens: [{ key_id: live.keyId, label: "deploy", expires_at: null }],
-			// The membership of the team mailbox gave the account mail.modify and mail.send.
-			scopes: ["mail.read", "mail.modify", "mail.send", "chat.read"],
+			// The membership of the team mailbox gave the account mail.modify and mail.send, and the membership
+			// of the room gave it chat.write.
+			scopes: ["mail.read", "mail.modify", "mail.send", "chat.read", "chat.write"],
 			resources: null,
 		});
 		const viaMcp = await callTool(admin.key, "directory_get_agent_access", { principal_id: service.id });

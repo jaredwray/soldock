@@ -15,9 +15,12 @@ import {
 	type ChatReaction,
 	type ChatSocketEvent,
 	type ChatWebhookEvent,
+	defaultRoomMemberScopes,
 	type GroupMention,
 	type PostingPolicy,
+	ROOM_MEMBER_SCOPES,
 	type RoomKind,
+	type RoomMemberScope,
 	type RoomRole,
 } from "@asterra/contracts";
 import {
@@ -103,6 +106,8 @@ export interface RoomRecord {
 
 export interface MemberRecord extends ActorRecord {
 	role: RoomRole;
+	/** What the member can do in the room. The owner has each scope. */
+	scopes: RoomMemberScope[];
 	joined_at: number;
 }
 
@@ -255,6 +260,11 @@ interface MemberRow extends Row {
 	starred: number;
 	/** The newest change of the room that is for the member, as the JSON of `ChatAddressedState`, or null. */
 	addressed_json: string | null;
+	/**
+	 * The scopes of the member in the room, as a JSON list. Null: the scopes of its kind
+	 * (`defaultRoomMemberScopes`), which a member from before the scopes has too.
+	 */
+	scopes: string | null;
 }
 
 /** A message that a search found, with the found parts of its text. */
@@ -602,6 +612,8 @@ const MIGRATIONS: string[][] = [
 		"ALTER TABLE messages ADD COLUMN cards_json TEXT",
 		"CREATE INDEX IF NOT EXISTS messages_active_created ON messages (created_at) WHERE deleted_at IS NULL",
 	],
+	// The scopes of each member in the room. Null: the scopes of the kind of the member.
+	["ALTER TABLE members ADD COLUMN scopes TEXT"],
 ];
 
 /**
@@ -678,6 +690,8 @@ const NOT_MEMBER = "You are not a member of this room. Join it first with chat.j
 const NO_MESSAGE = "No message has that id in this room.";
 const EMPTY_MESSAGE = "A message needs text or a file.";
 const FULL = `A room can have ${CHAT_LIMITS.membersPerRoom} members at most.`;
+const NO_WRITE = "Your membership of this room does not have chat.write. The owner of the room can add it.";
+const NO_ADD_MEMBERS = "Your membership of this room does not have chat.add_members. The owner of the room can add it.";
 /**
  * The most message allowances that a room keeps in memory. A room has `membersPerRoom` members at
  * most. The rest is for the members that left a short time before.
@@ -889,8 +903,40 @@ export class ChatRoomDO extends DurableObject<Env> {
 		return kind === "dm" || kind === "group_dm";
 	}
 
+	/**
+	 * The scopes of a member in the room. The owner has each scope. A member without stored scopes has the
+	 * scopes of its kind. A stored value that is not a list of scopes gives only `chat.read`, so a bad row
+	 * never gives more access.
+	 */
+	private scopesOf(member: MemberRow): RoomMemberScope[] {
+		if (member.role === "owner") return [...ROOM_MEMBER_SCOPES];
+		if (member.scopes === null) return defaultRoomMemberScopes((JSON.parse(member.actor_json) as ActorRecord).kind);
+		let stored: unknown;
+		try {
+			stored = JSON.parse(member.scopes);
+		} catch {
+			stored = null;
+		}
+		const list = Array.isArray(stored) ? stored : [];
+		return ROOM_MEMBER_SCOPES.filter((scope) => scope === "chat.read" || list.includes(scope));
+	}
+
+	private hasScope(member: MemberRow, scope: RoomMemberScope): boolean {
+		return this.scopesOf(member).includes(scope);
+	}
+
+	private memberRecord(row: MemberRow): MemberRecord {
+		return {
+			...(JSON.parse(row.actor_json) as ActorRecord),
+			role: row.role,
+			scopes: this.scopesOf(row),
+			joined_at: row.joined_at,
+		};
+	}
+
 	private canPost(room: RoomRow, member: MemberRow | null): boolean {
 		if (!member || room.archived_at !== null) return false;
+		if (!this.hasScope(member, "chat.write")) return false;
 		if (room.posting_policy === "owners_only") return member.role === "owner";
 		if (room.posting_policy === "allowlist") {
 			if (member.role === "owner") return true;
@@ -1035,6 +1081,17 @@ export class ChatRoomDO extends DurableObject<Env> {
 		const opened = this.open(call, "member");
 		if ("error" in opened) return opened;
 		return { room: opened.room, member: opened.member as MemberRow };
+	}
+
+	/**
+	 * The same as `openAsMember`, for a call that changes what the members see in the room: a message, a
+	 * reaction, a pin or a card. The membership of the caller needs `chat.write`. A member without it still
+	 * sets what it read, its star and the threads that it follows.
+	 */
+	private openAsWriter(call: RoomCall): { room: RoomRow; member: MemberRow } | Refusal {
+		const opened = this.openAsMember(call);
+		if ("error" in opened) return opened;
+		return this.hasScope(opened.member, "chat.write") ? opened : refuse("forbidden", NO_WRITE);
 	}
 
 	/** Verifies the caller is a member of this live room. */
@@ -1232,15 +1289,23 @@ export class ChatRoomDO extends DurableObject<Env> {
 
 	// --- Rooms and members ----------------------------------------------------------------------
 
-	private insertMember(actor: ActorRecord, role: RoomRole, now: number, lastReadSeq: number): void {
+	/** `scopes` null: the member gets the scopes of its kind. */
+	private insertMember(
+		actor: ActorRecord,
+		role: RoomRole,
+		now: number,
+		lastReadSeq: number,
+		scopes: readonly RoomMemberScope[] | null = null,
+	): void {
 		this.sql.exec(
-			"INSERT INTO members (principal_id, actor_json, role, joined_at, last_read_seq, membership_id) VALUES (?, ?, ?, ?, ?, ?)",
+			"INSERT INTO members (principal_id, actor_json, role, joined_at, last_read_seq, membership_id, scopes) VALUES (?, ?, ?, ?, ?, ?, ?)",
 			actor.principal_id,
 			JSON.stringify(actor),
 			role,
 			now,
 			lastReadSeq,
 			crypto.randomUUID(),
+			scopes === null ? null : JSON.stringify(ROOM_MEMBER_SCOPES.filter((scope) => scopes.includes(scope))),
 		);
 		this.touch(`member:${actor.principal_id}`);
 	}
@@ -1327,11 +1392,9 @@ export class ChatRoomDO extends DurableObject<Env> {
 		const opened = this.open(call, "visible");
 		if ("error" in opened) return opened;
 		if (!opened.member && !(await this.inDirectory(opened.room.room_id))) return refuse("not_found", NOT_FOUND);
-		const members = this.all<MemberRow>("SELECT * FROM members ORDER BY joined_at, principal_id").map((row) => ({
-			...(JSON.parse(row.actor_json) as ActorRecord),
-			role: row.role,
-			joined_at: row.joined_at,
-		}));
+		const members = this.all<MemberRow>("SELECT * FROM members ORDER BY joined_at, principal_id").map((row) =>
+			this.memberRecord(row),
+		);
 		return {
 			room: this.record(call.actor.principal_id),
 			members,
@@ -1386,38 +1449,117 @@ export class ChatRoomDO extends DurableObject<Env> {
 	 * Refuses a caller that cannot add members to this room. The handler asks this before it reads the
 	 * directory, so a caller without access to the room learns nothing about a principal id.
 	 */
-	checkAddMembers(call: RoomCall): { ok: true } | Refusal {
+	checkAddMembers(call: RoomCall, scopes?: readonly RoomMemberScope[]): { ok: true } | Refusal {
 		const opened = this.openAsMember(call);
 		if ("error" in opened) return opened;
 		const archived = this.ensureNotArchived(opened.room);
 		if (archived) return archived;
 		if (this.isDmKind(opened.room.kind)) {
 			return refuse("invalid", "A direct message keeps its members. Create a room for more people.");
+		}
+		const held = this.scopesOf(opened.member);
+		if (!held.includes("chat.add_members")) return refuse("forbidden", NO_ADD_MEMBERS);
+		// A member gives only what it has, so a member without a scope cannot give that scope to a different member.
+		const missing = (scopes ?? []).filter((scope) => !held.includes(scope));
+		if (missing.length > 0) {
+			return refuse(
+				"forbidden",
+				`You cannot give ${missing.join(", ")}: your membership of this room does not have it.`,
+			);
 		}
 		return { ok: true };
 	}
 
-	/** Adds principals as members. A new member starts with each message read, and can read them all. */
-	async addMembers(call: RoomCall, actors: ActorRecord[]): Promise<{ added: string[]; room: RoomRecord } | Refusal> {
-		const opened = this.openAsMember(call);
-		if ("error" in opened) return opened;
-		const archived = this.ensureNotArchived(opened.room);
-		if (archived) return archived;
-		if (this.isDmKind(opened.room.kind)) {
-			return refuse("invalid", "A direct message keeps its members. Create a room for more people.");
-		}
+	/**
+	 * Adds principals as members. A new member starts with each message read, and can read them all. With
+	 * `scopes`, each new member gets these scopes, and without them the scopes of its kind. The result has the
+	 * scopes of each named principal that is a member after the call, also a member from before.
+	 */
+	async addMembers(
+		call: RoomCall,
+		actors: ActorRecord[],
+		scopes?: readonly RoomMemberScope[],
+	): Promise<{ added: string[]; room: RoomRecord; members: MemberRecord[] } | Refusal> {
+		const allowed = this.checkAddMembers(call, scopes);
+		if ("error" in allowed) return allowed;
+		const room = this.room() as RoomRow;
 		const fresh = new Map<string, ActorRecord>();
 		for (const actor of actors) if (!this.member(actor.principal_id)) fresh.set(actor.principal_id, actor);
 		if (fresh.size > 0) {
 			if (this.memberCount() + fresh.size > CHAT_LIMITS.membersPerRoom) return refuse("conflict", FULL);
 			this.ctx.storage.transactionSync(() => {
 				const now = Date.now();
-				for (const actor of fresh.values()) this.insertMember(actor, "member", now, opened.room.last_seq);
+				for (const actor of fresh.values()) this.insertMember(actor, "member", now, room.last_seq, scopes ?? null);
 				this.roomChanged(call.actor.principal_id);
 			});
 			await this.publish({ type: "room" });
 		}
-		return { added: [...fresh.keys()], room: this.record(call.actor.principal_id) };
+		return { added: [...fresh.keys()], room: this.record(call.actor.principal_id), members: this.membersNamed(actors) };
+	}
+
+	/** The members of the room among these principals, each with its scopes. */
+	private membersNamed(actors: readonly ActorRecord[]): MemberRecord[] {
+		const ids = new Set(actors.map((actor) => actor.principal_id));
+		return [...ids].flatMap((id) => {
+			const row = this.member(id);
+			return row ? [this.memberRecord(row)] : [];
+		});
+	}
+
+	/** The members of the room among these principals, for a caller that is a member. */
+	membersOf(call: RoomCall, principalIds: readonly string[]): { members: MemberRecord[] } | Refusal {
+		const opened = this.openAsMember(call);
+		if ("error" in opened) return opened;
+		return {
+			members: principalIds.flatMap((id) => {
+				const row = this.member(id);
+				return row ? [this.memberRecord(row)] : [];
+			}),
+		};
+	}
+
+	/**
+	 * Sets what one member can do in the room. Only the owner of the room does this, or an owner or an admin
+	 * of the organization for a public room (`allowAdmin`). The owner has each scope, and a direct message has
+	 * no owner, so both keep their scopes. A call that changes nothing writes nothing.
+	 */
+	async setMemberScopes(
+		call: RoomCall,
+		input: { principalId: string; scopes: readonly RoomMemberScope[]; allowAdmin: boolean },
+	): Promise<{ member: MemberRecord; changed: boolean } | Refusal> {
+		const room = this.room();
+		if (!room) return refuse("not_found", NOT_FOUND);
+		const member = this.member(call.actor.principal_id);
+		if (!member && room.kind !== "public") return refuse("not_found", NOT_FOUND);
+		if (this.isDmKind(room.kind)) return refuse("invalid", "The members of a direct message keep their scopes.");
+		const canManage = member?.role === "owner" || (input.allowAdmin && room.kind === "public");
+		if (!canManage) {
+			return refuse(
+				"forbidden",
+				"Only the owner of the room, or an owner or an admin of the organization for a public room, can change the scopes of a member.",
+			);
+		}
+		const archived = this.ensureNotArchived(room);
+		if (archived) return archived;
+		const target = this.member(input.principalId);
+		if (!target) return refuse("not_found", "No member of this room has that id.");
+		if (target.role === "owner") return refuse("invalid", "The owner of a room has each scope.");
+		const scopes = ROOM_MEMBER_SCOPES.filter((scope) => scope === "chat.read" || input.scopes.includes(scope));
+		const current = this.scopesOf(target);
+		if (current.length === scopes.length && scopes.every((scope) => current.includes(scope))) {
+			return { member: this.memberRecord(target), changed: false };
+		}
+		this.ctx.storage.transactionSync(() => {
+			this.sql.exec(
+				"UPDATE members SET scopes = ? WHERE principal_id = ?",
+				JSON.stringify(scopes),
+				target.principal_id,
+			);
+			this.touch(`member:${target.principal_id}`);
+			this.roomChanged(call.actor.principal_id);
+		});
+		await this.publish({ type: "room" });
+		return { member: this.memberRecord(this.member(target.principal_id) as MemberRow), changed: true };
 	}
 
 	/**
@@ -1813,11 +1955,9 @@ export class ChatRoomDO extends DurableObject<Env> {
 				return refuse("not_found", NOT_FOUND);
 			}
 		}
-		const members = this.all<MemberRow>("SELECT * FROM members ORDER BY joined_at, principal_id").map((row) => ({
-			...(JSON.parse(row.actor_json) as ActorRecord),
-			role: row.role,
-			joined_at: row.joined_at,
-		}));
+		const members = this.all<MemberRow>("SELECT * FROM members ORDER BY joined_at, principal_id").map((row) =>
+			this.memberRecord(row),
+		);
 		const rows = this.all<MessageRow>(
 			"SELECT * FROM messages WHERE seq > ? ORDER BY seq LIMIT ?",
 			input.afterSeq,
@@ -2128,7 +2268,7 @@ export class ChatRoomDO extends DurableObject<Env> {
 		messageId: string,
 		url: string | null,
 	): Promise<{ message: MessageRecord } | Refusal> {
-		const opened = this.openAsMember(call);
+		const opened = this.openAsWriter(call);
 		if ("error" in opened) return opened;
 		const row = this.message(messageId);
 		if (!row) return refuse("not_found", NO_MESSAGE);
@@ -2503,7 +2643,7 @@ export class ChatRoomDO extends DurableObject<Env> {
 
 	/** Pins a message in the room. */
 	async pinMessage(call: RoomCall, messageId: string): Promise<{ pin: PinRecord; pinned: boolean } | Refusal> {
-		const opened = this.openAsMember(call);
+		const opened = this.openAsWriter(call);
 		if ("error" in opened) return opened;
 		const archived = this.ensureNotArchived(opened.room);
 		if (archived) return archived;
@@ -2550,7 +2690,7 @@ export class ChatRoomDO extends DurableObject<Env> {
 		call: RoomCall,
 		messageId: string,
 	): Promise<{ unpinned: boolean; message: MessageRecord } | Refusal> {
-		const opened = this.openAsMember(call);
+		const opened = this.openAsWriter(call);
 		if ("error" in opened) return opened;
 		const archived = this.ensureNotArchived(opened.room);
 		if (archived) return archived;
@@ -2664,7 +2804,7 @@ export class ChatRoomDO extends DurableObject<Env> {
 			idempotencyKey?: string | undefined;
 		},
 	): Promise<{ action: ChatCardAction } | Refusal> {
-		const opened = this.openAsMember(call);
+		const opened = this.openAsWriter(call);
 		if ("error" in opened) return opened;
 		const archived = this.ensureNotArchived(opened.room);
 		if (archived) return archived;
@@ -2883,7 +3023,7 @@ export class ChatRoomDO extends DurableObject<Env> {
 		emoji: string,
 		add: boolean,
 	): Promise<{ message: MessageRecord; changed: boolean } | Refusal> {
-		const opened = this.openAsMember(call);
+		const opened = this.openAsWriter(call);
 		if ("error" in opened) return opened;
 		const archived = this.ensureNotArchived(opened.room);
 		if (archived) return archived;
@@ -3066,6 +3206,7 @@ export class ChatRoomDO extends DurableObject<Env> {
 			if ("error" in opened) return opened;
 			const archived = this.ensureNotArchived(opened.room);
 			if (archived) return archived;
+			if (!this.hasScope(opened.member, "chat.write")) return refuse("forbidden", NO_WRITE);
 			if (!this.canPost(opened.room, opened.member)) {
 				return refuse("forbidden", "You do not have permission to post in this room.");
 			}
@@ -3337,7 +3478,7 @@ export class ChatRoomDO extends DurableObject<Env> {
 	): Promise<{ message: MessageRecord; changed: boolean } | Refusal> {
 		// Hold other room calls until the new version and the webhook event are stored.
 		const edited = await this.ctx.blockConcurrencyWhile(async () => {
-			const opened = this.openAsMember(call);
+			const opened = this.openAsWriter(call);
 			if ("error" in opened) return opened;
 			const archived = this.ensureNotArchived(opened.room);
 			if (archived) return archived;
@@ -3490,7 +3631,7 @@ export class ChatRoomDO extends DurableObject<Env> {
 	/** Deletes the text of a message. Its author and the owner of the room can do this. */
 	async deleteMessage(call: RoomCall, messageId: string): Promise<{ deleted: boolean } | Refusal> {
 		const deleted = await this.ctx.blockConcurrencyWhile(async () => {
-			const opened = this.openAsMember(call);
+			const opened = this.openAsWriter(call);
 			if ("error" in opened) return opened;
 			const archived = this.ensureNotArchived(opened.room);
 			if (archived) return archived;

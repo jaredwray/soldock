@@ -54,14 +54,17 @@ export {
 	chatIncomingWebhookPath,
 	chatLinkImagePath,
 	chatSocketPath,
+	defaultRoomMemberScopes,
 	Emoji,
 	isCustomEmoji,
 	POSTING_POLICIES,
 	type PostingPolicy,
 	ROOM_KINDS,
+	ROOM_MEMBER_SCOPES,
 	ROOM_ROLES,
 	RoomId,
 	type RoomKind,
+	type RoomMemberScope,
 	type RoomRole,
 } from "./chat.ts";
 export {
@@ -236,6 +239,7 @@ export {
 } from "./resources.ts";
 export {
 	AGENT_RESOURCE_LIMITS,
+	AgentAccessChange,
 	AgentResources,
 	allowsResource,
 	defaultAgentResources,
@@ -288,7 +292,6 @@ export {
 	TotpCode,
 } from "./signin.ts";
 export {
-	AgentAccessChange,
 	MAILBOX_MEMBER_SCOPES,
 	type MailboxMemberScope,
 	mailboxMemberScopes,

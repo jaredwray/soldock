@@ -1019,6 +1019,45 @@ a.chat-author:hover {
 	padding: 4px 24px 8px;
 }
 
+/* The form that adds a member to a room: the select with its button, then what the new member can do. */
+.chat-member-add {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr);
+	gap: 4px;
+}
+
+/* A long name in the select must not push the Add button out of a narrow dialog. */
+.chat-member-add .select-trigger {
+	flex: 1;
+	min-width: 0;
+}
+
+.chat-member-add .scope-inline {
+	box-sizing: border-box;
+	padding: 0 24px 8px;
+}
+
+/* The scopes of one member in the members list of a room stay on the right, before the Remove button. */
+.chat-member-scopes {
+	flex: none;
+	width: auto;
+}
+
+/* In a narrow dialog, the scopes and the Remove button of a member go below its name. */
+@media (max-width: 520px) {
+	.chat-row:has(.chat-member-scopes) {
+		flex-wrap: wrap;
+	}
+
+	.chat-row:has(.chat-member-scopes) .chat-row-text {
+		flex-basis: calc(100% - 60px);
+	}
+
+	.chat-member-scopes {
+		margin-left: 44px;
+	}
+}
+
 .chat-dialog-scroll {
 	max-height: min(420px, 50dvh);
 	overflow-y: auto;

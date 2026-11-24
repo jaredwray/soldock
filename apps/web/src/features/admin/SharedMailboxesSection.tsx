@@ -1,11 +1,11 @@
 import { EmailAddress, type Principal, type TeamMailbox } from "@asterra/contracts";
 import { type FormEvent, useCallback, useEffect, useId, useState } from "react";
+import { accessChangeText } from "../../lib/accessChange.ts";
 import { api, errorMessage } from "../../lib/api.ts";
 import { Dialog } from "../../lib/Dialog.tsx";
 import { Icon } from "../../lib/icons.tsx";
 import { kindTag } from "../../lib/principalKind.ts";
 import { useToast } from "../../lib/toast.tsx";
-import { accessChangeText } from "./mailboxScopes.ts";
 import { byName, SharedMailboxPanel } from "./SharedMailboxPanel.tsx";
 
 // The UI says "shared mailbox". The operations and the mail paths keep the name "team mailbox".
@@ -142,7 +142,7 @@ function CreateSharedMailboxDialog({ principals, onClose, onCreated }: CreatePro
 			const changed = result.agent_access_changes
 				.map((change) => {
 					const agent = principals.find((principal) => principal.id === change.principal_id);
-					return accessChangeText(agent?.display_name ?? "An agent", [change]);
+					return accessChangeText(agent?.display_name ?? "An agent", [change], "mailbox");
 				})
 				.join("");
 			toast({ message: `Shared mailbox ${result.team_mailbox.display_name} created.${changed}` });

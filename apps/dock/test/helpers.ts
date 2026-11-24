@@ -51,6 +51,7 @@ export async function restartLegacyRoom(roomId: string, version: number, restore
 				sql.exec("ALTER TABLE messages DROP COLUMN cards_json");
 				sql.exec("DROP TABLE chat_notification_outbox");
 				sql.exec("ALTER TABLE members DROP COLUMN last_typed_at");
+				sql.exec("ALTER TABLE members DROP COLUMN scopes");
 				sql.exec("UPDATE meta SET value = ? WHERE key = 'schema_version'", String(version));
 				await state.storage.sync();
 				state.abort("Restart the legacy room.");

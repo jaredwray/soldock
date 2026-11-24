@@ -9,10 +9,12 @@ import {
 	type ChatSavedMessage,
 	type ChatScheduledMessage,
 	type ChatSection,
+	defaultRoomMemberScopes,
 	type OperationName,
 } from "@asterra/contracts";
 import {
 	type ActivityRecord,
+	assertRoomMemberships,
 	type CallContext,
 	credentialBinding,
 	type DraftRecord,
@@ -22,6 +24,7 @@ import {
 	recordServiceMemberships,
 	type ScheduledRecord,
 	type SectionRecord,
+	widenAgentsForRoom,
 } from "../identity/index.ts";
 import {
 	audit,
@@ -709,24 +712,36 @@ export const chatLayer8Handlers: Pick<HandlerMap<CallContext>, Layer8ChatOperati
 			);
 		}
 		const peers = await actorsOf(call, uniqueOthers);
+		// An agent that the caller manages gets the access of its membership, as in `chat.open_dm`.
+		const principals = await getPrincipals(call.env.DIRECTORY, uniqueOthers);
+		const memberships = principals.map((principal) => ({
+			principal_id: principal.id,
+			scopes: defaultRoomMemberScopes(principal.kind),
+		}));
+		const scopesOf = (principal: { kind: "human" | "agent" }) => defaultRoomMemberScopes(principal.kind);
 		if (peers.length === 1) {
 			const peer = peers[0] as ActorRecord;
-			const opened = openRoom(call, await dmRoomId(call.caller.id, peer.principal_id));
+			const dmId = await dmRoomId(call.caller.id, peer.principal_id);
+			assertRoomMemberships(call, principals, scopesOf, dmId);
+			const opened = openRoom(call, dmId);
 			const res = accept(await opened.room.openDm(opened.ctx, peer));
 			if (res.created) {
 				auditOk(call, "chat.open_dm", res.room.id);
 				recordServiceMemberships(call, [peer.principal_id], "chat.open_dm", res.room.id);
 			}
-			return { room: toRoom(res.room) };
+			const changes = await widenAgentsForRoom(call, dmId, memberships);
+			return { room: toRoom(res.room), agent_access_changes: changes };
 		}
 		const roomId = await groupDmRoomId([call.caller.id, ...uniqueOthers]);
+		assertRoomMemberships(call, principals, scopesOf, roomId);
 		const opened = openRoom(call, roomId);
 		const res = accept(await opened.room.openGroupDm(opened.ctx, peers));
 		if (res.created) {
 			auditOk(call, "chat.open_group_dm", res.room.id);
 			recordServiceMemberships(call, uniqueOthers, "chat.open_group_dm", res.room.id);
 		}
-		return { room: toRoom(res.room) };
+		const changes = await widenAgentsForRoom(call, roomId, memberships);
+		return { room: toRoom(res.room), agent_access_changes: changes };
 	},
 
 	// --- Room lifecycle, posting rules, retention -----------------------------------------------
