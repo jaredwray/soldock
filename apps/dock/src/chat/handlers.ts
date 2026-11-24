@@ -155,6 +155,32 @@ function toActor(principal: PrincipalRecord): ActorRecord {
 	return { principal_id: principal.id, kind: principal.kind, display_name: principal.display_name };
 }
 
+/** Asks a room if a principal is a member now, for a write of the directory that comes after a write of the room. */
+export function memberCheck(room: ReturnType<typeof roomStub>): (principalId: string) => Promise<boolean> {
+	return async (principalId) => room.hasMember(principalId);
+}
+
+/** The most members that `settleOwner` passes before it stops. */
+const OWNER_TRIES = 5;
+
+/**
+ * The room gave itself a new owner: a person before an agent, then the member that joined first. The room
+ * does not know if that principal can still act. An archived or deleted principal cannot sign in, so it
+ * cannot be the owner: nobody could then change the room. The room passes such an owner, at most a few
+ * times, and keeps the last one when no member can act.
+ */
+async function settleOwner(call: CallContext, room: ReturnType<typeof roomStub>, ownerId: string): Promise<void> {
+	const skip: string[] = [];
+	let candidate: string | null = ownerId;
+	for (let attempt = 0; candidate !== null && attempt < OWNER_TRIES; attempt++) {
+		const [principal] = await getPrincipals(call.env.DIRECTORY, [candidate]);
+		if (principal && principal.archived_at === null) return;
+		skip.push(candidate);
+		const next: string | null = (await room.passOwnership(skip)).ownerId;
+		candidate = next !== null && !skip.includes(next) ? next : null;
+	}
+}
+
 /** The fields of a result that tell what the call changed on the agents that the caller manages. */
 export function accessOutput(access: { changes: AgentAccessChange[]; pending: string[] }) {
 	return { agent_access_changes: access.changes, agent_access_pending: access.pending };
@@ -581,7 +607,7 @@ export const chatHandlers: Pick<HandlerMap<CallContext>, ChatOperation> = {
 		);
 		// The members are in the room now. An agent that did not get its access does not fail the call: the
 		// result names it, and `chat.add_members` completes it.
-		const access = await giveRoomAccess(call, room.id, principals.map(defaultMembership));
+		const access = await giveRoomAccess(call, room.id, principals.map(defaultMembership), memberCheck(opened.room));
 		return { room: toRoom(room), ...accessOutput(access) };
 	},
 
@@ -600,7 +626,7 @@ export const chatHandlers: Pick<HandlerMap<CallContext>, ChatOperation> = {
 			auditOk(call, "chat.open_dm", result.room.id);
 			recordServiceMemberships(call, [input.principal_id], "chat.open_dm", result.room.id);
 		}
-		const access = await giveRoomAccess(call, roomId, principals.map(defaultMembership));
+		const access = await giveRoomAccess(call, roomId, principals.map(defaultMembership), memberCheck(opened.room));
 		return { room: toRoom(result.room), ...accessOutput(access) };
 	},
 
@@ -640,7 +666,7 @@ export const chatHandlers: Pick<HandlerMap<CallContext>, ChatOperation> = {
 		recordServiceMemberships(call, result.added, "chat.add_members", input.room_id);
 		// Each named agent that the caller manages gets the access of its membership, also a member from
 		// before. So a second call completes a write that failed.
-		const access = await giveRoomAccess(call, input.room_id, result.members);
+		const access = await giveRoomAccess(call, input.room_id, result.members, memberCheck(opened.room));
 		return { members_added: result.added.length, room: toRoom(result.room), ...accessOutput(access) };
 	},
 
@@ -662,7 +688,7 @@ export const chatHandlers: Pick<HandlerMap<CallContext>, ChatOperation> = {
 			recordServiceMemberships(call, [input.principal_id], "chat.set_member_scopes", input.room_id);
 		}
 		// Each call for an agent that the caller manages gives the agent the access of its membership.
-		const access = await giveRoomAccess(call, input.room_id, [result.member]);
+		const access = await giveRoomAccess(call, input.room_id, [result.member], memberCheck(opened.room));
 		return { member: { ...result.member, joined_at: iso(result.member.joined_at) }, ...accessOutput(access) };
 	},
 
@@ -672,11 +698,13 @@ export const chatHandlers: Pick<HandlerMap<CallContext>, ChatOperation> = {
 		if (result.removed) {
 			auditOk(call, "chat.remove_member", `${input.room_id}:${input.principal_id}`);
 			recordServiceMemberships(call, [input.principal_id], "chat.remove_member", input.room_id);
+			if (result.newOwnerId) await settleOwner(call, opened.room, result.newOwnerId);
+			// The limits of an agent must not name a room that it is not a member of: a later add by a member
+			// that does not manage the agent would then give it access. Only a remove does this: a call for a
+			// principal that was not a member must not change the limits of that principal.
+			await dropRoomAccess(call, input.room_id, [input.principal_id], memberCheck(opened.room));
 		}
-		// The limits of an agent must not name a room that it is not a member of: a later add by a member
-		// that does not manage the agent would then give it access. A second call completes a write that failed.
-		await dropRoomAccess(call, input.room_id, [input.principal_id], (id) => opened.room.hasMember(id));
-		return result;
+		return { removed: result.removed };
 	},
 
 	async "chat.list_messages"(call, input) {

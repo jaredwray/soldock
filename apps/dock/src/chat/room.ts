@@ -699,8 +699,8 @@ const FULL = `A room can have ${CHAT_LIMITS.membersPerRoom} members at most.`;
  * joined first in a room without a person. The owner has each scope, so a person comes before an agent: an
  * agent adds members only when a person decided that.
  */
-const NEXT_OWNER = `SELECT principal_id FROM members
-	ORDER BY json_extract(actor_json, '$.kind') = 'human' DESC, joined_at, principal_id LIMIT 1`;
+const NEXT_OWNER_FROM = "SELECT principal_id FROM members";
+const NEXT_OWNER_ORDER = "ORDER BY json_extract(actor_json, '$.kind') = 'human' DESC, joined_at, principal_id LIMIT 1";
 const NO_WRITE = "Your membership of this room does not have chat.write. The owner of the room can add it.";
 const NO_ADD_MEMBERS = "Your membership of this room does not have chat.add_members. The owner of the room can add it.";
 /**
@@ -1644,7 +1644,10 @@ export class ChatRoomDO extends DurableObject<Env> {
 	 * Removes a member. A member removes itself to leave the room. Only the owner removes a different
 	 * member. When the owner leaves, the member that joined first becomes the owner.
 	 */
-	async removeMember(call: RoomCall, principalId: string): Promise<{ removed: boolean } | Refusal> {
+	async removeMember(
+		call: RoomCall,
+		principalId: string,
+	): Promise<{ removed: boolean; newOwnerId?: string | null } | Refusal> {
 		const opened = this.openAsMember(call);
 		if ("error" in opened) return opened;
 		if (this.isDmKind(opened.room.kind)) return refuse("invalid", "Direct messages keep their members.");
@@ -1657,6 +1660,7 @@ export class ChatRoomDO extends DurableObject<Env> {
 		if (self && opened.room.kind === "private" && this.memberCount() === 1) {
 			return refuse("conflict", "You are the last member of this room, so you cannot leave it.");
 		}
+		let newOwnerId: string | null = null;
 		this.ctx.storage.transactionSync(() => {
 			this.keepScopes(target);
 			this.sql.exec("DELETE FROM members WHERE principal_id = ?", principalId);
@@ -1666,10 +1670,11 @@ export class ChatRoomDO extends DurableObject<Env> {
 			this.touch(`member:${principalId}`);
 			this.touch(`${PRINCIPAL_TARGET}${principalId}`);
 			if (target.role === "owner") {
-				const next = this.one<{ principal_id: string }>(NEXT_OWNER);
+				const next = this.one<{ principal_id: string }>(`${NEXT_OWNER_FROM} ${NEXT_OWNER_ORDER}`);
 				if (next) {
 					this.sql.exec("UPDATE members SET role = 'owner' WHERE principal_id = ?", next.principal_id);
 					this.touch(`member:${next.principal_id}`);
+					newOwnerId = next.principal_id;
 				}
 			}
 			this.roomChanged(call.actor.principal_id);
@@ -1679,7 +1684,33 @@ export class ChatRoomDO extends DurableObject<Env> {
 			this.end(socket, CHAT_SOCKET_CLOSE.ended, "You are not a member of this room now.");
 		}
 		await this.publish({ type: "room" });
-		return { removed: true };
+		return { removed: true, newOwnerId };
+	}
+
+	/**
+	 * Gives the room to the next member when its owner is one of `skip`: principals that cannot act, because
+	 * they are archived or deleted. The handler knows that from the directory, and the room does not. The next
+	 * owner is a member that is not in `skip`, a person before an agent, then the member that joined first.
+	 * Returns the owner after the call. Without such a member, the owner does not change.
+	 */
+	async passOwnership(skip: readonly string[]): Promise<{ ownerId: string | null }> {
+		const room = this.room();
+		const owner = this.one<{ principal_id: string }>("SELECT principal_id FROM members WHERE role = 'owner' LIMIT 1");
+		if (!room || !owner || !skip.includes(owner.principal_id)) return { ownerId: owner?.principal_id ?? null };
+		const next = this.one<{ principal_id: string }>(
+			`${NEXT_OWNER_FROM} WHERE principal_id NOT IN (SELECT value FROM json_each(?)) ${NEXT_OWNER_ORDER}`,
+			JSON.stringify(skip),
+		);
+		if (!next) return { ownerId: owner.principal_id };
+		this.ctx.storage.transactionSync(() => {
+			this.sql.exec("UPDATE members SET role = 'member' WHERE principal_id = ?", owner.principal_id);
+			this.sql.exec("UPDATE members SET role = 'owner' WHERE principal_id = ?", next.principal_id);
+			this.touch(`member:${owner.principal_id}`);
+			this.touch(`member:${next.principal_id}`);
+			this.roomChanged("system");
+		});
+		await this.publish({ type: "room" });
+		return { ownerId: next.principal_id };
 	}
 
 	/** Archives a room so it becomes read-only. Room owner, or org admin/owner on a public room. */
@@ -1993,7 +2024,7 @@ export class ChatRoomDO extends DurableObject<Env> {
 			this.touch(`member:${principalId}`);
 			this.touch(`${PRINCIPAL_TARGET}${principalId}`);
 			if (target.role === "owner") {
-				const next = this.one<{ principal_id: string }>(NEXT_OWNER);
+				const next = this.one<{ principal_id: string }>(`${NEXT_OWNER_FROM} ${NEXT_OWNER_ORDER}`);
 				if (next) {
 					this.sql.exec("UPDATE members SET role = 'owner' WHERE principal_id = ?", next.principal_id);
 					this.touch(`member:${next.principal_id}`);

@@ -244,6 +244,27 @@ describe("the owner of a room", () => {
 		expect((await bot.call("chat.get_room", { room_id: room.id })).room.role).toBe("owner");
 	});
 
+	// An archived person cannot sign in. As the owner, it would stop each change of the room, and an admin
+	// can assign an owner only to a room without one.
+	it("does not hand the room to an archived person when it leaves", async () => {
+		const cy = await createActor(owner, {
+			kind: "human",
+			display_name: "Cy",
+			address: "cy@dock.test",
+			password: PASSWORD,
+		});
+		const room = await createRoom(ada, "private", "Hiring", [cy.id, bot.id]);
+		await owner.call("directory.archive_principal", { principal_id: cy.id });
+		await ada.call("chat.remove_member", { room_id: room.id, principal_id: ada.id });
+		const { members } = await bot.call("chat.get_room", { room_id: room.id });
+		// The room gives itself to a person first, and Cy is the only one. But Cy cannot act, so the agent is
+		// the owner.
+		expect(Object.fromEntries(members.map((member) => [member.principal_id, member.role]))).toEqual({
+			[cy.id]: "member",
+			[bot.id]: "owner",
+		});
+	});
+
 	it("cannot leave a private room as its last member, and a public room without members gets a new owner", async () => {
 		const secret = await createRoom(ada, "private", "Hiring");
 		expect(await codeOf(ada.call("chat.remove_member", { room_id: secret.id, principal_id: ada.id }))).toBe("conflict");
@@ -1115,6 +1136,64 @@ describe("an agent in a room", () => {
 		const again = await person.call("chat.add_members", { room_id: room.id, principal_ids: [agent.id] });
 		expect(again).toMatchObject({ members_added: 1, agent_access_changes: [] });
 		expect(await codeOf(agent.call("chat.list_messages", { room_id: room.id }))).toBe("forbidden");
+	});
+
+	// The owner of a room can call chat.remove_member with each id. A call for a principal that is not a
+	// member removes nothing, so it must not change the limits of that principal.
+	it("keeps its limits when the owner of a room removes it and it is not a member", async () => {
+		const agent = await newAgent();
+		const room = await createRoom(ada, "private", "Builds");
+		const limits = { mailbox_ids: [agent.id], drive_ids: [agent.id], room_ids: [room.id] };
+		await ada.call("directory.set_agent_access", { principal_id: agent.id, resources: limits });
+		const version = async () =>
+			(
+				await env.DIRECTORY.prepare("SELECT access_version FROM principals WHERE id = ?")
+					.bind(agent.id)
+					.first<{ access_version: number }>()
+			)?.access_version;
+		const before = await version();
+		expect(await ada.call("chat.remove_member", { room_id: room.id, principal_id: agent.id })).toEqual({
+			removed: false,
+		});
+		expect((await access(agent.id)).resources).toEqual(limits);
+		expect(await version()).toBe(before);
+	});
+
+	// The same two stores, in the other order: a member removes the agent after the room wrote the add, and
+	// before the directory has the access. The late write of the add must not leave the room in the limits.
+	it("gets no room in its limits when a remove comes before the add completes", async () => {
+		const agent = await newAgent();
+		const room = await createRoom(ada, "private", "Builds");
+		const remove = { room_id: room.id, principal_id: agent.id };
+		// The write of the access waits for the remove.
+		const directory = new Proxy(env.DIRECTORY, {
+			get(target, property) {
+				if (property === "prepare") {
+					return (sql: string) => {
+						const statement = target.prepare(sql);
+						if (!sql.includes("UPDATE principals SET agent_scopes")) return statement;
+						return {
+							bind: (...values: unknown[]) => ({
+								run: async () => {
+									await ada.call("chat.remove_member", remove);
+									return statement.bind(...values).run();
+								},
+							}),
+						};
+					};
+				}
+				const value = Reflect.get(target, property);
+				return typeof value === "function" ? value.bind(target) : value;
+			},
+		});
+		const added = await withEnv({ DIRECTORY: directory }, `/api/v1/chat/rooms/${room.id}/members`, {
+			method: "POST",
+			headers: { authorization: `Bearer ${ada.key}`, "content-type": "application/json" },
+			body: JSON.stringify({ principal_ids: [agent.id] }),
+		});
+		expect(await added.json()).toMatchObject({ members_added: 1, agent_access_changes: [] });
+		expect((await ada.call("chat.get_room", { room_id: room.id })).room.member_count).toBe(1);
+		expect((await access(agent.id)).resources?.room_ids).toEqual([]);
 	});
 
 	// The room and the directory are two stores. A manager can add the agent again after the room removed

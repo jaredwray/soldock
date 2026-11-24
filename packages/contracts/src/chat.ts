@@ -760,7 +760,8 @@ const AGENT_MEMBER = [
 	"The call also changes each agent and each service account that it makes a member and that you manage.",
 	"You manage an agent when you are its sponsor, an owner or an admin, and your credential holds directory.write.",
 	"The agent gets the chat scopes of its membership that it does not hold. The room goes into its resource limits when it has limits.",
-	"agent_access_changes has these changes. agent_access_pending names each agent that did not get them: send the call for that member again.",
+	"agent_access_changes has these changes. agent_access_pending names each agent that did not get them.",
+	"For such an agent, call chat.add_members with the id of the room. Do not call chat.create_room again: that makes a second room.",
 	"A membership gives no new access to an agent that you do not manage. Its sponsor, an owner or an admin gives it.",
 ].join(" ");
 const MENTIONS = `To mention a person or an agent, write @ and the local part of its address in text or markdown, for example @ada. When two principals have the same local part, write the full address, for example @ada@example.org. The server stores each mention as a mention node with the id of the principal, and the message lists the ids in mentions. In a private room, a mention of a principal that is not a member stays text. In a body, write a mention node: { type: mention, attrs: { id, label } }. @here and @channel mention each member of the room, except you: the message lists them in group_mentions. In a room with more than ${CHAT_LIMITS.groupMentionMembers} members, only an owner of the room can mention a group: a different member gets forbidden. In a body, write { type: group_mention, attrs: { group } }.`;

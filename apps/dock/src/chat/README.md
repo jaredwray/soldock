@@ -182,8 +182,10 @@ and the room in its limits when it has limits ([`identity`](../identity/README.m
   service account, with an add or with `chat.set_member_scopes`. A member that has the scope cannot give
   it to an agent. So one agent cannot give it to the next agent with no person in the decision.
 - **The next owner.** When the owner leaves, the person that joined first becomes the owner. An agent
-  becomes the owner only in a room without a person (`NEXT_OWNER`). The owner has each scope, so a person
-  comes first.
+  becomes the owner only in a room without a person (`NEXT_OWNER_ORDER`). The owner has each scope, so a
+  person comes first. The room does not know if a principal is archived or deleted. So the handler reads
+  the new owner in the directory, and the room passes an owner that cannot act (`settleOwner`,
+  `passOwnership`). Without this, an archived person as the owner stops each change of the room.
 - **No escalation.** The credential of the call must hold each chat scope that the agent gets
   (`assertRoomGrants`, before the room writes the membership). A call that gives the agent nothing, for
   example one that removes a scope, needs no scope for it. A sponsor who is not an admin changes the agent
@@ -198,7 +200,11 @@ and the room in its limits when it has limits ([`identity`](../identity/README.m
 - **A removed agent.** `chat.remove_member` takes the room out of the limits of an agent
   (`dropRoomAccess`). So a later add by a member that does not manage the agent gives no access. The
   scopes of the agent do not change. A different call can add the agent again before this write. So after
-  the write, the handler asks the room again (`hasMember`), and puts the room back for a member. Known limit: a room that an owner or an admin deletes stays in the
+  the write, the handler asks the room again (`hasMember`), and puts the room back for a member. A call
+  for a principal that was not a member changes no limits.
+- **The same question after an add.** A different call can remove the agent between the write of the room
+  and the write of the access. So `giveRoomAccess` asks the room again after it put the room into the
+  limits, and takes the room out for a principal that is not a member. Known limit: a room that an owner or an admin deletes stays in the
   limits, and gives nothing.
 
 ## Messages

@@ -186,12 +186,13 @@ export interface RoomAccessResult {
  * still the sponsor. The function reads the agent and tries again.
  *
  * It does not throw for an agent that it cannot complete. The membership is in the room, so the call
- * returns its result, and `pending` names the agent.
+ * returns its result, and `pending` names the agent. `isMember` asks the room if a principal is a member now.
  */
 export async function giveRoomAccess(
 	call: CallContext,
 	roomId: string,
 	members: readonly RoomMembership[],
+	isMember: (principalId: string) => Promise<boolean>,
 ): Promise<RoomAccessResult> {
 	const { DIRECTORY } = call.env;
 	const scopesOf = new Map(members.map((member) => [member.principal_id, credentialScopes(member.scopes)]));
@@ -215,12 +216,19 @@ export async function giveRoomAccess(
 				refused.push(agent.id);
 				continue;
 			}
-			if (await widenAgentAccess(DIRECTORY, { ...widening, sponsorId })) {
-				await afterWidening(call, widening);
-				changes.push(toAccessChange(widening));
-			} else {
+			if (!(await widenAgentAccess(DIRECTORY, { ...widening, sponsorId }))) {
 				lost.push(agent.id);
+				continue;
 			}
+			await afterWidening(call, widening);
+			// A different call can remove the member between the write of the room and this write. Its own write
+			// came first, and found no room in the limits. So ask the room again: the limits must not name a
+			// room that the agent is not a member of.
+			if (widening.resources !== agent.agent_resources && !(await isMember(agent.id))) {
+				await dropRoomFromLimits(DIRECTORY, agent.id, roomId);
+				continue;
+			}
+			changes.push(toAccessChange(widening));
 		}
 		agents = lost.length === 0 ? [] : managedAgents(call, await getPrincipals(DIRECTORY, lost));
 	}
