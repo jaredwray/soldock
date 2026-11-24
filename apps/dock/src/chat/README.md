@@ -175,8 +175,12 @@ and the room in its limits when it has limits ([`identity`](../identity/README.m
   place 21 gets `invalid`. The handler makes these checks before the room writes the membership.
 - The room object owns the members, and the directory owns the access of an agent. So the two writes are
   not one transaction: the membership comes first. The write of the access matches only while
-  `access_version` is the one of the read, and the handler tries three times. After that, the call gets
-  `conflict` with the members in the room, and the same call again completes the access.
+  `access_version` is the one of the read, and the handler tries three times (`giveRoomAccess`). After
+  that, the call gets `conflict` with the members in the room, and the same call again completes the
+  access.
+- `chat.create_room` is different: a second call would make a second room. So it does not fail for an
+  agent that did not get its access. The result has the room, and `agent_access_pending` names the agent.
+  `chat.add_members` for that agent completes the access.
 
 ## Messages
 

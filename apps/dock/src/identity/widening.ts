@@ -147,29 +147,51 @@ export function assertRoomMemberships(
 	}
 }
 
+/** The result of `giveRoomAccess`: the changes that it wrote, and the agents that still need their access. */
+export interface RoomAccessResult {
+	changes: AgentAccessChange[];
+	/**
+	 * The agents that the caller manages, that are members of the room, and that did not get the access of
+	 * their membership: a parallel change of their access came first each time, or their limits have no place
+	 * now. The same call again, or `chat.add_members` for them, completes it.
+	 */
+	pending: string[];
+}
+
 /**
  * Gives each agent that the caller manages the access of its membership of a room: the chat scopes of the
  * membership that it does not hold, and the room in its limits when it has limits. The room object owns the
  * members, and the directory owns the access of an agent, so the two writes are not one transaction. The
- * membership comes first. This write is idempotent: when it fails, the same call again completes it.
+ * membership comes first. This write is idempotent: when it does not complete, a later call completes it.
  *
  * The write matches only while the access of the agent is the access of the read (`access_version`), so a
- * parallel change of the access is not lost. Then the function reads the agent and tries again.
+ * parallel change of the access is not lost. Then the function reads the agent and tries again. It does not
+ * throw for an agent that it cannot complete: the membership is in the room, so the caller decides what the
+ * call returns.
  */
-export async function widenAgentsForRoom(
+export async function giveRoomAccess(
 	call: CallContext,
 	roomId: string,
 	members: readonly RoomMembership[],
-): Promise<AgentAccessChange[]> {
+): Promise<RoomAccessResult> {
 	const { DIRECTORY } = call.env;
 	const scopesOf = new Map(members.map((member) => [member.principal_id, credentialScopes(member.scopes)]));
 	const changes: AgentAccessChange[] = [];
+	const refused: string[] = [];
 	let agents = managedAgents(call, await getPrincipals(DIRECTORY, [...scopesOf.keys()]));
 	for (let attempt = 0; agents.length > 0 && attempt < WIDENING_TRIES; attempt++) {
 		const lost: string[] = [];
 		for (const agent of agents) {
 			const scopes = scopesOf.get(agent.id) ?? [];
-			assertAgentMembership(call, agent, "room", scopes, roomId);
+			try {
+				// The handler made this check before the room wrote the membership. A parallel change of the agent
+				// can make it fail now, for example when its limits have no place.
+				assertAgentMembership(call, agent, "room", scopes, roomId);
+			} catch (error) {
+				if (!(error instanceof OperationError)) throw error;
+				refused.push(agent.id);
+				continue;
+			}
 			const widening = agentWidening(agent, "room", roomId, scopes);
 			if (!widening) continue;
 			if (await widenAgentAccess(DIRECTORY, widening)) {
@@ -181,7 +203,21 @@ export async function widenAgentsForRoom(
 		}
 		agents = lost.length === 0 ? [] : managedAgents(call, await getPrincipals(DIRECTORY, lost));
 	}
-	if (agents.length > 0) {
+	return { changes, pending: [...refused, ...agents.map((agent) => agent.id)] };
+}
+
+/**
+ * The same as `giveRoomAccess`, for an operation that the caller can send again for the same room. When an
+ * agent did not get its access, the call gets `conflict`: the members are in the room, and the same call
+ * again completes the access.
+ */
+export async function widenAgentsForRoom(
+	call: CallContext,
+	roomId: string,
+	members: readonly RoomMembership[],
+): Promise<AgentAccessChange[]> {
+	const { changes, pending } = await giveRoomAccess(call, roomId, members);
+	if (pending.length > 0) {
 		throw new OperationError(
 			"conflict",
 			"The access of an agent changed during the call. The members are in the room. Send the call again.",

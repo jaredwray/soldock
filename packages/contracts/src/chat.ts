@@ -800,6 +800,7 @@ export const createRoom = defineOperation({
 		`Set member_ids to add people and agents at once, at most ${CHAT_LIMITS.membersPerCall}.`,
 		NEW_MEMBER_SCOPES,
 		AGENT_MEMBER,
+		"The room exists when the call returns. agent_access_pending names each agent that did not get its access: call chat.add_members for it.",
 		"Two rooms can have the same name. For a conversation with one person or one agent, use chat.open_dm.",
 	].join(" "),
 	http: { method: "POST", path: "/api/v1/chat/rooms" },
@@ -812,7 +813,15 @@ export const createRoom = defineOperation({
 		topic: RoomTopic.optional(),
 		member_ids: z.array(PrincipalId).max(CHAT_LIMITS.membersPerCall).optional(),
 	}),
-	output: z.object({ room: ChatRoom, agent_access_changes: z.array(AgentAccessChange).default([]) }),
+	output: z.object({
+		room: ChatRoom,
+		agent_access_changes: z.array(AgentAccessChange).default([]),
+		/**
+		 * The agents that you manage, that are members of the new room, and that did not get their access: a
+		 * different call changed their access at the same time. Call chat.add_members for them to complete it.
+		 */
+		agent_access_pending: z.array(z.string()).default([]),
+	}),
 	errors: ["not_found", "invalid"],
 });
 

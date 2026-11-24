@@ -15,11 +15,13 @@ import {
 	createActor,
 	ORIGIN,
 	PASSWORD,
+	racing,
 	request,
 	restartLegacyRoom,
 	SETUP_TOKEN,
 	seedOrg,
 	sendMemberStates,
+	withEnv,
 } from "./helpers.ts";
 
 type ChatMessageEvent = { id: string; version: number };
@@ -1017,6 +1019,41 @@ describe("an agent in a room", () => {
 			scopes: ["account.read", "chat.read", "chat.write"],
 			resources: { room_ids: [room.id] },
 		});
+	});
+
+	// The room owns the members, and the directory owns the access of the agent, so the two writes are not
+	// one transaction. A new room exists after its write: a failed call would leave a room that the caller
+	// cannot name, and a second call would make a second room.
+	it("returns the new room when a parallel change stops the access of the agent, and a later add completes it", async () => {
+		const agent = await newAgent();
+		// A different call changes the access of the agent before each try of the write.
+		const racer = racing(
+			"UPDATE principals SET access_version = access_version + 1 WHERE id = ?",
+			agent.id,
+			"UPDATE principals SET agent_scopes",
+		);
+		const send = (path: string, body: unknown) =>
+			withEnv({ DIRECTORY: racer }, path, {
+				method: "POST",
+				headers: { authorization: `Bearer ${ada.key}`, "content-type": "application/json" },
+				body: JSON.stringify(body),
+			});
+		const response = await send("/api/v1/chat/rooms", { kind: "private", name: "Builds", member_ids: [agent.id] });
+		expect(response.status).toBe(200);
+		const created = (await response.json()) as { room: { id: string }; agent_access_pending: string[] };
+		expect(created).toMatchObject({ agent_access_changes: [], agent_access_pending: [agent.id] });
+		expect((await ada.call("chat.list_rooms")).rooms.map((room) => room.id)).toEqual([created.room.id]);
+		expect(await codeOf(agent.call("chat.list_messages", { room_id: created.room.id }))).toBe("forbidden");
+		// An add can run again for the same room, so it gets conflict while the parallel change continues.
+		const add = { room_id: created.room.id, principal_ids: [agent.id] };
+		expect((await send(`/api/v1/chat/rooms/${created.room.id}/members`, { principal_ids: [agent.id] })).status).toBe(
+			409,
+		);
+		// An add of the member that the room has completes the access.
+		expect((await ada.call("chat.add_members", add)).agent_access_changes).toEqual([
+			{ principal_id: agent.id, scopes_added: ["chat.write"], limits_widened: true },
+		]);
+		expect((await agent.call("chat.list_messages", { room_id: created.room.id })).messages).toEqual([]);
 	});
 
 	// Stored limits with more ids than the most are not valid, and such an agent reaches nothing.

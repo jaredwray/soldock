@@ -18,6 +18,7 @@ import {
 	type CallContext,
 	chatPresenceHandlers,
 	getPrincipals,
+	giveRoomAccess,
 	isAdmin,
 	mentionCandidates,
 	type PrincipalRecord,
@@ -572,8 +573,10 @@ export const chatHandlers: Pick<HandlerMap<CallContext>, ChatOperation> = {
 			"chat.create_room",
 			room.id,
 		);
-		const changes = await widenAgentsForRoom(call, room.id, principals.map(defaultMembership));
-		return { room: toRoom(room), agent_access_changes: changes };
+		// The room exists now, and a second call would make a second room. So an agent that did not get its
+		// access does not fail the call: the result names it, and `chat.add_members` completes it.
+		const access = await giveRoomAccess(call, room.id, principals.map(defaultMembership));
+		return { room: toRoom(room), agent_access_changes: access.changes, agent_access_pending: access.pending };
 	},
 
 	async "chat.open_dm"(call, input) {
