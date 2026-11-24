@@ -9,7 +9,7 @@ import { Link, navigate, useLocation } from "../lib/router.tsx";
 import { useChatNotifications } from "../lib/useChatNotifications.ts";
 import { useOnChange } from "../lib/useOnChange.ts";
 import { usePrincipalActivity } from "../lib/usePrincipalActivity.ts";
-import { INBOX_PATH, ownMailboxPath, parseRoute } from "../routes.ts";
+import { INBOX_PATH, ownMailboxPath, parseRoute, settingsPath } from "../routes.ts";
 import { MENU_BUTTON_ID, RAIL_ID, sidebarId } from "./nav.ts";
 import { PageHeader } from "./PageHeader.tsx";
 import { Rail } from "./Rail.tsx";
@@ -36,11 +36,12 @@ export function Shell() {
 	// The mailboxes that the person expanded or collapsed in the mail sidebar. The state stays when the mailbox changes.
 	const [expandedMailboxes, setExpandedMailboxes] = useState<Readonly<Record<string, boolean>>>({});
 	// After the upgrade to passwords, a person in an old session has no password. Without one, they cannot
-	// sign in again after the session ends. Settings shows the same notice in the Password card.
+	// sign in again after the session ends. The Security section of Settings shows the same notice in the Password card.
 	const { whoami } = useSession();
 	useChatNotifications(whoami.principal.id);
 	usePrincipalActivity();
-	const needsPassword = whoami.sign_in?.password_set === false && route.page !== "settings";
+	const needsPassword =
+		whoami.sign_in?.password_set === false && !(route.page === "settings" && route.section === "security");
 
 	// The sidebar of the page, or null. At 900px and below, the menu button opens it with the rail.
 	const navId = sidebarId(route);
@@ -94,7 +95,7 @@ export function Shell() {
 			{needsPassword && (
 				<p className="app-banner" role="status">
 					You have no password yet. Set one now: after this session ends, you sign in with your address and a password.{" "}
-					<Link to="/settings">Set a password</Link>
+					<Link to={settingsPath("security")}>Set a password</Link>
 				</p>
 			)}
 			{page()}
@@ -158,7 +159,7 @@ export function Shell() {
 			case "connect":
 				return <ConnectPage key={route.requestId} requestId={route.requestId} />;
 			case "settings":
-				return <SettingsPage />;
+				return <SettingsPage section={route.section} navOpen={navOpen} onCloseNav={() => setNavOpen(false)} />;
 			case "redirect":
 				return null;
 			case "not-found":

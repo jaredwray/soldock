@@ -14,6 +14,7 @@ export const MAIL_NAV_ID = "mail-nav";
 export const DRIVE_NAV_ID = "drive-nav";
 export const CHAT_NAV_ID = "chat-nav";
 export const ADMIN_NAV_ID = "admin-nav";
+export const SETTINGS_NAV_ID = "settings-nav";
 
 /** The pages with a sidebar, and the element id of each sidebar. */
 const NAV_IDS: Partial<Record<Route["page"], string>> = {
@@ -21,6 +22,7 @@ const NAV_IDS: Partial<Record<Route["page"], string>> = {
 	drive: DRIVE_NAV_ID,
 	chat: CHAT_NAV_ID,
 	admin: ADMIN_NAV_ID,
+	settings: SETTINGS_NAV_ID,
 };
 
 /** The element id of the sidebar of a page, or null for a page with no sidebar. */
