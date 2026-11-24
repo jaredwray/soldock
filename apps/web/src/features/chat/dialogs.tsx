@@ -96,7 +96,7 @@ export function NewRoomDialog({ onClose, onCreated }: { onClose: () => void; onC
 					</fieldset>
 					<p className="field-hint">
 						{kind === "public"
-							? "Each person and each agent of the organization can find and join a public room."
+							? "Each person of the organization can find and join a public room. A member adds an agent."
 							: "Only the members can find a private room. A member adds each new member."}
 					</p>
 					<div className="field">

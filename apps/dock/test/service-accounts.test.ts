@@ -135,6 +135,10 @@ describe("service accounts", () => {
 		expect(
 			await codeOf(admin.call("directory.create_service_account", { ...input, scopes: ["account.keys" as never] })),
 		).toBe("invalid");
+		// An account has no resource limits now. A call that asks for them creates nothing.
+		expect(await codeOf(admin.call("directory.create_service_account", { ...input, limits: "none" } as never))).toBe(
+			"invalid",
+		);
 		const token = await serviceToken(admin, service.id);
 		expect(await codeOf(ada.call("directory.create_service_account", input))).toBe("forbidden");
 		expect(await codeOf(bot.call("directory.create_service_account", input))).toBe("forbidden");
@@ -291,6 +295,10 @@ describe("tokens of a service account", () => {
 		expect(await codeOf(admin.call("directory.set_agent_access", { principal_id: service.id } as never))).toBe(
 			"invalid",
 		);
+		// An account has no resource limits now. A call that sends them changes nothing.
+		expect(await codeOf(admin.call("directory.set_agent_access", { ...change, resources: null } as never))).toBe(
+			"invalid",
+		);
 		// A key with directory.write cannot give the account a scope that the key does not hold.
 		const writer = await admin.call("account.create_api_key", {
 			label: "writer",
@@ -323,6 +331,9 @@ describe("tokens of a service account", () => {
 				owner.id,
 			]);
 		});
+		// Stored scopes that are not valid give an account without a scope, never an account with each scope.
+		await env.DIRECTORY.prepare("UPDATE principals SET agent_scopes = '{bad' WHERE id = ?").bind(service.id).run();
+		expect(await codeOf(first.call("chat.list_rooms", {}))).toBe("forbidden");
 	});
 
 	// A scheduled message is a lasting effect of a token. It must not post with access that the account lost.

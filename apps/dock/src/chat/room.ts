@@ -694,7 +694,8 @@ const LINK_ATTEMPTS = 3;
 export const MEMBER_DELAY_MS = 500;
 
 const NOT_FOUND = "No room has that id, or you have no access to it.";
-const NOT_MEMBER = "You are not a member of this room. Join it first with chat.join_room.";
+const NOT_MEMBER =
+	"You are not a member of this room. A person joins a public room with chat.join_room. A member adds an agent or a service account with chat.add_members.";
 const NO_MESSAGE = "No message has that id in this room.";
 const EMPTY_MESSAGE = "A message needs text or a file.";
 const FULL = `A room can have ${CHAT_LIMITS.membersPerRoom} members at most.`;

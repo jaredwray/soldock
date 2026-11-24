@@ -451,9 +451,16 @@ where an account can act. The role or the member scopes of the membership say wh
 Do these steps before the deploy, in the old version:
 
 1. Open each agent and each service account in **Admin › Members**.
-2. Read **Access**. It marks each membership that is **Not in the limits**.
+2. Read **Access**. It marks each membership that is **Not in the limits**. The list of rooms shows at
+   most 200 rooms: for an account with more rooms, read the members of each room.
 3. Remove each membership that the account must not use. Do this in the settings of that mailbox, drive
    or room.
+4. Read **Shared directly in Drive** on the same card. An account with limits did not reach these items.
+   After the upgrade, it reaches each one. Remove each grant that the account must not use
+   (`drive.unshare_item`, or **Share** on the item in Drive).
+5. Each account always reaches its own mailbox and its own drive after the upgrade, with the scopes that
+   it holds. Before, limits that did not name them stopped that. Take a mail scope or a Drive scope from
+   an account that must not use its own mailbox or drive.
 
 What changes for a script that calls the API:
 
@@ -495,6 +502,13 @@ What changes in storage:
 A rollback to the Worker from before this change makes the old limits of each old account apply again.
 An account from after the upgrade has no limits there. The old Worker finds its tables and its columns,
 because this change removes none of them.
+
+The new Worker does not change the old limits. So after a rollback:
+
+- An old account with limits does not reach a room or a drive that it became a member of after the
+  upgrade. A person who manages it adds it again.
+- The old limits of an account still name a room or a drive that it left after the upgrade. Read the
+  limits of each account, and remove such a room or drive.
 
 [Agents](agents.md#permissions-of-an-agent) has the rules.
 

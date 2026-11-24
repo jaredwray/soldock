@@ -248,6 +248,35 @@ describe("the event catalog", () => {
 });
 
 describe("events/subscribe", () => {
+	// events/subscribe does not go through the invoker, so it checks the target itself. An agent must be a
+	// member of the room, the team mailbox or the shared drive of the event, as a person must.
+	it("refuses an agent an event of a room, a team mailbox or a shared drive that it is not a member of", async () => {
+		await ada.call("directory.update_agent_policy", { principal_id: bot.id, mode: "any" });
+		const closed = await privateRoom("Closed", owner, [ada.id]);
+		const { team_mailbox } = await owner.call("directory.create_team_mailbox", {
+			display_name: "Support",
+			address: "support@dock.test",
+			member_ids: [ada.id],
+		});
+		const { shared_drive } = await owner.call("drive.create_shared_drive", {
+			name: "Plans",
+			members: [{ principal_id: ada.id, role: "manager" }],
+		});
+		const { posts } = receiver();
+		for (const [name, args] of [
+			["chat.message.created", { room_id: closed.id }],
+			["mail.inbox.updated", { mailbox_id: team_mailbox.id }],
+			["drive.item.created", { space_id: shared_drive.id }],
+		] as const) {
+			expect(errorOf(await subscribe(bot.key, name, { arguments: args })), name).toMatchObject({
+				code: -32603,
+				data: { code: expect.stringMatching(/^(not_found|forbidden)$/) },
+			});
+		}
+		expect(posts).toEqual([]);
+		expect(await rows()).toEqual([]);
+	});
+
 	// The life of a dot: it subscribes to a room, another member writes, and the dot gets one signed POST
 	// in the form of MCP Events, without the message text.
 	it("verifies the callback, then sends each new message of the room as a signed event", async () => {

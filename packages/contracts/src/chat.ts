@@ -772,7 +772,7 @@ export const listRooms = defineOperation({
 	summary: "List your rooms, or the public rooms",
 	description: [
 		"Returns the rooms of one view. The default view is joined: the rooms and the direct messages that you are a member of, with the newest message first.",
-		"The public view has each public room of the organization, in the order of the names. A room with role: null is one that you can join with chat.join_room.",
+		"The public view has each public room of the organization, in the order of the names. A room with role: null is one that you are not a member of. A person joins it with chat.join_room. A member adds an agent or a service account with chat.add_members.",
 		"The starred view has the rooms and the direct messages of the joined view that have your star (chat.star_room), with the newest message first.",
 		"Set query to get only the rooms whose name has that text. A direct message has no name, so it never matches.",
 		"Each room has unread, unread_count, mention_count, starred and version. Compare version with the value that you have to find out if the messages of a room changed.",
@@ -801,7 +801,7 @@ export const createRoom = defineOperation({
 	name: "chat.create_room",
 	summary: "Create a room",
 	description: [
-		"Creates a room and makes you its owner. Each person and each agent of the organization can find and join a public room.",
+		"Creates a room and makes you its owner. Each person and each agent of the organization can find a public room. Each person can join it, and a member adds an agent or a service account.",
 		"Only the members can find a private room, and a member must add each new member.",
 		`Set member_ids to add people and agents at once, at most ${CHAT_LIMITS.membersPerCall}.`,
 		NEW_MEMBER_SCOPES,
