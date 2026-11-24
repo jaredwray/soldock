@@ -31,6 +31,8 @@ import {
 	type CredentialCheck,
 	type CredentialRef,
 	checkCredentials,
+	dropRoomFromLimits,
+	getPrincipals,
 	THREADS_PER_ROOM,
 	UNREAD_COUNT_MAX,
 } from "../identity/index.ts";
@@ -618,6 +620,9 @@ const MIGRATIONS: string[][] = [
 		"ALTER TABLE members ADD COLUMN scopes TEXT",
 		"CREATE TABLE IF NOT EXISTS left_scopes (principal_id TEXT PRIMARY KEY, scopes TEXT NOT NULL) WITHOUT ROWID",
 	],
+	// The agents whose limits in the directory still name this room after a remove, because the write of the
+	// directory failed. The room completes that write before such an agent is a member again.
+	["CREATE TABLE IF NOT EXISTS limit_drops (principal_id TEXT PRIMARY KEY) WITHOUT ROWID"],
 ];
 
 /**
@@ -699,8 +704,9 @@ const FULL = `A room can have ${CHAT_LIMITS.membersPerRoom} members at most.`;
  * joined first in a room without a person. The owner has each scope, so a person comes before an agent: an
  * agent adds members only when a person decided that.
  */
-const NEXT_OWNER = `SELECT principal_id FROM members
-	ORDER BY json_extract(actor_json, '$.kind') = 'human' DESC, joined_at, principal_id LIMIT 1`;
+const NEXT_OWNER_FROM = "SELECT principal_id FROM members";
+const NEXT_OWNER_SORT = "ORDER BY json_extract(actor_json, '$.kind') = 'human' DESC, joined_at, principal_id";
+const NEXT_OWNER_ORDER = `${NEXT_OWNER_SORT} LIMIT 1`;
 const NO_WRITE = "Your membership of this room does not have chat.write. The owner of the room can add it.";
 const NO_ADD_MEMBERS = "Your membership of this room does not have chat.add_members. The owner of the room can add it.";
 /**
@@ -1478,19 +1484,23 @@ export class ChatRoomDO extends DurableObject<Env> {
 		const archived = this.ensureNotArchived(opened.room);
 		if (archived) return archived;
 		if (!(await this.inDirectory(opened.room.room_id))) return refuse("not_found", NOT_FOUND);
-		// A different call can run during the read of the directory. Read the state of the room again.
-		if (this.member(call.actor.principal_id)) return { room: this.record(call.actor.principal_id), joined: false };
-		if (this.memberCount() >= CHAT_LIMITS.membersPerRoom) return refuse("conflict", FULL);
-		const hasOwner = this.one("SELECT 1 AS found FROM members WHERE role = 'owner' LIMIT 1") !== null;
-		const lastSeq = (this.room() as RoomRow).last_seq;
-		// A principal that left with fewer scopes than its kind joins with those scopes: only the owner gives more.
-		const kept = this.keptScopes(call.actor.principal_id);
-		this.ctx.storage.transactionSync(() => {
-			this.insertMember(call.actor, hasOwner ? "member" : "owner", Date.now(), lastSeq, kept);
-			this.roomChanged(call.actor.principal_id);
+		const written = await this.afterDrops([call.actor], () => {
+			// A different call can run during the reads of the directory. Read the state of the room again.
+			if (this.member(call.actor.principal_id)) return { joined: false };
+			if (this.memberCount() >= CHAT_LIMITS.membersPerRoom) return refuse("conflict", FULL);
+			const hasOwner = this.one("SELECT 1 AS found FROM members WHERE role = 'owner' LIMIT 1") !== null;
+			const lastSeq = (this.room() as RoomRow).last_seq;
+			// A principal that left with fewer scopes than its kind joins with those scopes: only the owner gives more.
+			const kept = this.keptScopes(call.actor.principal_id);
+			this.ctx.storage.transactionSync(() => {
+				this.insertMember(call.actor, hasOwner ? "member" : "owner", Date.now(), lastSeq, kept);
+				this.roomChanged(call.actor.principal_id);
+			});
+			return { joined: true };
 		});
-		await this.publish({ type: "room" });
-		return { room: this.record(call.actor.principal_id), joined: true };
+		if ("error" in written) return written;
+		if (written.joined) await this.publish({ type: "room" });
+		return { room: this.record(call.actor.principal_id), joined: written.joined };
 	}
 
 	/**
@@ -1529,6 +1539,21 @@ export class ChatRoomDO extends DurableObject<Env> {
 		actors: ActorRecord[],
 		scopes?: readonly RoomMemberScope[],
 	): Promise<{ added: string[]; room: RoomRecord; members: MemberRecord[] } | Refusal> {
+		const first = this.checkAddMembers(call, scopes);
+		if ("error" in first) return first;
+		const written = await this.afterDrops(actors, () => this.insertMembers(call, actors, scopes));
+		if ("error" in written) return written;
+		if (written.added.length > 0) await this.publish({ type: "room" });
+		return { added: written.added, room: this.record(call.actor.principal_id), members: this.membersNamed(actors) };
+	}
+
+	/** The write of `addMembers`. It has no wait, so no other call of the room runs in it. */
+	private insertMembers(
+		call: RoomCall,
+		actors: ActorRecord[],
+		scopes?: readonly RoomMemberScope[],
+	): { added: string[] } | Refusal {
+		// A different call can run during a write of the directory. Check the caller again.
 		const allowed = this.checkAddMembers(call, scopes);
 		if ("error" in allowed) return allowed;
 		const room = this.room() as RoomRow;
@@ -1562,9 +1587,8 @@ export class ChatRoomDO extends DurableObject<Env> {
 				for (const actor of fresh.values()) this.insertMember(actor, "member", now, room.last_seq, given(actor));
 				this.roomChanged(call.actor.principal_id);
 			});
-			await this.publish({ type: "room" });
 		}
-		return { added: [...fresh.keys()], room: this.record(call.actor.principal_id), members: this.membersNamed(actors) };
+		return { added: [...fresh.keys()] };
 	}
 
 	/** The members of the room among these principals, each with its scopes. */
@@ -1636,7 +1660,10 @@ export class ChatRoomDO extends DurableObject<Env> {
 	 * Removes a member. A member removes itself to leave the room. Only the owner removes a different
 	 * member. When the owner leaves, the member that joined first becomes the owner.
 	 */
-	async removeMember(call: RoomCall, principalId: string): Promise<{ removed: boolean } | Refusal> {
+	async removeMember(
+		call: RoomCall,
+		principalId: string,
+	): Promise<{ removed: boolean; limitsDropped?: boolean } | Refusal> {
 		const opened = this.openAsMember(call);
 		if ("error" in opened) return opened;
 		if (this.isDmKind(opened.room.kind)) return refuse("invalid", "Direct messages keep their members.");
@@ -1649,6 +1676,26 @@ export class ChatRoomDO extends DurableObject<Env> {
 		if (self && opened.room.kind === "private" && this.memberCount() === 1) {
 			return refuse("conflict", "You are the last member of this room, so you cannot leave it.");
 		}
+		let limitsDropped = false;
+		// The remove, the write of the limits and the check of a new owner are one step of the room: no other
+		// call of the room runs between them. See `dropLimits` and `settleOwner`.
+		await this.ctx.blockConcurrencyWhile(async () => {
+			const newOwner = this.removeRows(call, target);
+			limitsDropped = await this.dropLimits(target);
+			if (newOwner) await this.settleOwner();
+		});
+		// The sockets of the removed member close in the same step, so no later event reaches them.
+		for (const socket of this.ctx.getWebSockets(socketTag(principalId))) {
+			this.end(socket, CHAT_SOCKET_CLOSE.ended, "You are not a member of this room now.");
+		}
+		await this.publish({ type: "room" });
+		return { removed: true, limitsDropped };
+	}
+
+	/** The rows of a member that leaves, and the next owner when the owner leaves. True: the room has a new owner. */
+	private removeRows(call: RoomCall, target: MemberRow): boolean {
+		const principalId = target.principal_id;
+		let newOwner = false;
 		this.ctx.storage.transactionSync(() => {
 			this.keepScopes(target);
 			this.sql.exec("DELETE FROM members WHERE principal_id = ?", principalId);
@@ -1658,20 +1705,125 @@ export class ChatRoomDO extends DurableObject<Env> {
 			this.touch(`member:${principalId}`);
 			this.touch(`${PRINCIPAL_TARGET}${principalId}`);
 			if (target.role === "owner") {
-				const next = this.one<{ principal_id: string }>(NEXT_OWNER);
+				const next = this.one<{ principal_id: string }>(`${NEXT_OWNER_FROM} ${NEXT_OWNER_ORDER}`);
 				if (next) {
 					this.sql.exec("UPDATE members SET role = 'owner' WHERE principal_id = ?", next.principal_id);
 					this.touch(`member:${next.principal_id}`);
+					newOwner = true;
 				}
 			}
 			this.roomChanged(call.actor.principal_id);
 		});
-		// The sockets of the removed member close in the same step, so no later event reaches them.
-		for (const socket of this.ctx.getWebSockets(socketTag(principalId))) {
-			this.end(socket, CHAT_SOCKET_CLOSE.ended, "You are not a member of this room now.");
+		return newOwner;
+	}
+
+	/**
+	 * Takes the room out of the resource limits of an agent or a service account that is not a member now. The
+	 * limits of an agent must not name a room that it is not a member of: a later add by a member that does
+	 * not manage the agent would then give it access.
+	 *
+	 * The room object owns the members, and the directory owns the limits. A caller of this method holds the
+	 * room with `blockConcurrencyWhile`, so no add and no remove of the room runs between the read of the
+	 * members and the write of the directory. So the room gives the order of the two stores: after this
+	 * write, a new membership finds no room in the limits, and only a manager of the agent puts it back.
+	 *
+	 * Returns true when the limits named the room. When the directory fails, the room keeps the principal in
+	 * `limit_drops`, and `afterDrops` completes the write before that principal is a member again.
+	 */
+	private async dropLimits(member: Pick<MemberRow, "principal_id" | "actor_json">): Promise<boolean> {
+		if ((JSON.parse(member.actor_json) as ActorRecord).kind !== "agent") return false;
+		const room = this.rawRoom();
+		if (!room) return false;
+		try {
+			const dropped = (await dropRoomFromLimits(this.env.DIRECTORY, member.principal_id, room.room_id)) !== null;
+			this.sql.exec("DELETE FROM limit_drops WHERE principal_id = ?", member.principal_id);
+			return dropped;
+		} catch (error) {
+			this.sql.exec("INSERT OR IGNORE INTO limit_drops (principal_id) VALUES (?)", member.principal_id);
+			log("warn", "chat room: the limits of an agent still name the room after a remove", {
+				error: error instanceof Error ? error.message : String(error),
+			});
+			return false;
 		}
-		await this.publish({ type: "room" });
-		return { removed: true };
+	}
+
+	/**
+	 * Runs `write`, which makes these principals members, after the room completed the write of the limits
+	 * for each of them that has a row in `limit_drops`. The limits of such an agent still name the room.
+	 * Without this, a member that does not manage the agent adds it, and the agent has access from the old
+	 * limits. When the directory fails again, the call gets `conflict`: the principal does not become a member.
+	 *
+	 * The writes of the directory and `write` are one step of the room, as `dropLimits` needs. So no remove
+	 * puts a row into `limit_drops` between them, and no write of an earlier call deletes a later row.
+	 */
+	private async afterDrops<T>(actors: readonly ActorRecord[], write: () => T | Refusal): Promise<T | Refusal> {
+		// The object of a room that nobody created has no tables: `write` gives the refusal for it.
+		const waits = (actor: ActorRecord) =>
+			this.hasTables &&
+			this.one("SELECT 1 AS found FROM limit_drops WHERE principal_id = ?", actor.principal_id) !== null;
+		// No row: `write` runs with no wait after this read, so it needs no step of its own.
+		if (!actors.some(waits)) return write();
+		return this.ctx.blockConcurrencyWhile(async () => {
+			for (const actor of actors) {
+				if (!waits(actor)) continue;
+				await this.dropLimits({ principal_id: actor.principal_id, actor_json: JSON.stringify(actor) });
+				if (waits(actor)) {
+					return refuse("conflict", "The directory did not complete an earlier remove of this agent. Try again.");
+				}
+			}
+			return write();
+		});
+	}
+
+	/**
+	 * Takes the room out of the limits of an agent that is not a member now. The handler of an add calls this
+	 * after it put the room into the limits: a remove can come between the write of the room and that write.
+	 * The room reads its members and writes the directory in one step, as `removeMember` does. Returns true
+	 * when the principal is not a member, so the access that the handler wrote is gone.
+	 */
+	async releaseLimits(actor: ActorRecord): Promise<boolean> {
+		return this.ctx.blockConcurrencyWhile(async () => {
+			if (this.room() !== null && this.member(actor.principal_id) !== null) return false;
+			await this.dropLimits({ principal_id: actor.principal_id, actor_json: JSON.stringify(actor) });
+			return true;
+		});
+	}
+
+	/**
+	 * The room gave itself a new owner: a person before an agent, then the member that joined first. The room
+	 * does not know if that principal can still act. An archived or deleted principal cannot sign in, so it
+	 * cannot be the owner: nobody could then change the room. One read of the directory tells which members
+	 * can act, and the first of them in the order of the next owner becomes the owner. The owner stays when
+	 * no member can act, or when the directory fails.
+	 *
+	 * `removeMember` holds the room with `blockConcurrencyWhile` for this call. So the members do not change
+	 * between the read of the directory and the write of the owner, and each member is in that read.
+	 */
+	private async settleOwner(): Promise<void> {
+		const owner = this.one<{ principal_id: string }>("SELECT principal_id FROM members WHERE role = 'owner' LIMIT 1");
+		if (!owner) return;
+		const candidates = this.all<{ principal_id: string }>(`${NEXT_OWNER_FROM} ${NEXT_OWNER_SORT}`).map(
+			(row) => row.principal_id,
+		);
+		let active: Set<string>;
+		try {
+			const principals = await getPrincipals(this.env.DIRECTORY, candidates);
+			active = new Set(principals.filter((principal) => principal.archived_at === null).map(({ id }) => id));
+		} catch (error) {
+			log("warn", "chat room: the room did not check that its new owner can act", {
+				error: error instanceof Error ? error.message : String(error),
+			});
+			return;
+		}
+		const next = candidates.find((id) => active.has(id));
+		if (active.has(owner.principal_id) || next === undefined) return;
+		this.ctx.storage.transactionSync(() => {
+			this.sql.exec("UPDATE members SET role = 'member' WHERE principal_id = ?", owner.principal_id);
+			this.sql.exec("UPDATE members SET role = 'owner' WHERE principal_id = ?", next);
+			this.touch(`member:${owner.principal_id}`);
+			this.touch(`member:${next}`);
+			this.roomChanged("system");
+		});
 	}
 
 	/** Archives a room so it becomes read-only. Room owner, or org admin/owner on a public room. */
@@ -1945,6 +2097,14 @@ export class ChatRoomDO extends DurableObject<Env> {
 
 	/** Admin action: assigns an owner to an ownerless public or private room. */
 	async adminAssignOwner(actorId: string, target: ActorRecord): Promise<RoomRecord | Refusal> {
+		const assigned = await this.afterDrops([target], () => this.assignOwner(actorId, target));
+		if ("error" in assigned) return assigned;
+		await this.publish({ type: "room" });
+		return this.record(target.principal_id);
+	}
+
+	/** The write of `adminAssignOwner`. It has no wait, so no other call of the room runs in it. */
+	private assignOwner(actorId: string, target: ActorRecord): { assigned: true } | Refusal {
 		const room = this.room();
 		if (!room) return refuse("not_found", NOT_FOUND);
 		if (this.isDmKind(room.kind)) return refuse("invalid", "Direct messages do not have owners.");
@@ -1967,8 +2127,7 @@ export class ChatRoomDO extends DurableObject<Env> {
 			this.sql.exec("UPDATE room SET version = version + 1 WHERE id = 1");
 			this.roomChanged(actorId);
 		});
-		await this.publish({ type: "room" });
-		return this.record(target.principal_id);
+		return { assigned: true };
 	}
 
 	/** Removes a deleted principal from this room, even if last member or in a DM. */
@@ -1985,7 +2144,7 @@ export class ChatRoomDO extends DurableObject<Env> {
 			this.touch(`member:${principalId}`);
 			this.touch(`${PRINCIPAL_TARGET}${principalId}`);
 			if (target.role === "owner") {
-				const next = this.one<{ principal_id: string }>(NEXT_OWNER);
+				const next = this.one<{ principal_id: string }>(`${NEXT_OWNER_FROM} ${NEXT_OWNER_ORDER}`);
 				if (next) {
 					this.sql.exec("UPDATE members SET role = 'owner' WHERE principal_id = ?", next.principal_id);
 					this.touch(`member:${next.principal_id}`);

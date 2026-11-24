@@ -1042,6 +1042,12 @@ describe("incoming webhooks, forwarding untrusted content, slash commands, and c
 		);
 		const deletedOrphan = await owner.call("chat.delete_room", { room_id: soloPriv.id });
 		expect(deletedOrphan.deleted).toBe(true);
+
+		// A room id that no room has gets `not_found`: the object of such a room has no tables.
+		const noRoom = `rm_${"0".repeat(26)}`;
+		expect(await codeOf(owner.call("chat.admin_assign_owner", { room_id: noRoom, principal_id: owner.id }))).toBe(
+			"not_found",
+		);
 	});
 
 	it("keeps versions monotonic during concurrent retention prune and posts, and prunes with delete events on alarm", async () => {

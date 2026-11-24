@@ -63,6 +63,7 @@ export { mountAuthRoutes } from "./routes.ts";
 export {
 	addressTag,
 	domainOf,
+	dropRoomFromLimits,
 	getPrincipal,
 	getPrincipals,
 	listPrincipals,
@@ -85,4 +86,4 @@ export {
 	teamMailboxFor,
 	teamMailboxMemberScopes,
 } from "./team-mailboxes.ts";
-export { assertRoomGrants, dropRoomAccess, giveRoomAccess } from "./widening.ts";
+export { afterLimitsDrop, assertRoomGrants, giveRoomAccess } from "./widening.ts";
