@@ -99,11 +99,11 @@ export function AdminPage({ section: routeSection, navOpen, onCloseNav }: AdminP
 	const allowed = elevated || agents.length > 0;
 
 	return (
-		<div className="admin-layout">
+		<div className="section-layout">
 			<AdminSidebar active={section} elevated={elevated} open={navOpen} onClose={onCloseNav} />
-			<main id="main" ref={mainRef} className="admin-main" tabIndex={-1}>
+			<main id="main" ref={mainRef} className="section-main" tabIndex={-1}>
 				<PageHeader title={title} icon={sectionIcon(section)} />
-				<div className="admin-content">
+				<div className="section-content">
 					{state.status === "loading" && <p className="panel-card panel-empty">Loading the directory…</p>}
 					{state.status === "error" && (
 						<div className="panel-card panel-form" role="alert">

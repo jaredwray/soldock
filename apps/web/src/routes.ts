@@ -33,6 +33,10 @@ export type DriveView =
 export const ADMIN_SECTIONS = ["members", "shared-mailboxes", "shared-drives", "chat", "domains", "ai"] as const;
 export type AdminSection = (typeof ADMIN_SECTIONS)[number];
 
+/** The sections of the settings page. Each has one path under `/settings`. */
+export const SETTINGS_SECTIONS = ["account", "notifications", "security", "api-keys"] as const;
+export type SettingsSection = (typeof SETTINGS_SECTIONS)[number];
+
 export const CHAT_VIEWS = ["activity", "saved", "drafts"] as const;
 export type ChatView = (typeof CHAT_VIEWS)[number];
 
@@ -67,7 +71,8 @@ export type Route =
 	| { page: "admin"; section: AdminSection | null }
 	/** The approval page of an OAuth request from an MCP client. `/oauth/authorize` sends the browser here. */
 	| { page: "connect"; requestId: string }
-	| { page: "settings" }
+	/** `section` is null for `/settings`. The page then shows the first section. */
+	| { page: "settings"; section: SettingsSection | null }
 	| { page: "redirect"; to: string }
 	| { page: "not-found" };
 
@@ -76,6 +81,7 @@ export const DRIVE_PATH = "/drive";
 export const SHARED_DRIVES_PATH = "/drive/shared-drives";
 export const CHAT_PATH = "/chat";
 export const ADMIN_PATH = "/admin";
+export const SETTINGS_PATH = "/settings";
 
 /**
  * True for the mailbox of an agent, which an owner or an admin can only read. In the routes, a mailbox
@@ -116,7 +122,9 @@ export function parseRoute(location: string): Route {
 	if (first === "admin" && parts.length === 2 && second === "agents")
 		return { page: "redirect", to: adminPath("members") };
 	if (first === "admin" && parts.length === 2 && isAdminSection(second)) return { page: "admin", section: second };
-	if (first === "settings" && parts.length === 1) return { page: "settings" };
+	if (first === "settings" && parts.length === 1) return { page: "settings", section: null };
+	if (first === "settings" && parts.length === 2 && isSettingsSection(second))
+		return { page: "settings", section: second };
 	if (first === "connect" && parts.length === 2 && second?.startsWith("oar_"))
 		return { page: "connect", requestId: second };
 	if (first === "drive") return parseDriveView(parts.slice(1), url);
@@ -204,6 +212,10 @@ function isAdminSection(value: string | undefined): value is AdminSection {
 	return (ADMIN_SECTIONS as readonly string[]).includes(value ?? "");
 }
 
+function isSettingsSection(value: string | undefined): value is SettingsSection {
+	return (SETTINGS_SECTIONS as readonly string[]).includes(value ?? "");
+}
+
 function isDriveList(value: string | undefined): value is DriveList {
 	return (DRIVE_LISTS as readonly string[]).includes(value ?? "");
 }
@@ -284,6 +296,11 @@ export function itemPath(item: {
 /** The path of a section of the admin page. */
 export function adminPath(section: AdminSection): string {
 	return `${ADMIN_PATH}/${section}`;
+}
+
+/** The path of a section of the settings page. */
+export function settingsPath(section: SettingsSection): string {
+	return `${SETTINGS_PATH}/${section}`;
 }
 
 /** The seq of a message in a path: a whole number from 1, in the range that a number keeps exactly. */
