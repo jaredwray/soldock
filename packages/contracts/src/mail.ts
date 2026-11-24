@@ -72,6 +72,11 @@ export const Mailbox = z.object({
 	address: z.string(),
 	display_name: z.string(),
 	/**
+	 * True when the mailbox belongs to a service account. In mail, a service account acts as an agent, so
+	 * its mailbox has the kind `agent` for an owner or an admin. False for a team mailbox.
+	 */
+	service: z.boolean(),
+	/**
 	 * What you can do in the mailbox: `mail.read`, `mail.modify` and `mail.send`. Your own mailbox has the
 	 * three. A team mailbox has the scopes of your membership. The mailbox of an agent has `mail.read` only.
 	 * The scopes of your credential apply too.
@@ -203,7 +208,7 @@ export const listMailboxes = defineOperation({
 	name: "mail.list_mailboxes",
 	summary: "List the mailboxes that you can use",
 	description:
-		"Returns your own mailbox first, then each team mailbox that you are a member of. A team mailbox is a shared mailbox with its own address. scopes says what you can do in each mailbox: an owner or an admin sets the scopes of each member of a team mailbox. For an owner or an admin, the list then has the mailbox of each agent (kind agent). They can read the mailbox of an agent, but they cannot change it or send from it. Pass the id of a mailbox as mailbox_id to the other mail operations. Without mailbox_id, they use your own mailbox.",
+		"Returns your own mailbox first, then each team mailbox that you are a member of. A team mailbox is a shared mailbox with its own address. scopes says what you can do in each mailbox: an owner or an admin sets the scopes of each member of a team mailbox. For an owner or an admin, the list then has the mailbox of each agent and each service account (kind agent, and service is true for a service account). They can read the mailbox of an agent, but they cannot change it or send from it. Pass the id of a mailbox as mailbox_id to the other mail operations. Without mailbox_id, they use your own mailbox.",
 	http: { method: "GET", path: "/api/v1/mail/mailboxes" },
 	scopes: ["mail.read"],
 	callers: ["human", "agent", "service"],

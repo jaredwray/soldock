@@ -8,6 +8,7 @@ const own: Mailbox = {
 	kind: "personal",
 	address: "me@x.test",
 	display_name: "Me",
+	service: false,
 	scopes: ALL,
 };
 const support: Mailbox = {
@@ -15,6 +16,7 @@ const support: Mailbox = {
 	kind: "team",
 	address: "s@x.test",
 	display_name: "Support",
+	service: false,
 	scopes: ALL,
 };
 const sales: Mailbox = {
@@ -22,6 +24,7 @@ const sales: Mailbox = {
 	kind: "team",
 	address: "t@x.test",
 	display_name: "Sales",
+	service: false,
 	scopes: ALL,
 };
 const bot: Mailbox = {
@@ -29,7 +32,15 @@ const bot: Mailbox = {
 	kind: "agent",
 	address: "b@x.test",
 	display_name: "Bot",
+	service: false,
 	scopes: ["mail.read"],
+};
+const ci: Mailbox = {
+	...bot,
+	id: "prn_01JD0000000000000000000CI0",
+	address: "ci@x.test",
+	display_name: "CI",
+	service: true,
 };
 
 const rows = (nav: ReturnType<typeof mailboxNav>) => nav?.map((entry) => [entry.id, entry.name, entry.kind]);
@@ -37,12 +48,16 @@ const rows = (nav: ReturnType<typeof mailboxNav>) => nav?.map((entry) => [entry.
 describe("the mailbox rows of the sidebar", () => {
 	it("lists My mailbox, then the shared mailboxes, then the agent mailboxes", () => {
 		// The agent comes first in the list, but the sidebar shows the shared mailboxes before the agents.
-		expect(rows(mailboxNav([bot, own, support, sales], null, null))).toEqual([
+		const nav = mailboxNav([bot, own, support, sales, ci], null, null);
+		expect(rows(nav)).toEqual([
 			[null, "My mailbox", "personal"],
 			[support.id, "Support", "team"],
 			[sales.id, "Sales", "team"],
 			[bot.id, "Bot", "agent"],
+			[ci.id, "CI", "agent"],
 		]);
+		// A service account is an agent in mail. Its row keeps `service`, so it gets its own icon.
+		expect(nav?.map((entry) => entry.service)).toEqual([false, false, false, false, true]);
 		// Only the own mailbox: nothing to switch to, so no mailbox rows.
 		expect(mailboxNav([own], null, null)).toBeNull();
 		expect(mailboxNav(null, null, null)).toBeNull();

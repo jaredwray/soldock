@@ -257,6 +257,8 @@ MCP clients. The app has no UI-only path.
     admin removed the access.
 - **Agent mailboxes.** An owner or an admin can read the mailbox of each agent. The sidebar then
   shows a row for each agent (`mail.list_mailboxes`, kind `agent`).
+  - The row of an agent has the agent icon. The row of a service account (`service`) has the settings
+    icon, as in Admin › Members.
   - An agent mailbox path with the own id of the person goes to the same view under `/mail/…`
     (`ownMailboxPath`), because the server treats that id as the own mailbox.
   - The mailbox of an agent has its own paths (`/mail/agent/<prn_id>/…`). The `prn_` prefix tells

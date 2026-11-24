@@ -136,6 +136,7 @@ describe("team mailboxes in the directory", () => {
 			kind: "team",
 			address: "support@dock.test",
 			display_name: "Help desk",
+			service: false,
 			scopes: ALL,
 		});
 		const sent = await bot.call("mail.send", { mailbox_id: support.id, to: ["owner@dock.test"], text: "Hi" });
@@ -244,12 +245,20 @@ describe("the scopes of a member of a team mailbox", () => {
 		expect(changed.team_mailbox.members[0]).toEqual({ principal_id: ada.id, scopes: ["mail.read", "mail.send"] });
 		// Each member sees what it can do in each mailbox.
 		expect((await ada.call("mail.list_mailboxes")).mailboxes).toEqual([
-			{ id: ada.id, kind: "personal", address: "ada@dock.test", display_name: "Ada Lovelace", scopes: ALL },
+			{
+				id: ada.id,
+				kind: "personal",
+				address: "ada@dock.test",
+				display_name: "Ada Lovelace",
+				service: false,
+				scopes: ALL,
+			},
 			{
 				id: support.id,
 				kind: "team",
 				address: "support@dock.test",
 				display_name: "Support",
+				service: false,
 				scopes: ["mail.read", "mail.send"],
 			},
 		]);
@@ -487,8 +496,22 @@ describe("mail in a team mailbox", () => {
 			// The mail is in the team mailbox, not in the own mailbox of a member.
 			expect(await subjects(member)).toEqual([]);
 			expect((await member.call("mail.list_mailboxes")).mailboxes).toEqual([
-				{ id: member.id, kind: "personal", address: member.address, display_name: expect.any(String), scopes: ALL },
-				{ id: support.id, kind: "team", address: "support@dock.test", display_name: "Support", scopes: ALL },
+				{
+					id: member.id,
+					kind: "personal",
+					address: member.address,
+					display_name: expect.any(String),
+					service: false,
+					scopes: ALL,
+				},
+				{
+					id: support.id,
+					kind: "team",
+					address: "support@dock.test",
+					display_name: "Support",
+					service: false,
+					scopes: ALL,
+				},
 			]);
 		}
 		expect(await ada.call("mail.get_profile", { mailbox_id: support.id })).toMatchObject({
