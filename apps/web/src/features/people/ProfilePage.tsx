@@ -1,4 +1,5 @@
-import { ApiError, type ChatRoom, type DirectoryEntry, type Principal } from "@asterra/contracts";
+import "./people.css";
+import { ApiError, type DirectoryEntry, type Principal } from "@asterra/contracts";
 import { useEffect, useState } from "react";
 import { roomAccessText } from "../../lib/accessChange.ts";
 import { api, errorMessage } from "../../lib/api.ts";
@@ -6,22 +7,20 @@ import { initials } from "../../lib/format.ts";
 import { Icon } from "../../lib/icons.tsx";
 import { setPageTitle } from "../../lib/pageTitle.ts";
 import { isAutomated, kindTag } from "../../lib/principalKind.ts";
-import { Link } from "../../lib/router.tsx";
+import { Link, navigate } from "../../lib/router.tsx";
 import { useToast } from "../../lib/toast.tsx";
-import { chatPath, profilePath } from "../../routes.ts";
+import { chatPath, INBOX_PATH, profilePath } from "../../routes.ts";
+import { PageHeader } from "../../shell/PageHeader.tsx";
 import { useSession } from "../auth/session.tsx";
-import type { MentionDirectory } from "./mentions.ts";
-import { dayLabel } from "./model.ts";
-import { Presence } from "./Presence.tsx";
+import { Presence, PresenceProvider } from "../chat/Presence.tsx";
 
 const ROLE_NAMES = { owner: "Owner", admin: "Admin", member: "Member" } as const;
 
-export interface ProfileViewProps {
+/** The date of the account, for example "October 31, 2026". */
+const sinceFormat = new Intl.DateTimeFormat(undefined, { year: "numeric", month: "long", day: "numeric" });
+
+export interface ProfilePageProps {
 	principalId: string;
-	/** The people that the page asked for. A profile that a message already read shows at once. */
-	directory: MentionDirectory<DirectoryEntry>;
-	/** Shows the direct message room that the button opened. */
-	onOpened: (room: ChatRoom) => Promise<void>;
 }
 
 /**
@@ -58,27 +57,31 @@ function useProfile(principalId: string): ProfileRead {
 }
 
 /**
- * The profile of a person or an agent: the name, the handle for a mention, the address, the role or
- * the sponsor, and a button for a direct message. A mention in a message links here.
+ * The profile of a person or an agent, on its own page in the workspace: the name, the handle for a
+ * mention, the address, the role or the sponsor, and a button for a direct message. The page has the
+ * rail and no sidebar of a product. A mention in a message, the name of an author and the account menu
+ * link here.
  */
-export function ProfileView({ principalId, directory, onOpened }: ProfileViewProps) {
+export function ProfilePage({ principalId }: ProfilePageProps) {
+	return (
+		<PresenceProvider>
+			<Profile principalId={principalId} />
+		</PresenceProvider>
+	);
+}
+
+function Profile({ principalId }: ProfilePageProps) {
 	const ownId = useSession().whoami.principal.id;
 	const toast = useToast();
 	const [opening, setOpening] = useState(false);
 	const read = useProfile(principalId);
-	// Until the read comes, and when it fails, the profile shows what a message of the page already read.
 	const loaded = read !== null && read !== "failed" ? read : null;
-	const person = loaded ? loaded.person : (directory.byId.get(principalId) ?? null);
-	const answered = loaded && loaded.sponsor !== "failed" ? loaded.sponsor : undefined;
-	const sponsor =
-		answered !== undefined ? answered : person?.sponsor_id ? (directory.byId.get(person.sponsor_id) ?? null) : null;
-	// An agent has a sponsor that the page does not have yet, or that did not load. "None" is then wrong.
-	const sponsorUnknown = !sponsor && answered === undefined && Boolean(person?.sponsor_id);
-	const handle = person?.handle;
+	const person = loaded?.person ?? null;
+	const sponsor = loaded && loaded.sponsor !== "failed" ? loaded.sponsor : null;
 	const name = person?.display_name ?? null;
 
 	useEffect(() => {
-		setPageTitle(`${name ?? "Profile"} – Asterra Chat`);
+		setPageTitle(`${name ?? "Profile"} – Asterra`);
 	}, [name]);
 
 	async function message(target: Principal) {
@@ -88,61 +91,63 @@ export function ProfileView({ principalId, directory, onOpened }: ProfileViewPro
 			// The change is on the account of the agent, so the person who manages it must see it.
 			const changed = roomAccessText(result, () => target.display_name).trim();
 			if (changed) toast({ message: changed });
-			await onOpened(result.room);
+			navigate(chatPath(result.room.id));
 		} catch (caught) {
 			toast({ message: errorMessage(caught), tone: "error" });
 			setOpening(false);
 		}
 	}
 
-	if (!person && read === null) {
-		return (
-			<p className="list-state" role="status">
-				<span className="spinner" aria-hidden="true" />
-				Loading…
-			</p>
-		);
-	}
-	if (!person) {
-		return (
-			<div className="list-state">
-				<p role="alert">
-					{read === "failed"
-						? "The profile did not load. Reload the page to try again."
-						: "This person or agent is not in the directory."}
-				</p>
-				<Link to={chatPath()} className="button">
-					Go to your rooms
-				</Link>
-			</div>
-		);
-	}
-
-	const agent = isAutomated(person.kind);
 	return (
-		<>
-			<header className="chat-header">
-				<Icon name="team" size={22} />
-				<h1 className="chat-title">Profile</h1>
-			</header>
-			<div className="chat-profile">
+		<main id="main" className="page-main" tabIndex={-1}>
+			<PageHeader title="Profile" icon="team" />
+			{body()}
+		</main>
+	);
+
+	function body() {
+		if (read === null) {
+			return (
+				<p className="list-state" role="status">
+					<span className="spinner" aria-hidden="true" />
+					Loading…
+				</p>
+			);
+		}
+		if (!person) {
+			return (
+				<div className="list-state">
+					<p role="alert">
+						{read === "failed"
+							? "The profile did not load. Reload the page to try again."
+							: "This person or agent is not in the directory."}
+					</p>
+					<Link to={INBOX_PATH} className="button">
+						Go to the inbox
+					</Link>
+				</div>
+			);
+		}
+		const agent = isAutomated(person.kind);
+		return (
+			<div className="profile">
 				{/* The avatar of a person is a square with round corners. The avatar of an agent is a circle. */}
-				<span className={agent ? "chat-profile-avatar chat-avatar-agent" : "chat-profile-avatar"} aria-hidden="true">
+				<span className={agent ? "profile-avatar profile-avatar-agent" : "profile-avatar"} aria-hidden="true">
 					{initials(person.display_name)}
 				</span>
-				<h2 className="chat-profile-name">
+				<h2 className="profile-name">
 					{person.display_name}
 					{agent && <span className="kind kind-agent">{kindTag(person.kind)}</span>}
 				</h2>
-				{handle && <p className="chat-profile-handle">@{handle}</p>}
-				<div className="chat-profile-status">
+				{person.handle && <p className="profile-handle">@{person.handle}</p>}
+				<div className="profile-status">
 					<Presence id={person.id} agent={agent} editable={person.id === ownId} />
 				</div>
 				{person.archived_at !== null && (
-					<p className="chat-profile-note">An owner or an admin archived this {kindTag(person.kind) || "person"}.</p>
+					<p className="profile-note">An owner or an admin archived this {kindTag(person.kind) || "person"}.</p>
 				)}
 				{person.id !== ownId && person.archived_at === null && (
-					<p className="chat-start">
+					<p className="profile-actions">
 						<button
 							type="button"
 							className="button button-primary"
@@ -154,7 +159,7 @@ export function ProfileView({ principalId, directory, onOpened }: ProfileViewPro
 						</button>
 					</p>
 				)}
-				<dl className="panel-card setting-rows chat-profile-details">
+				<dl className="panel-card setting-rows profile-details">
 					<div className="setting-row">
 						<dt>Address</dt>
 						<dd>{person.address}</dd>
@@ -171,12 +176,8 @@ export function ProfileView({ principalId, directory, onOpened }: ProfileViewPro
 							<dd>
 								{sponsor ? (
 									<Link to={profilePath(sponsor.id)}>{sponsor.display_name}</Link>
-								) : sponsorUnknown ? (
-									read === null ? (
-										"Loading…"
-									) : (
-										"The sponsor did not load."
-									)
+								) : loaded?.sponsor === "failed" ? (
+									"The sponsor did not load."
 								) : (
 									"None"
 								)}
@@ -186,11 +187,11 @@ export function ProfileView({ principalId, directory, onOpened }: ProfileViewPro
 					<div className="setting-row">
 						<dt>In Asterra since</dt>
 						<dd>
-							<time dateTime={person.created_at}>{dayLabel(person.created_at)}</time>
+							<time dateTime={person.created_at}>{sinceFormat.format(new Date(person.created_at))}</time>
 						</dd>
 					</div>
 				</dl>
 			</div>
-		</>
-	);
+		);
+	}
 }

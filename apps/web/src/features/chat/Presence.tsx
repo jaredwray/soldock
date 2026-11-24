@@ -193,7 +193,7 @@ function StatusDialog({
 					void save({ text: text.trim(), emoji: emoji.trim(), expires_at: end ? new Date(end).toISOString() : null });
 				}}
 			>
-				<div className="dialog-body chat-form">
+				<div className="dialog-body form-stack">
 					<label className="field-label" htmlFor={`${id}-text`}>
 						Status
 					</label>

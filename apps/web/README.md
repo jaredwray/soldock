@@ -90,8 +90,9 @@ MCP clients. The app has no UI-only path.
     agent of that sponsor (`directory.list_principals` with `sponsor_id`, the kind `agent` and a limit
     of 1), not for the directory. The sponsor of only a service account gets no **Admin**.
   - The account button opens a panel with the name, the address and the role of the person, the
-    **Appearance** choice, and **Sign out**. Escape closes the panel, and the focus goes back to
-    the button.
+    **Appearance** choice, **Profile and status**, and **Sign out**. **Profile and status** opens the
+    profile page of the person (`/people/<own id>`). Escape closes the panel, and the focus goes back
+    to the button.
   - **Appearance** is Light, Dark or System. A choice applies at once. System follows the device,
     also when the device changes while the page is open. The choice is saved in this browser only
     (see [Data inventory](#data-inventory)), and each open tab follows a change.
@@ -441,6 +442,23 @@ MCP clients. The app has no UI-only path.
     Changes take effect without a new deployment. A confirmation precedes removal.
     The server refuses removal of a domain with mailboxes.
     The page explains the separate Cloudflare email and DNS steps. Members and agents cannot change these settings.
+- **Profile** (`/people/<principal_id>`, [`ProfilePage.tsx`](src/features/people/ProfilePage.tsx)).
+  The profile of a person or an agent is a page of the workspace, not a part of Chat. The page has the
+  rail and no sidebar of a product, so no product link of the rail has `aria-current`. The page shows the
+  avatar, the name, the handle, the address, the role in the organization or the sponsor of an agent,
+  and the date of the account.
+  - A mention in a message, the name of an author, the sponsor of an agent and **Profile and status**
+    in the account menu link here.
+  - **Send a direct message** opens the direct message with that principal (`chat.open_dm`). The
+    page then goes to that direct message in Chat. An archived principal and the own profile have no
+    such button.
+  - The profile shows the presence and the custom status of the principal, as Chat does. The own
+    profile has **Set status**: status text, an emoji, and an optional end time.
+  - The page reads its principal, and the sponsor of an agent, by their ids
+    (`directory.get_principals`). While the read runs, the page shows "Loading…". When the read fails,
+    or the directory does not have the principal, the page tells so. When only the read of the sponsor
+    fails, the page shows the agent, and tells that the sponsor did not load.
+  - The old path in Chat (`/chat/people/<principal_id>`) is not a route. It shows "Page not found".
 - **Connect an agent** (`/connect/<oar_id>`). `/oauth/authorize` sends the browser of a person here
   for the request of an MCP client. A person who is not signed in signs in first, and then sees the
   same page. The page loads the request (`oauth.get_authorization`) and shows the client name, the
@@ -866,10 +884,9 @@ MCP clients. The app has no UI-only path.
   - While no change waits, the page gets the sheet again every 15 seconds when the tab is visible,
     and on window focus.
 - **Chat** (`/chat`, `/chat/<room_id>`, `/chat/<room_id>/<seq>`, `/chat/<room_id>/<seq>/<reply seq>`,
-  `/chat/people/<principal_id>`, `/chat/threads`, `/chat/search`). A sidebar with the rooms
-  and the direct messages of the person, and one room with its messages and a box for a new
-  message, or one profile.
-  - The account menu opens **Profile and status**. Set status text, an emoji, and an optional end time.
+  `/chat/threads`, `/chat/search`). A sidebar with the rooms and the direct messages of the person,
+  and one room with its messages and a box for a new message, or one view. A profile is not part of
+  Chat: it has its own page (see **Profile**).
   - Profiles, room members, and direct messages show presence. The page reads only the names visible on screen.
     Each read includes up to 50 principals. The page refreshes them every 10 seconds.
     An agent opens no events socket, so its availability is always offline. The page shows no availability
@@ -1384,15 +1401,6 @@ MCP clients. The app has no UI-only path.
       client finds their principals in the directory of that time. The web app shows such a text as a
       mention also in a newer message, for example a mention that the server kept as text because its
       principal cannot see a private room.
-  - **Profile** (`/chat/people/<principal_id>`). The profile of a person or an agent shows in the
-    place of a room: the avatar, the name, the handle, the address, the role in the organization
-    or the sponsor of an agent, and the date of the account. **Send a direct message** opens the
-    direct message with that principal (`chat.open_dm`). An archived principal and the own profile
-    have no such button. A mention, the name of an author and the sponsor of an agent link here.
-    The profile reads its principal, and the sponsor of an agent, by their ids
-    (`directory.get_principals`). While the read runs, it shows what a message of the page already
-    read. When the read fails and the page has no such principal, the profile tells so. When only the
-    read of the sponsor fails, the profile shows the agent, and tells that the sponsor did not load.
   - A message row has a fill while the pointer is on it, or while the focus is in it. Then a small
     bar at its top right shows the buttons to change and to delete the message. On a touch screen,
     a tap on a message gives the focus to its row, and the bar shows above the row with buttons of
@@ -1749,12 +1757,12 @@ dock Worker serves `index.html` for each app path, so a deep link works on reloa
 | `/sheets/<prn_id>/<itm_id>` | The editor of one sheet |
 | `/chat` | Chat, without an open room |
 | `/chat/<rm_id>`, `/chat/<dm_id>` | One room, or one direct message |
-| `/chat/people/<prn_id>` | The profile of a person or an agent |
 | `/chat/threads` | The Threads view: the threads that the person follows |
 | `/chat/activity` | The Activity feed: mentions, replies, reactions, pins, and fired reminders |
 | `/chat/saved` | Saved messages and personal reminders |
 | `/chat/drafts` | Server-synced drafts and scheduled messages |
 | `/chat/search` | Search across rooms |
+| `/people/<prn_id>` | The profile of a person or an agent, a page of the workspace |
 | `/settings` | Goes to the Account section of Settings |
 | `/settings/<section>` | One section of Settings: `account`, `notifications`, `security` or `api-keys` |
 
@@ -1778,7 +1786,8 @@ Each view uses one search query: Inbox `in:inbox`, Starred `is:starred`, Sent `i
 | [`src/features/drive/`](src/features/drive/) | Drive: the sidebar, the item list, the menus and dialogs (new folder, rename, move, share, versions, preview), the data hooks, the pure rules in `model.ts`, the upload queue in `uploadQueue.ts`, and the document header that the editors share |
 | [`src/features/docs/`](src/features/docs/) | Docs: the schema, the commands, the autosave, the paste of Markdown (`markdownPaste.ts`), the editor and the page. For images: the store of the images of a doc (`images.ts`), the geometry (`imageModel.ts`), the commands (`imageCommands.ts`), the view of an image (`imageView.ts`), the plugin for a drop and a paste (`imagePlugin.ts`), the toolbar and the dialogs |
 | [`src/features/sheets/`](src/features/sheets/) | Sheets: the store with the tabs and the save queue, the toolbar, the grid, the formula bar, the tab bar, and the pure modules for cell names, the selection, clipboard text, the cells of the grid, the formats of cells and the formulas of the Σ menu |
-| [`src/features/chat/`](src/features/chat/) | Chat: the sidebar, the room view, the profile view, the dialogs (new room, public rooms, new direct message, members, name and topic), the message box with its toolbar, Markdown shortcuts and suggestions of a mention (`ChatComposer.tsx`, `composerSchema.ts`, `composerCommands.ts`), the files of a new message (`attachments.ts`, `ComposerFiles.tsx`, the drop in `fileDrop.ts`), the files and the link previews of a message (`MessageFiles.tsx`), the focus after the X of a chip (`focusAfterRemove.ts`), the data hooks, the pure rules in `model.ts`, the rules of mentions in `mentions.ts`, the part of the history that the page keeps in `history.ts`, the page reads in `pager.ts`, the last list of each room in `roomCache.ts`, the drafts in `drafts.ts`, the sends whose message the room has in `settle.ts`, and the sync of the open room in `sync.ts` |
+| [`src/features/chat/`](src/features/chat/) | Chat: the sidebar, the room view, the dialogs (new room, public rooms, new direct message, members, name and topic), the message box with its toolbar, Markdown shortcuts and suggestions of a mention (`ChatComposer.tsx`, `composerSchema.ts`, `composerCommands.ts`), the files of a new message (`attachments.ts`, `ComposerFiles.tsx`, the drop in `fileDrop.ts`), the files and the link previews of a message (`MessageFiles.tsx`), the focus after the X of a chip (`focusAfterRemove.ts`), the data hooks, the pure rules in `model.ts`, the rules of mentions in `mentions.ts`, the part of the history that the page keeps in `history.ts`, the page reads in `pager.ts`, the last list of each room in `roomCache.ts`, the drafts in `drafts.ts`, the sends whose message the room has in `settle.ts`, and the sync of the open room in `sync.ts` |
+| [`src/features/people/`](src/features/people/) | The profile page of a person or an agent |
 | [`src/features/settings/`](src/features/settings/) | Settings, its side navigation, the password and two-step verification cards, the TOTP setup panel, the API key manager with the lifetime of a key (`ttl.ts`), the event check boxes, the webhook list of one target, and the one-time secret dialog |
 | [`src/lib/`](src/lib/) | The API client, the router, the dialog, the select, toasts, icons (with the Iconoir files in `iconoir/`), the appearance, format helpers, the names of the kinds of principals (`principalKind.ts`), the hook for the people and agents of the organization, the page chunks with the reload after a deploy, the upload of a file to Drive (`upload.ts`), the limit of the uploads and the small pictures that run at the same time (`limiter.ts`), and the small picture of a picture or a video (`filePreview.ts`) |
 | [`src/styles.css`](src/styles.css) | Plain CSS with custom properties. The `dark` class on `<html>` selects the dark colors. See [Design](#design) |
