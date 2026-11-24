@@ -326,11 +326,13 @@ export const chatLayer8Handlers: Pick<HandlerMap<CallContext>, Layer8ChatOperati
 
 		// Verify current room membership and message liveness against each authoritative ChatRoomDO
 		// so previews from left rooms or deleted/retention-pruned messages are never exposed.
-		// An item of a member request is not about a message: it is live while the request waits for an answer.
+		// An item of a member request is not about a message: it is live while the request waits for an answer
+		// that this person can still give.
 		const requests = shown.filter((item) => item.kind === "member_request");
 		const liveRequests = await liveMemberRequestIds(
 			call.env.DIRECTORY,
 			requests.map((item) => item.message_id),
+			{ id: call.caller.id, admin: call.caller.kind === "human" && isAdmin(call.caller) },
 		);
 		const byRoom = new Map<string, string[]>();
 		for (const item of shown) {

@@ -669,9 +669,9 @@ account names its resources.
   that waits for a person (migration `0030`). It belongs to the [`chat`](../chat/README.md#data-inventory)
   module. The migration only adds the table, and the Worker from before does not read it. A fresh start
   of the directory drops the table and replays `0030` (`setup.ts`).
-- **Rollback after `0030`.** A Worker from before this change does not know the activity kind
-  `member_request`. For a person who has such an item, `chat.list_activity` of that Worker fails until
-  the item is gone. The table of the migration stays. Fix a problem with a new deploy
+- **Rollback after `0030`.** A Worker from before this change finds no message for an item of the kind
+  `member_request`, so its `chat.list_activity` removes the item as old. The table of the migration stays
+  and that Worker does not use it
   ([Self-hosting](../../../../docs/self-hosting.md#an-agent-asks-before-it-adds-an-agent)).
 - **A remove changes nothing on the account.** After a remove from a room, a shared drive or a team
   mailbox, the agent keeps its scopes. The membership is gone, so the agent does not reach the resource.

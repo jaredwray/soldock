@@ -1057,6 +1057,7 @@ export const approveMemberRequest = defineOperation({
 	description: [
 		REQUEST_DECIDER,
 		"Makes the account a member of the room, with the scopes of the request. The agent that asked must still be a member with chat.add_members: if not, the call gets conflict and the request goes away.",
+		"Only one answer to a request succeeds: a call after a different answer gets not_found.",
 		"When your credential holds directory.write, the account also gets the chat scopes of the membership that it does not hold: agent_access_changes has them. Your credential must hold each scope that the account gets.",
 	].join(" "),
 	http: { method: "POST", path: "/api/v1/chat/member-requests/{request_id}/approve" },
@@ -1075,7 +1076,7 @@ export const approveMemberRequest = defineOperation({
 export const denyMemberRequest = defineOperation({
 	name: "chat.deny_member_request",
 	summary: "Deny a request to add an agent or a service account to a room",
-	description: `${REQUEST_DECIDER} Removes the request. The account does not become a member. A second call gets not_found.`,
+	description: `${REQUEST_DECIDER} Removes the request. The account does not become a member. A second call, or a call after a different answer, gets not_found.`,
 	http: { method: "POST", path: "/api/v1/chat/member-requests/{request_id}/deny" },
 	scopes: ["chat.write"],
 	callers: ["human"],

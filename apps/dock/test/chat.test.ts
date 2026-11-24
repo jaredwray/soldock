@@ -1433,6 +1433,8 @@ describe("a request of an agent to add an agent", () => {
 				actor: { principal_id: bot.id, kind: "agent", display_name: "Billing Bot" },
 				subject: { principal_id: helper.id, kind: "agent", display_name: "Helper" },
 				preview: "Asks to add Helper to Builds",
+				// The agent that asked chose the name of the room, and an agent chose each name.
+				untrusted: true,
 				read_at: null,
 			});
 			expect(await send(ada, "chat.list_activity", { filter: "member_request" })).toEqual(feed);
@@ -1609,6 +1611,86 @@ describe("a request of an agent to add an agent", () => {
 		expect((await bot.call("chat.request_member", { ...input, room_id: other.id })).created).toBe(true);
 		await ada.call("chat.deny_member_request", { request_id: kept.id });
 		expect((await bot.call("chat.request_member", input)).created).toBe(true);
+
+		// Nobody can decide a request for an archived account, so it does not use a place of the room.
+		const last = await newAgent("Last");
+		expect(await codeOf(bot.call("chat.request_member", { room_id: room.id, principal_id: last.id }))).toBe("conflict");
+		await owner.call("directory.archive_principal", { principal_id: (rest[0] as Actor).id });
+		expect((await bot.call("chat.request_member", { room_id: room.id, principal_id: last.id })).created).toBe(true);
+	});
+
+	// The delete of the request is the decision. A denial that comes while an approval runs must win or lose
+	// as a whole: a denied account must never become a member.
+	// A request that nobody can decide must not stay in a list or use a place of the room. A request also goes
+	// to the person who can decide it now, and an approval gives no scope for a membership that a person made.
+	it("drops a request that nobody can decide, follows a new sponsor, and gives no scope for a membership from before", async () => {
+		const cy = await newPerson("Cy");
+		const room = await createRoom(bot, "private", "Builds");
+		const gone = await newAgent("Gone");
+		await ask(bot, room.id, gone);
+		expect(await requestItems(ada)).toHaveLength(1);
+		// The account is archived: no person can decide the request, so it leaves each list.
+		await owner.call("directory.archive_principal", { principal_id: gone.id });
+		expect(await requestItems(ada)).toEqual([]);
+		for (const actor of [ada, owner, bot]) expect(await requestsOf(actor)).toEqual([]);
+
+		// The sponsor changes. Ada no longer decides, so her item goes away, and a new call sends it to Cy.
+		const moved = await newAgent("Moved");
+		const request = await ask(bot, room.id, moved);
+		await owner.call("directory.update_principal", { principal_id: moved.id, sponsor_id: cy.id });
+		expect(await requestItems(ada)).toEqual([]);
+		expect(await codeOf(ada.call("chat.deny_member_request", { request_id: request.id }))).toBe("not_found");
+		expect((await bot.call("chat.request_member", { room_id: room.id, principal_id: moved.id })).created).toBe(false);
+		expect(await requestItems(cy)).toMatchObject([{ message_id: request.id, subject: { principal_id: moved.id } }]);
+
+		// A person who does not manage the account adds it before the approval. That add gives no scope, and the
+		// approval then gives no scope either: the membership is not the one of the request.
+		const dan = await newPerson("Dan");
+		await bot.call("chat.add_members", { room_id: room.id, principal_ids: [dan.id] });
+		await dan.call("chat.add_members", { room_id: room.id, principal_ids: [moved.id], scopes: ["chat.read"] });
+		const approved = await cy.call("chat.approve_member_request", { request_id: request.id });
+		expect(approved).toMatchObject({ agent_access_changes: [], agent_access_pending: [] });
+		expect(await scopesOf(moved.id)).toEqual(["account.read"]);
+	});
+
+	it("makes no member when a denial deletes the request before the approval does", async () => {
+		const helper = await newAgent("Helper", [...CHAT_AGENT]);
+		const room = await createRoom(ada, "private", "Builds", [bot.id]);
+		await ada.call("chat.set_member_scopes", {
+			room_id: room.id,
+			principal_id: bot.id,
+			scopes: ["chat.read", "chat.write", "chat.add_members"],
+		});
+		const request = await ask(bot, room.id, helper);
+		// The owner denies the request just before the approval of Ada deletes it.
+		const directory = new Proxy(env.DIRECTORY, {
+			get(target, property) {
+				if (property === "prepare") {
+					return (sql: string) => {
+						const statement = target.prepare(sql);
+						if (!sql.startsWith("DELETE FROM chat_member_requests WHERE id")) return statement;
+						return {
+							bind: (...values: unknown[]) => ({
+								run: async () => {
+									await owner.call("chat.deny_member_request", { request_id: request.id });
+									return statement.bind(...values).run();
+								},
+							}),
+						};
+					};
+				}
+				const value = Reflect.get(target, property);
+				return typeof value === "function" ? value.bind(target) : value;
+			},
+		});
+		const approved = await withEnv({ DIRECTORY: directory }, `/api/v1/chat/member-requests/${request.id}/approve`, {
+			method: "POST",
+			headers: { authorization: `Bearer ${ada.key}`, "content-type": "application/json" },
+			body: "{}",
+		});
+		expect(approved.status).toBe(404);
+		expect(await codeOf(helper.call("chat.get_room", { room_id: room.id }))).toBe("not_found");
+		expect(await requestsOf(ada)).toEqual([]);
 	});
 
 	// An approval gives no more than the agent that asked can give at the time of the approval.

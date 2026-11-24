@@ -65,6 +65,16 @@ export async function createMemberRequest(
 	most: number,
 ): Promise<{ request: MemberRequestRow; created: boolean } | null> {
 	const id = newId("mrq");
+	// A request for an account that is archived or deleted cannot complete, and nobody sees it. It must not use a
+	// place of the room, so the call removes such requests of the room first.
+	await db
+		.prepare(
+			`DELETE FROM chat_member_requests WHERE room_id = ?1 AND principal_id IN (
+				SELECT p.id FROM principals p WHERE p.deleted_at IS NOT NULL OR p.archived_at IS NOT NULL
+			)`,
+		)
+		.bind(input.roomId)
+		.run();
 	// One statement: the count and the insert have no other request between them.
 	const inserted = await db
 		.prepare(
@@ -124,23 +134,53 @@ export async function listMemberRequestsFor(
 	return results.map(toRow);
 }
 
-/** The requests that an agent or a service account made, the newest first. */
-export async function listMemberRequestsBy(db: D1Database, requesterId: string): Promise<MemberRequestRow[]> {
+/**
+ * The requests that an agent or a service account made, the newest first. With `principalId`, only the
+ * requests for that account: the filter comes before the limit, so an older request is in the answer too.
+ */
+export async function listMemberRequestsBy(
+	db: D1Database,
+	requesterId: string,
+	principalId: string | null,
+): Promise<MemberRequestRow[]> {
+	// A request for an account that is archived or deleted cannot complete, so the list leaves it out.
 	const { results } = await db
 		.prepare(
-			`SELECT ${COLUMNS} FROM chat_member_requests r WHERE r.requested_by = ? ORDER BY r.created_at DESC, r.id DESC LIMIT ?`,
+			`SELECT ${COLUMNS} FROM chat_member_requests r JOIN principals p ON p.id = r.principal_id
+			WHERE r.requested_by = ?1 AND (?2 IS NULL OR r.principal_id = ?2)
+				AND p.deleted_at IS NULL AND p.archived_at IS NULL
+			ORDER BY r.created_at DESC, r.id DESC LIMIT ?3`,
 		)
-		.bind(requesterId, LIST_MAX)
+		.bind(requesterId, principalId, LIST_MAX)
 		.all<StoredRow>();
 	return results.map(toRow);
 }
 
-/** The ids of the list that are requests now. The activity list drops an item of a request that is gone. */
-export async function liveMemberRequestIds(db: D1Database, ids: readonly string[]): Promise<Set<string>> {
+/**
+ * The ids of the list that are requests that this person can decide now: the request waits, its account is
+ * not archived or deleted, and the person manages the account (as `listMemberRequestsFor`). The activity list
+ * drops each other item. So an item goes away when its account is gone, or when the person no longer
+ * manages it, for example after a change of the sponsor.
+ */
+export async function liveMemberRequestIds(
+	db: D1Database,
+	ids: readonly string[],
+	person: { id: string; admin: boolean },
+): Promise<Set<string>> {
 	if (ids.length === 0) return new Set();
 	const { results } = await db
-		.prepare("SELECT r.id FROM chat_member_requests r JOIN json_each(?) wanted ON wanted.value = r.id")
-		.bind(JSON.stringify([...new Set(ids)]))
+		.prepare(
+			`SELECT r.id FROM chat_member_requests r JOIN json_each(?1) wanted ON wanted.value = r.id
+			JOIN principals p ON p.id = r.principal_id
+			WHERE p.kind = 'agent' AND p.deleted_at IS NULL AND p.archived_at IS NULL
+				AND (?2 = 1 OR (p.service = 0 AND p.sponsor_id = ?3))`,
+		)
+		.bind(JSON.stringify([...new Set(ids)]), person.admin ? 1 : 0, person.id)
 		.all<{ id: string }>();
 	return new Set(results.map((row) => row.id));
+}
+
+/** Records a different person as the one who got the request in the activity list. */
+export async function setMemberRequestNotified(db: D1Database, id: string, personId: string | null): Promise<void> {
+	await db.prepare("UPDATE chat_member_requests SET notified_id = ? WHERE id = ?").bind(personId, id).run();
 }

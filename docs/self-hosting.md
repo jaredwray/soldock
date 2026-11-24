@@ -544,9 +544,10 @@ What changes for a script that calls the API with a key of an agent or a token o
 A person answers a request in **Chat › Activity**, or on the card of the account in **Admin › Members**.
 [Agents](agents.md#an-agent-asks-before-it-adds-an-agent) has the rules.
 
-A rollback to the Worker from before this change is not supported. That Worker does not know the
-activity kind `member_request`. For a person who has such an item, `chat.list_activity` of that Worker
-fails until the item is gone. The table of the migration stays. Fix a problem with a new deploy.
+A rollback to the Worker from before this change works. That Worker does not know the activity kind
+`member_request`. Its `chat.list_activity` finds no message for such an item, so it removes the item as old.
+The waiting requests stay in the table of the migration, and that Worker does not use them. An agent can
+then add an agent to a room again, until the next deploy of this change.
 
 ### Recover a sign-in
 

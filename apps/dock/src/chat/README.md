@@ -237,6 +237,8 @@ the messages from before. So a person decides that the account gets them.
 - **One request.** A room has one request for one account (`chat_member_requests` in D1). A second call
   for the same room and account returns that request with `created: false`. A room has at most 20
   requests that wait for an answer (`CHAT_LIMITS.memberRequestsPerRoom`). The next one gets `conflict`.
+  A new request first removes the requests of the room for an account that is archived or deleted:
+  nobody can decide them, so they must not use a place.
 - **The lists.** `chat.list_member_requests` returns the requests that wait, the newest first, and
   `principal_id` keeps the requests for one account.
   - The sponsor of an agent gets the requests for that agent.
@@ -246,16 +248,30 @@ the messages from before. So a person decides that the account gets them.
 - **Who decides.** `chat.approve_member_request` and `chat.deny_member_request` accept people only. The
   caller must manage the account (`canManageAgent`): its sponsor, an owner or an admin. Only an owner or
   an admin manages a service account. Each other caller gets `not_found`.
-- **An approval.** The room makes the account a member with the scopes of the request (`admitMember`).
-  The agent that asked must still be a member with `chat.add_members` and each scope of the request. If
-  the room refuses, the call gets `conflict` and the handler deletes the request. A limit from an
+- **What the person sees.** The person who decides is usually not a member of the room. The item and
+  the list show that person the id and the name of the room, the agent that asked and the account. This
+  is on purpose: the person cannot decide without them. The agent that asked chose the name of the room,
+  so the item has `untrusted: true`.
+- **When a request goes away without an answer.** The activity list keeps an item only while the request
+  waits and the person still manages the account. So the item goes away when the account is archived or
+  deleted, or when its sponsor changes. A new call of `chat.request_member` sends the item to the person
+  of now. The lists leave out a request for an archived or deleted account.
+- **One answer.** The delete of the request is the decision. An approval and a denial each delete the
+  request first, and only the call that deletes it continues. A different answer at the same time gets
+  `not_found`. So a denied account never becomes a member.
+- **An approval.** After the delete, the room makes the account a member with the scopes of the request
+  (`admitMember`). The agent that asked must still be a member with `chat.add_members` and each scope of
+  the request. If the room refuses, the call gets `conflict`, and the request is gone. When a person
+  added the account in the meantime, the approval gives the account no scope: that membership is not the
+  one of the request. A limit from an
   earlier membership of the account still applies (`left_scopes`, [Member scopes](#member-scopes)).
 - **The access of the account.** After the write of the room, `giveMemberAccess` gives the account the
   chat scopes that it lacks, as for [an agent as a new member](#an-agent-as-a-new-member). The credential
   must hold `directory.write` for that. The result has `agent_access_changes` and `agent_access_pending`.
   `assertMemberGrants` refuses the call first when the credential cannot give a scope.
-- **A second approval.** The write of the room comes first, and the handler deletes the request last. A
-  second call for a request that stays finds the member, completes the access and deletes the request.
+- **A failed write.** When the room or the directory fails after the delete, the request is gone and the
+  account can be without the membership or without its scopes. The agent asks again, or a person who
+  manages the account adds it to the room or sets its scopes.
 - **A denial.** `chat.deny_member_request` deletes the request. The account does not become a member.
 - **The activity item.** One person gets an item of the kind `member_request` in `chat.list_activity`
   (`deciderOf`). For an agent, that person is its sponsor. For a service account, that person is its

@@ -48,6 +48,7 @@ import {
 	listMemberRequestsFor,
 	type MemberRequestRow,
 	memberRequestActivityId,
+	setMemberRequestNotified,
 	toMemberRequest,
 } from "./member-requests.ts";
 import { chatNotificationHandlers } from "./notification-handlers.ts";
@@ -208,6 +209,8 @@ async function notifyDecider(call: CallContext, request: MemberRequestRow, targe
 			actor: actorOf(call),
 			emoji: null,
 			preview: `Asks to add ${target.display_name} to ${room}`,
+			// The agent that asked chose the name of the room, and an agent chose the name of each account.
+			untrusted: true,
 			subject: toActor(target),
 			created_at: Date.parse(request.created_at),
 		},
@@ -765,6 +768,7 @@ export const chatHandlers: Pick<HandlerMap<CallContext>, ChatOperation> = {
 		}
 		if (target.archived_at !== null) throw new OperationError("invalid", "That account is archived.");
 		const checked = accept(await opened.room.checkMemberRequest(opened.ctx, target.id, scopes));
+		const decider = await deciderOf(call, target);
 		const stored = await createMemberRequest(
 			call.env.DIRECTORY,
 			{
@@ -773,7 +777,7 @@ export const chatHandlers: Pick<HandlerMap<CallContext>, ChatOperation> = {
 				principalId: target.id,
 				requestedBy: call.caller.id,
 				scopes,
-				notifiedId: await deciderOf(call, target),
+				notifiedId: decider,
 			},
 			CHAT_LIMITS.memberRequestsPerRoom,
 		);
@@ -783,24 +787,27 @@ export const chatHandlers: Pick<HandlerMap<CallContext>, ChatOperation> = {
 				`This room has ${CHAT_LIMITS.memberRequestsPerRoom} requests that wait for an answer, the most. Try again after a person decides one.`,
 			);
 		}
+		// The line comes first: the request is in the directory, so the log must have it when a later step fails.
+		if (stored.created) auditOk(call, "chat.request_member", `${input.room_id}:${target.id}`);
+		// A request from an earlier call can name a person who no longer decides, for example after a change of
+		// the sponsor. The item then goes to the person of now. The old item leaves the list of the other person.
+		let request = stored.request;
+		if (request.notified_id !== decider) {
+			await setMemberRequestNotified(call.env.DIRECTORY, request.id, decider);
+			request = { ...request, notified_id: decider };
+		}
 		// Each call sends the item again. The write has the id of the request, so a second one changes nothing,
 		// and it completes a write that failed.
-		await notifyDecider(call, stored.request, target);
-		if (stored.created) auditOk(call, "chat.request_member", `${input.room_id}:${target.id}`);
-		return { request: toMemberRequest(stored.request), created: stored.created };
+		await notifyDecider(call, request, target);
+		return { request: toMemberRequest(request), created: stored.created };
 	},
 
 	async "chat.list_member_requests"(call, input) {
 		const db = call.env.DIRECTORY;
 		if (call.caller.kind !== "human") {
 			// An agent or a service account sees the requests that it made.
-			const made = await listMemberRequestsBy(db, call.caller.id);
-			const wanted = input.principal_id;
-			return {
-				requests: made
-					.filter((request) => wanted === undefined || request.principal_id === wanted)
-					.map(toMemberRequest),
-			};
+			const made = await listMemberRequestsBy(db, call.caller.id, input.principal_id ?? null);
+			return { requests: made.map(toMemberRequest) };
 		}
 		const requests = await listMemberRequestsFor(db, {
 			personId: call.caller.id,
@@ -815,28 +822,31 @@ export const chatHandlers: Pick<HandlerMap<CallContext>, ChatOperation> = {
 		// The approval can give the account the chat scopes of the membership. Refuse what the credential cannot
 		// give before the room writes the member.
 		assertMemberGrants(call, [target], () => request.scopes);
+		// The delete of the request is the decision. Only one answer deletes it, so a denial and an approval at
+		// the same time cannot both succeed. The room writes the member only after the approval won.
+		if (!(await removeMemberRequest(call, request))) throw new OperationError("not_found", NO_REQUEST);
 		const room = roomStub(call.env, request.room_id);
 		const admitted = await room.admitMember(request.requested_by, toActor(target), request.scopes, call.caller.id);
 		if ("error" in admitted) {
 			// The room is gone, or the agent that asked cannot add this member now. The request cannot complete.
-			await removeMemberRequest(call, request);
 			throw new OperationError("conflict", `${admitted.error.message} The request is gone.`);
 		}
-		if (admitted.added) {
-			auditOk(call, "chat.approve_member_request", `${request.room_id}:${target.id}`);
-			recordServiceMemberships(call, [target.id], "chat.approve_member_request", request.room_id);
-		}
+		// The account was a member before the approval: a person added it in the meantime. That membership is not
+		// the one of the request, so the approval gives the account no scope.
+		if (!admitted.added) return { request: toMemberRequest(request), ...accessOutput({ changes: [], pending: [] }) };
+		auditOk(call, "chat.approve_member_request", `${request.room_id}:${target.id}`);
+		recordServiceMemberships(call, [target.id], "chat.approve_member_request", request.room_id);
 		// The member is in the room. The write of the scopes is idempotent, as for chat.add_members.
 		const access = await giveMemberAccess(call, [admitted.member]);
-		await removeMemberRequest(call, request);
 		return { request: toMemberRequest(request), ...accessOutput(access) };
 	},
 
 	async "chat.deny_member_request"(call, input) {
 		const { request, target } = await requestToDecide(call, input.request_id);
-		const denied = await removeMemberRequest(call, request);
-		if (denied) auditOk(call, "chat.deny_member_request", `${request.room_id}:${target.id}`);
-		return { denied };
+		// Only one answer deletes the request. A different answer that came first gives `not_found`.
+		if (!(await removeMemberRequest(call, request))) throw new OperationError("not_found", NO_REQUEST);
+		auditOk(call, "chat.deny_member_request", `${request.room_id}:${target.id}`);
+		return { denied: true };
 	},
 
 	async "chat.remove_member"(call, input) {
