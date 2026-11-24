@@ -493,9 +493,9 @@ MCP clients. The app has no UI-only path.
     the surface. **Account** starts with a muted line in place of a heading. The account shows as rows
     with the name at the left and the value at the right. A key shows its label above its scopes.
     At 1100px and below, the table of keys has no Created and Last used columns.
-  - Each change to your own sign-in asks for your current password, because the server needs it
-    from a browser session. On the setup page, the two-step step uses the password that the owner
-    just typed.
+  - A change to your own two-step verification asks for your current password, because the server
+    needs it from a browser session. On the setup page, the two-step step uses the password that the
+    owner just typed. A change of your password does not ask for the current password.
   - A person without a password (after the upgrade to passwords) sees **Set a password** in
     **Security**. Until they set one, a notice shows at the top of each other page. The link of the
     notice opens **Security**.
