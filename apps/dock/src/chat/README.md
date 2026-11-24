@@ -197,15 +197,18 @@ and the room in its limits when it has limits ([`identity`](../identity/README.m
   second `chat.create_room` would make a second room. The result names the agent in
   `agent_access_pending`. The causes are limits that name 20 rooms, and a parallel change of the agent at
   each try. A later call for the member completes the access.
-- **A removed agent.** `chat.remove_member` takes the room out of the limits of an agent
-  (`dropRoomAccess`). So a later add by a member that does not manage the agent gives no access. The
-  scopes of the agent do not change. A different call can add the agent again before this write. So after
-  the write, the handler asks the room again (`hasMember`), and puts the room back for a member. A call
-  for a principal that was not a member changes no limits.
-- **The same question after an add.** A different call can remove the agent between the write of the room
-  and the write of the access. So `giveRoomAccess` asks the room again after it put the room into the
-  limits, and takes the room out for a principal that is not a member. Known limit: a room that an owner or an admin deletes stays in the
-  limits, and gives nothing.
+- **A removed agent.** `chat.remove_member` takes the room out of the limits of an agent. So a later add
+  by a member that does not manage the agent gives no access. The scopes of the agent do not change. A
+  call for a principal that was not a member changes no limits.
+- **The room gives the order of the two stores.** The room object makes the write of the limits itself,
+  in one step with the remove (`dropLimits`, with `blockConcurrencyWhile`). No add and no remove of the
+  room runs between the two writes. So after a remove, each new membership finds no room in the limits,
+  and only a manager of the agent puts it back.
+- **A remove during an add.** A different call can remove the agent between the write of the room and the
+  write of the access. So after `giveRoomAccess` put the room into the limits, the room takes it out again
+  for a principal that is not a member now (`releaseLimits`), in one step with the read of its members.
+- Known limits: a room that an owner or an admin deletes stays in the limits, and gives nothing. When the
+  directory fails during a remove, the limits keep the room, and the room writes a warning.
 
 ## Messages
 

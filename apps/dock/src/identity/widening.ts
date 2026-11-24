@@ -9,14 +9,7 @@ import { OperationError } from "../platform/index.ts";
 import { auditOk, canManageAgent, grantableScopes, isAdmin, recordServiceChange } from "./access.ts";
 import type { CallContext } from "./auth.ts";
 import { endEventSockets } from "./principal.ts";
-import {
-	type AgentWidening,
-	dropRoomFromLimits,
-	getPrincipals,
-	type PrincipalRecord,
-	restoreRoomToLimits,
-	widenAgentAccess,
-} from "./store.ts";
+import { type AgentWidening, getPrincipal, getPrincipals, type PrincipalRecord, widenAgentAccess } from "./store.ts";
 
 // What a membership gives to an agent or a service account. A membership of a team mailbox or a room says
 // what the agent can do in that resource. The agent also needs the scopes on its account, and the resource
@@ -186,13 +179,13 @@ export interface RoomAccessResult {
  * still the sponsor. The function reads the agent and tries again.
  *
  * It does not throw for an agent that it cannot complete. The membership is in the room, so the call
- * returns its result, and `pending` names the agent. `isMember` asks the room if a principal is a member now.
+ * returns its result, and `pending` names the agent. `release` is `releaseLimits` of the room.
  */
 export async function giveRoomAccess(
 	call: CallContext,
 	roomId: string,
 	members: readonly RoomMembership[],
-	isMember: (principalId: string) => Promise<boolean>,
+	release: (agent: PrincipalRecord) => Promise<boolean>,
 ): Promise<RoomAccessResult> {
 	const { DIRECTORY } = call.env;
 	const scopesOf = new Map(members.map((member) => [member.principal_id, credentialScopes(member.scopes)]));
@@ -222,12 +215,9 @@ export async function giveRoomAccess(
 			}
 			await afterWidening(call, widening);
 			// A different call can remove the member between the write of the room and this write. Its own write
-			// came first, and found no room in the limits. So ask the room again: the limits must not name a
-			// room that the agent is not a member of.
-			if (widening.resources !== agent.agent_resources && !(await isMember(agent.id))) {
-				await dropRoomFromLimits(DIRECTORY, agent.id, roomId);
-				continue;
-			}
+			// of the limits came first, and found no room in them. So the room takes the limits back for a
+			// principal that is not a member now. The room does that in one step with the read of its members.
+			if (widening.resources !== agent.agent_resources && (await release(agent))) continue;
 			changes.push(toAccessChange(widening));
 		}
 		agents = lost.length === 0 ? [] : managedAgents(call, await getPrincipals(DIRECTORY, lost));
@@ -236,28 +226,12 @@ export async function giveRoomAccess(
 }
 
 /**
- * Takes a room out of the limits of each agent or service account that is no longer a member of it. Without
- * this, the room stays in the limits, and a later add by a member that does not manage the agent gives the
- * agent access again. The change only removes reach, so each caller that removed the member makes it. The
- * scopes of the agent do not change.
- *
- * The room object and the directory are two stores, so a different call can make the agent a member again
- * between the remove and this write. That add found the room in the limits, and wrote nothing. So after the
- * write, `isMember` asks the room again. For a member, the room goes back into the limits: the access is
- * then the access from before the remove, which the new membership has.
+ * The effects of a remove that took the room out of the limits of an agent: the log gets a line, and the live
+ * connections of the agent end. The room object makes the write, in one step with the remove.
  */
-export async function dropRoomAccess(
-	call: CallContext,
-	roomId: string,
-	principalIds: readonly string[],
-	isMember: (principalId: string) => Promise<boolean>,
-): Promise<void> {
-	const { DIRECTORY } = call.env;
-	for (const principalId of principalIds) {
-		const agent = await dropRoomFromLimits(DIRECTORY, principalId, roomId);
-		if (!agent) continue;
-		if ((await isMember(principalId)) && (await restoreRoomToLimits(DIRECTORY, principalId, roomId))) continue;
-		auditOk(call, "directory.set_agent_access", `${agent.id}:${agent.agent_scopes.join(",")}:limits`);
-		await endEventSockets(call.env, agent.id, { agentAccess: true });
-	}
+export async function afterLimitsDrop(call: CallContext, principalId: string): Promise<void> {
+	const agent = await getPrincipal(call.env.DIRECTORY, principalId);
+	if (agent?.kind !== "agent") return;
+	auditOk(call, "directory.set_agent_access", `${agent.id}:${agent.agent_scopes.join(",")}:limits`);
+	await endEventSockets(call.env, agent.id, { agentAccess: true });
 }

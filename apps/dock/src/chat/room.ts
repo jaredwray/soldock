@@ -31,6 +31,7 @@ import {
 	type CredentialCheck,
 	type CredentialRef,
 	checkCredentials,
+	dropRoomFromLimits,
 	THREADS_PER_ROOM,
 	UNREAD_COUNT_MAX,
 } from "../identity/index.ts";
@@ -1576,14 +1577,6 @@ export class ChatRoomDO extends DurableObject<Env> {
 		});
 	}
 
-	/**
-	 * True when the principal is a member of the room now. The handler of `chat.remove_member` asks this after
-	 * a remove, before the limits of an agent lose the room for good: a different call can add the agent again.
-	 */
-	hasMember(principalId: string): boolean {
-		return this.room() !== null && this.member(principalId) !== null;
-	}
-
 	/** The members of the room among these principals, for a caller that is a member. */
 	membersOf(call: RoomCall, principalIds: readonly string[]): { members: MemberRecord[] } | Refusal {
 		const opened = this.openAsMember(call);
@@ -1647,7 +1640,7 @@ export class ChatRoomDO extends DurableObject<Env> {
 	async removeMember(
 		call: RoomCall,
 		principalId: string,
-	): Promise<{ removed: boolean; newOwnerId?: string | null } | Refusal> {
+	): Promise<{ removed: boolean; newOwnerId?: string | null; limitsDropped?: boolean } | Refusal> {
 		const opened = this.openAsMember(call);
 		if ("error" in opened) return opened;
 		if (this.isDmKind(opened.room.kind)) return refuse("invalid", "Direct messages keep their members.");
@@ -1661,6 +1654,26 @@ export class ChatRoomDO extends DurableObject<Env> {
 			return refuse("conflict", "You are the last member of this room, so you cannot leave it.");
 		}
 		let newOwnerId: string | null = null;
+		let limitsDropped = false;
+		// The remove and the write of the limits are one step of the room: no other call of the room runs
+		// between them. See `dropLimits`.
+		await this.ctx.blockConcurrencyWhile(async () => {
+			this.removeRows(call, target, (ownerId) => {
+				newOwnerId = ownerId;
+			});
+			limitsDropped = await this.dropLimits(target);
+		});
+		// The sockets of the removed member close in the same step, so no later event reaches them.
+		for (const socket of this.ctx.getWebSockets(socketTag(principalId))) {
+			this.end(socket, CHAT_SOCKET_CLOSE.ended, "You are not a member of this room now.");
+		}
+		await this.publish({ type: "room" });
+		return { removed: true, newOwnerId, limitsDropped };
+	}
+
+	/** The rows of a member that leaves, and the next owner when the owner leaves. */
+	private removeRows(call: RoomCall, target: MemberRow, onNewOwner: (principalId: string) => void): void {
+		const principalId = target.principal_id;
 		this.ctx.storage.transactionSync(() => {
 			this.keepScopes(target);
 			this.sql.exec("DELETE FROM members WHERE principal_id = ?", principalId);
@@ -1674,17 +1687,52 @@ export class ChatRoomDO extends DurableObject<Env> {
 				if (next) {
 					this.sql.exec("UPDATE members SET role = 'owner' WHERE principal_id = ?", next.principal_id);
 					this.touch(`member:${next.principal_id}`);
-					newOwnerId = next.principal_id;
+					onNewOwner(next.principal_id);
 				}
 			}
 			this.roomChanged(call.actor.principal_id);
 		});
-		// The sockets of the removed member close in the same step, so no later event reaches them.
-		for (const socket of this.ctx.getWebSockets(socketTag(principalId))) {
-			this.end(socket, CHAT_SOCKET_CLOSE.ended, "You are not a member of this room now.");
+	}
+
+	/**
+	 * Takes the room out of the resource limits of an agent or a service account that is not a member now. The
+	 * limits of an agent must not name a room that it is not a member of: a later add by a member that does
+	 * not manage the agent would then give it access.
+	 *
+	 * The room object owns the members, and the directory owns the limits. A caller of this method holds the
+	 * room with `blockConcurrencyWhile`, so no add and no remove of the room runs between the read of the
+	 * members and the write of the directory. So the room gives the order of the two stores: after this
+	 * write, a new membership finds no room in the limits, and only a manager of the agent puts it back.
+	 *
+	 * Returns true when the limits named the room. A failure of the directory only writes a warning: the
+	 * member is not in the room, and the limits keep a room that gives nothing.
+	 */
+	private async dropLimits(member: Pick<MemberRow, "principal_id" | "actor_json">): Promise<boolean> {
+		if ((JSON.parse(member.actor_json) as ActorRecord).kind !== "agent") return false;
+		const room = this.rawRoom();
+		if (!room) return false;
+		try {
+			return (await dropRoomFromLimits(this.env.DIRECTORY, member.principal_id, room.room_id)) !== null;
+		} catch (error) {
+			log("warn", "chat room: the limits of an agent kept the room after a remove", {
+				error: error instanceof Error ? error.message : String(error),
+			});
+			return false;
 		}
-		await this.publish({ type: "room" });
-		return { removed: true, newOwnerId };
+	}
+
+	/**
+	 * Takes the room out of the limits of an agent that is not a member now. The handler of an add calls this
+	 * after it put the room into the limits: a remove can come between the write of the room and that write.
+	 * The room reads its members and writes the directory in one step, as `removeMember` does. Returns true
+	 * when the principal is not a member, so the access that the handler wrote is gone.
+	 */
+	async releaseLimits(actor: ActorRecord): Promise<boolean> {
+		return this.ctx.blockConcurrencyWhile(async () => {
+			if (this.room() !== null && this.member(actor.principal_id) !== null) return false;
+			await this.dropLimits({ principal_id: actor.principal_id, actor_json: JSON.stringify(actor) });
+			return true;
+		});
 	}
 
 	/**

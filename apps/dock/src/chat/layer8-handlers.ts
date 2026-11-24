@@ -37,7 +37,7 @@ import {
 } from "../platform/index.ts";
 import { bodyMarkdown, type MessageContent, messageContent, textBody } from "./body.ts";
 import { createCustomEmoji, deleteCustomEmoji, listCustomEmoji } from "./custom-emoji.ts";
-import { dmRoomId } from "./handlers.ts";
+import { dmRoomId, releaseOf } from "./handlers.ts";
 import {
 	createIncomingWebhook,
 	deleteIncomingWebhook,
@@ -729,7 +729,7 @@ export const chatLayer8Handlers: Pick<HandlerMap<CallContext>, Layer8ChatOperati
 				auditOk(call, "chat.open_dm", res.room.id);
 				recordServiceMemberships(call, [peer.principal_id], "chat.open_dm", res.room.id);
 			}
-			const access = await giveRoomAccess(call, dmId, memberships, async (id) => opened.room.hasMember(id));
+			const access = await giveRoomAccess(call, dmId, memberships, releaseOf(opened.room));
 			return { room: toRoom(res.room), agent_access_changes: access.changes, agent_access_pending: access.pending };
 		}
 		const roomId = await groupDmRoomId([call.caller.id, ...uniqueOthers]);
@@ -740,7 +740,7 @@ export const chatLayer8Handlers: Pick<HandlerMap<CallContext>, Layer8ChatOperati
 			auditOk(call, "chat.open_group_dm", res.room.id);
 			recordServiceMemberships(call, uniqueOthers, "chat.open_group_dm", res.room.id);
 		}
-		const access = await giveRoomAccess(call, roomId, memberships, async (id) => opened.room.hasMember(id));
+		const access = await giveRoomAccess(call, roomId, memberships, releaseOf(opened.room));
 		return { room: toRoom(res.room), agent_access_changes: access.changes, agent_access_pending: access.pending };
 	},
 
