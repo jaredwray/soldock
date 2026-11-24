@@ -125,10 +125,18 @@ test("a sponsor creates a webhook on the agent card, and Settings does not list 
 	const id = await endpointId(sponsor, label);
 	expect(await chatFiltersOf(sponsor, id)).toEqual(["chat.message.updated addressed"]);
 
-	await page.goto("/settings");
-	await expect(page.getByRole("heading", { name: "Account" })).toBeVisible();
-	await expect(page.getByRole("heading", { name: "Webhooks" })).toHaveCount(0);
-	await expect(page.getByText(label)).toHaveCount(0);
+	const sections = [
+		["/settings/account", "Account"],
+		["/settings/notifications", "Notifications"],
+		["/settings/security", "Security"],
+		["/settings/api-keys", "API keys"],
+	] as const;
+	for (const [path, title] of sections) {
+		await page.goto(path);
+		await expect(page.getByRole("heading", { level: 1, name: title })).toBeVisible();
+		await expect(page.getByRole("heading", { name: "Webhooks" })).toHaveCount(0);
+		await expect(page.getByText(label)).toHaveCount(0);
+	}
 
 	await page.goto("/admin/members");
 	await page.locator("summary").filter({ hasText: "Research Agent" }).click();

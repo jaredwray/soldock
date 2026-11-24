@@ -70,7 +70,7 @@ MCP clients. The app has no UI-only path.
   - Each signed-in tab shares one principal socket between its pages. The title shows the unread message count for Chat.
   - An installed app shows that count on its icon when the device supports app badges.
     An open tab updates the badge even during quiet hours. A closed app gets the current count with its next push or when it opens.
-  - In Settings, **Chat notifications** sets the default level, sound and daily quiet hours for the account.
+  - In **Settings › Notifications**, **Chat notifications** sets the default level, sound and daily quiet hours for the account.
     Select the start, the end and the time zone. Equal times keep notifications quiet all day.
   - **Turn on device notifications** asks for browser permission on this device.
     A click on a notification opens the message or the reply in its thread.
@@ -472,8 +472,18 @@ MCP clients. The app has no UI-only path.
     send the browser to the `redirect_to` of the result. A member who cannot approve sees only Deny.
   - An expired or decided request shows a message to start again in the app.
   - The page shows one card in the center, on the surface, as the sign-in page does.
-- **Settings** (`/settings`). Your account, your password, two-step verification, your API keys
-  (list, create, revoke) and sign out. Settings does not list webhooks. A new password
+- **Settings** (`/settings/<section>`). A side navigation selects one section at a time, as in Admin.
+  Each section has its own path, so a deep link and a reload open the same section.
+  - The sections are:
+    - **Account** (`account`): your name, your address, your role, the scopes of this session, and sign out.
+    - **Notifications** (`notifications`): the chat notifications.
+    - **Security** (`security`): your password and two-step verification.
+    - **API keys** (`api-keys`): your API keys (list, create, rotate, revoke).
+  - `/settings` shows **Account**. The page then replaces the path with the path of that section.
+  - Each section starts at its top. At 900px and below, the navigation is part of the drawer of the
+    shell, as in Admin. The sidebar of Admin and the sidebar of Settings use one component
+    (`shell/SectionSidebar.tsx`).
+  - Settings does not list webhooks. A new password
   (`account.set_password`) ends your sessions on other browsers. A new key can hold only the scopes
   of the session. A new key does not get `account.keys`, `directory.write`, `mail.webhooks`, `chat.webhooks` or `drive.webhooks`
   unless the person selects them. A new key has a label, an optional description and a lifetime: 1, 7,
@@ -484,15 +494,17 @@ MCP clients. The app has no UI-only path.
     Now, In 15 minutes, In 1 hour (first) or In 24 hours. The secret dialog shows the new secret and the
     end of the old one. During the overlap, the row shows "Old secret works until …" and **Stop old secret
     now** (`account.end_api_key_rotation`). After a rotation, the row shows "Rotated … by …".
-  - The page is one column of 720px. Each part has a heading and a short muted line, and its content
-    is in a card on the surface. The account shows as rows with the name at the left and the value
-    at the right. A key shows its label above its scopes.
-    At 900px and below, the table of keys has no Created and Last used columns.
+  - Each section is a column of 960px at most, as in Admin. The header row shows the name and the icon
+    of the section. Each part has a heading and a short muted line, and its content is in a card on
+    the surface. **Account** starts with a muted line in place of a heading. The account shows as rows
+    with the name at the left and the value at the right. A key shows its label above its scopes.
+    At 1100px and below, the table of keys has no Created and Last used columns.
   - Each change to your own sign-in asks for your current password, because the server needs it
     from a browser session. On the setup page, the two-step step uses the password that the owner
     just typed.
-  - A person without a password (after the upgrade to passwords) sees **Set a password**, and a
-    notice at the top of each other page until they set one.
+  - A person without a password (after the upgrade to passwords) sees **Set a password** in
+    **Security**. Until they set one, a notice shows at the top of each other page. The link of the
+    notice opens **Security**.
   - **Two-step verification.** A click on **Set up two-step verification** calls
     `account.create_totp_secret` and shows the secret as a QR code (black on white in both themes)
     and as text, at the right of the code or below it. A correct code from the app (`account.enable_totp`) turns it on. **Turn off**
@@ -1768,7 +1780,8 @@ dock Worker serves `index.html` for each app path, so a deep link works on reloa
 | `/chat/saved` | Saved messages and personal reminders |
 | `/chat/drafts` | Server-synced drafts and scheduled messages |
 | `/chat/search` | Search across rooms |
-| `/settings` | Settings |
+| `/settings` | Goes to the Account section of Settings |
+| `/settings/<section>` | One section of Settings: `account`, `notifications`, `security` or `api-keys` |
 
 Each view uses one search query: Inbox `in:inbox`, Starred `is:starred`, Sent `in:sent`, Spam
 `in:spam`, Trash `in:trash`, All mail an empty string, and a user label `label:"<name>"`.
@@ -1782,7 +1795,7 @@ Each view uses one search query: Inbox `in:inbox`, Starred `is:starred`, Sent `i
 | [`src/main.tsx`](src/main.tsx) | The entry point |
 | [`src/App.tsx`](src/App.tsx) | Boot and the session state |
 | [`src/routes.ts`](src/routes.ts) | Route parse and path functions |
-| [`src/shell/`](src/shell/) | The signed-in frame: the rail, the account menu with the Appearance choice, the search box, the header row of a page, and the header of a sidebar |
+| [`src/shell/`](src/shell/) | The signed-in frame: the rail, the account menu with the Appearance choice, the search box, the header row of a page, the header of a sidebar, and the sidebar of a page with sections (Admin and Settings) |
 | [`src/features/auth/`](src/features/auth/) | The sign-in page and the `/auth/*` calls |
 | [`src/features/mail/`](src/features/mail/) | Mail: data hooks, sidebar, toolbar, thread list, thread view, composer and shortcuts |
 | [`src/features/admin/`](src/features/admin/) | Admin: the side navigation, the directory, the create form, the MCP endpoint banner, the agent panels with their OAuth connections, the service account panels (details, permissions, access and activity), the sign-in help, the team mailboxes and the email domains |
@@ -1791,7 +1804,7 @@ Each view uses one search query: Inbox `in:inbox`, Starred `is:starred`, Sent `i
 | [`src/features/docs/`](src/features/docs/) | Docs: the schema, the commands, the autosave, the paste of Markdown (`markdownPaste.ts`), the editor and the page. For images: the store of the images of a doc (`images.ts`), the geometry (`imageModel.ts`), the commands (`imageCommands.ts`), the view of an image (`imageView.ts`), the plugin for a drop and a paste (`imagePlugin.ts`), the toolbar and the dialogs |
 | [`src/features/sheets/`](src/features/sheets/) | Sheets: the store with the tabs and the save queue, the toolbar, the grid, the formula bar, the tab bar, and the pure modules for cell names, the selection, clipboard text, the cells of the grid, the formats of cells and the formulas of the Σ menu |
 | [`src/features/chat/`](src/features/chat/) | Chat: the sidebar, the room view, the profile view, the dialogs (new room, public rooms, new direct message, members, name and topic), the message box with its toolbar, Markdown shortcuts and suggestions of a mention (`ChatComposer.tsx`, `composerSchema.ts`, `composerCommands.ts`), the files of a new message (`attachments.ts`, `ComposerFiles.tsx`, the drop in `fileDrop.ts`), the files and the link previews of a message (`MessageFiles.tsx`), the focus after the X of a chip (`focusAfterRemove.ts`), the data hooks, the pure rules in `model.ts`, the rules of mentions in `mentions.ts`, the part of the history that the page keeps in `history.ts`, the page reads in `pager.ts`, the last list of each room in `roomCache.ts`, the drafts in `drafts.ts`, the sends whose message the room has in `settle.ts`, the sync of the open room in `sync.ts`, and the texts and the buttons of a member request (`memberRequests.ts`, `MemberRequestActions.tsx`) |
-| [`src/features/settings/`](src/features/settings/) | Settings, the password and two-step verification cards, the TOTP setup panel, the API key manager with the lifetime of a key (`ttl.ts`), the event check boxes, the webhook list of one target, and the one-time secret dialog |
+| [`src/features/settings/`](src/features/settings/) | Settings, its side navigation, the password and two-step verification cards, the TOTP setup panel, the API key manager with the lifetime of a key (`ttl.ts`), the event check boxes, the webhook list of one target, and the one-time secret dialog |
 | [`src/lib/`](src/lib/) | The API client, the router, the dialog, the select, toasts, icons (with the Iconoir files in `iconoir/`), the appearance, format helpers, the names of the kinds of principals (`principalKind.ts`), the hook for the people and agents of the organization, the page chunks with the reload after a deploy, the upload of a file to Drive (`upload.ts`), the limit of the uploads and the small pictures that run at the same time (`limiter.ts`), and the small picture of a picture or a video (`filePreview.ts`) |
 | [`src/styles.css`](src/styles.css) | Plain CSS with custom properties. The `dark` class on `<html>` selects the dark colors. See [Design](#design) |
 | [`test/`](test/) | Vitest tests for the pure modules: routes, view queries, label rows, compose, rich text, editor commands, actions and shortcuts, the Drive rules, the Docs schema, commands, autosave and images, the Sheets cells, clipboard text, formats, Σ formulas and save queue, the message list rules, the mentions, the room sync and the files of a new message of Chat, the upload in parts, the limit of the uploads, the upload queue of Drive and the small pictures, the first values of the OAuth approval page, the icons and the appearance rules |

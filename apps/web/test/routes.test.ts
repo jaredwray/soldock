@@ -16,6 +16,8 @@ import {
 	ownMailboxPath,
 	parseRoute,
 	profilePath,
+	SETTINGS_SECTIONS,
+	settingsPath,
 	threadPath,
 	viewPath,
 } from "../src/routes.ts";
@@ -239,10 +241,17 @@ describe("routes", () => {
 		expect(parseRoute("/admin/agents")).toEqual({ page: "redirect", to: "/admin/members" });
 	});
 
+	// Settings has the same side navigation as Admin. A deep link and a reload open the same section.
+	it("parses the path of each settings section back to that section", () => {
+		expect(parseRoute("/settings")).toEqual({ page: "settings", section: null });
+		for (const section of SETTINGS_SECTIONS) {
+			expect(parseRoute(settingsPath(section))).toEqual({ page: "settings", section });
+		}
+	});
+
 	it("sends / and /mail to the inbox, and gives not-found for other paths", () => {
 		expect(parseRoute("/")).toEqual({ page: "redirect", to: "/mail/inbox" });
 		expect(parseRoute("/mail")).toEqual({ page: "redirect", to: "/mail/inbox" });
-		expect(parseRoute("/settings")).toEqual({ page: "settings" });
 		expect(parseRoute("/connect/oar_01JD0000000000000000000000")).toEqual({
 			page: "connect",
 			requestId: "oar_01JD0000000000000000000000",
@@ -262,6 +271,8 @@ describe("routes", () => {
 			`/sheets/${ITEM}/${SPACE}`,
 			"/admin/extra",
 			"/admin/members/extra",
+			"/settings/extra",
+			"/settings/account/extra",
 			"/connect",
 			"/connect/thr_01JD0000000000000000000000",
 			"/mail/outbox",

@@ -1,9 +1,7 @@
-import { useEffect, useRef } from "react";
-import { Icon, type IconName } from "../../lib/icons.tsx";
-import { Link } from "../../lib/router.tsx";
+import type { IconName } from "../../lib/icons.tsx";
 import { ADMIN_SECTIONS, type AdminSection, adminPath } from "../../routes.ts";
-import { ADMIN_NAV_ID, domainOf, MENU_BUTTON_ID } from "../../shell/nav.ts";
-import { SidebarHeader } from "../../shell/SidebarHeader.tsx";
+import { ADMIN_NAV_ID, domainOf } from "../../shell/nav.ts";
+import { SectionSidebar } from "../../shell/SectionSidebar.tsx";
 import { useSession } from "../auth/session.tsx";
 
 /** The title and the icon of each section. Only owners and admins see a section with `adminOnly`. */
@@ -45,50 +43,21 @@ interface AdminSidebarProps {
 /** The sidebar of the admin page. At 900px and below it is part of the drawer that the menu button opens. */
 export function AdminSidebar({ active, elevated, open, onClose }: AdminSidebarProps) {
 	const { whoami } = useSession();
-	const navRef = useRef<HTMLElement>(null);
-	const wasOpen = useRef(open);
-	const sections = ADMIN_SECTIONS.filter((section) => elevated || !SECTIONS[section].adminOnly);
-
-	// The drawer at 900px and below: when it opens, the focus goes to its first item. When it closes, the
-	// focus goes back to the menu button, if the focus was in the drawer.
-	useEffect(() => {
-		const nav = navRef.current;
-		if (!nav || open === wasOpen.current) return;
-		wasOpen.current = open;
-		if (open) {
-			nav.querySelector<HTMLElement>("a[href]")?.focus();
-		} else if (nav.contains(document.activeElement) || document.activeElement === document.body) {
-			document.getElementById(MENU_BUTTON_ID)?.focus();
-		}
-	}, [open]);
-
+	const links = ADMIN_SECTIONS.filter((section) => elevated || !SECTIONS[section].adminOnly).map((section) => ({
+		path: adminPath(section),
+		title: sectionTitle(section, elevated),
+		icon: SECTIONS[section].icon,
+		active: active === section,
+	}));
 	return (
-		<>
-			{open && (
-				<button type="button" className="nav-backdrop" aria-label="Close the menu" tabIndex={-1} onClick={onClose} />
-			)}
-			<nav
-				id={ADMIN_NAV_ID}
-				ref={navRef}
-				className={open ? "sidebar sidebar-open" : "sidebar"}
-				aria-label="Admin sections"
-			>
-				<SidebarHeader title="Admin" subtitle={domainOf(whoami.principal.address)} />
-				<ul className="nav-list">
-					{sections.map((section) => (
-						<li key={section}>
-							<Link
-								to={adminPath(section)}
-								className={active === section ? "nav-item nav-item-active" : "nav-item"}
-								aria-current={active === section ? "page" : undefined}
-							>
-								<Icon name={SECTIONS[section].icon} />
-								<span className="nav-name">{sectionTitle(section, elevated)}</span>
-							</Link>
-						</li>
-					))}
-				</ul>
-			</nav>
-		</>
+		<SectionSidebar
+			id={ADMIN_NAV_ID}
+			label="Admin sections"
+			title="Admin"
+			subtitle={domainOf(whoami.principal.address)}
+			links={links}
+			open={open}
+			onClose={onClose}
+		/>
 	);
 }

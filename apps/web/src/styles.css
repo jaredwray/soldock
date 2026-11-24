@@ -1323,7 +1323,7 @@ fieldset {
 	min-height: 0;
 }
 
-/* The sidebar of a product: Mail, Drive, Chat and Admin. */
+/* The sidebar of a product (Mail, Drive and Chat), and of Admin and Settings. */
 
 .sidebar {
 	position: relative;
@@ -3026,7 +3026,7 @@ fieldset {
 	outline-color: currentColor;
 }
 
-/* Settings and the other pages with one column. Admin also uses the cards and the forms. */
+/* The pages with one column, for example Connect and Not found. */
 
 /* A page with a header row: the page scrolls under the header. Relative keeps visually hidden
    elements inside the scroll area, so the document does not scroll. */
@@ -3043,7 +3043,7 @@ fieldset {
 }
 
 .page-main > .page-header,
-.admin-main > .page-header {
+.section-main > .page-header {
 	position: sticky;
 	top: 0;
 	z-index: 2;
@@ -3071,16 +3071,16 @@ fieldset {
 	outline: none;
 }
 
-/* Admin: the sidebar and one section at a time */
+/* Admin and Settings: the sidebar and one section at a time */
 
-.admin-layout {
+.section-layout {
 	display: grid;
 	grid-template-columns: var(--sidebar-width) minmax(0, 1fr);
 	min-height: 0;
 }
 
 /* Relative, so that the visually hidden captions stay inside the scroll area and the document does not scroll. */
-.admin-main {
+.section-main {
 	position: relative;
 	min-width: 0;
 	min-height: 0;
@@ -3088,11 +3088,11 @@ fieldset {
 	background: var(--background);
 }
 
-.admin-main:focus {
+.section-main:focus {
 	outline: none;
 }
 
-.admin-content {
+.section-content {
 	display: flex;
 	flex-direction: column;
 	gap: 28px;
@@ -3290,17 +3290,6 @@ fieldset {
 
 /* Panels: the sections of Settings and Admin. A panel has a heading, a short muted line, and its
    content. The content is in a card on the surface, only where it is a list or a form. */
-
-/* Settings: one column of 720px, with the panels 36px apart. */
-.settings-column {
-	display: flex;
-	flex-direction: column;
-	gap: 36px;
-	width: 100%;
-	max-width: 784px;
-	margin: 0 auto;
-	padding: 36px 32px 64px;
-}
 
 .panel {
 	display: flex;
@@ -4131,7 +4120,7 @@ fieldset {
 	}
 
 	.mail-layout,
-	.admin-layout {
+	.section-layout {
 		grid-template-columns: minmax(0, 1fr);
 	}
 
@@ -4371,14 +4360,9 @@ fieldset {
 		padding: 16px 16px 32px;
 	}
 
-	.admin-content {
+	.section-content {
 		gap: 24px;
 		padding: 20px 16px 40px;
-	}
-
-	.settings-column {
-		gap: 28px;
-		padding: 24px 16px 40px;
 	}
 
 	.panel-card {
@@ -4421,10 +4405,10 @@ fieldset {
 	}
 }
 
-/* From 901px to 1100px, the Admin tables have the sidebar next to them. They keep the name and the
-   actions, as at 900px and below. */
+/* From 901px to 1100px, the tables of Admin and Settings have the sidebar next to them. They keep the
+   name and the actions, as at 900px and below. */
 @media (min-width: 901px) and (max-width: 1100px) {
-	.admin-layout .col-optional {
+	.section-layout .col-optional {
 		display: none;
 	}
 }
