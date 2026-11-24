@@ -1040,7 +1040,7 @@ export const listMemberRequests = defineOperation({
 	description: [
 		"For a person: the requests for the agents and the service accounts that you manage, the newest first. Set principal_id to get the requests for one account.",
 		"For an agent or a service account: the requests that it made.",
-		"A request stays in the list until a person approves or denies it.",
+		"A request stays in the list until a person approves or denies it. A request for an account that is archived or deleted is not in the list: nobody can decide it, and it never makes a member. A person sees only the requests for the accounts that the person manages now.",
 	].join(" "),
 	http: { method: "GET", path: "/api/v1/chat/member-requests" },
 	scopes: ["chat.read"],
@@ -1058,6 +1058,7 @@ export const approveMemberRequest = defineOperation({
 		REQUEST_DECIDER,
 		"Makes the account a member of the room, with the scopes of the request. The agent that asked must still be a member with chat.add_members: if not, the call gets conflict and the request goes away.",
 		"Only one answer to a request succeeds: a call after a different answer gets not_found.",
+		"When a person added the account to the room before the approval, the call succeeds and gives no scope: agent_access_changes is empty.",
 		"When your credential holds directory.write, the account also gets the chat scopes of the membership that it does not hold: agent_access_changes has them. Your credential must hold each scope that the account gets.",
 	].join(" "),
 	http: { method: "POST", path: "/api/v1/chat/member-requests/{request_id}/approve" },
