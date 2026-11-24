@@ -142,7 +142,7 @@ function CreateSharedMailboxDialog({ principals, onClose, onCreated }: CreatePro
 			const changed = result.agent_access_changes
 				.map((change) => {
 					const agent = principals.find((principal) => principal.id === change.principal_id);
-					return accessChangeText(agent?.display_name ?? "An agent", [change], "mailbox");
+					return accessChangeText(agent?.display_name ?? "An agent", [change]);
 				})
 				.join("");
 			toast({ message: `Shared mailbox ${result.team_mailbox.display_name} created.${changed}` });

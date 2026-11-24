@@ -1,11 +1,9 @@
 import {
-	type AgentResources,
 	holdsOperationScopes,
 	type Operation,
 	type OperationName,
 	type Operations,
 	type PrincipalKind,
-	resourceRefusal,
 } from "@asterra/contracts";
 import { z } from "zod";
 import { audit } from "../log/log.ts";
@@ -17,11 +15,6 @@ export interface Caller {
 	kind: PrincipalKind;
 	scopes: ReadonlySet<string>;
 	credential: string;
-	/**
-	 * The mailboxes, drives and rooms that the agent or the service account of the caller is limited to, or null. The invoker
-	 * refuses each call that names a resource outside the list, before the handler runs.
-	 */
-	restriction: AgentResources | null;
 }
 
 /** The name of each caller kind at the start of an error text. */
@@ -136,12 +129,6 @@ async function run<C extends { caller: Caller }>(
 	const parsed = operation.input.safeParse(rawInput);
 	if (!parsed.success) throw new OperationError("invalid", z.prettifyError(parsed.error));
 	parsedInput.input = parsed.data;
-	// The limits of a service account apply here, so no adapter or handler can skip them. An operation without a rule
-	// is refused for a limited account (`resourceRefusal`).
-	if (call.caller.restriction !== null) {
-		const why = resourceRefusal(operation.name, parsed.data, call.caller);
-		if (why) throw new OperationError("forbidden", why);
-	}
 	const result = await (handler as (call: C, input: unknown) => Promise<unknown>)(call, parsed.data);
 	return operation.output.parse(result);
 }

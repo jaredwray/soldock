@@ -30,7 +30,7 @@ export function canReadAgentMailboxes(caller: AuthContext): boolean {
 }
 
 /**
- * Who changes the policy and the access (scopes and resource limits) of an agent: its sponsor, an owner or an
+ * Who changes the policy and the access (the scopes) of an agent: its sponsor, an owner or an
  * admin. Only an owner or an admin changes them for a service account. Never an agent, also not for itself.
  */
 export function canManageAgent(caller: AuthContext, target: PrincipalRecord): boolean {
@@ -310,15 +310,6 @@ export function recordServiceMemberships(
 	);
 }
 
-/**
- * The audit target of a new principal: its id and, for an agent or a service account, if it has limits. So
- * the log shows an agent that its creator made without limits, as it shows a change of the limits.
- */
-export function createdTarget(principal: Pick<PrincipalRecord, "id" | "kind" | "agent_resources">): string {
-	if (principal.kind !== "agent") return principal.id;
-	return `${principal.id}:${principal.agent_resources === null ? "no limits" : "limits"}`;
-}
-
 export function auditOk(call: CallContext, op: string, target: string): void {
 	audit({
 		op,
@@ -414,7 +405,7 @@ export interface CredentialRef {
 	gen?: number;
 	/**
 	 * The `access_version` of an agent at the open, when it is 1 or more: for an API key or an OAuth token of
-	 * an agent or a service account. A change of the scopes or the limits of the agent gives a new number, so
+	 * an agent or a service account. A change of the scopes of the agent gives a new number, so
 	 * the connection stops at its next check and the client opens a new one with the new access. A ref
 	 * without it has the number 0.
 	 */
@@ -448,7 +439,7 @@ export function credentialRef(caller: AuthContext): CredentialRef {
  * - `live`: it works.
  * - `renew`: the connection must authenticate again. An OAuth access token that expired, or that a refresh
  *   replaced, while its grant works: the client gets a new token. Or a key or a token whose agent got new
- *   scopes or limits after the open: the client opens a new connection, with the new access.
+ *   scopes after the open: the client opens a new connection, with the new access.
  * - `ended`: it does not work, and its owner cannot renew it.
  */
 export type CredentialCheck = "live" | "renew" | "ended";
@@ -457,7 +448,7 @@ export type CredentialCheck = "live" | "renew" | "ended";
  * For each credential, what it can do now, by the rules of `authenticate`: the principal is not
  * archived and not deleted, a session did not expire and its person did not sign out, an API key is
  * not revoked and did not expire, an OAuth access token is the current token of a grant that is not
- * revoked, and did not expire, and the scopes and the limits of the agent of a key or a token did not
+ * revoked, and did not expire, and the scopes of the agent of a key or a token did not
  * change after the open. So a refresh of a grant, which replaces its access token, stops the old token
  * here too. A live key, and an OAuth token whose grant works, get `renew` when the access of their agent
  * changed: the client connects again.

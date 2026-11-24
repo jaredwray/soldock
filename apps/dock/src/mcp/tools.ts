@@ -4,7 +4,6 @@ import {
 	type Operation,
 	type OperationName,
 	operationList,
-	resourceRuleOf,
 	toolName,
 	UNTRUSTED_NOTICE,
 } from "@asterra/contracts";
@@ -59,15 +58,9 @@ const TOOLS = new Map<string, { operation: Operation; tool: Tool }>(
 	]),
 );
 
-/**
- * A tool is listed only when this credential can call it, so an agent never sees tools that would refuse it.
- * A service account with resource limits does not see an operation without a rule, or with the rule `refuse`.
- */
+/** A tool is listed only when this credential can call it, so an agent never sees tools that would refuse it. */
 export function canCall(caller: AuthContext, operation: Operation): boolean {
-	if (!operation.callers.includes(caller.kind) || !holdsOperationScopes(operation, caller.scopes)) return false;
-	if (caller.restriction === null) return true;
-	const rule = resourceRuleOf(operation.name);
-	return rule !== undefined && rule.mode !== "refuse";
+	return operation.callers.includes(caller.kind) && holdsOperationScopes(operation, caller.scopes);
 }
 
 /** The tools that this credential can call, in the order of the registry. */

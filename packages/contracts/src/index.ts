@@ -1,4 +1,5 @@
 // Public surface of @asterra/contracts. Runtime-agnostic: no Workers, DOM or Node APIs.
+export { AgentAccessChange } from "./agent-access.ts";
 export {
 	AI_FEATURES,
 	AI_LIMITS,
@@ -238,20 +239,6 @@ export {
 	resources,
 	templateVars,
 } from "./resources.ts";
-export {
-	AGENT_RESOURCE_LIMITS,
-	AgentAccessChange,
-	AgentResources,
-	allowsResource,
-	defaultAgentResources,
-	listedIds,
-	RESOURCE_RULES,
-	type ResourceField,
-	type ResourceKind,
-	type ResourceRule,
-	resourceRefusal,
-	resourceRuleOf,
-} from "./restrictions.ts";
 export {
 	AGENT_SCOPES,
 	ALL_SCOPES,

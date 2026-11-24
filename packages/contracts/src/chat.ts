@@ -1,9 +1,9 @@
+import { AgentAccessChange } from "./agent-access.ts";
 import { prefixedId, RoomId, Timestamp } from "./common.ts";
 import { Href } from "./docs.ts";
 import { Actor, DownloadVariant, DRIVE_LIMITS, ItemId } from "./drive.ts";
 import { GROUP_MENTIONS } from "./mentions.ts";
 import { defineOperation } from "./operation.ts";
-import { AgentAccessChange } from "./restrictions.ts";
 import {
 	CHAT_ADDRESSED_REASONS,
 	CHAT_WEBHOOK_EVENTS,
@@ -706,7 +706,7 @@ export const CHAT_SOCKET_CLOSE = {
 	/**
 	 * The server must authenticate the credential again. Open a new socket now. An OAuth client gets this
 	 * code when its access token expired or when a refresh replaced the token: use the new token. A key or a
-	 * token of an agent gets it when the scopes or the limits of the agent changed: the new socket has them.
+	 * token of an agent gets it when the scopes of the agent changed: the new socket has them.
 	 */
 	reconnect: 4001,
 	/** The member opened more sockets than `CHAT_LIMITS.socketsPerMember`. Do not open a new socket for this one. */
@@ -759,11 +759,10 @@ const NEW_MEMBER_SCOPES =
 const AGENT_MEMBER = [
 	"The call also changes each agent and each service account that it makes a member and that you manage.",
 	"You manage an agent when you are its sponsor, an owner or an admin, and your credential holds directory.write.",
-	"The agent gets the chat scopes of its membership that it does not hold. The room goes into its resource limits when it has limits.",
-	"Your credential must hold each scope that the agent gets. When the room goes into the limits, it must hold each chat scope of the membership.",
+	"The agent gets the chat scopes of its membership that it does not hold. Your credential must hold each scope that the agent gets.",
 	"agent_access_changes has these changes. agent_access_pending names each agent that did not get them.",
 	"For such an agent, call chat.add_members with the id of the room. Do not call chat.create_room again: that makes a second room.",
-	"A membership gives no new access to an agent that you do not manage. Its sponsor, an owner or an admin gives it.",
+	"A membership gives no new scope to an agent that you do not manage. Such an agent uses the room with the scopes that it holds. Its sponsor, an owner or an admin gives it more.",
 ].join(" ");
 const MENTIONS = `To mention a person or an agent, write @ and the local part of its address in text or markdown, for example @ada. When two principals have the same local part, write the full address, for example @ada@example.org. The server stores each mention as a mention node with the id of the principal, and the message lists the ids in mentions. In a private room, a mention of a principal that is not a member stays text. In a body, write a mention node: { type: mention, attrs: { id, label } }. @here and @channel mention each member of the room, except you: the message lists them in group_mentions. In a room with more than ${CHAT_LIMITS.groupMentionMembers} members, only an owner of the room can mention a group: a different member gets forbidden. In a body, write { type: group_mention, attrs: { group } }.`;
 const RATE_LIMIT = `You can send ${CHAT_LIMITS.messageBurst} new or changed messages to one room at once, and then one in each ${CHAT_LIMITS.messageRefillSeconds === 1 ? "second" : `${CHAT_LIMITS.messageRefillSeconds} seconds`}. A call above that gets rate_limited: wait, then try again.`;
@@ -824,8 +823,8 @@ export const createRoom = defineOperation({
 		agent_access_changes: z.array(AgentAccessChange).default([]),
 		/**
 		 * The agents that you manage, that are members of the room, and that did not get the access of their
-		 * membership. Their limits have no place for the room, or a different call changed their access at the
-		 * same time. A later call for the member completes it.
+		 * membership: a different call changed their access at the same time. A later call for the member
+		 * completes it.
 		 */
 		agent_access_pending: z.array(z.string()).default([]),
 	}),
@@ -846,8 +845,8 @@ export const openDm = defineOperation({
 		agent_access_changes: z.array(AgentAccessChange).default([]),
 		/**
 		 * The agents that you manage, that are members of the room, and that did not get the access of their
-		 * membership. Their limits have no place for the room, or a different call changed their access at the
-		 * same time. A later call for the member completes it.
+		 * membership: a different call changed their access at the same time. A later call for the member
+		 * completes it.
 		 */
 		agent_access_pending: z.array(z.string()).default([]),
 	}),
@@ -893,10 +892,10 @@ export const joinRoom = defineOperation({
 	name: "chat.join_room",
 	summary: "Join a public room",
 	description:
-		"Makes you a member of a public room. You can then read its messages, also the messages from before, and post. A private room refuses: a member must add you with chat.add_members. A second call changes nothing.",
+		"Makes you a member of a public room. You can then read its messages, also the messages from before, and post. A private room refuses: a member must add you with chat.add_members. A second call changes nothing. Only a person can join: a member adds an agent or a service account with chat.add_members, so a person decides where it is a member.",
 	http: { method: "POST", path: "/api/v1/chat/rooms/{room_id}/join" },
 	scopes: ["chat.write"],
-	callers: ["human", "agent", "service"],
+	callers: ["human"],
 	annotations: CHANGE,
 	input: z.strictObject({ room_id: RoomId }),
 	output: z.object({ room: ChatRoom }),
@@ -935,8 +934,8 @@ export const addMembers = defineOperation({
 		agent_access_changes: z.array(AgentAccessChange).default([]),
 		/**
 		 * The agents that you manage, that are members of the room, and that did not get the access of their
-		 * membership. Their limits have no place for the room, or a different call changed their access at the
-		 * same time. A later call for the member completes it.
+		 * membership: a different call changed their access at the same time. A later call for the member
+		 * completes it.
 		 */
 		agent_access_pending: z.array(z.string()).default([]),
 	}),
@@ -965,8 +964,8 @@ export const setMemberScopes = defineOperation({
 		agent_access_changes: z.array(AgentAccessChange).default([]),
 		/**
 		 * The agents that you manage, that are members of the room, and that did not get the access of their
-		 * membership. Their limits have no place for the room, or a different call changed their access at the
-		 * same time. A later call for the member completes it.
+		 * membership: a different call changed their access at the same time. A later call for the member
+		 * completes it.
 		 */
 		agent_access_pending: z.array(z.string()).default([]),
 	}),

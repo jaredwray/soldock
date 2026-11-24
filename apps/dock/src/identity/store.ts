@@ -1,13 +1,4 @@
-import {
-	AGENT_SCOPES,
-	AgentResources,
-	ALL_SCOPES,
-	defaultAgentResources,
-	nameAliasParts,
-	type Scope,
-	SERVICE_SCOPES,
-	searchFold,
-} from "@asterra/contracts";
+import { AGENT_SCOPES, ALL_SCOPES, nameAliasParts, type Scope, SERVICE_SCOPES, searchFold } from "@asterra/contracts";
 import { log, newId, OperationError, randomToken, sha256Hex } from "../platform/index.ts";
 
 /** The kind that the directory stores. A service account is an agent row with `service`. */
@@ -46,10 +37,8 @@ export interface PrincipalRecord {
 	 * them: a credential of an agent has no scopes of its own. Empty for a person, whose keys have scopes.
 	 */
 	agent_scopes: Scope[];
-	/** The mailboxes, drives and rooms that an agent or a service account is limited to. Null: not limited. */
-	agent_resources: AgentResources | null;
 	/**
-	 * The number of changes of the scopes and the limits of an agent. A live connection keeps the number of
+	 * The number of changes of the scopes of an agent. A live connection keeps the number of
 	 * its open, and stops when the number changes.
 	 */
 	access_version: number;
@@ -77,16 +66,12 @@ export interface ApiKeyRecord {
 }
 
 interface PrincipalRow
-	extends Omit<
-		PrincipalRecord,
-		"outbound_allowlist" | "password_set" | "totp_enabled" | "service" | "agent_scopes" | "agent_resources"
-	> {
+	extends Omit<PrincipalRecord, "outbound_allowlist" | "password_set" | "totp_enabled" | "service" | "agent_scopes"> {
 	outbound_allowlist: string;
 	password_set: number;
 	totp_enabled: number;
 	service: number;
 	agent_scopes: string | null;
-	agent_resources: string | null;
 }
 
 interface ApiKeyRow extends Omit<ApiKeyRecord, "scopes"> {
@@ -99,7 +84,7 @@ interface ApiKeyRow extends Omit<ApiKeyRecord, "scopes"> {
  */
 const PRINCIPAL_COLUMNS = `p.id, p.kind, p.display_name, p.org_role, p.sponsor_id, p.outbound_mode, p.outbound_allowlist,
 	p.password_hash IS NOT NULL AS password_set, p.totp_secret IS NOT NULL AS totp_enabled, p.created_at, p.archived_at,
-	p.service, p.description, p.created_by, p.agent_scopes, p.agent_resources, p.access_version`;
+	p.service, p.description, p.created_by, p.agent_scopes, p.access_version`;
 
 const PRINCIPAL_SELECT = `SELECT ${PRINCIPAL_COLUMNS}, a.address
 	FROM principals p JOIN addresses a ON a.principal_id = p.id AND a.is_primary = 1`;
@@ -130,25 +115,6 @@ export const API_KEY_PREFIX = "sdk_";
 /** A session lasts 30 days. */
 export const SESSION_TTL_SECONDS = 30 * 24 * 60 * 60;
 
-/** No mailbox, no drive and no room: the limits of an agent whose stored limits are not valid. */
-const NOTHING: AgentResources = { mailbox_ids: [], drive_ids: [], room_ids: [] };
-
-/**
- * The stored limits of an agent. Null: not limited. Stored text that is not valid limits gives an agent that
- * reaches nothing, never an agent without limits.
- */
-function parseResources(id: string, text: string | null): AgentResources | null {
-	if (text === null) return null;
-	try {
-		const parsed = AgentResources.safeParse(JSON.parse(text));
-		if (parsed.success) return parsed.data;
-	} catch {
-		// Not JSON. The next lines fail closed.
-	}
-	log("error", "agent: the stored resource limits are not valid; the agent reaches nothing", { principalId: id });
-	return NOTHING;
-}
-
 /**
  * The stored scopes of an agent, without each value outside the ceiling of its kind. Stored text that is not a
  * list gives no scope. The order is the order of the ceiling.
@@ -174,9 +140,8 @@ function toPrincipal(row: PrincipalRow): PrincipalRecord {
 		password_set: row.password_set === 1,
 		totp_enabled: row.totp_enabled === 1,
 		service,
-		// Only an agent has scopes and limits of its own. A value on the row of a person is ignored.
+		// Only an agent has scopes of its own. A value on the row of a person is ignored.
 		agent_scopes: agent ? parseAgentScopes(row.id, row.agent_scopes, service ? SERVICE_SCOPES : AGENT_SCOPES) : [],
-		agent_resources: agent ? parseResources(row.id, row.agent_resources) : null,
 	};
 }
 
@@ -571,11 +536,6 @@ export interface NewPrincipal {
 	created_by?: string | null;
 	/** The scopes of a new agent or service account. Values outside the ceiling of its kind are left out. */
 	agent_scopes?: readonly Scope[];
-	/**
-	 * True for a new agent or service account without resource limits. Without it, the new agent is limited to
-	 * its own mailbox and its own drive (`defaultAgentResources`).
-	 */
-	no_limits?: boolean;
 }
 
 /** Turns a directory constraint failure into an error that the caller can read. */
@@ -693,8 +653,8 @@ export async function createPrincipal(
 			db
 				.prepare(
 					`INSERT INTO principals (id, kind, display_name, org_role, sponsor_id, outbound_mode, outbound_allowlist,
-						password_hash, created_at, service, description, created_by, agent_scopes, agent_resources)
-					SELECT ?1, ?2, ?3, ?4, ?5, ?6, '[]', ?7, ?8, ?9, ?10, ?11, ?16, ?17
+						password_hash, created_at, service, description, created_by, agent_scopes)
+					SELECT ?1, ?2, ?3, ?4, ?5, ?6, '[]', ?7, ?8, ?9, ?10, ?11, ?16
 					WHERE NOT EXISTS (SELECT 1 FROM setup_lock WHERE token IS NOT NULL)
 						AND (?12 = 0 OR NOT EXISTS (SELECT 1 FROM principals))
 						AND (?13 IS NULL OR EXISTS (SELECT 1 FROM principals sponsor WHERE sponsor.id = ?13
@@ -723,8 +683,6 @@ export async function createPrincipal(
 								scopeCeiling({ kind: "agent", service }).filter((s) => principal.agent_scopes?.includes(s)),
 							)
 						: null,
-					// A new agent reaches only its own mailbox and its own drive, unless its creator removes the limits.
-					principal.kind === "agent" && principal.no_limits !== true ? JSON.stringify(defaultAgentResources(id)) : null,
 				),
 			// The name aliases of the mention read, in the same transaction. A lost guard inserted no row, so
 			// this update then changes nothing.
@@ -810,8 +768,7 @@ export async function updateOutboundPolicy(
 }
 
 /**
- * Sets the scopes and the resource limits of an agent or a service account. A field that is undefined does
- * not change, and `resources: null` removes the limits. Scopes outside the ceiling of the kind are left out.
+ * Sets the scopes of an agent or a service account. Scopes outside the ceiling of the kind are left out.
  * Each write adds one to `access_version`, so each live connection of the agent stops at its next check.
  * With `sponsorId`, the write matches only while that person still sponsors the agent, so a sponsor that a
  * parallel change replaced cannot change the access. Returns the new record, or null when no live agent with
@@ -820,48 +777,40 @@ export async function updateOutboundPolicy(
 export async function setAgentAccess(
 	db: D1Database,
 	target: Pick<PrincipalRecord, "id" | "service">,
-	changes: { scopes?: readonly Scope[] | undefined; resources?: AgentResources | null | undefined },
+	scopes: readonly Scope[],
 	sponsorId: string | null = null,
 ): Promise<PrincipalRecord | null> {
 	const ceiling = scopeCeiling({ kind: "agent", service: target.service });
-	const scopes =
-		changes.scopes === undefined ? null : JSON.stringify(ceiling.filter((s) => changes.scopes?.includes(s)));
-	const setResources = changes.resources !== undefined ? 1 : 0;
-	const resources = changes.resources == null ? null : JSON.stringify(changes.resources);
 	// The kind and the service flag of the read must still hold, so the ceiling of the scopes is right.
 	const result = await db
 		.prepare(
-			`UPDATE principals SET
-				agent_scopes = CASE WHEN ?2 IS NULL THEN agent_scopes ELSE ?2 END,
-				agent_resources = CASE WHEN ?3 = 1 THEN ?4 ELSE agent_resources END,
-				access_version = access_version + 1
-			WHERE id = ?1 AND kind = 'agent' AND service = ?5 AND deleted_at IS NULL AND (?6 IS NULL OR sponsor_id = ?6)`,
+			`UPDATE principals SET agent_scopes = ?2, access_version = access_version + 1
+			WHERE id = ?1 AND kind = 'agent' AND service = ?3 AND deleted_at IS NULL AND (?4 IS NULL OR sponsor_id = ?4)`,
 		)
-		.bind(target.id, scopes, setResources, resources, target.service ? 1 : 0, sponsorId)
+		.bind(target.id, JSON.stringify(ceiling.filter((s) => scopes.includes(s))), target.service ? 1 : 0, sponsorId)
 		.run();
 	if (result.meta.changes !== 1) return null;
 	return getPrincipal(db, target.id);
 }
 
-/** The access of an agent after a membership of a team mailbox widened it. */
+/** The scopes of an agent after a membership gave it the scopes that it did not hold. */
 export interface AgentWidening {
 	/** The agent as the caller read it. The write matches only while the agent has this `access_version`. */
 	agent: Pick<PrincipalRecord, "id" | "service" | "access_version">;
 	/** Each scope of the agent after the write. */
 	scopes: readonly Scope[];
-	resources: AgentResources | null;
 	/** For a sponsor who is not an admin: the write matches only while the agent still has this sponsor. */
 	sponsorId?: string | null;
 }
 
 /**
- * The statement that writes the scopes and the limits that a membership gives to an agent. It matches only
- * while the access of the agent is the access of the read (`access_version`), so a parallel change of the
- * access is never lost.
+ * The statement that writes the scopes that a membership gives to an agent. It matches only while the access
+ * of the agent is the access of the read (`access_version`), so a parallel change of the access is never
+ * lost.
  *
  * With `mailboxId`, the statement goes into the batch that writes the membership of a team mailbox, so the
  * two writes are one transaction. It then matches only when the batch wrote the membership: an agent never
- * gets the access without it.
+ * gets the scopes without it.
  */
 export function widenAgentAccessStatement(
 	db: D1Database,
@@ -872,15 +821,14 @@ export function widenAgentAccessStatement(
 	const ceiling = scopeCeiling({ kind: "agent", service: agent.service });
 	return db
 		.prepare(
-			`UPDATE principals SET agent_scopes = ?2, agent_resources = ?3, access_version = access_version + 1
-			WHERE id = ?1 AND kind = 'agent' AND service = ?4 AND deleted_at IS NULL AND access_version = ?5
-			AND (?6 IS NULL OR EXISTS (SELECT 1 FROM team_mailbox_members WHERE mailbox_id = ?6 AND principal_id = ?1))
-			AND (?7 IS NULL OR sponsor_id = ?7)`,
+			`UPDATE principals SET agent_scopes = ?2, access_version = access_version + 1
+			WHERE id = ?1 AND kind = 'agent' AND service = ?3 AND deleted_at IS NULL AND access_version = ?4
+			AND (?5 IS NULL OR EXISTS (SELECT 1 FROM team_mailbox_members WHERE mailbox_id = ?5 AND principal_id = ?1))
+			AND (?6 IS NULL OR sponsor_id = ?6)`,
 		)
 		.bind(
 			agent.id,
 			JSON.stringify(ceiling.filter((scope) => widening.scopes.includes(scope))),
-			widening.resources === null ? null : JSON.stringify(widening.resources),
 			agent.service ? 1 : 0,
 			agent.access_version,
 			mailboxId,
@@ -889,40 +837,12 @@ export function widenAgentAccessStatement(
 }
 
 /**
- * Writes the access that a membership of a room or a shared drive gives to an agent. The object of the
+ * Writes the scopes that a membership of a room or a shared drive gives to an agent. The object of the
  * room or the drive owns the membership, so this write is not in a transaction with it. Returns false when
  * a parallel change of the access came first: the caller reads the agent again.
  */
 export async function widenAgentAccess(db: D1Database, widening: AgentWidening): Promise<boolean> {
 	const result = await widenAgentAccessStatement(db, widening, null).run();
-	return result.meta.changes === 1;
-}
-
-/**
- * Takes a room or a shared drive out of the limits of an agent or a service account, in one statement, so a
- * parallel change of the access is not lost. Returns true when the limits named the resource. The write adds
- * one to `access_version`. The function has one statement and no read after it: a caller must know that the
- * write changed the limits, also when the directory fails a moment later.
- */
-export async function dropFromLimits(
-	db: D1Database,
-	principalId: string,
-	kind: "room" | "drive",
-	id: string,
-): Promise<boolean> {
-	// `kind` is one of two fixed words, so it is safe in the text of the statement.
-	const list = `'$.${kind}_ids'`;
-	const result = await db
-		.prepare(
-			`UPDATE principals SET access_version = access_version + 1, agent_resources = json_set(
-				agent_resources, ${list},
-				json((SELECT json_group_array(${kind}.value) FROM json_each(agent_resources, ${list}) ${kind} WHERE ${kind}.value != ?2))
-			)
-			WHERE id = ?1 AND kind = 'agent' AND deleted_at IS NULL AND json_valid(agent_resources)
-			AND EXISTS (SELECT 1 FROM json_each(agent_resources, ${list}) ${kind} WHERE ${kind}.value = ?2)`,
-		)
-		.bind(principalId, id)
-		.run();
 	return result.meta.changes === 1;
 }
 

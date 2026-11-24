@@ -1,5 +1,4 @@
 import {
-	allowsResource,
 	MAIL_LIMITS,
 	MAILBOX_MEMBER_SCOPES,
 	type MailboxMemberScope,
@@ -271,13 +270,12 @@ export const mailHandlers: Pick<HandlerMap<CallContext>, MailOperation> = {
 			teamMailboxesOf(call.env.DIRECTORY, call.caller.id),
 			canReadAgentMailboxes(call.caller) ? agentMailboxes(call.env.DIRECTORY) : [],
 		]);
-		// A service account with resource limits sees only its listed mailboxes.
 		const mailboxes = [
 			{ ...ownMailbox(call), scopes: [...MAILBOX_MEMBER_SCOPES] },
 			...teams,
 			// An owner or an admin can read the mailbox of an agent, and nothing more.
 			...agents.map((mailbox) => ({ ...mailbox, scopes: ["mail.read"] })),
-		].filter((mailbox) => allowsResource(call.caller.restriction, "mailbox", mailbox.id));
+		];
 		return { mailboxes };
 	},
 

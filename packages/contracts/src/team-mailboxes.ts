@@ -1,7 +1,7 @@
+import { AgentAccessChange } from "./agent-access.ts";
 import { EmailAddress, prefixedId, Timestamp } from "./common.ts";
 import { DisplayName } from "./directory.ts";
 import { defineOperation } from "./operation.ts";
-import { AgentAccessChange } from "./restrictions.ts";
 import type { Scope } from "./scopes.ts";
 import { z } from "./zod.ts";
 
@@ -60,7 +60,7 @@ const ADMIN_ONLY = "Owners and admins only.";
 
 /** What a membership changes on an agent or a service account. */
 const AGENT_MEMBER =
-	"An agent or a service account also gets each scope of its membership that it does not hold. The mailbox goes into its resource limits when it has limits. So it can use the mailbox at once. agent_access_changes has these changes. Your credential must hold each scope of the membership of an agent.";
+	"An agent or a service account also gets each scope of its membership that it does not hold. So it can use the mailbox at once. agent_access_changes has these changes. Your credential must hold each scope of the membership of an agent.";
 
 export const listTeamMailboxes = defineOperation({
 	name: "directory.list_team_mailboxes",

@@ -178,7 +178,7 @@ export function SharedDriveMembersPart({
 				for (const id of result.agent_access_pending) next.add(id);
 				return next;
 			});
-			// An agent that the person manages gets the scopes of its role and the drive in its limits.
+			// An agent that the person manages gets the Drive scopes of its role that it does not hold.
 			const access = driveAccessText(result, () => principal.display_name);
 			toast({
 				message: `${
@@ -286,7 +286,7 @@ export function SharedDriveMembersPart({
 												{/* The role menu sends no call for the role that the member has. This button does. */}
 												{canManage && principal && pending.has(member.principal_id) && (
 													<div className="row-note">
-														{name} cannot use this shared drive yet.{" "}
+														{name} did not get the Drive scopes of its role.{" "}
 														<button
 															type="button"
 															className="link-button"

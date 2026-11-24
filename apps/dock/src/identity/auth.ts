@@ -92,7 +92,7 @@ export async function authenticate(
 			// A service account never connects through OAuth. The approval refuses it, and this is a second guard.
 			if (!granted || granted.principal.archived_at !== null || granted.principal.service) return null;
 			waitUntil(touchGrant(env.DIRECTORY, granted.grant));
-			// An OAuth connection is only a credential of its agent: the scopes and the limits are those of the
+			// An OAuth connection is only a credential of its agent: the scopes are those of the
 			// agent, so a change of the agent applies to the next request of each access token.
 			return {
 				id: granted.principal.id,
@@ -101,7 +101,6 @@ export async function authenticate(
 				credential: "oauth",
 				keyId: null,
 				keyGeneration: null,
-				restriction: granted.principal.agent_resources,
 				grantId: granted.grant.id,
 				sessionHash: null,
 				accessHash: await sha256Hex(match[1]),
@@ -121,7 +120,6 @@ export async function authenticate(
 			credential: "api_key",
 			keyId: found.key.id,
 			keyGeneration: found.generation,
-			restriction: found.principal.agent_resources,
 			grantId: null,
 			sessionHash: null,
 			accessHash: null,
@@ -141,7 +139,6 @@ export async function authenticate(
 		credential: "session",
 		keyId: null,
 		keyGeneration: null,
-		restriction: null,
 		grantId: null,
 		sessionHash: session.tokenHash,
 		accessHash: null,

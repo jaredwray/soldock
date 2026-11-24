@@ -193,8 +193,6 @@ export interface ChatRoomQuery {
 	/** Keep only the rooms with the star of the principal. */
 	starred: boolean;
 	limit: number;
-	/** Keep only these rooms: the list of a service account with resource limits. Null or absent for no filter. */
-	roomIds?: readonly string[] | null;
 }
 
 /** The largest unread count that a room sends. A room with more unread messages sends this number. */
@@ -223,7 +221,7 @@ export const EVENTS_SOCKET_HEADER = "x-soldock-events-socket";
 export type EndedCredential =
 	| { kind: CredentialRef["kind"]; id: string }
 	| { grantId: string }
-	/** Each API key and each OAuth token of the principal: the scopes or the limits of an agent changed. */
+	/** Each API key and each OAuth token of the principal: the scopes of an agent changed. */
 	| { agentAccess: true };
 
 /**
@@ -245,14 +243,12 @@ export async function endEventSockets(
 }
 
 /**
- * True when an agent lost the access to post a scheduled message: the scopes and the limits of an agent can
- * change after it scheduled the message. The send needs the access that a new schedule needs now:
- * `chat.write`, and no limits, because a limited agent cannot schedule a message. A person keeps the access.
+ * True when an agent lost the access to post a scheduled message: the scopes of an agent can change after it
+ * scheduled the message. The send needs the scope that a new schedule needs now: `chat.write`. A person
+ * keeps the access.
  */
 function lostScheduleAccess(principal: PrincipalRecord): boolean {
-	return (
-		principal.kind === "agent" && (!principal.agent_scopes.includes("chat.write") || principal.agent_resources !== null)
-	);
+	return principal.kind === "agent" && !principal.agent_scopes.includes("chat.write");
 }
 
 /** The object checks the credential of a socket again when its last check is this old. */
@@ -723,7 +719,6 @@ export class PrincipalDO extends DurableObject<Env> {
 					AND (?1 IS NULL OR instr(name_key, ?1) > 0)
 					AND (?2 IS NULL OR activity_at < ?2 OR (activity_at = ?2 AND room_id < ?3))
 					AND (?5 IS NULL OR activity_at > ?5 OR (activity_at = ?5 AND room_id >= ?6))
-					AND (?7 IS NULL OR room_id IN (SELECT value FROM json_each(?7)))
 				ORDER BY activity_at DESC, room_id DESC LIMIT ?4`,
 				query.nameKey,
 				query.after?.activityAt ?? null,
@@ -731,7 +726,6 @@ export class PrincipalDO extends DurableObject<Env> {
 				query.limit + 1,
 				query.until?.activityAt ?? null,
 				query.until?.roomId ?? null,
-				query.roomIds == null ? null : JSON.stringify(query.roomIds),
 			)
 			.toArray()
 			.map(toEntry);

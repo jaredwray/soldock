@@ -23,7 +23,7 @@ export const ROLE_HINT =
 
 /** What the role of an agent or a service account changes on its account, for the role control. */
 export const AGENT_ROLE_HINT =
-	"If you manage this account, it also gets the Drive scopes of its role, and this shared drive in its limits.";
+	"If you manage this account, it also gets the Drive scopes of its role that it does not hold.";
 
 /**
  * The roles that a person, an agent or a service account can have. An agent and a service account are
