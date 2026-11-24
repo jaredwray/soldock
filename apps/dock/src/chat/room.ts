@@ -619,6 +619,9 @@ const MIGRATIONS: string[][] = [
 		"ALTER TABLE members ADD COLUMN scopes TEXT",
 		"CREATE TABLE IF NOT EXISTS left_scopes (principal_id TEXT PRIMARY KEY, scopes TEXT NOT NULL) WITHOUT ROWID",
 	],
+	// The agents whose limits in the directory still name this room after a remove, because the write of the
+	// directory failed. The room completes that write before such an agent is a member again.
+	["CREATE TABLE IF NOT EXISTS limit_drops (principal_id TEXT PRIMARY KEY) WITHOUT ROWID"],
 ];
 
 /**
@@ -1480,7 +1483,9 @@ export class ChatRoomDO extends DurableObject<Env> {
 		const archived = this.ensureNotArchived(opened.room);
 		if (archived) return archived;
 		if (!(await this.inDirectory(opened.room.room_id))) return refuse("not_found", NOT_FOUND);
-		// A different call can run during the read of the directory. Read the state of the room again.
+		const unsettled = await this.settleDrops([call.actor]);
+		if (unsettled) return unsettled;
+		// A different call can run during the reads of the directory. Read the state of the room again.
 		if (this.member(call.actor.principal_id)) return { room: this.record(call.actor.principal_id), joined: false };
 		if (this.memberCount() >= CHAT_LIMITS.membersPerRoom) return refuse("conflict", FULL);
 		const hasOwner = this.one("SELECT 1 AS found FROM members WHERE role = 'owner' LIMIT 1") !== null;
@@ -1531,6 +1536,11 @@ export class ChatRoomDO extends DurableObject<Env> {
 		actors: ActorRecord[],
 		scopes?: readonly RoomMemberScope[],
 	): Promise<{ added: string[]; room: RoomRecord; members: MemberRecord[] } | Refusal> {
+		const first = this.checkAddMembers(call, scopes);
+		if ("error" in first) return first;
+		const unsettled = await this.settleDrops(actors.filter((actor) => !this.member(actor.principal_id)));
+		if (unsettled) return unsettled;
+		// A different call can run during the write of the directory. Check the caller again.
 		const allowed = this.checkAddMembers(call, scopes);
 		if ("error" in allowed) return allowed;
 		const room = this.room() as RoomRow;
@@ -1705,21 +1715,43 @@ export class ChatRoomDO extends DurableObject<Env> {
 	 * members and the write of the directory. So the room gives the order of the two stores: after this
 	 * write, a new membership finds no room in the limits, and only a manager of the agent puts it back.
 	 *
-	 * Returns true when the limits named the room. A failure of the directory only writes a warning: the
-	 * member is not in the room, and the limits keep a room that gives nothing.
+	 * Returns true when the limits named the room. When the directory fails, the room keeps the principal in
+	 * `limit_drops`, and `settleDrops` completes the write before that principal is a member again.
 	 */
 	private async dropLimits(member: Pick<MemberRow, "principal_id" | "actor_json">): Promise<boolean> {
 		if ((JSON.parse(member.actor_json) as ActorRecord).kind !== "agent") return false;
 		const room = this.rawRoom();
 		if (!room) return false;
 		try {
-			return (await dropRoomFromLimits(this.env.DIRECTORY, member.principal_id, room.room_id)) !== null;
+			const dropped = (await dropRoomFromLimits(this.env.DIRECTORY, member.principal_id, room.room_id)) !== null;
+			this.sql.exec("DELETE FROM limit_drops WHERE principal_id = ?", member.principal_id);
+			return dropped;
 		} catch (error) {
-			log("warn", "chat room: the limits of an agent kept the room after a remove", {
+			this.sql.exec("INSERT OR IGNORE INTO limit_drops (principal_id) VALUES (?)", member.principal_id);
+			log("warn", "chat room: the limits of an agent still name the room after a remove", {
 				error: error instanceof Error ? error.message : String(error),
 			});
 			return false;
 		}
+	}
+
+	/**
+	 * Completes the write of the limits for each of these principals that has a row in `limit_drops`, before
+	 * the room makes it a member again. The limits of such an agent still name the room. Without this, a
+	 * member that does not manage the agent adds it, and the agent has access from the old limits. When the
+	 * directory fails again, the call gets `conflict`: the principal does not become a member.
+	 */
+	private async settleDrops(actors: readonly ActorRecord[]): Promise<Refusal | null> {
+		for (const actor of actors) {
+			const waits = () =>
+				this.one("SELECT 1 AS found FROM limit_drops WHERE principal_id = ?", actor.principal_id) !== null;
+			if (!waits()) continue;
+			await this.dropLimits({ principal_id: actor.principal_id, actor_json: JSON.stringify(actor) });
+			if (waits()) {
+				return refuse("conflict", "The directory did not complete an earlier remove of this agent. Try again.");
+			}
+		}
+		return null;
 	}
 
 	/**
@@ -2051,6 +2083,11 @@ export class ChatRoomDO extends DurableObject<Env> {
 			return refuse("forbidden", "An owner assigned to a private room must already be a member of that room.");
 		}
 		if (!existing && this.memberCount() >= CHAT_LIMITS.membersPerRoom) return refuse("conflict", FULL);
+		if (!existing) {
+			const unsettled = await this.settleDrops([target]);
+			if (unsettled) return unsettled;
+			if (this.member(target.principal_id)) return refuse("conflict", "The members of the room changed. Try again.");
+		}
 		this.ctx.storage.transactionSync(() => {
 			if (existing) {
 				this.sql.exec("UPDATE members SET role = 'owner' WHERE principal_id = ?", target.principal_id);

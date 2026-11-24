@@ -1201,6 +1201,60 @@ describe("an agent in a room", () => {
 		expect((await access(agent.id)).resources?.room_ids).toEqual([]);
 	});
 
+	// The room takes itself out of the limits of a removed agent with a write of the directory. When that
+	// write fails, the limits still name the room. A member that does not manage the agent must not be able
+	// to use these old limits: the room completes the write before the agent is a member again.
+	it("is not a member again before the room completed a write of its limits that failed", async () => {
+		const agent = await newAgent();
+		const person = await createActor(owner, {
+			kind: "human",
+			display_name: "Cy",
+			address: "cy@dock.test",
+			password: PASSWORD,
+		});
+		const room = await createRoom(ada, "private", "Builds", [agent.id, person.id]);
+		const stub = roomStub(room.id);
+		// The directory of the room object fails for the write that takes the room out of the limits.
+		const setDirectory = (fails: boolean) =>
+			runInDurableObject(stub, (instance) => {
+				const target = instance as unknown as { env: Env };
+				const directory = fails
+					? new Proxy(env.DIRECTORY, {
+							get(db, property) {
+								if (property === "prepare") {
+									return (sql: string) => {
+										if (!sql.includes("json_group_array(room.value)")) return db.prepare(sql);
+										return {
+											bind: () => ({
+												run: async () => {
+													throw new Error("The directory is not available.");
+												},
+											}),
+										};
+									};
+								}
+								const value = Reflect.get(db, property);
+								return typeof value === "function" ? value.bind(db) : value;
+							},
+						})
+					: env.DIRECTORY;
+				target.env = { ...target.env, DIRECTORY: directory };
+			});
+		await setDirectory(true);
+		await ada.call("chat.remove_member", { room_id: room.id, principal_id: agent.id });
+		expect((await access(agent.id)).resources?.room_ids).toEqual([room.id]);
+		const add = { room_id: room.id, principal_ids: [agent.id] };
+		expect(await codeOf(person.call("chat.add_members", add))).toBe("conflict");
+		expect((await ada.call("chat.get_room", { room_id: room.id })).room.member_count).toBe(2);
+
+		// The directory works again. The add of a member that does not manage the agent completes the old
+		// write first, so the agent is a member without the room in its limits.
+		await setDirectory(false);
+		expect(await person.call("chat.add_members", add)).toMatchObject({ members_added: 1, agent_access_changes: [] });
+		expect((await access(agent.id)).resources?.room_ids).toEqual([]);
+		expect(await codeOf(agent.call("chat.list_messages", { room_id: room.id }))).toBe("forbidden");
+	});
+
 	it("gets its access when its manager changes its scopes in a room, or opens a group direct message with it", async () => {
 		const agent = await newAgent();
 		const person = await createActor(owner, {
