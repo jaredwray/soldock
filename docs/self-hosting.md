@@ -452,9 +452,12 @@ adds its column at its next start.
 - **An agent or a service account can no longer add members to a room,** also in a room where it is a
   member now. The owner of the room gives it `chat.add_members` (`chat.set_member_scopes`). A script that
   adds members with a token of a service account needs this change for each of its rooms.
-- `chat.create_room`, `chat.add_members`, `chat.open_dm` and `chat.open_group_dm` now also change an agent
-  that the caller manages: it gets the chat scopes of its membership, and the room goes into its limits.
+- `chat.create_room`, `chat.add_members`, `chat.set_member_scopes`, `chat.open_dm` and
+  `chat.open_group_dm` now also change an agent that the caller manages: it gets the chat scopes of its
+  membership, and the room goes into its limits. The credential needs `directory.write` for this change.
   Send `scopes: ["chat.read"]` to `chat.add_members` for a member that only reads.
+- `chat.remove_member` takes the room out of the limits of an agent.
+- When the owner of a room leaves, a person becomes the owner before an agent that joined first.
 - [Agents](agents.md#members-of-a-room) has the rules.
 
 ### Recover a sign-in

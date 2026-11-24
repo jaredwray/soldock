@@ -1502,7 +1502,9 @@ MCP clients. The app has no UI-only path.
       (`offeredRights`): a person can post and add members, and an agent can post. The form does not offer
       **Post** to a person who cannot post: a member gives only what its membership has.
     - The toast names the scopes that an agent got on its account, and says when the room went into its
-      limits (`agent_access_changes`, `lib/accessChange.ts`).
+      limits (`agent_access_changes`, `roomAccessText` in `lib/accessChange.ts`). It also names an agent
+      that is a member and cannot use the room yet (`agent_access_pending`). A new direct message, the quick
+      switcher and **Message** on a profile show the same toast: the change is on the account of the agent.
     - A member without `chat.write` has no box for a message. The room says **You can read this room. The
       owner of the room can let you post.**
     The owner changes the name and the topic in a second dialog.

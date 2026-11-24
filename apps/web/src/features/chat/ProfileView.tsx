@@ -1,5 +1,6 @@
 import { ApiError, type ChatRoom, type DirectoryEntry, type Principal } from "@asterra/contracts";
 import { useEffect, useState } from "react";
+import { roomAccessText } from "../../lib/accessChange.ts";
 import { api, errorMessage } from "../../lib/api.ts";
 import { initials } from "../../lib/format.ts";
 import { Icon } from "../../lib/icons.tsx";
@@ -83,8 +84,11 @@ export function ProfileView({ principalId, directory, onOpened }: ProfileViewPro
 	async function message(target: Principal) {
 		setOpening(true);
 		try {
-			const { room } = await api.call("chat.open_dm", { principal_id: target.id });
-			await onOpened(room);
+			const result = await api.call("chat.open_dm", { principal_id: target.id });
+			// The change is on the account of the agent, so the person who manages it must see it.
+			const changed = roomAccessText(result, () => target.display_name).trim();
+			if (changed) toast({ message: changed });
+			await onOpened(result.room);
 		} catch (caught) {
 			toast({ message: errorMessage(caught), tone: "error" });
 			setOpening(false);

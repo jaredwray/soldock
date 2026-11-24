@@ -85,4 +85,4 @@ export {
 	teamMailboxFor,
 	teamMailboxMemberScopes,
 } from "./team-mailboxes.ts";
-export { assertRoomMemberships, giveRoomAccess, widenAgentsForRoom } from "./widening.ts";
+export { assertRoomGrants, dropRoomAccess, giveRoomAccess } from "./widening.ts";
