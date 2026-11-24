@@ -16,7 +16,7 @@ import {
 	chatSearchPath,
 	chatThreadsPath,
 } from "../../routes.ts";
-import { CHAT_NAV_ID, domainOf, MENU_BUTTON_ID, SEARCH_INPUT_ID } from "../../shell/nav.ts";
+import { CHAT_NAV_ID, MENU_BUTTON_ID, SEARCH_INPUT_ID } from "../../shell/nav.ts";
 import { PageHeader } from "../../shell/PageHeader.tsx";
 import { SidebarHeader } from "../../shell/SidebarHeader.tsx";
 import { useSession } from "../auth/session.tsx";
@@ -327,7 +327,6 @@ function ChatSidebar({
 	onRenameSection,
 	onDeleteSection,
 }: ChatSidebarProps) {
-	const { whoami } = useSession();
 	const navRef = useRef<HTMLElement>(null);
 	const wasOpen = useRef(open);
 	const [collapsed, setCollapsed] = useState<Readonly<Record<string, boolean>>>({});
@@ -361,7 +360,7 @@ function ChatSidebar({
 				<button type="button" className="nav-backdrop" aria-label="Close the menu" tabIndex={-1} onClick={onClose} />
 			)}
 			<nav id={CHAT_NAV_ID} ref={navRef} className={open ? "sidebar sidebar-open" : "sidebar"} aria-label="Rooms">
-				<SidebarHeader title="Chat" subtitle={domainOf(whoami.principal.address)} />
+				<SidebarHeader title="Chat" />
 				<button type="button" className="compose-button" onClick={onNewRoom}>
 					<Icon name="plus" size={16} />
 					New room

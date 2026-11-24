@@ -96,8 +96,9 @@ MCP clients. The app has no UI-only path.
     also when the device changes while the page is open. The choice is saved in this browser only
     (see [Data inventory](#data-inventory)), and each open tab follows a change.
   - Mail, Drive, Chat and Admin have a sidebar next to the rail. Each sidebar starts with the name
-    of the product and one line of text: the address of the open mailbox in Mail, the own address
-    in Drive, and the mail domain in Chat and Admin.
+    of the product. In Mail, the address of the open mailbox is under the name. In Drive, your own
+    address is under the name. Chat and Admin show only the name, because an instance can have
+    more than one mail domain.
   - Each page starts with a header row: the title of the page at the left, and the search box and
     the controls of the page at the right.
   - The search box is in the header row of Mail and of Drive. In Drive, the search box finds items
