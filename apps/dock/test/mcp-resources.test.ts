@@ -479,9 +479,9 @@ describe("MCP subscriptions/listen", () => {
 		// A read marker changes the unread count of the list.
 		await bot.call("chat.mark_read", { room_id: room.id });
 		expect(await stream.next()).toEqual(updated(ROOMS));
-		// A room that the agent joins after the start of the stream: no new subscription.
+		// A room that gets the agent as a member after the start of the stream: no new subscription.
 		const { room: later } = await ada.call("chat.create_room", { kind: "public", name: "Town hall" });
-		await bot.call("chat.join_room", { room_id: later.id });
+		await ada.call("chat.add_members", { room_id: later.id, principal_ids: [bot.id] });
 		expect(await stream.next()).toEqual(updated(ROOMS));
 		// A room that the agent leaves.
 		await bot.call("chat.remove_member", { room_id: later.id, principal_id: bot.id });
@@ -630,9 +630,9 @@ describe("MCP subscriptions/listen", () => {
 		await vi.waitFor(async () => expect(await watchSockets(bot.id)).toBe(0));
 	});
 
-	// An admin can change the scopes and the limits of a service account while a stream is open. The stream
-	// must not keep the access of its open.
-	it("ends when its service account loses the scope or the resource of a watched inbox", async () => {
+	// An admin can change the scopes of a service account while a stream is open. The stream must not keep
+	// the access of its open.
+	it("ends when its service account loses the scope of a watched inbox", async () => {
 		const { owner } = await seedOrg();
 		const account = async (local: string) => {
 			const { principal } = await owner.call("directory.create_service_account", {
@@ -643,30 +643,25 @@ describe("MCP subscriptions/listen", () => {
 			const { api_key } = await owner.call("account.create_api_key", { principal_id: principal.id, label: "feed" });
 			return { id: principal.id, key: api_key.secret, address: `${local}@dock.test` };
 		};
-		const [unscoped, limited, steady] = [await account("unscoped"), await account("limited"), await account("steady")];
+		const [unscoped, steady] = [await account("unscoped"), await account("steady")];
 		vi.useFakeTimers({ toFake: ["Date"] });
-		const streams = await Promise.all(
-			[unscoped, limited, steady].map((service) => listen(service.key, [inbox(service.id)])),
-		);
+		const streams = await Promise.all([unscoped, steady].map((service) => listen(service.key, [inbox(service.id)])));
 		for (const stream of streams) {
 			expect(await stream.next()).toMatchObject({ method: "notifications/subscriptions/acknowledged" });
 		}
-		// The first account loses mail.read. The second gets limits without its own mailbox. The third gets one
-		// more scope, which takes nothing away.
+		// The first account loses mail.read. The second gets one more scope, which takes nothing away.
 		const set = (input: Parameters<typeof owner.call<"directory.set_agent_access">>[1]) =>
 			owner.call("directory.set_agent_access", input);
 		await set({ principal_id: unscoped.id, scopes: ["account.read"] });
-		await set({ principal_id: limited.id, resources: { mailbox_ids: [], drive_ids: [], room_ids: [] } });
 		await set({ principal_id: steady.id, scopes: ["account.read", "mail.read", "chat.read"] });
 		// The next change after RECHECK_MS makes each stream check its access first.
 		vi.setSystemTime(Date.now() + RECHECK_MS);
-		for (const service of [unscoped, limited, steady]) {
+		for (const service of [unscoped, steady]) {
 			await inject(rawMessage({ from: "x@internet.example", to: service.address, subject: "Hello" }), service.address);
 		}
-		const [first, second, third] = streams;
+		const [first, second] = streams;
 		expect(await first?.next()).toBe("closed");
-		expect(await second?.next()).toBe("closed");
-		expect(await third?.next()).toEqual(updated(inbox(steady.id)));
-		await third?.cancel();
+		expect(await second?.next()).toEqual(updated(inbox(steady.id)));
+		await second?.cancel();
 	});
 });

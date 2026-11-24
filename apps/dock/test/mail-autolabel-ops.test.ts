@@ -187,31 +187,13 @@ describe("who can use the auto-label settings", () => {
 		);
 	});
 
-	it("follows the scopes of a key and the mailboxes of a limited service account", async () => {
+	it("follows the scopes of a key", async () => {
 		const { api_key } = await owner.call("account.create_api_key", {
 			principal_id: ada.id,
 			label: "read only",
 			scopes: ["mail.read"],
 		});
 		expect(await codeOf(api(api_key.secret)("mail.update_auto_labels", { enabled: true }))).toBe("forbidden");
-
-		const { principal: service } = await owner.call("directory.create_service_account", {
-			display_name: "CI Pipeline",
-			address: "ci@dock.test",
-			sponsor_id: ada.id,
-			scopes: ["mail.read"],
-		});
-		const { team_mailbox: billing } = await owner.call("directory.create_team_mailbox", {
-			display_name: "Billing",
-			address: "billing@dock.test",
-			member_ids: [service.id],
-		});
-		await owner.call("directory.set_agent_access", {
-			principal_id: service.id,
-			resources: { mailbox_ids: [], drive_ids: [], room_ids: [] },
-		});
-		const { api_key: token } = await owner.call("account.create_api_key", { principal_id: service.id, label: "ci" });
-		expect(await codeOf(api(token.secret)("mail.get_auto_labels", { mailbox_id: billing.id }))).toBe("forbidden");
 	});
 });
 

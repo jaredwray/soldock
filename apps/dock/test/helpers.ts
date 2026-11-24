@@ -144,10 +144,9 @@ export async function setupOwner(address = "owner@dock.test"): Promise<Actor> {
 }
 
 /**
- * Creates a principal as `admin` and returns it with a key. An agent gets its first key, each agent scope
- * when the input names no scopes, and no resource limits: the tests of a product use each membership of the
- * agent. A test of the limits of a new agent calls `directory.create_principal` itself. A person gets no key
- * at creation, so `admin` then creates a key with every human scope for the person.
+ * Creates a principal as `admin` and returns it with a key. An agent gets its first key, and each agent scope
+ * when the input names no scopes. A person gets no key at creation, so `admin` then creates a key with every
+ * human scope for the person.
  */
 export async function createActor(
 	admin: Actor,

@@ -130,7 +130,6 @@ describe("the MCP endpoint", () => {
 			"chat_get_presence",
 			"chat_get_room",
 			"chat_invoke_slash_command",
-			"chat_join_room",
 			"chat_list_activity",
 			"chat_list_addressed",
 			"chat_list_card_actions",
