@@ -3928,6 +3928,29 @@ fieldset {
 	list-style: none;
 }
 
+/* The requests to add an agent or a service account to a room, on the card of the account. The two buttons
+   are also in the activity list of Chat. */
+.member-requests {
+	display: flex;
+	flex-direction: column;
+	gap: 12px;
+	margin: 12px 0 0;
+	padding: 0;
+	list-style: none;
+}
+.member-request {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	justify-content: space-between;
+	gap: 8px 24px;
+}
+.member-request-actions {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
+}
+
 @media (max-width: 600px) {
 	.access-list {
 		grid-template-columns: 1fr;
