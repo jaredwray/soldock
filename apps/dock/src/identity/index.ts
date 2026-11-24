@@ -5,6 +5,7 @@ export {
 	type CredentialBinding,
 	type CredentialCheck,
 	type CredentialRef,
+	canManageAgent,
 	canManageCredentialsOf,
 	canReadAgentMailboxes,
 	checkCredentials,

@@ -40,6 +40,7 @@ export {
 	ChatForwardedMessage,
 	ChatLinkPreview,
 	ChatMember,
+	ChatMemberRequest,
 	ChatMessage,
 	ChatMessageEdit,
 	ChatReaction,

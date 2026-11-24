@@ -44,6 +44,7 @@ import {
 	getIncomingWebhookRoom,
 	listIncomingWebhooks,
 } from "./incoming-webhooks.ts";
+import { liveMemberRequestIds } from "./member-requests.ts";
 import {
 	type ActorRecord,
 	messageOutput,
@@ -173,6 +174,7 @@ function toActivity(record: ActivityRecord): ChatActivityItem {
 		preview: record.preview,
 		emoji: record.emoji,
 		untrusted: record.untrusted,
+		subject: record.subject,
 		read_at: record.read_at === null ? null : iso(record.read_at),
 		created_at: iso(record.created_at),
 	};
@@ -324,8 +326,15 @@ export const chatLayer8Handlers: Pick<HandlerMap<CallContext>, Layer8ChatOperati
 
 		// Verify current room membership and message liveness against each authoritative ChatRoomDO
 		// so previews from left rooms or deleted/retention-pruned messages are never exposed.
+		// An item of a member request is not about a message: it is live while the request waits for an answer.
+		const requests = shown.filter((item) => item.kind === "member_request");
+		const liveRequests = await liveMemberRequestIds(
+			call.env.DIRECTORY,
+			requests.map((item) => item.message_id),
+		);
 		const byRoom = new Map<string, string[]>();
 		for (const item of shown) {
+			if (item.kind === "member_request") continue;
 			const list = byRoom.get(item.room_id);
 			if (list) list.push(item.message_id);
 			else byRoom.set(item.room_id, [item.message_id]);
@@ -343,7 +352,7 @@ export const chatLayer8Handlers: Pick<HandlerMap<CallContext>, Layer8ChatOperati
 		const liveItems: ActivityRecord[] = [];
 		const staleIds: string[] = [];
 		for (const item of shown) {
-			const live = liveByRoom.get(item.room_id);
+			const live = item.kind === "member_request" ? liveRequests : liveByRoom.get(item.room_id);
 			if (live?.has(item.message_id)) {
 				liveItems.push(item);
 			} else {

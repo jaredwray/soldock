@@ -16,7 +16,9 @@ import {
 	accessOutput,
 	assertMemberGrants,
 	type CallContext,
+	canManageAgent,
 	chatPresenceHandlers,
+	getPrincipal,
 	getPrincipals,
 	giveMemberAccess,
 	isAdmin,
@@ -38,6 +40,16 @@ import { bodyMarkdown, type MessageContent, messageContent, textBody } from "./b
 import { hasCustomEmoji } from "./custom-emoji.ts";
 import { downloadChatFile, downloadLinkImage } from "./files.ts";
 import { chatLayer8Handlers } from "./layer8-handlers.ts";
+import {
+	createMemberRequest,
+	deleteMemberRequest,
+	getMemberRequest,
+	listMemberRequestsBy,
+	listMemberRequestsFor,
+	type MemberRequestRow,
+	memberRequestActivityId,
+	toMemberRequest,
+} from "./member-requests.ts";
 import { chatNotificationHandlers } from "./notification-handlers.ts";
 import {
 	joinedRoomRefs,
@@ -151,6 +163,89 @@ async function principalsOf(call: CallContext, ids: readonly string[]): Promise<
 
 function toActor(principal: PrincipalRecord): ActorRecord {
 	return { principal_id: principal.id, kind: principal.kind, display_name: principal.display_name };
+}
+
+const NO_REQUEST = "No request has that id, or you cannot decide it.";
+
+/**
+ * The person who gets a request for this account in the activity list of Chat. For an agent: its sponsor.
+ * Only an owner or an admin manages a service account, so its sponsor gets the request only with one of
+ * these roles. If not, the owner of the organization gets it. Each owner and admin also sees the request on
+ * the card of the account in Admin, Members.
+ */
+async function deciderOf(call: CallContext, target: PrincipalRecord): Promise<string | null> {
+	const db = call.env.DIRECTORY;
+	if (target.sponsor_id !== null) {
+		if (!target.service) return target.sponsor_id;
+		const sponsor = await getPrincipal(db, target.sponsor_id);
+		if (sponsor?.archived_at === null && (sponsor.org_role === "owner" || sponsor.org_role === "admin")) {
+			return sponsor.id;
+		}
+	}
+	const owner = await db
+		.prepare(
+			"SELECT id FROM principals WHERE org_role = 'owner' AND deleted_at IS NULL AND archived_at IS NULL LIMIT 1",
+		)
+		.first<{ id: string }>();
+	return owner?.id ?? null;
+}
+
+/** Puts a request into the activity list of the person who decides it. A second call changes nothing. */
+async function notifyDecider(call: CallContext, request: MemberRequestRow, target: PrincipalRecord): Promise<void> {
+	if (request.notified_id === null) return;
+	const room = request.room_name === null ? "a room" : request.room_name;
+	await call.env.PRINCIPAL.get(call.env.PRINCIPAL.idFromName(request.notified_id)).recordChatActivity([
+		{
+			id: memberRequestActivityId(request.id),
+			kind: "member_request",
+			room_id: request.room_id,
+			room_name: request.room_name,
+			// The item is not about a message. The field has the id of the request, for the two answers.
+			message_id: request.id,
+			parent_id: null,
+			seq: 0,
+			parent_seq: null,
+			actor: actorOf(call),
+			emoji: null,
+			preview: `Asks to add ${target.display_name} to ${room}`,
+			subject: toActor(target),
+			created_at: Date.parse(request.created_at),
+		},
+	]);
+}
+
+/** Removes a request, and its item from the activity list of the person who got it. */
+async function removeMemberRequest(call: CallContext, request: MemberRequestRow): Promise<boolean> {
+	const removed = await deleteMemberRequest(call.env.DIRECTORY, request.id);
+	if (request.notified_id !== null) {
+		try {
+			await call.env.PRINCIPAL.get(call.env.PRINCIPAL.idFromName(request.notified_id)).deleteChatActivities([
+				memberRequestActivityId(request.id),
+			]);
+		} catch (error) {
+			// The activity list drops the item at its next read: the request is gone.
+			log("warn", "chat: the activity item of a member request stays until the next read of the list", {
+				error: error instanceof Error ? error.message : String(error),
+			});
+		}
+	}
+	return removed;
+}
+
+/**
+ * The request that the caller can decide, with its account. The caller must manage the account: its sponsor,
+ * an owner or an admin. Each other caller gets the answer for a request that does not exist.
+ */
+async function requestToDecide(
+	call: CallContext,
+	requestId: string,
+): Promise<{ request: MemberRequestRow; target: PrincipalRecord }> {
+	const request = await getMemberRequest(call.env.DIRECTORY, requestId);
+	const target = request ? await getPrincipal(call.env.DIRECTORY, request.principal_id) : null;
+	if (!request || !target || target.archived_at !== null || !canManageAgent(call.caller, target)) {
+		throw new OperationError("not_found", NO_REQUEST);
+	}
+	return { request, target };
 }
 
 /** A new member with the scopes of its kind, for the access that an agent gets with its membership. */
@@ -654,6 +749,94 @@ export const chatHandlers: Pick<HandlerMap<CallContext>, ChatOperation> = {
 		// Each call for an agent that the caller manages gives the agent the access of its membership.
 		const access = await giveMemberAccess(call, [result.member]);
 		return { member: { ...result.member, joined_at: iso(result.member.joined_at) }, ...accessOutput(access) };
+	},
+
+	async "chat.request_member"(call, input) {
+		const opened = openRoom(call, input.room_id);
+		const scopes = input.scopes ?? defaultRoomMemberScopes("agent");
+		// The room comes first. A caller without access gets the same answer for each principal id.
+		accept(await opened.room.checkAddMembers(opened.ctx, scopes));
+		const [target] = await principalsOf(call, [input.principal_id]);
+		if (target?.kind !== "agent") {
+			throw new OperationError(
+				"invalid",
+				"A request is for an agent or a service account. Add a person with chat.add_members.",
+			);
+		}
+		if (target.archived_at !== null) throw new OperationError("invalid", "That account is archived.");
+		const checked = accept(await opened.room.checkMemberRequest(opened.ctx, target.id, scopes));
+		const stored = await createMemberRequest(
+			call.env.DIRECTORY,
+			{
+				roomId: input.room_id,
+				roomName: checked.room_name,
+				principalId: target.id,
+				requestedBy: call.caller.id,
+				scopes,
+				notifiedId: await deciderOf(call, target),
+			},
+			CHAT_LIMITS.memberRequestsPerRoom,
+		);
+		if (!stored) {
+			throw new OperationError(
+				"conflict",
+				`This room has ${CHAT_LIMITS.memberRequestsPerRoom} requests that wait for an answer, the most. Try again after a person decides one.`,
+			);
+		}
+		// Each call sends the item again. The write has the id of the request, so a second one changes nothing,
+		// and it completes a write that failed.
+		await notifyDecider(call, stored.request, target);
+		if (stored.created) auditOk(call, "chat.request_member", `${input.room_id}:${target.id}`);
+		return { request: toMemberRequest(stored.request), created: stored.created };
+	},
+
+	async "chat.list_member_requests"(call, input) {
+		const db = call.env.DIRECTORY;
+		if (call.caller.kind !== "human") {
+			// An agent or a service account sees the requests that it made.
+			const made = await listMemberRequestsBy(db, call.caller.id);
+			const wanted = input.principal_id;
+			return {
+				requests: made
+					.filter((request) => wanted === undefined || request.principal_id === wanted)
+					.map(toMemberRequest),
+			};
+		}
+		const requests = await listMemberRequestsFor(db, {
+			personId: call.caller.id,
+			admin: isAdmin(call.caller),
+			principalId: input.principal_id ?? null,
+		});
+		return { requests: requests.map(toMemberRequest) };
+	},
+
+	async "chat.approve_member_request"(call, input) {
+		const { request, target } = await requestToDecide(call, input.request_id);
+		// The approval can give the account the chat scopes of the membership. Refuse what the credential cannot
+		// give before the room writes the member.
+		assertMemberGrants(call, [target], () => request.scopes);
+		const room = roomStub(call.env, request.room_id);
+		const admitted = await room.admitMember(request.requested_by, toActor(target), request.scopes, call.caller.id);
+		if ("error" in admitted) {
+			// The room is gone, or the agent that asked cannot add this member now. The request cannot complete.
+			await removeMemberRequest(call, request);
+			throw new OperationError("conflict", `${admitted.error.message} The request is gone.`);
+		}
+		if (admitted.added) {
+			auditOk(call, "chat.approve_member_request", `${request.room_id}:${target.id}`);
+			recordServiceMemberships(call, [target.id], "chat.approve_member_request", request.room_id);
+		}
+		// The member is in the room. The write of the scopes is idempotent, as for chat.add_members.
+		const access = await giveMemberAccess(call, [admitted.member]);
+		await removeMemberRequest(call, request);
+		return { request: toMemberRequest(request), ...accessOutput(access) };
+	},
+
+	async "chat.deny_member_request"(call, input) {
+		const { request, target } = await requestToDecide(call, input.request_id);
+		const denied = await removeMemberRequest(call, request);
+		if (denied) auditOk(call, "chat.deny_member_request", `${request.room_id}:${target.id}`);
+		return { denied };
 	},
 
 	async "chat.remove_member"(call, input) {
