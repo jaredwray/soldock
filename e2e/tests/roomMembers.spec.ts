@@ -49,21 +49,17 @@ test("the owner of a room selects what a new member can do, changes it later, an
 		await expect(page.getByText(/^Nadia .* can now only read in /)).toBeVisible();
 
 		// An agent does not add members at the start. Its manager adds it, and it gets the chat scopes on its
-		// account and the room in its limits.
+		// account.
 		await select.click();
 		await page.getByRole("option", { name: new RegExp(`^${agentName}`) }).click();
 		await expect(fresh.getByLabel("Post")).toBeChecked();
 		await expect(fresh.getByLabel("Add members")).not.toBeChecked();
 		await dialog.getByRole("button", { name: "Add", exact: true }).click();
-		await expect(
-			page.getByText(`${agentName} now also holds chat.read, chat.write, and has this room in its limits now.`, {
-				exact: false,
-			}),
-		).toBeVisible();
+		await expect(page.getByText(`${agentName} now also holds chat.read, chat.write.`, { exact: false })).toBeVisible();
 		const access = await owner.request.get(`/api/v1/directory/agents/${agent.id}/access`);
 		expect(await access.json()).toMatchObject({
 			scopes: ["account.read", "chat.read", "chat.write"],
-			resources: { room_ids: [roomId] },
+			chat_rooms: [{ id: roomId, role: "member" }],
 		});
 
 		// Nadia reads the room, and has no box for a message.

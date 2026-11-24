@@ -17,7 +17,6 @@ import {
 	request,
 	SETUP_TOKEN,
 	seedOrg,
-	withEnv,
 } from "./helpers.ts";
 
 // The people and the agent of each test. The owner of the organization is an admin, and is not a member
@@ -454,7 +453,7 @@ describe("the members of a shared drive", () => {
 });
 
 describe("an agent in a shared drive", () => {
-	/** A new agent of Ada, with the limits of a new agent: its own mailbox and its own drive. */
+	/** A new agent of Ada. It is a member of no shared drive. */
 	async function newAgent(scopes: Scope[] = ["account.read"], name = "Helper") {
 		const created = await owner.call("directory.create_principal", {
 			kind: "agent",
@@ -465,31 +464,28 @@ describe("an agent in a shared drive", () => {
 		});
 		return { id: created.principal.id, call: api(created.api_key?.secret ?? "") };
 	}
-	const access = (id: string) => owner.call("directory.get_agent_access", { principal_id: id });
+	const scopesOf = async (id: string) => (await owner.call("directory.get_agent_access", { principal_id: id })).scopes;
 	const add = (actor: Pick<Actor, "call">, principal_id: string, role: "manager" | "editor" | "viewer") =>
 		actor.call("drive.add_shared_drive_members", { drive_id: driveId, members: [{ principal_id, role }] });
-	const remove = (actor: Actor, principal_id: string) =>
-		actor.call("drive.remove_shared_drive_member", { drive_id: driveId, principal_id });
+	/** A key of a person that holds only the given scopes. */
+	const keyOf = async (by: Actor, scopes: Scope[]) => ({
+		call: api((await by.call("account.create_api_key", { label: "Narrow", scopes })).api_key.secret),
+	});
 
 	// A person who manages the agent and gives it a role decided what the agent can do in the drive. The
-	// agent must not need a second change of its scopes and of its limits in Admin, Members.
-	it("gets the access of its role from its sponsor, an owner or an admin, so it can use the drive at once", async () => {
+	// agent must not need a second change of its scopes in Admin, Members.
+	it("gets the scopes of its role from its sponsor, an owner or an admin, so it can use the drive at once", async () => {
 		const agent = await newAgent();
 		const added = await add(ada, agent.id, "viewer");
-		expect(added.agent_access_changes).toEqual([
-			{ principal_id: agent.id, scopes_added: ["drive.read"], limits_widened: true },
-		]);
+		expect(added.agent_access_changes).toEqual([{ principal_id: agent.id, scopes_added: ["drive.read"] }]);
 		expect(added.agent_access_pending).toEqual([]);
-		expect(await access(agent.id)).toMatchObject({
-			scopes: ["account.read", "drive.read"],
-			resources: { drive_ids: [agent.id, driveId] },
-		});
+		expect(await scopesOf(agent.id)).toEqual(["account.read", "drive.read"]);
 		await upload(ada, "plan.txt", "v1");
 		expect(await names(agent as Actor)).toEqual(["plan.txt"]);
 
-		// The editor role needs drive.write too. The drive is in the limits, so only the scope is new.
+		// The editor role needs drive.write too.
 		expect((await add(ada, agent.id, "editor")).agent_access_changes).toEqual([
-			{ principal_id: agent.id, scopes_added: ["drive.write"], limits_widened: false },
+			{ principal_id: agent.id, scopes_added: ["drive.write"] },
 		]);
 		expect((await upload(agent as Actor, "notes.txt", "v1")).name).toBe("notes.txt");
 		// A second call has nothing to add. The MCP tool returns the same fields.
@@ -501,262 +497,104 @@ describe("an agent in a shared drive", () => {
 		expect(viaMcp.structuredContent).toMatchObject({ agent_access_changes: [], agent_access_pending: [] });
 
 		// A new drive gives the same to the agents of its first members.
+		const second = await newAgent(["account.read"], "Second");
 		const created = await owner.call("drive.create_shared_drive", {
 			name: "Releases",
 			members: [
 				{ principal_id: ada.id, role: "manager" },
-				{ principal_id: agent.id, role: "editor" },
+				{ principal_id: second.id, role: "editor" },
 			],
 		});
-		expect(created.agent_access_changes).toEqual([{ principal_id: agent.id, scopes_added: [], limits_widened: true }]);
-		expect((await agent.call("drive.list_shared_drives")).shared_drives.map((drive) => drive.name)).toEqual([
-			"Design",
+		expect(created.agent_access_changes).toEqual([
+			{ principal_id: second.id, scopes_added: ["drive.read", "drive.write"] },
+		]);
+		expect(created.agent_access_pending).toEqual([]);
+		expect((await second.call("drive.list_shared_drives")).shared_drives.map((drive) => drive.name)).toEqual([
 			"Releases",
 		]);
 	});
 
-	// Each manager of a drive can add an agent. That must not change what the credentials of the agent
-	// reach: only a person who manages the agent does that, with a credential that can change an agent.
-	it("gets no access from a manager that does not manage it, and none from a key that cannot give it", async () => {
+	// Each manager of a drive can add an agent. The membership gives the agent its role in the drive. It must
+	// not change the scopes of the agent: only a person who manages the agent does that.
+	it("gets no scope from a manager that does not manage it, and uses the drive with the scopes that it holds", async () => {
 		const agent = await newAgent(["account.read", "drive.read"]);
 		await add(ada, eve.id, "manager");
 		// Eve is a manager of the drive. She is not the sponsor of the agent, and not an admin.
 		const byEve = await add(eve, agent.id, "editor");
 		expect(byEve).toMatchObject({ agent_access_changes: [], agent_access_pending: [] });
 		expect(byEve.members.map((member) => member.principal_id)).toContain(agent.id);
-		expect(await access(agent.id)).toMatchObject({
-			scopes: ["account.read", "drive.read"],
-			resources: { drive_ids: [agent.id] },
-		});
-		expect(await codeOf(agent.call("drive.get_about", { space_id: driveId }))).toBe("forbidden");
+		expect(await scopesOf(agent.id)).toEqual(["account.read", "drive.read"]);
 
-		// A change of an agent needs directory.write in the credential, as directory.set_agent_access does.
-		const keyOf = async (by: Actor, scopes: Scope[]) => ({
-			call: api((await by.call("account.create_api_key", { label: "Narrow", scopes })).api_key.secret),
-		});
+		// The agent holds drive.read, so it reads the drive with its role. It does not hold drive.write.
+		await upload(ada, "plan.txt", "v1");
+		expect((await agent.call("drive.get_about", { space_id: driveId })).role).toBe("editor");
+		expect(await names(agent as Actor)).toEqual(["plan.txt"]);
+		expect(await codeOf(upload(agent as Actor, "notes.txt", "v1"))).toBe("forbidden");
+	});
+
+	// A change of an agent needs directory.write in the credential, as directory.set_agent_access does. A
+	// narrow key with directory.write must not give an agent a scope that the key does not hold.
+	it("gets no scope from a key without directory.write, and none that the key does not hold", async () => {
+		const agent = await newAgent(["account.read", "drive.read"]);
 		const driveOnly = await keyOf(ada, ["drive.read", "drive.write", "drive.share"]);
-		expect(await add(driveOnly, agent.id, "viewer")).toMatchObject({
+		expect(await add(driveOnly, agent.id, "editor")).toMatchObject({
 			agent_access_changes: [],
 			agent_access_pending: [],
 		});
-		expect((await access(agent.id)).resources?.drive_ids).toEqual([agent.id]);
+		expect((await rolesOf(ada))[agent.id]).toBe("editor");
+		expect(await scopesOf(agent.id)).toEqual(["account.read", "drive.read"]);
 
 		// The editor role gives the agent drive.write. A key that does not hold drive.write cannot give it, and
 		// the refused call changes no member.
-		const second = await newAgent(["account.read", "drive.read"], "Second");
+		const second = await newAgent(["account.read"], "Second");
 		const noWrite = await keyOf(ada, ["directory.write", "drive.read", "drive.share"]);
 		expect(await codeOf(add(noWrite, second.id, "editor"))).toBe("forbidden");
 		expect(Object.keys(await rolesOf(ada))).not.toContain(second.id);
+		expect(await scopesOf(second.id)).toEqual(["account.read"]);
 		// The same key gives the viewer role: it holds drive.read, the only scope of that role.
 		expect((await add(noWrite, second.id, "viewer")).agent_access_changes).toEqual([
-			{ principal_id: second.id, scopes_added: [], limits_widened: true },
+			{ principal_id: second.id, scopes_added: ["drive.read"] },
 		]);
 
-		// The drive goes into the limits of the agent, and the limits then let drive.read reach the drive. So a
-		// key that does not hold drive.read cannot give the drive, also to an agent that holds drive.read.
-		const third = await newAgent(["account.read", "drive.read"], "Third");
+		// Only the scopes that the agent gets count. This agent holds drive.read, so a key that does not hold
+		// drive.read can make it a viewer.
 		const shareOnly = await keyOf(ada, ["directory.write", "drive.share"]);
-		expect(await codeOf(add(shareOnly, third.id, "viewer"))).toBe("forbidden");
-		expect(Object.keys(await rolesOf(ada))).not.toContain(third.id);
-		expect((await access(third.id)).resources?.drive_ids).toEqual([third.id]);
+		expect((await add(shareOnly, agent.id, "viewer")).agent_access_changes).toEqual([]);
+		expect((await rolesOf(ada))[agent.id]).toBe("viewer");
 	});
 
 	// Only an owner or an admin manages a service account. A manager of the drive who is not one of them
-	// gives it no access.
-	it("gives a service account its access only from an owner or an admin", async () => {
+	// gives it no scope.
+	it("gives a service account its scopes only from an owner or an admin", async () => {
 		const { principal: service } = await owner.call("directory.create_service_account", {
 			display_name: "CI",
 			address: "ci@dock.test",
 			scopes: ["account.read"],
 		});
 		expect(await add(ada, service.id, "viewer")).toMatchObject({ agent_access_changes: [], agent_access_pending: [] });
-		expect((await access(service.id)).scopes).toEqual(["account.read"]);
+		expect(await scopesOf(service.id)).toEqual(["account.read"]);
 		expect((await add(owner, service.id, "viewer")).agent_access_changes).toEqual([
-			{ principal_id: service.id, scopes_added: ["drive.read"], limits_widened: true },
+			{ principal_id: service.id, scopes_added: ["drive.read"] },
 		]);
 	});
 
-	// The limits of an agent must not name a drive that it is not a member of. If they did, a manager of the
-	// drive that does not manage the agent would add it, and the agent would have access from the old limits.
-	it("loses the drive from its limits with the remove, and a later add by a different manager gives nothing", async () => {
-		const agent = await newAgent(["account.read", "drive.read"]);
-		await add(ada, eve.id, "manager");
+	// The scopes are on the account of the agent, and the membership is in the drive. A remove ends the access
+	// to the drive, and it does not change the account.
+	it("does not reach the drive after the remove, and keeps its scopes", async () => {
+		const agent = await newAgent();
 		await add(ada, agent.id, "viewer");
-		expect((await access(agent.id)).resources?.drive_ids).toEqual([agent.id, driveId]);
-		expect(await remove(ada, agent.id)).toEqual({ removed: true });
-		expect((await access(agent.id)).resources?.drive_ids).toEqual([agent.id]);
-
-		expect((await add(eve, agent.id, "viewer")).agent_access_changes).toEqual([]);
-		expect(await codeOf(agent.call("drive.get_about", { space_id: driveId }))).toBe("forbidden");
-		// The sponsor gives the access back with a call for the member.
-		expect((await add(ada, agent.id, "viewer")).agent_access_changes).toEqual([
-			{ principal_id: agent.id, scopes_added: [], limits_widened: true },
-		]);
-		expect((await agent.call("drive.get_about", { space_id: driveId })).role).toBe("viewer");
+		expect(await ada.call("drive.remove_shared_drive_member", { drive_id: driveId, principal_id: agent.id })).toEqual({
+			removed: true,
+		});
+		expect(await codeOf(agent.call("drive.get_about", { space_id: driveId }))).toBe("not_found");
+		expect((await agent.call("drive.list_shared_drives")).shared_drives).toEqual([]);
+		expect(await scopesOf(agent.id)).toEqual(["account.read", "drive.read"]);
 	});
 
-	// The drive takes itself out of the limits with a write of the directory. When that write fails, the
-	// limits still name the drive. The drive completes the write before the agent is a member again.
-	it("is not a member again before the drive completed a write of its limits that failed", async () => {
-		const agent = await newAgent(["account.read", "drive.read"]);
-		await add(ada, eve.id, "manager");
-		await add(ada, agent.id, "viewer");
-		const stub = env.DRIVE_SPACE.get(env.DRIVE_SPACE.idFromName(driveId));
-		// The directory of the drive object fails for the write that takes the drive out of the limits.
-		const setDirectory = (fails: boolean) =>
-			runInDurableObject(stub, (instance) => {
-				const target = instance as unknown as { env: Env };
-				const directory = fails
-					? new Proxy(env.DIRECTORY, {
-							get(db, property) {
-								if (property === "prepare") {
-									return (sql: string) => {
-										if (!sql.includes("json_group_array(drive.value)")) return db.prepare(sql);
-										return {
-											bind: () => ({
-												run: async () => {
-													throw new Error("The directory is not available.");
-												},
-											}),
-										};
-									};
-								}
-								const value = Reflect.get(db, property);
-								return typeof value === "function" ? value.bind(db) : value;
-							},
-						})
-					: env.DIRECTORY;
-				target.env = { ...target.env, DIRECTORY: directory };
-			});
-		await setDirectory(true);
-		expect(await remove(ada, agent.id)).toEqual({ removed: true });
-		expect((await access(agent.id)).resources?.drive_ids).toEqual([agent.id, driveId]);
-		expect(await codeOf(add(eve, agent.id, "viewer"))).toBe("conflict");
-		expect(Object.keys(await rolesOf(ada))).not.toContain(agent.id);
-
-		// The directory works again. The add of a manager that does not manage the agent completes the old
-		// write first, so the agent is a member without the drive in its limits.
-		await setDirectory(false);
-		expect((await add(eve, agent.id, "viewer")).agent_access_changes).toEqual([]);
-		expect((await access(agent.id)).resources?.drive_ids).toEqual([agent.id]);
-		expect(await codeOf(agent.call("drive.get_about", { space_id: driveId }))).toBe("forbidden");
-	});
-
-	// The drive owns the members, and the directory owns the access of the agent, so the two writes are not
-	// one transaction. A remove can come after the drive wrote the add, and before the directory has the
-	// access. The late write of the add must not leave the drive in the limits.
-	it("gets no drive in its limits when a remove comes before the add completes", async () => {
-		const agent = await newAgent(["account.read", "drive.read"]);
-		// The write of the access waits for the remove.
-		const directory = new Proxy(env.DIRECTORY, {
-			get(target, property) {
-				if (property === "prepare") {
-					return (sql: string) => {
-						const statement = target.prepare(sql);
-						if (!sql.includes("UPDATE principals SET agent_scopes")) return statement;
-						return {
-							bind: (...values: unknown[]) => ({
-								run: async () => {
-									await remove(ada, agent.id);
-									return statement.bind(...values).run();
-								},
-							}),
-						};
-					};
-				}
-				const value = Reflect.get(target, property);
-				return typeof value === "function" ? value.bind(target) : value;
-			},
-		});
-		const added = await withEnv({ DIRECTORY: directory }, `/api/v1/drive/shared-drives/${driveId}/members`, {
-			method: "POST",
-			headers: { authorization: `Bearer ${ada.key}`, "content-type": "application/json" },
-			body: JSON.stringify({ members: [{ principal_id: agent.id, role: "viewer" }] }),
-		});
-		expect(await added.json()).toMatchObject({ agent_access_changes: [] });
-		expect(Object.keys(await rolesOf(ada))).not.toContain(agent.id);
-		expect((await access(agent.id)).resources?.drive_ids).toEqual([agent.id]);
-	});
-
-	// The access of an add is for the membership of that add. A different manager can remove the agent and add
-	// it again before the write of the access. That new membership comes from a person who does not manage
-	// the agent, so it must not get the access of the first add.
-	it("gets no access for a membership that a different manager made during the add of its sponsor", async () => {
-		const agent = await newAgent(["account.read", "drive.read"]);
-		await add(ada, eve.id, "manager");
-		// The write of the access waits for the remove and the add of Eve.
-		const directory = new Proxy(env.DIRECTORY, {
-			get(target, property) {
-				if (property === "prepare") {
-					return (sql: string) => {
-						const statement = target.prepare(sql);
-						if (!sql.includes("UPDATE principals SET agent_scopes")) return statement;
-						return {
-							bind: (...values: unknown[]) => ({
-								run: async () => {
-									await remove(eve, agent.id);
-									await add(eve, agent.id, "viewer");
-									return statement.bind(...values).run();
-								},
-							}),
-						};
-					};
-				}
-				const value = Reflect.get(target, property);
-				return typeof value === "function" ? value.bind(target) : value;
-			},
-		});
-		const added = await withEnv({ DIRECTORY: directory }, `/api/v1/drive/shared-drives/${driveId}/members`, {
-			method: "POST",
-			headers: { authorization: `Bearer ${ada.key}`, "content-type": "application/json" },
-			body: JSON.stringify({ members: [{ principal_id: agent.id, role: "viewer" }] }),
-		});
-		expect(await added.json()).toMatchObject({ agent_access_changes: [] });
-		expect((await rolesOf(ada))[agent.id]).toBe("viewer");
-		expect((await access(agent.id)).resources?.drive_ids).toEqual([agent.id]);
-		expect(await codeOf(agent.call("drive.get_about", { space_id: driveId }))).toBe("forbidden");
-	});
-
-	// The drive writes its index after the write of the members, and a different call can change the members
-	// in that time. The access of the add is for the membership that the add wrote, not for the membership
-	// at the time of the answer.
-	it("gets no access when its membership is a different one before the drive answers the add", async () => {
-		const agent = await newAgent(["account.read", "drive.read"]);
-		const stub = env.DRIVE_SPACE.get(env.DRIVE_SPACE.idFromName(driveId));
-		// At the first write of the index, the agent has a new membership, as after a remove and an add of a
-		// different manager: a higher `added_version`.
-		await runInDurableObject(stub, (instance, state) => {
-			const target = instance as unknown as { env: Env };
-			let changed = false;
-			const directory = new Proxy(target.env.DIRECTORY, {
-				get(db, property) {
-					if (property === "batch") {
-						return (statements: D1PreparedStatement[]) => {
-							if (!changed) {
-								changed = true;
-								state.storage.sql.exec(
-									"UPDATE members SET added_version = added_version + 100 WHERE principal_id = ?",
-									agent.id,
-								);
-							}
-							return db.batch(statements);
-						};
-					}
-					const value = Reflect.get(db, property);
-					return typeof value === "function" ? value.bind(db) : value;
-				},
-			});
-			target.env = { ...target.env, DIRECTORY: directory };
-		});
-		expect((await add(ada, agent.id, "viewer")).agent_access_changes).toEqual([]);
-		expect((await rolesOf(ada))[agent.id]).toBe("viewer");
-		expect((await access(agent.id)).resources?.drive_ids).toEqual([agent.id]);
-	});
-
-	// A retry of a create call returns the first drive. The members can be different at that time: here a
-	// manager who does not manage the agent made it a member again. So the retry must change no agent.
-	it("gets no access from a retry of the create call, after a different manager made it a member again", async () => {
-		const agent = await newAgent(["account.read", "drive.read"]);
+	// A retry of a create call returns the first drive. A manager of the agent can change its scopes between
+	// the two calls. So the retry must change no agent.
+	it("gets no scope from a retry of the create call", async () => {
+		const agent = await newAgent();
 		const input = {
 			name: "Plans",
 			members: [
@@ -766,31 +604,16 @@ describe("an agent in a shared drive", () => {
 			idempotency_key: "plans-1",
 		};
 		const created = await owner.call("drive.create_shared_drive", input);
-		const plans = created.shared_drive.id;
-		expect(created.agent_access_changes).toEqual([{ principal_id: agent.id, scopes_added: [], limits_widened: true }]);
-		const member = { drive_id: plans, principal_id: agent.id };
-		await owner.call("drive.remove_shared_drive_member", member);
-		await eve.call("drive.add_shared_drive_members", {
-			drive_id: plans,
-			members: [{ principal_id: agent.id, role: "viewer" }],
-		});
+		expect(created.agent_access_changes).toEqual([{ principal_id: agent.id, scopes_added: ["drive.read"] }]);
+		// The owner takes the scope away again.
+		await owner.call("directory.set_agent_access", { principal_id: agent.id, scopes: ["account.read"] });
 		const retry = await owner.call("drive.create_shared_drive", input);
-		expect(retry).toMatchObject({ shared_drive: { id: plans }, agent_access_changes: [], agent_access_pending: [] });
-		expect((await access(agent.id)).resources?.drive_ids).toEqual([agent.id]);
-	});
-
-	// Stored limits with more ids than the most are not valid, and such an agent reaches nothing. Full limits
-	// must not stop the call: the membership is in the drive, and the result names the agent.
-	it("gets no drive in its limits when they name the most drives, and the result names the agent", async () => {
-		const agent = await newAgent(["account.read", "drive.read"]);
-		const full = Array.from({ length: 20 }, (_, i) => `drv_${String(i).padStart(26, "0")}`);
-		await env.DIRECTORY.prepare("UPDATE principals SET agent_resources = ? WHERE id = ?")
-			.bind(JSON.stringify({ mailbox_ids: [], drive_ids: full, room_ids: [] }), agent.id)
-			.run();
-		const added = await add(ada, agent.id, "viewer");
-		expect(added).toMatchObject({ agent_access_changes: [], agent_access_pending: [agent.id] });
-		expect((await rolesOf(ada))[agent.id]).toBe("viewer");
-		expect((await access(agent.id)).resources?.drive_ids).toEqual(full);
+		expect(retry).toMatchObject({
+			shared_drive: { id: created.shared_drive.id },
+			agent_access_changes: [],
+			agent_access_pending: [],
+		});
+		expect(await scopesOf(agent.id)).toEqual(["account.read"]);
 	});
 });
 

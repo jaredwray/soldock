@@ -1,6 +1,6 @@
 import { createExecutionContext, runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
-import { AGENT_RESOURCE_LIMITS, ApiError, TEAM_MAILBOX_LIMITS } from "@asterra/contracts";
+import { ApiError, TEAM_MAILBOX_LIMITS } from "@asterra/contracts";
 import { beforeEach, describe, expect, it } from "vitest";
 import worker from "../src/index.ts";
 import {
@@ -347,7 +347,7 @@ describe("the scopes of a member of a team mailbox", () => {
 });
 
 describe("an agent in a team mailbox", () => {
-	/** A new agent with `mail.read` only and the limits of a new agent: its own mailbox and its own drive. */
+	/** A new agent of Ada with `mail.read` only. It is a member of no team mailbox. */
 	async function newAgent() {
 		const created = await owner.call("directory.create_principal", {
 			kind: "agent",
@@ -369,19 +369,18 @@ describe("an agent in a team mailbox", () => {
 		});
 
 	// An admin who adds an agent to a mailbox decided what the agent can do there. The agent must not need a
-	// second change of its scopes and of its limits before it can use the mailbox.
-	it("gets the scopes of its membership and the mailbox in its limits, so it can use the mailbox at once", async () => {
+	// second change of its scopes before it can use the mailbox.
+	it("gets the scopes of its membership, so it can use the mailbox at once", async () => {
 		const agent = await newAgent();
 		const support = await createSupport([]);
 		const add = { mailbox_id: support.id, principal_id: agent.id };
 		const added = await owner.call("directory.add_team_mailbox_member", add);
 		// The result tells the admin what the agent got: the scopes also apply to the own mailbox of the agent.
 		expect(added.agent_access_changes).toEqual([
-			{ principal_id: agent.id, scopes_added: ["mail.modify", "mail.send"], limits_widened: true },
+			{ principal_id: agent.id, scopes_added: ["mail.modify", "mail.send"] },
 		]);
 		expect(await access(agent.id)).toMatchObject({
 			scopes: ["account.read", "mail.read", "mail.modify", "mail.send"],
-			resources: { mailbox_ids: [agent.id, support.id], drive_ids: [agent.id], room_ids: [] },
 			team_mailboxes: [{ id: support.id, scopes: ALL }],
 		});
 		// The key from before the membership sends from the mailbox.
@@ -392,38 +391,16 @@ describe("an agent in a team mailbox", () => {
 		const person = await owner.call("directory.add_team_mailbox_member", { ...add, principal_id: ada.id });
 		expect(person.agent_access_changes).toEqual([]);
 
-		// The first members of a new mailbox get the same, and the result names each change. The agent holds
-		// the scopes now, so it gets only the mailbox in its limits. An agent without limits stays without
-		// limits, and the bot holds each scope: it has no change.
+		// The first members of a new mailbox get the same, and the result names each change. The owner takes
+		// the new scopes away first. The bot holds each scope: it has no change.
+		await owner.call("directory.set_agent_access", { principal_id: agent.id, scopes: ["account.read", "mail.read"] });
 		const { team_mailbox: sales, agent_access_changes: changes } = await owner.call("directory.create_team_mailbox", {
 			display_name: "Sales",
 			address: "sales@dock.test",
 			member_ids: [agent.id, bot.id],
 		});
-		expect(changes).toEqual([{ principal_id: agent.id, scopes_added: [], limits_widened: true }]);
-		expect((await access(agent.id)).resources?.mailbox_ids).toEqual([agent.id, support.id, sales.id]);
-		expect((await access(bot.id)).resources).toBeNull();
-	});
-
-	// The settings of the mailbox show the scopes of each member. A membership from before this rule can be
-	// outside the limits of its agent. Each call for that member, also one that removes a scope, makes the
-	// settings true, and the result says that the limits changed.
-	it("puts the mailbox into the limits at each call for the member, and says so in the result", async () => {
-		const agent = await newAgent();
-		const support = await createSupport([]);
-		await env.DIRECTORY.prepare(
-			"INSERT INTO team_mailbox_members (mailbox_id, principal_id, added_by, created_at) VALUES (?, ?, ?, ?)",
-		)
-			.bind(support.id, agent.id, owner.id, new Date().toISOString())
-			.run();
-		expect(await code(agent.call("mail.list_threads", { mailbox_id: support.id }))).toBe("forbidden");
-		const narrowed = await owner.call("directory.add_team_mailbox_member", {
-			mailbox_id: support.id,
-			principal_id: agent.id,
-			scopes: ["mail.read"],
-		});
-		expect(narrowed.agent_access_changes).toEqual([{ principal_id: agent.id, scopes_added: [], limits_widened: true }]);
-		expect((await agent.call("mail.list_threads", { mailbox_id: support.id })).threads).toEqual([]);
+		expect(changes).toEqual([{ principal_id: agent.id, scopes_added: ["mail.modify", "mail.send"] }]);
+		expect((await agent.call("mail.list_threads", { mailbox_id: sales.id })).threads).toEqual([]);
 	});
 
 	// A narrow key with directory.write must not give an agent a scope that the key does not hold.
@@ -446,39 +423,6 @@ describe("an agent in a team mailbox", () => {
 		expect(person.team_mailbox.members[1]).toEqual({ principal_id: ada.id, scopes: ALL });
 	});
 
-	// Stored limits with more ids than the most are not valid, and such an agent reaches nothing.
-	it("refuses a membership when the limits of the agent name the most mailboxes", async () => {
-		const agent = await newAgent();
-		const support = await createSupport([]);
-		const full = Array.from({ length: AGENT_RESOURCE_LIMITS.perKind }, (_, i) => `tmb_${String(i).padStart(26, "0")}`);
-		await env.DIRECTORY.prepare("UPDATE principals SET agent_resources = ? WHERE id = ?")
-			.bind(JSON.stringify({ mailbox_ids: full, drive_ids: [], room_ids: [] }), agent.id)
-			.run();
-		const add = { mailbox_id: support.id, principal_id: agent.id };
-		expect(await code(owner.call("directory.add_team_mailbox_member", add))).toBe("invalid");
-		expect((await owner.call("directory.list_team_mailboxes")).team_mailboxes).toEqual([support]);
-		expect((await access(agent.id)).resources?.mailbox_ids).toEqual(full);
-
-		// A parallel call can fill the limits after the first check. The transaction of this call then writes
-		// nothing, and its second try must not store one mailbox more than the most.
-		await env.DIRECTORY.prepare("UPDATE principals SET agent_resources = ? WHERE id = ?")
-			.bind(JSON.stringify({ mailbox_ids: full.slice(1), drive_ids: [], room_ids: [] }), agent.id)
-			.run();
-		const filled = JSON.stringify({ mailbox_ids: full, drive_ids: [], room_ids: [] });
-		const raced = await addAs(
-			racing(
-				`UPDATE principals SET agent_resources = '${filled}', access_version = access_version + 1
-				WHERE id = ? AND agent_resources != '${filled}'`,
-				agent.id,
-			),
-			support.id,
-			agent.id,
-		);
-		expect(raced.status).toBe(400);
-		expect((await owner.call("directory.list_team_mailboxes")).team_mailboxes).toEqual([support]);
-		expect((await access(agent.id)).resources?.mailbox_ids).toEqual(full);
-	});
-
 	// The membership and the access of the agent are one transaction. A change of the access of the agent by
 	// a different call, between the read and the write, must not be lost, and must not leave a half result.
 	it("keeps a parallel change of the access of the agent, and writes nothing when each try loses", async () => {
@@ -492,10 +436,13 @@ describe("an agent in a team mailbox", () => {
 		);
 		const added = await addAs(once, support.id, agent.id);
 		expect(added.status).toBe(200);
-		expect(await access(agent.id)).toMatchObject({
-			scopes: ["account.read", "mail.read", "mail.modify", "mail.send", "drive.read"],
-			resources: { mailbox_ids: [agent.id, support.id] },
-		});
+		expect((await access(agent.id)).scopes).toEqual([
+			"account.read",
+			"mail.read",
+			"mail.modify",
+			"mail.send",
+			"drive.read",
+		]);
 
 		// A change before each try: the call gets conflict. No member, no mailbox and no new access stay.
 		const other = await owner.call("directory.create_principal", {
@@ -518,10 +465,7 @@ describe("an agent in a team mailbox", () => {
 		expect(team_mailboxes.map((mailbox) => [mailbox.address, mailbox.member_ids])).toEqual([
 			["support@dock.test", [agent.id]],
 		]);
-		expect(await access(other.principal.id)).toMatchObject({
-			scopes: ["account.read"],
-			resources: { mailbox_ids: [other.principal.id] },
-		});
+		expect((await access(other.principal.id)).scopes).toEqual(["account.read"]);
 	});
 });
 

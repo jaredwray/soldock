@@ -92,11 +92,11 @@ describe("search in one room", () => {
 		expect(refused.isError).toBe(true);
 	});
 
-	it("refuses a principal that did not join a public room", async () => {
+	it("refuses a principal that is not a member of a public room", async () => {
 		const room = await createRoom(ada, "public", "Launch");
 		await post(ada, room.id, "The budget is ready.");
 		expect(await codeOf(bot.call("chat.search_messages", { room_id: room.id, query: "budget" }))).toBe("forbidden");
-		await bot.call("chat.join_room", { room_id: room.id });
+		await ada.call("chat.add_members", { room_id: room.id, principal_ids: [bot.id] });
 		expect(await find(bot, "budget", { room_id: room.id })).toEqual(["The budget is ready."]);
 	});
 

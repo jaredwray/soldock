@@ -30,7 +30,7 @@ test("an admin sets what a person and an agent can do in a shared mailbox, and t
 	const agentName = unique("Sorter");
 	let agentId: string | null = null;
 	try {
-		// A new agent holds only account.read, and it has the limits of a new agent.
+		// A new agent holds only account.read, and it is a member of no shared mailbox.
 		const { principal: agent } = await post<{ principal: { id: string } }>(admin, "/api/v1/directory/principals", {
 			kind: "agent",
 			display_name: agentName,
@@ -63,20 +63,15 @@ test("an admin sets what a person and an agent can do in a shared mailbox, and t
 		// The form goes back to each scope for the next member.
 		await expect(fresh.getByLabel("Send")).toBeChecked();
 
-		// The admin adds the agent with each scope. The agent gets the scopes on its account, and the mailbox
-		// in its limits.
+		// The admin adds the agent with each scope. The agent gets the scopes on its account.
 		await selectCandidate(page, card, agentName);
 		await card.getByRole("button", { name: "Add member" }).click();
 		await expect(
-			page.getByText(
-				`${agentName} now also holds mail.read, mail.modify, mail.send, and has this mailbox in its limits now.`,
-				{ exact: false },
-			),
+			page.getByText(`${agentName} now also holds mail.read, mail.modify, mail.send.`, { exact: false }),
 		).toBeVisible();
 		const access = await admin.request.get(`/api/v1/directory/agents/${agent.id}/access`);
 		expect(await access.json()).toMatchObject({
 			scopes: ["account.read", "mail.read", "mail.modify", "mail.send"],
-			resources: { mailbox_ids: [agent.id, mailbox.id] },
 			team_mailboxes: [{ id: mailbox.id, scopes: ["mail.read", "mail.modify", "mail.send"] }],
 		});
 

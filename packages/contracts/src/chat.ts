@@ -892,7 +892,7 @@ export const joinRoom = defineOperation({
 	name: "chat.join_room",
 	summary: "Join a public room",
 	description:
-		"Makes you a member of a public room. You can then read its messages, also the messages from before, and post. A private room refuses: a member must add you with chat.add_members. A second call changes nothing. Only a person can join: a member adds an agent or a service account with chat.add_members, so a person decides where it is a member.",
+		"Makes you a member of a public room. You can then read its messages, also the messages from before, and post. A private room refuses: a member must add you with chat.add_members. A second call changes nothing. Only a person can join: a member of the room adds an agent or a service account with chat.add_members.",
 	http: { method: "POST", path: "/api/v1/chat/rooms/{room_id}/join" },
 	scopes: ["chat.write"],
 	callers: ["human"],

@@ -45,8 +45,7 @@ afterEach(() => {
 
 /**
  * The owner, an admin, a member (Ada), the agent of Ada, and a service account that Ada sponsors. The
- * account has each service scope, unless `scopes` names its scopes. It has no limits, so the tests reach
- * each membership of the account.
+ * account has each service scope, unless `scopes` names its scopes.
  */
 async function seedService(scopes: Scope[] = [...SERVICE_SCOPES]) {
 	const { owner, ada, bot } = await seedOrg();
@@ -63,7 +62,6 @@ async function seedService(scopes: Scope[] = [...SERVICE_SCOPES]) {
 		description: "Posts build results",
 		sponsor_id: ada.id,
 		scopes: scopes as never,
-		limits: "none",
 	});
 	return { owner, admin, ada, bot, service: principal };
 }
@@ -117,10 +115,9 @@ describe("service accounts", () => {
 			outbound_policy: { mode: "internal-only", allowlist: [] },
 		});
 		expect((await admin.call("account.list_api_keys", { principal_id: service.id })).api_keys).toEqual([]);
-		// The account has the scopes of its creation. `limits: "none"` of the call gave it no limits.
+		// The account has the scopes of its creation.
 		expect(await admin.call("directory.get_agent_access", { principal_id: service.id })).toMatchObject({
 			scopes: ["account.read", "chat.read"],
-			resources: null,
 			tokens: [],
 		});
 		// The owner can create one through MCP too. The sponsor is the caller by default.
@@ -131,13 +128,6 @@ describe("service accounts", () => {
 		});
 		expect(viaMcp.isError).toBeFalsy();
 		expect(viaMcp.structuredContent).toMatchObject({ principal: { kind: "service", sponsor_id: owner.id } });
-		// A call without `limits` limits the new account to its own mailbox and its own drive.
-		const backupId = (viaMcp.structuredContent as { principal: { id: string } }).principal.id;
-		expect((await owner.call("directory.get_agent_access", { principal_id: backupId })).resources).toEqual({
-			mailbox_ids: [backupId],
-			drive_ids: [backupId],
-			room_ids: [],
-		});
 
 		const input = { display_name: "Nope", address: "nope@dock.test", scopes: ["account.read" as const] };
 		// An account needs a scope, and only a scope that a service account can hold.
@@ -294,11 +284,13 @@ describe("tokens of a service account", () => {
 		expect(await codeOf(admin.call("directory.set_agent_access", { ...change, principal_id: ada.id }))).toBe(
 			"not_found",
 		);
-		// The list has only scopes that a service account can hold, and the call needs a field to change.
+		// The list has only scopes that a service account can hold, and the call needs the list.
 		expect(
 			await codeOf(admin.call("directory.set_agent_access", { ...change, scopes: ["account.keys" as never] })),
 		).toBe("invalid");
-		expect(await codeOf(admin.call("directory.set_agent_access", { principal_id: service.id }))).toBe("invalid");
+		expect(await codeOf(admin.call("directory.set_agent_access", { principal_id: service.id } as never))).toBe(
+			"invalid",
+		);
 		// A key with directory.write cannot give the account a scope that the key does not hold.
 		const writer = await admin.call("account.create_api_key", {
 			label: "writer",
@@ -306,25 +298,11 @@ describe("tokens of a service account", () => {
 		});
 		const asWriter = api(writer.api_key.secret);
 		expect(await codeOf(asWriter("directory.set_agent_access", change))).toBe("forbidden");
-		// The limits say where each scope applies. So the same key cannot change the limits of an account that
-		// has mail.read, which the key does not hold.
-		expect(
-			await codeOf(
-				asWriter("directory.set_agent_access", {
-					principal_id: service.id,
-					resources: { mailbox_ids: [], drive_ids: [], room_ids: [] },
-				}),
-			),
-		).toBe("forbidden");
 
 		// The owner changes the scopes through MCP: the operation has REST and MCP.
 		const viaMcp = await callTool(owner.key, "directory_set_agent_access", change);
 		expect(viaMcp.isError).toBeFalsy();
-		expect(viaMcp.structuredContent).toEqual({
-			principal_id: service.id,
-			scopes: ["account.read", "chat.read"],
-			resources: null,
-		});
+		expect(viaMcp.structuredContent).toEqual({ principal_id: service.id, scopes: ["account.read", "chat.read"] });
 		// Both tokens lose mail.read and get chat.read, without a new secret.
 		for (const token of [first, second]) {
 			expect(await codeOf(token.call("mail.list_threads", {}))).toBe("forbidden");
@@ -348,7 +326,7 @@ describe("tokens of a service account", () => {
 	});
 
 	// A scheduled message is a lasting effect of a token. It must not post with access that the account lost.
-	it("post no scheduled message after the account loses chat.write or gets limits, also without a binding", async () => {
+	it("post no scheduled message after the account loses chat.write, also without a binding", async () => {
 		const { admin, service } = await seedService(["account.read", "chat.read", "chat.write"]);
 		const token = await serviceToken(admin, service.id);
 		const { room } = await admin.call("chat.create_room", { kind: "private", name: "ci", member_ids: [service.id] });
@@ -380,7 +358,7 @@ describe("tokens of a service account", () => {
 						.one().status,
 			);
 
-		// With chat.write and no limits, the message posts.
+		// With chat.write, the message posts.
 		const sent = await schedule("Build 1 passed.");
 		await fire(sent.id);
 		expect(await texts()).toEqual(["Build 1 passed."]);
@@ -391,20 +369,9 @@ describe("tokens of a service account", () => {
 		await fire(unscoped.id);
 		expect(await statusOf(unscoped.id)).toBe("failed");
 
-		// The account gets limits, also with the room in its list: a limited account cannot schedule, so the
-		// message of before the limits does not post.
-		await setScopes(admin, service.id, ["account.read", "chat.read", "chat.write"]);
-		const limited = await schedule("Build 3 passed.");
-		await admin.call("directory.set_agent_access", {
-			principal_id: service.id,
-			resources: { mailbox_ids: [], drive_ids: [], room_ids: [room.id] },
-		});
-		await fire(limited.id);
-		expect(await statusOf(limited.id)).toBe("failed");
-
 		// A message from before the credential binding has no binding. It needs the same access.
-		await admin.call("directory.set_agent_access", { principal_id: service.id, resources: null });
-		const legacy = await schedule("Build 4 passed.");
+		await setScopes(admin, service.id, ["account.read", "chat.read", "chat.write"]);
+		const legacy = await schedule("Build 3 passed.");
 		await runInDurableObject(principal, (_instance, state) => {
 			state.storage.sql.exec(
 				"UPDATE chat_scheduled_messages SET credential_binding_json = NULL WHERE id = ?",
@@ -417,7 +384,7 @@ describe("tokens of a service account", () => {
 		expect(await texts()).toEqual(["Build 1 passed."]);
 	});
 
-	it("lose their live connections when the scopes or the limits of the account change", async () => {
+	it("lose their live connections when the scopes of the account change", async () => {
 		const { admin, service } = await seedService(["account.read", "chat.read"]);
 		const token = await serviceToken(admin, service.id);
 		// A membership with only chat.read: the admin manages the account, so chat.write in the membership would
@@ -452,20 +419,13 @@ describe("tokens of a service account", () => {
 					.bind(service.id)
 					.first<{ access_version: number }>()
 			)?.access_version;
-		await admin.call("directory.set_agent_access", {
-			principal_id: service.id,
-			scopes: ["chat.read", "account.read"],
-			resources: null,
-		});
+		await setScopes(admin, service.id, ["chat.read", "account.read"]);
 		expect(await version()).toBe(0);
 		expect(await checkCredentials(env.DIRECTORY, before)).toEqual(["live"]);
 
-		// A change of the limits closes the events socket at once, and the reference of the room socket must open
+		// A change of the scopes closes the events socket at once, and the reference of the room socket must open
 		// again. The token still works, so the code tells the client to open a new socket, not to stop.
-		await admin.call("directory.set_agent_access", {
-			principal_id: service.id,
-			resources: { mailbox_ids: [], drive_ids: [], room_ids: [room.id] },
-		});
+		await setScopes(admin, service.id, ["account.read", "chat.read", "mail.read"]);
 		expect(await version()).toBe(1);
 		expect(await events.next()).toEqual({ closed: EVENTS_SOCKET_CLOSE.reconnect });
 		expect(await checkCredentials(env.DIRECTORY, before)).toEqual(["renew"]);
@@ -896,8 +856,8 @@ describe("the activity log of a service account", () => {
 		await ada.call("chat.remove_member", { room_id: room.id, principal_id: service.id });
 		const file = (await ada.call("drive.upload_file", { name: "a.txt", content_base64: base64("a") })).item;
 		await ada.call("drive.share_item", { item_id: file.id, principal_id: service.id, role: "viewer" });
-		const { room: lobby } = await owner.call("chat.create_room", { kind: "public", name: "lobby" });
-		await token.call("chat.join_room", { room_id: lobby.id });
+		// The account makes a room itself: it is the first member of that room.
+		const { room: own } = await token.call("chat.create_room", { kind: "private", name: "own" });
 		// The delete of its only member leaves a room without an owner. An admin makes the account its owner.
 		const carol = await createActor(owner, {
 			kind: "human",
@@ -931,7 +891,7 @@ describe("the activity log of a service account", () => {
 			"chat.add_members",
 			"chat.remove_member",
 			"drive.share_item",
-			"chat.join_room",
+			"chat.create_room",
 			"chat.admin_assign_owner",
 			"chat.delete_room",
 			"drive.delete_shared_drive",
@@ -939,7 +899,7 @@ describe("the activity log of a service account", () => {
 		const entries = await vi.waitFor(async () => {
 			const page = await admin.call("directory.list_service_account_activity", { principal_id: service.id });
 			const found = page.entries.filter((entry) => memberships.has(entry.operation));
-			expect(found).toHaveLength(10);
+			expect(found).toHaveLength(11);
 			return found;
 		});
 		expect(entries.map((entry) => [entry.operation, entry.surface, entry.actor_id, entry.resource_id])).toEqual(
@@ -950,14 +910,17 @@ describe("the activity log of a service account", () => {
 				["chat.add_members", "member", ada.id, room.id],
 				["chat.remove_member", "member", ada.id, room.id],
 				["drive.share_item", "member", ada.id, file.id],
-				// Its own join is its own call: one entry with the surface rest, and no admin entry.
-				["chat.join_room", "rest", service.id, lobby.id],
+				// Its own room is its own call: one entry with the surface rest.
+				["chat.create_room", "rest", service.id, null],
 				["chat.admin_assign_owner", "admin", admin.id, orphan.id],
+				["chat.create_room", "admin", admin.id, doomed.id],
 				["chat.delete_room", "admin", admin.id, doomed.id],
 				["drive.create_shared_drive", "admin", admin.id, gone.id],
 				["drive.delete_shared_drive", "admin", admin.id, gone.id],
 			]),
 		);
+		// The account is a member of its own room, and the log has no membership entry for that room.
+		expect(entries.map((entry) => entry.resource_id)).not.toContain(own.id);
 	});
 
 	it("records each call with its token, surface, result and request id, and each change by an admin", async () => {
@@ -1238,12 +1201,11 @@ describe("the access of a service account", () => {
 			chat_rooms_truncated: false,
 			drive_shared_items: [{ space_id: ada.id, item_id: kept.id, name: "kept.txt", kind: "file", role: "viewer" }],
 			drive_shared_items_truncated: false,
-			// A token has no scopes of its own: the scopes and the limits are those of the account.
+			// A token has no scopes of its own: the scopes are those of the account.
 			tokens: [{ key_id: live.keyId, label: "deploy", expires_at: null }],
 			// The membership of the team mailbox gave the account mail.modify and mail.send. The editor role in
 			// the shared drive gave it drive.read and drive.write, and the membership of the room gave it chat.write.
 			scopes: ["mail.read", "mail.modify", "mail.send", "drive.read", "drive.write", "chat.read", "chat.write"],
-			resources: null,
 		});
 		const viaMcp = await callTool(admin.key, "directory_get_agent_access", { principal_id: service.id });
 		expect(viaMcp.structuredContent).toEqual(access);

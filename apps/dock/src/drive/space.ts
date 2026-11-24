@@ -649,13 +649,12 @@ const MIGRATIONS: string[][] = [
 			named TEXT NOT NULL
 		) WITHOUT ROWID`,
 	],
-	// A table and a column from the time when an agent had resource limits. The next step removes them. This
-	// step stays, because the number of each step is the schema version of an object.
+	// A table and a column from the time when an agent had resource limits. Nothing uses them now. They stay,
+	// so a Worker from before that change, which uses them, still works after a rollback.
 	[
 		"CREATE TABLE IF NOT EXISTS limit_drops (principal_id TEXT PRIMARY KEY) WITHOUT ROWID",
 		"ALTER TABLE members ADD COLUMN added_version INTEGER",
 	],
-	["DROP TABLE IF EXISTS limit_drops", "ALTER TABLE members DROP COLUMN added_version"],
 ];
 
 const OUTBOX_MAX_ATTEMPTS = 8;

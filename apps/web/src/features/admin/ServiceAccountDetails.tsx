@@ -17,13 +17,13 @@ interface ServiceAccountDetailsProps {
 
 /**
  * The tools of one service account, for an owner or an admin: what it is for and who created it, its
- * outbound policy, its permissions (scopes and limits), its tokens with their lifetime, what it can reach,
- * and its activity log. A change of a token or of the permissions loads the access and the activity again.
+ * outbound policy, its permissions (scopes), its tokens with their lifetime, what it can reach, and its
+ * activity log. A change of a token or of the permissions loads the access and the activity again.
  */
 export function ServiceAccountDetails({ account, principals, onChanged }: ServiceAccountDetailsProps) {
 	// Each change of a token or of the permissions gives a new number, so the activity loads again.
 	const [version, setVersion] = useState(0);
-	// One read of the access gives the Permissions part its scopes and limits, and the Access part its lists.
+	// One read of the access gives the Permissions part its scopes, and the Access part its lists.
 	const { access, error, reload, applySaved } = useAgentAccess(account.id);
 	const changed = () => {
 		setVersion((current) => current + 1);

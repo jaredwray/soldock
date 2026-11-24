@@ -35,7 +35,7 @@ interface AgentDetailsProps {
 
 /**
  * The tools of one agent, for its sponsor, an owner or an admin: its outbound policy, its permissions
- * (scopes and limits), the apps that connected as it with OAuth, its webhooks, its API keys and what it
+ * (scopes), the apps that connected as it with OAuth, its webhooks, its API keys and what it
  * can reach. Each key and each connection has the permissions of the agent. An owner or an admin also gets
  * a link to the mailbox, which they can read. Only the sponsor can add a webhook or an event for the agent.
  * An owner or an admin can clear an event.
@@ -43,7 +43,7 @@ interface AgentDetailsProps {
 export function AgentDetails({ agent, sponsor, canReadMail, showSponsor, onChanged }: AgentDetailsProps) {
 	const { whoami } = useSession();
 	const policy = agent.outbound_policy ?? { mode: "internal-only", allowlist: [] };
-	// One read of the access gives the Permissions part its scopes and limits, and the Access part its lists.
+	// One read of the access gives the Permissions part its scopes, and the Access part its lists.
 	const { access, error, reload, applySaved } = useAgentAccess(agent.id);
 	return (
 		<>

@@ -324,20 +324,16 @@ Without a session or the owner key, start fresh with `SETUP_TOKEN`.
 
 ### Upgrade to permissions on the service account
 
-Migration `0026_service_access.sql` moves the scopes and the resource limits of a service account from
-each token to the account. After it, each token of an account has the scopes and the limits of the
-account.
+Migration `0026_service_access.sql` moves the scopes of a service account from
+each token to the account. After it, each token of an account has the scopes of the
+account. The migration also copies the resource limits of the tokens. The Worker does not use these
+limits now: see [Access follows membership](#access-follows-membership).
 
 What the migration does to an account that has tokens:
 
 - The account gets each scope of its live tokens (not revoked and not expired). So a token with fewer
   scopes gets the scopes of the other live tokens of its account.
-- The account gets limits only when each of its live tokens had limits. The limits are then each
-  mailbox, drive and room that one of those tokens named. An account with one live token without limits
-  has no limits.
 - An account without a live token has no scope. Set its scopes before you create a token.
-- When the limits of the tokens of one account name more than 20 mailboxes, 20 drives or 20 rooms
-  together, the account reaches nothing after the migration. Save new limits for it.
 
 After the deploy, open each service account under **Admin › Members**, and examine **Permissions**.
 Remove each scope that the account does not need.
@@ -346,9 +342,9 @@ What changes for a script that calls the API:
 
 - `directory.create_service_account` needs `scopes`.
 - `account.create_api_key` refuses `scopes` for a service account, and it has no `resources` field. Set
-  the scopes and the limits with `directory.set_agent_access` (the name since migration `0027`).
+  the scopes with `directory.set_agent_access` (the name since migration `0027`).
 - `account.list_api_keys` has no `resources` field. The tokens of
-  `directory.get_agent_access` have no `scopes` and no `resources`: the account has them.
+  `directory.get_agent_access` have no `scopes` and no `resources`: the account has the scopes.
 
 Between the migration and the deploy, the old Worker keeps working with the scopes and the limits of
 each token. A service account or a token that the old Worker creates in that time has no scope on the
@@ -357,23 +353,23 @@ supported ([Upgrade to permissions on the agent](#upgrade-to-permissions-on-the-
 
 ### Upgrade to permissions on the agent
 
-Migration `0027_agent_access.sql` moves the scopes and the resource limits of an agent from each API key
+Migration `0027_agent_access.sql` moves the scopes of an agent from each API key
 and each OAuth connection to the agent, as `0026` did for a service account. After it, each key and each
-connection of an agent has the scopes and the limits of the agent. A key of a person keeps its own
+connection of an agent has the scopes of the agent. A key of a person keeps its own
 scopes.
 
 What the migration does:
 
 - It adds `principals.agent_scopes` and `agent_resources`, and copies the scopes and the limits of each
-  service account into them. A service account keeps its scopes and its limits. `service_scopes` and
-  `service_resources` stay for the old Worker, and the new Worker does not read them.
+  service account into them. A service account keeps its scopes. `service_scopes` and
+  `service_resources` stay for the old Worker, and the new Worker does not read them. The Worker does not
+  use `agent_resources` now ([Access follows membership](#access-follows-membership)).
 - Each agent gets each scope of these credentials, so no client of the agent loses a scope:
   - its live API keys (not revoked and not expired)
   - its live OAuth connections (not revoked, and the refresh token did not expire)
   - its approved OAuth codes that a client did not use yet
 - A key or a connection with fewer scopes then gets the scopes of the other live credentials of its
   agent.
-- An agent gets no limits.
 - An agent without a live credential has no scope. Its sponsor, an owner or an admin sets its scopes
   before a client connects or uses a new key.
 
@@ -397,9 +393,9 @@ What changes for a client that calls the API:
   (`invalid`). `OAuthGrant.scopes` and the `scope` of a token response show the scopes of the agent.
 - `oauth.add_grant_scopes` is removed. To add or remove a scope of a connection, change the agent with
   `directory.set_agent_access`.
-- In the contracts, `ServiceResources` is now `AgentResources`, `SERVICE_RESOURCE_LIMITS` is now
-  `AGENT_RESOURCE_LIMITS`, and `SERVICE_ACCESS_LIMITS` is now `AGENT_ACCESS_LIMITS`.
-- A change of the scopes or the limits closes the sockets of each key and each OAuth token of the agent
+- In the contracts, `SERVICE_ACCESS_LIMITS` is now `AGENT_ACCESS_LIMITS`. `ServiceResources` and
+  `SERVICE_RESOURCE_LIMITS` are gone ([Access follows membership](#access-follows-membership)).
+- A change of the scopes closes the sockets of each key and each OAuth token of the agent
   with code `4001` (`reconnect`). The events sockets close at once, and each other socket at its next
   check. A client opens a new socket with the same credential. A token of a service account also gets
   `4001` now, not `4003` (`ended`).
@@ -411,25 +407,6 @@ of a service account that the old Worker saves in that time is lost. A rollback 
 this migration is not supported: it gives each key of an agent its old scopes, and a new key none. Fix a
 problem with a new deploy.
 
-### Limits of a new agent
-
-A new agent or service account is limited to its own mailbox and its own drive. It reaches no chat room
-and no shared drive until a person who manages it makes it a member. No migration is necessary.
-
-- An agent or a service account from before this change keeps its access. Its limits do not change.
-- The limits of an agent can name a shared drive that it is not a member of now, from a remove before this
-  change. A person who then adds the agent gives it access from these limits. To prevent this, read the
-  limits of each agent in **Admin › Members**, and remove such a drive.
-- A shared drive needs no change of the limits when a manager of the agent gives it a role with
-  `drive.add_shared_drive_members` or `drive.create_shared_drive`. The credential must hold
-  `directory.write` and each Drive scope of the role. The results of these two operations have the new
-  fields `agent_access_changes` and `agent_access_pending`.
-- A script whose credential does not manage the agent must change. Send `limits: "none"` to
-  `directory.create_principal` or `directory.create_service_account` for an agent without limits. Or set
-  its limits with `directory.set_agent_access` after you add the memberships.
-- A team mailbox needs no change of the limits: see [Scopes of a member of a team mailbox](#scopes-of-a-member-of-a-team-mailbox).
-- A room needs no change of the limits when a manager of the agent adds it: see [Scopes of a member of a room](#scopes-of-a-member-of-a-room).
-
 ### Scopes of a member of a team mailbox
 
 Migration `0029_mailbox_member_scopes.sql` adds the scopes of each member of a team mailbox: `mail.read`,
@@ -439,13 +416,11 @@ person, an agent and a service account.
 - The migration only adds a column. Each member from before the migration keeps the three scopes, so no
   member loses access. The old Worker keeps working between the migration and the deploy.
 - `directory.add_team_mailbox_member` and `directory.create_team_mailbox` now also change an agent or a
-  service account that they add. It gets each scope of its membership that it does not hold, and the
-  mailbox goes into its limits. A script that added an agent and then called `directory.set_agent_access`
+  service account that they add. It gets each scope of its membership that it does not hold. A script
+  that added an agent and then called `directory.set_agent_access`
   for the mailbox can stop the second call.
 - The credential that adds an agent must hold each scope of the membership. A script with a narrow key
   must send `scopes` that its key holds, or get a key with the mail scopes.
-- A membership from before this change that is not in the limits of its agent stays outside them. Add the
-  member again, or select the mailbox under **Permissions** of the agent.
 - [Agents](agents.md#team-mailboxes) has the rules.
 - [Agents](agents.md#permissions-of-an-agent) has the rules.
 
@@ -461,11 +436,67 @@ adds its column at its next start.
   adds members with a token of a service account needs this change for each of its rooms.
 - `chat.create_room`, `chat.add_members`, `chat.set_member_scopes`, `chat.open_dm` and
   `chat.open_group_dm` now also change an agent that the caller manages: it gets the chat scopes of its
-  membership, and the room goes into its limits. The credential needs `directory.write` for this change.
+  membership that it does not hold. The credential needs `directory.write` for this change.
   Send `scopes: ["chat.read"]` to `chat.add_members` for a member that only reads.
-- `chat.remove_member` takes the room out of the limits of an agent.
 - When the owner of a room leaves, a person becomes the owner before an agent that joined first.
 - [Agents](agents.md#members-of-a-room) has the rules.
+
+### Access follows membership
+
+This change removes the resource limits of agents and service accounts. After this upgrade, each agent
+and each service account reaches each team mailbox, shared drive and room that it is a member of. Before
+this upgrade, an account with limits did not reach a membership outside its limits. The membership says
+where an account can act. The role or the member scopes of the membership say what it can do there.
+
+Do these steps before the deploy, in the old version:
+
+1. Open each agent and each service account in **Admin › Members**.
+2. Read **Access**. It marks each membership that is **Not in the limits**.
+3. Remove each membership that the account must not use. Do this in the settings of that mailbox, drive
+   or room.
+
+What changes for a script that calls the API:
+
+- `directory.create_principal`, `directory.create_service_account` and `oauth.approve_authorization`
+  have no `limits`. A call that sends `limits` gets `invalid`.
+- `directory.set_agent_access` takes `principal_id` and `scopes`, and `scopes` is necessary. A call that
+  sends `resources` gets `invalid`. The result has `principal_id` and `scopes`.
+- `directory.get_agent_access` and `account.whoami` return no `resources`.
+- An entry of `agent_access_changes` has `principal_id` and `scopes_added`. It has no `limits_widened`.
+- `drive.add_shared_drive_members` and `drive.create_shared_drive` give an agent that the caller manages
+  the Drive scopes of its role that it does not hold. The credential must hold `directory.write` and each
+  scope that the agent gets. The results have `agent_access_changes` and `agent_access_pending`.
+- `agent_access_pending` names an agent only when a parallel change of its access defeated the write. A
+  later call for the member completes it.
+- A person who does not manage an agent can still add it to a room or a shared drive. The agent then
+  uses the resource with the scopes that it holds, and gets no new scope.
+- `chat.join_room` accepts people only. An agent or a service account that calls it gets `forbidden`. A
+  member adds it with `chat.add_members`.
+- These are now open to each agent that holds the scopes. Before, an agent with limits got `forbidden`.
+  - `chat.create_room`, `chat.open_dm` and `chat.open_group_dm`
+  - the chat operations across rooms: threads, activity, sections, saved messages, scheduled messages,
+    reminders, drafts and notification settings
+  - the chat webhooks
+  - the events socket `/ws/events`
+- A remove from a room, a shared drive or a team mailbox changes nothing on the account of the agent.
+- The audit target of `directory.set_agent_access` is `<id>:<scopes>`. The audit target of
+  `directory.create_principal` and `directory.create_service_account` is the id of the principal.
+- In the contracts, these exports are gone: `AgentResources`, `AGENT_RESOURCE_LIMITS`,
+  `defaultAgentResources`, `RESOURCE_RULES`, `resourceRefusal`, `allowsResource` and `listedIds`. An MCP
+  resource definition has no `restricted` field.
+
+What changes in storage:
+
+- No D1 migration is necessary. The column `principals.agent_resources` stays in the table, and the
+  Worker does not use it.
+- The table `limit_drops` of each room object and each drive object stays, and the Worker does not use it.
+  The column `added_version` of the members of a drive object stays too.
+
+A rollback to the Worker from before this change makes the old limits of each old account apply again.
+An account from after the upgrade has no limits there. The old Worker finds its tables and its columns,
+because this change removes none of them.
+
+[Agents](agents.md#permissions-of-an-agent) has the rules.
 
 ### Recover a sign-in
 

@@ -119,8 +119,6 @@ export async function runSeed(api: SeedApi, options: SeedOptions = {}): Promise<
 			sponsor_id: idOf(agent.sponsor),
 			// Each agent scope, so the sample agents can use each product and its webhooks.
 			scopes: [...AGENT_SCOPES],
-			// No limits: the sample agents use the Support mailbox, the shared drives and the rooms of the seed.
-			limits: "none",
 		});
 		if (!created.api_key) throw new Error(`The agent ${agent.displayName} got no first API key.`);
 		apiKeys.set(key, created.api_key.secret);

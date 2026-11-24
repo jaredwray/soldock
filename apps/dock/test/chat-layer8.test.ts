@@ -260,8 +260,8 @@ describe("pins, saved messages, drafts, scheduled messages, and reminders", () =
 		).toBe("invalid");
 	});
 
-	// The scopes and the limits are on the agent, and the sponsor can change them after the agent schedules.
-	it("posts no scheduled message of an agent after the agent gets limits or loses chat.write", async () => {
+	// The scopes are on the agent, and the sponsor can change them after the agent schedules.
+	it("posts no scheduled message of an agent after the agent loses chat.write", async () => {
 		const room = await createRoom(ada, "private", "Billing", [bot.id]);
 		const principal = env.PRINCIPAL.get(env.PRINCIPAL.idFromName(bot.id));
 		const schedule = async (text: string) =>
@@ -291,23 +291,13 @@ describe("pins, saved messages, drafts, scheduled messages, and reminders", () =
 						.one().status,
 			);
 
-		// With chat.write and no limits, the message posts.
+		// With chat.write, the message posts.
 		const sent = await schedule("Invoice 1 is paid.");
 		await fire(sent.id);
 		expect(await statusOf(sent.id)).toBe("sent");
 
-		// The agent gets limits, also with the room in its list: a limited agent cannot schedule a message.
-		const limited = await schedule("Invoice 2 is paid.");
-		await ada.call("directory.set_agent_access", {
-			principal_id: bot.id,
-			resources: { mailbox_ids: [], drive_ids: [], room_ids: [room.id] },
-		});
-		await fire(limited.id);
-		expect(await statusOf(limited.id)).toBe("failed");
-
 		// The agent loses chat.write.
-		await ada.call("directory.set_agent_access", { principal_id: bot.id, resources: null });
-		const unscoped = await schedule("Invoice 3 is paid.");
+		const unscoped = await schedule("Invoice 2 is paid.");
 		await ada.call("directory.set_agent_access", { principal_id: bot.id, scopes: ["account.read", "chat.read"] });
 		await fire(unscoped.id);
 		expect(await statusOf(unscoped.id)).toBe("failed");

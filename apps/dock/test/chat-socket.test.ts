@@ -93,7 +93,7 @@ describe("a room socket", () => {
 		// A public room is visible, and its messages are for its members.
 		const open = (await ada.call("chat.create_room", { kind: "public", name: "Town hall" })).room;
 		expect(await status(open.id, bearer(bot.key))).toBe(403);
-		await bot.call("chat.join_room", { room_id: open.id });
+		await ada.call("chat.add_members", { room_id: open.id, principal_ids: [bot.id] });
 		expect(await status(open.id, bearer(bot.key))).toBe(101);
 		// The path is for a WebSocket upgrade only.
 		expect((await request(chatSocketPath(room.id), { headers: bearer(ada.key) })).status).toBe(400);
@@ -139,9 +139,9 @@ describe("a room socket", () => {
 		const mine = await connect(room.id, bearer(ada.key));
 		await ada.call("chat.update_room", { room_id: room.id, name: "Launch week" });
 		expect(await mine.next()).toEqual({ type: "room" });
-		await bot.call("chat.join_room", { room_id: room.id });
+		await owner.call("chat.join_room", { room_id: room.id });
 		expect(await mine.next()).toEqual({ type: "room" });
-		await ada.call("chat.add_members", { room_id: room.id, principal_ids: [owner.id] });
+		await ada.call("chat.add_members", { room_id: room.id, principal_ids: [bot.id] });
 		expect(await mine.next()).toEqual({ type: "room" });
 	});
 

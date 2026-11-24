@@ -32,7 +32,7 @@ const PRIVILEGED: readonly Scope[] = [
  * Where the scopes of a key come from. A key of a person has its own scopes: `allowedScopes` is the list that
  * a new key can hold, and the form offers only the ones that this session also holds, because a credential
  * cannot grant a scope that it does not hold. A key of an agent and a token of a service account have no
- * scopes of their own: each one has the scopes and the limits of its agent. `scopesFrom` is then the word for
+ * scopes of their own: each one has the scopes of its agent. `scopesFrom` is then the word for
  * the agent in the text of the form. The form offers no scopes, and a row shows none.
  */
 type KeyScopes =
@@ -473,8 +473,8 @@ function CreateKeyForm({
 			)}
 			{scopesFrom !== undefined ? (
 				<p className="field-hint">
-					The {noun} has the scopes and the limits of the {scopesFrom}. Change them under Permissions. Use one {noun}{" "}
-					for each system, so that you can rotate or revoke it alone.
+					The {noun} has the scopes of the {scopesFrom}. Change them under Permissions. Use one {noun} for each system,
+					so that you can rotate or revoke it alone.
 				</p>
 			) : (
 				<fieldset className="scope-list">

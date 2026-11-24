@@ -12,7 +12,7 @@ async function post<T>(context: BrowserContext, path: string, data: unknown): Pr
 
 // A person who manages an agent gives it a role in a shared drive, in the settings of the drive. The agent
 // gets the Drive scopes of the role with the membership, so nobody opens Admin › Members for a second
-// change. A remove takes the drive out of the limits of the agent again.
+// change. A remove ends the access of the agent to the drive. The scopes stay on its account.
 test("an admin gives an agent a role in a shared drive, and the agent gets and loses its access with the membership", async ({
 	browser,
 }) => {
@@ -27,7 +27,7 @@ test("an admin gives an agent a role in a shared drive, and the agent gets and l
 		const { principal: self } = (await (await admin.request.get("/api/v1/account")).json()) as {
 			principal: { id: string };
 		};
-		// A new agent holds only account.read, and it has the limits of a new agent.
+		// A new agent holds only account.read, and it is a member of no shared drive.
 		const { principal: agent } = await post<{ principal: { id: string } }>(admin, "/api/v1/directory/principals", {
 			kind: "agent",
 			display_name: agentName,
@@ -54,23 +54,20 @@ test("an admin gives an agent a role in a shared drive, and the agent gets and l
 		await expect(card.getByText("it also gets the Drive scopes of its role", { exact: false })).toBeVisible();
 		await card.getByRole("button", { name: "Add member" }).click();
 		await expect(
-			page.getByText(
-				`${agentName} now also holds drive.read, drive.write, and has this shared drive in its limits now.`,
-				{ exact: false },
-			),
+			page.getByText(`${agentName} now also holds drive.read, drive.write.`, { exact: false }),
 		).toBeVisible();
 		expect(await accessOf()).toMatchObject({
 			scopes: ["account.read", "drive.read", "drive.write"],
-			resources: { drive_ids: [agent.id, drive.id] },
+			shared_drives: [{ id: drive.id, role: "editor" }],
 		});
 
-		// The admin removes the agent. The drive goes out of its limits. The scopes stay on the account.
+		// The admin removes the agent. The membership ends. The scopes stay on the account.
 		await card.getByRole("button", { name: `Remove ${agentName} from ${name}` }).click();
 		await page.getByRole("button", { name: "Remove member" }).click();
 		await expect(page.getByText(`${agentName} is no longer a member of ${name}.`)).toBeVisible();
 		expect(await accessOf()).toMatchObject({
 			scopes: ["account.read", "drive.read", "drive.write"],
-			resources: { drive_ids: [agent.id] },
+			shared_drives: [],
 		});
 	} finally {
 		const headers = { origin: BASE_URL };

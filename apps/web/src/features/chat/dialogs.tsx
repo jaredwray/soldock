@@ -193,7 +193,11 @@ export function BrowseRoomsDialog({ onClose, onOpen }: { onClose: () => void; on
 	}
 
 	return (
-		<Dialog title="Public rooms" onClose={onClose} description="Each person and each agent can join a public room.">
+		<Dialog
+			title="Public rooms"
+			onClose={onClose}
+			description="Each person can join a public room. A member adds an agent."
+		>
 			<form
 				className="chat-browse-search"
 				onSubmit={(event) => {
