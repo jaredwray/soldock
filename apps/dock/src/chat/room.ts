@@ -1757,7 +1757,9 @@ export class ChatRoomDO extends DurableObject<Env> {
 	 * puts a row into `limit_drops` between them, and no write of an earlier call deletes a later row.
 	 */
 	private async afterDrops<T>(actors: readonly ActorRecord[], write: () => T | Refusal): Promise<T | Refusal> {
+		// The object of a room that nobody created has no tables: `write` gives the refusal for it.
 		const waits = (actor: ActorRecord) =>
+			this.hasTables &&
 			this.one("SELECT 1 AS found FROM limit_drops WHERE principal_id = ?", actor.principal_id) !== null;
 		// No row: `write` runs with no wait after this read, so it needs no step of its own.
 		if (!actors.some(waits)) return write();
