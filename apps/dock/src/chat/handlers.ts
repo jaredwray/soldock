@@ -740,9 +740,10 @@ export const chatHandlers: Pick<HandlerMap<CallContext>, ChatOperation> = {
 		accept(await opened.room.checkAddMembers(opened.ctx, input.scopes));
 		const principals = await principalsOf(call, input.principal_ids);
 		assertMemberGrants(call, principals, (principal) => input.scopes ?? defaultRoomMemberScopes(principal.kind));
-		const result = accept(await opened.room.addMembers(opened.ctx, principals.map(toActor), input.scopes));
-		// The time just after the write of the room. A request that comes later can follow a remove, so it stays.
+		// The time before the write of the room. A request that comes later can follow a remove, so it stays. A
+		// later request that has nothing to decide goes away at its answer.
 		const written = new Date().toISOString();
+		const result = accept(await opened.room.addMembers(opened.ctx, principals.map(toActor), input.scopes));
 		if (result.added.length > 0) auditOk(call, "chat.add_members", `${input.room_id}:${result.added.join(",")}`);
 		recordServiceMemberships(call, result.added, "chat.add_members", input.room_id);
 		// A request for an account that is a member now has nothing to decide.
@@ -852,9 +853,10 @@ export const chatHandlers: Pick<HandlerMap<CallContext>, ChatOperation> = {
 		// the same time cannot both succeed. The room writes the member only after the approval won.
 		if (!(await removeMemberRequest(call, request))) throw new OperationError("not_found", NO_REQUEST);
 		const room = roomStub(call.env, request.room_id);
-		const admitted = await room.admitMember(request.requested_by, toActor(target), request.scopes, call.caller.id);
-		// The time just after the write of the room. A request that comes later can follow a remove, so it stays.
+		// The time before the write of the room. A request that comes later can follow a remove, so it stays. A
+		// later request that has nothing to decide goes away at its answer.
 		const written = new Date().toISOString();
+		const admitted = await room.admitMember(request.requested_by, toActor(target), request.scopes, call.caller.id);
 		if ("error" in admitted) {
 			// The room is gone, or the agent that asked cannot add this member now. The request cannot complete.
 			throw new OperationError("conflict", `${admitted.error.message} The request is gone.`);

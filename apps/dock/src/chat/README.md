@@ -257,8 +257,10 @@ the messages from before. So a person decides that the account gets them.
   deleted, or when its sponsor changes. A new call of `chat.request_member` sends the item to the person
   of now. The lists leave out a request for an archived or deleted account.
 - **A member has no request.** When a person adds the account, and after an approval, the handler removes
-  each request of the room for that account (`settleMemberRequests`). A new request can come between the
-  delete of an approval and the write of the room; this step removes it too.
+  each request of the room for that account from before the call to the room (`settleMemberRequests`). A
+  new request can come between the delete of an approval and the call to the room; this step removes it
+  too. A request that comes during the write of the room stays, because it can follow a remove. When it
+  has nothing to decide, its answer removes it.
 - **One answer.** The delete of the request is the decision. An approval and a denial each delete the
   request first, and only the call that deletes it continues. A different answer at the same time gets
   `not_found`. So a denied account never becomes a member.
