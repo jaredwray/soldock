@@ -1013,7 +1013,7 @@ export const requestMember = defineOperation({
 		"Your membership of the room must have chat.add_members, as for chat.add_members. The owner of a room has it.",
 		REQUEST_DECIDER,
 		"That person gets the request in the activity list of Chat. After the approval, the account is a member with scopes: chat.read and chat.write without scopes. A request cannot give chat.add_members.",
-		"A second call for the same room and account returns the same request. To see your requests, call chat.list_member_requests: a request that is not there is approved or denied, or its account is archived or deleted, so nobody can decide it. chat.get_room tells if the account is a member.",
+		"A second call for the same room and account returns the same request, and sends it again to the person who decides now, for example after a change of the sponsor. To see your requests, call chat.list_member_requests: a request that is not there is approved or denied, or its account is archived or deleted, so nobody can decide it. chat.get_room tells if the account is a member.",
 		`A room has at most ${CHAT_LIMITS.memberRequestsPerRoom} requests at the same time. Add a person with chat.add_members.`,
 	].join(" "),
 	http: { method: "POST", path: "/api/v1/chat/rooms/{room_id}/member-requests" },
