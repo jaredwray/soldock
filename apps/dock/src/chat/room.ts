@@ -701,7 +701,8 @@ const FULL = `A room can have ${CHAT_LIMITS.membersPerRoom} members at most.`;
  * agent adds members only when a person decided that.
  */
 const NEXT_OWNER_FROM = "SELECT principal_id FROM members";
-const NEXT_OWNER_ORDER = "ORDER BY json_extract(actor_json, '$.kind') = 'human' DESC, joined_at, principal_id LIMIT 1";
+const NEXT_OWNER_SORT = "ORDER BY json_extract(actor_json, '$.kind') = 'human' DESC, joined_at, principal_id";
+const NEXT_OWNER_ORDER = `${NEXT_OWNER_SORT} LIMIT 1`;
 const NO_WRITE = "Your membership of this room does not have chat.write. The owner of the room can add it.";
 const NO_ADD_MEMBERS = "Your membership of this room does not have chat.add_members. The owner of the room can add it.";
 /**
@@ -1733,6 +1734,12 @@ export class ChatRoomDO extends DurableObject<Env> {
 			await this.dropLimits({ principal_id: actor.principal_id, actor_json: JSON.stringify(actor) });
 			return true;
 		});
+	}
+
+	/** The members of the room in the order in which they become the owner: `NEXT_OWNER_ORDER`. */
+	ownerCandidates(): string[] {
+		if (!this.room()) return [];
+		return this.all<{ principal_id: string }>(`${NEXT_OWNER_FROM} ${NEXT_OWNER_SORT}`).map((row) => row.principal_id);
 	}
 
 	/**

@@ -160,25 +160,18 @@ export function releaseOf(room: ReturnType<typeof roomStub>): (agent: PrincipalR
 	return async (agent) => room.releaseLimits(toActor(agent));
 }
 
-/** The most members that `settleOwner` passes before it stops. */
-const OWNER_TRIES = 5;
-
 /**
  * The room gave itself a new owner: a person before an agent, then the member that joined first. The room
  * does not know if that principal can still act. An archived or deleted principal cannot sign in, so it
- * cannot be the owner: nobody could then change the room. The room passes such an owner, at most a few
- * times, and keeps the last one when no member can act.
+ * cannot be the owner: nobody could then change the room. One read of the directory tells which members
+ * cannot act, and the room passes the owner to the first member that can. The owner stays when no member can.
  */
-async function settleOwner(call: CallContext, room: ReturnType<typeof roomStub>, ownerId: string): Promise<void> {
-	const skip: string[] = [];
-	let candidate: string | null = ownerId;
-	for (let attempt = 0; candidate !== null && attempt < OWNER_TRIES; attempt++) {
-		const [principal] = await getPrincipals(call.env.DIRECTORY, [candidate]);
-		if (principal && principal.archived_at === null) return;
-		skip.push(candidate);
-		const next: string | null = (await room.passOwnership(skip)).ownerId;
-		candidate = next !== null && !skip.includes(next) ? next : null;
-	}
+async function settleOwner(call: CallContext, room: ReturnType<typeof roomStub>): Promise<void> {
+	const candidates = await room.ownerCandidates();
+	const principals = await getPrincipals(call.env.DIRECTORY, candidates);
+	const active = new Set(principals.filter((principal) => principal.archived_at === null).map(({ id }) => id));
+	const skip = candidates.filter((id) => !active.has(id));
+	if (skip.length > 0) await room.passOwnership(skip);
 }
 
 /** The fields of a result that tell what the call changed on the agents that the caller manages. */
@@ -698,7 +691,7 @@ export const chatHandlers: Pick<HandlerMap<CallContext>, ChatOperation> = {
 		if (result.removed) {
 			auditOk(call, "chat.remove_member", `${input.room_id}:${input.principal_id}`);
 			recordServiceMemberships(call, [input.principal_id], "chat.remove_member", input.room_id);
-			if (result.newOwnerId) await settleOwner(call, opened.room, result.newOwnerId);
+			if (result.newOwnerId) await settleOwner(call, opened.room);
 			// The room took itself out of the limits of an agent, in one step with the remove.
 			if (result.limitsDropped) await afterLimitsDrop(call, input.principal_id);
 		}
