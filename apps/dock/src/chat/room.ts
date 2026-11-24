@@ -1776,28 +1776,28 @@ export class ChatRoomDO extends DurableObject<Env> {
 
 	/**
 	 * Gives the room to the next member when its owner is one of `skip`: principals that cannot act, because
-	 * they are archived or deleted. The handler knows that from the directory, and the room does not. The next
-	 * owner is a member that is not in `skip`, a person before an agent, then the member that joined first.
+	 * they are archived or deleted. The handler knows that from the directory, and the room does not.
+	 *
+	 * `eligible` has the members that the handler found able to act, in the order of the next owner. The next
+	 * owner is the first of them that is still a member. A principal that became a member after the read of
+	 * the handler is not in the list, so the room does not give itself to a member that nobody checked.
 	 * Returns the owner after the call. Without such a member, the owner does not change.
 	 */
-	async passOwnership(skip: readonly string[]): Promise<{ ownerId: string | null }> {
+	async passOwnership(skip: readonly string[], eligible: readonly string[]): Promise<{ ownerId: string | null }> {
 		const room = this.room();
 		const owner = this.one<{ principal_id: string }>("SELECT principal_id FROM members WHERE role = 'owner' LIMIT 1");
 		if (!room || !owner || !skip.includes(owner.principal_id)) return { ownerId: owner?.principal_id ?? null };
-		const next = this.one<{ principal_id: string }>(
-			`${NEXT_OWNER_FROM} WHERE principal_id NOT IN (SELECT value FROM json_each(?)) ${NEXT_OWNER_ORDER}`,
-			JSON.stringify(skip),
-		);
-		if (!next) return { ownerId: owner.principal_id };
+		const next = eligible.find((id) => !skip.includes(id) && this.member(id) !== null);
+		if (next === undefined) return { ownerId: owner.principal_id };
 		this.ctx.storage.transactionSync(() => {
 			this.sql.exec("UPDATE members SET role = 'member' WHERE principal_id = ?", owner.principal_id);
-			this.sql.exec("UPDATE members SET role = 'owner' WHERE principal_id = ?", next.principal_id);
+			this.sql.exec("UPDATE members SET role = 'owner' WHERE principal_id = ?", next);
 			this.touch(`member:${owner.principal_id}`);
-			this.touch(`member:${next.principal_id}`);
+			this.touch(`member:${next}`);
 			this.roomChanged("system");
 		});
 		await this.publish({ type: "room" });
-		return { ownerId: next.principal_id };
+		return { ownerId: next };
 	}
 
 	/** Archives a room so it becomes read-only. Room owner, or org admin/owner on a public room. */

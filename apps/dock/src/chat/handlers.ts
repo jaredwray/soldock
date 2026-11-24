@@ -171,7 +171,9 @@ async function settleOwner(call: CallContext, room: ReturnType<typeof roomStub>)
 	const principals = await getPrincipals(call.env.DIRECTORY, candidates);
 	const active = new Set(principals.filter((principal) => principal.archived_at === null).map(({ id }) => id));
 	const skip = candidates.filter((id) => !active.has(id));
-	if (skip.length > 0) await room.passOwnership(skip);
+	// The room takes the next owner only from the members of this read: a later member is not checked.
+	const eligible = candidates.filter((id) => active.has(id));
+	if (skip.length > 0) await room.passOwnership(skip, eligible);
 }
 
 /** The fields of a result that tell what the call changed on the agents that the caller manages. */
