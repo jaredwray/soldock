@@ -1693,6 +1693,45 @@ describe("a request of an agent to add an agent", () => {
 		expect(await requestsOf(bot)).toEqual([]);
 	});
 
+	// The cleanup after an add removes only the requests from before the add. The account can leave the room
+	// just after the add, and then a new request is right: the cleanup must not delete it.
+	it("keeps a request that comes after the account left the room again", async () => {
+		const dan = await newPerson("Dan");
+		const again = await newAgent("Again");
+		const room = await createRoom(bot, "private", "Builds", [dan.id]);
+		let fresh: string | null = null;
+		const directory = new Proxy(env.DIRECTORY, {
+			get(target, property) {
+				if (property === "prepare") {
+					return (sql: string) => {
+						const statement = target.prepare(sql);
+						if (fresh !== null || !sql.includes("r.created_at < ?3")) return statement;
+						return {
+							bind: (...values: unknown[]) => ({
+								all: async () => {
+									// Before the cleanup reads the requests, the account leaves, and the agent asks again.
+									await bot.call("chat.remove_member", { room_id: room.id, principal_id: again.id });
+									fresh = (await ask(bot, room.id, again)).id;
+									return statement.bind(...values).all();
+								},
+							}),
+						};
+					};
+				}
+				const value = Reflect.get(target, property);
+				return typeof value === "function" ? value.bind(target) : value;
+			},
+		});
+		const added = await withEnv({ DIRECTORY: directory }, `/api/v1/chat/rooms/${room.id}/members`, {
+			method: "POST",
+			headers: { authorization: `Bearer ${dan.key}`, "content-type": "application/json" },
+			body: JSON.stringify({ principal_ids: [again.id] }),
+		});
+		expect(added.status).toBe(200);
+		expect(fresh).not.toBeNull();
+		expect((await requestsOf(bot)).map((request) => request.id)).toEqual([fresh]);
+	});
+
 	it("makes no member when a denial deletes the request before the approval does", async () => {
 		const helper = await newAgent("Helper", [...CHAT_AGENT]);
 		const room = await createRoom(ada, "private", "Builds", [bot.id]);

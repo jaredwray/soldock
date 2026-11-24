@@ -180,19 +180,24 @@ export async function liveMemberRequestIds(
 	return new Set(results.map((row) => row.id));
 }
 
-/** The requests of a room for these accounts. */
+/**
+ * The requests of a room for these accounts that came before `until` (an ISO time). A request that
+ * came after it is from after the membership of the caller: the account can leave the room in the meantime,
+ * and then a new request is right.
+ */
 export async function memberRequestsOfRoom(
 	db: D1Database,
 	roomId: string,
 	principalIds: readonly string[],
+	until: string,
 ): Promise<MemberRequestRow[]> {
 	if (principalIds.length === 0) return [];
 	const { results } = await db
 		.prepare(
 			`SELECT ${COLUMNS} FROM chat_member_requests r JOIN json_each(?2) wanted ON wanted.value = r.principal_id
-			WHERE r.room_id = ?1`,
+			WHERE r.room_id = ?1 AND r.created_at < ?3`,
 		)
-		.bind(roomId, JSON.stringify([...new Set(principalIds)]))
+		.bind(roomId, JSON.stringify([...new Set(principalIds)]), until)
 		.all<StoredRow>();
 	return results.map(toRow);
 }

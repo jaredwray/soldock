@@ -241,8 +241,13 @@ async function removeMemberRequest(call: CallContext, request: MemberRequestRow)
  * request can come between the delete of an approval and the write of the room. Such a request has nothing
  * to decide, and it must not use a place of the room.
  */
-async function settleMemberRequests(call: CallContext, roomId: string, principalIds: readonly string[]): Promise<void> {
-	for (const request of await memberRequestsOfRoom(call.env.DIRECTORY, roomId, principalIds)) {
+async function settleMemberRequests(
+	call: CallContext,
+	roomId: string,
+	principalIds: readonly string[],
+	until: string,
+): Promise<void> {
+	for (const request of await memberRequestsOfRoom(call.env.DIRECTORY, roomId, principalIds, until)) {
 		await removeMemberRequest(call, request);
 	}
 }
@@ -736,6 +741,8 @@ export const chatHandlers: Pick<HandlerMap<CallContext>, ChatOperation> = {
 		const principals = await principalsOf(call, input.principal_ids);
 		assertMemberGrants(call, principals, (principal) => input.scopes ?? defaultRoomMemberScopes(principal.kind));
 		const result = accept(await opened.room.addMembers(opened.ctx, principals.map(toActor), input.scopes));
+		// The time just after the write of the room. A request that comes later can follow a remove, so it stays.
+		const written = new Date().toISOString();
 		if (result.added.length > 0) auditOk(call, "chat.add_members", `${input.room_id}:${result.added.join(",")}`);
 		recordServiceMemberships(call, result.added, "chat.add_members", input.room_id);
 		// A request for an account that is a member now has nothing to decide.
@@ -743,6 +750,7 @@ export const chatHandlers: Pick<HandlerMap<CallContext>, ChatOperation> = {
 			call,
 			input.room_id,
 			result.members.map((member) => member.principal_id),
+			written,
 		);
 		// Each named agent that the caller manages gets the access of its membership, also a member from
 		// before. So a second call completes a write that failed.
@@ -845,13 +853,15 @@ export const chatHandlers: Pick<HandlerMap<CallContext>, ChatOperation> = {
 		if (!(await removeMemberRequest(call, request))) throw new OperationError("not_found", NO_REQUEST);
 		const room = roomStub(call.env, request.room_id);
 		const admitted = await room.admitMember(request.requested_by, toActor(target), request.scopes, call.caller.id);
+		// The time just after the write of the room. A request that comes later can follow a remove, so it stays.
+		const written = new Date().toISOString();
 		if ("error" in admitted) {
 			// The room is gone, or the agent that asked cannot add this member now. The request cannot complete.
 			throw new OperationError("conflict", `${admitted.error.message} The request is gone.`);
 		}
 		// A new request can come between the delete above and the write of the room. The account is a member now,
 		// so such a request has nothing to decide.
-		await settleMemberRequests(call, request.room_id, [target.id]);
+		await settleMemberRequests(call, request.room_id, [target.id], written);
 		// The account was a member before the approval: a person added it in the meantime. That membership is not
 		// the one of the request, so the approval gives the account no scope.
 		if (!admitted.added) return { request: toMemberRequest(request), ...accessOutput({ changes: [], pending: [] }) };
