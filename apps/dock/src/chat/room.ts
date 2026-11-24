@@ -1551,13 +1551,20 @@ export class ChatRoomDO extends DurableObject<Env> {
 		call: RoomCall,
 		actors: ActorRecord[],
 		scopes?: readonly RoomMemberScope[],
-	): Promise<{ added: string[]; room: RoomRecord; members: MemberRecord[] } | Refusal> {
+	): Promise<{ added: string[]; room: RoomRecord; members: MemberRecord[]; at: number } | Refusal> {
 		const first = this.checkAddMembers(call, scopes);
 		if ("error" in first) return first;
+		// The time of the step that checks and writes the members. Each member of the result was a member then.
+		const at = Date.now();
 		const written = this.insertMembers(call, actors, scopes);
 		if ("error" in written) return written;
 		if (written.added.length > 0) await this.publish({ type: "room" });
-		return { added: written.added, room: this.record(call.actor.principal_id), members: this.membersNamed(actors) };
+		return {
+			added: written.added,
+			room: this.record(call.actor.principal_id),
+			members: this.membersNamed(actors),
+			at,
+		};
 	}
 
 	/** The write of `addMembers`. It has no wait, so no other call of the room runs in it. */
@@ -1635,11 +1642,13 @@ export class ChatRoomDO extends DurableObject<Env> {
 		actor: ActorRecord,
 		scopes: readonly RoomMemberScope[],
 		approverId: string,
-	): Promise<{ member: MemberRecord; added: boolean } | Refusal> {
+	): Promise<{ member: MemberRecord; added: boolean; at: number } | Refusal> {
 		const room = this.room();
 		if (!room) return refuse("not_found", NOT_FOUND);
+		// The time of the step that checks and writes the member. The account was a member then.
+		const at = Date.now();
 		const existing = this.member(actor.principal_id);
-		if (existing) return { member: this.memberRecord(existing), added: false };
+		if (existing) return { member: this.memberRecord(existing), added: false, at };
 		const archived = this.ensureNotArchived(room);
 		if (archived) return archived;
 		const requester = this.member(requesterId);
@@ -1662,7 +1671,7 @@ export class ChatRoomDO extends DurableObject<Env> {
 			this.roomChanged(approverId);
 		});
 		await this.publish({ type: "room" });
-		return { member: this.memberRecord(this.member(actor.principal_id) as MemberRow), added: true };
+		return { member: this.memberRecord(this.member(actor.principal_id) as MemberRow), added: true, at };
 	}
 
 	/** The members of the room among these principals, each with its scopes. */

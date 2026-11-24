@@ -740,10 +740,10 @@ export const chatHandlers: Pick<HandlerMap<CallContext>, ChatOperation> = {
 		accept(await opened.room.checkAddMembers(opened.ctx, input.scopes));
 		const principals = await principalsOf(call, input.principal_ids);
 		assertMemberGrants(call, principals, (principal) => input.scopes ?? defaultRoomMemberScopes(principal.kind));
-		// The time before the write of the room. A request that comes later can follow a remove, so it stays. A
-		// later request that has nothing to decide goes away at its answer.
-		const written = new Date().toISOString();
 		const result = accept(await opened.room.addMembers(opened.ctx, principals.map(toActor), input.scopes));
+		// The room gives the time of its write. A request from before it has nothing to decide. A later request
+		// can follow a remove, so it stays.
+		const written = new Date(result.at).toISOString();
 		if (result.added.length > 0) auditOk(call, "chat.add_members", `${input.room_id}:${result.added.join(",")}`);
 		recordServiceMemberships(call, result.added, "chat.add_members", input.room_id);
 		// A request for an account that is a member now has nothing to decide.
@@ -853,17 +853,15 @@ export const chatHandlers: Pick<HandlerMap<CallContext>, ChatOperation> = {
 		// the same time cannot both succeed. The room writes the member only after the approval won.
 		if (!(await removeMemberRequest(call, request))) throw new OperationError("not_found", NO_REQUEST);
 		const room = roomStub(call.env, request.room_id);
-		// The time before the write of the room. A request that comes later can follow a remove, so it stays. A
-		// later request that has nothing to decide goes away at its answer.
-		const written = new Date().toISOString();
 		const admitted = await room.admitMember(request.requested_by, toActor(target), request.scopes, call.caller.id);
 		if ("error" in admitted) {
 			// The room is gone, or the agent that asked cannot add this member now. The request cannot complete.
 			throw new OperationError("conflict", `${admitted.error.message} The request is gone.`);
 		}
 		// A new request can come between the delete above and the write of the room. The account is a member now,
-		// so such a request has nothing to decide.
-		await settleMemberRequests(call, request.room_id, [target.id], written);
+		// so such a request has nothing to decide. The room gives the time of its write: a later request can
+		// follow a remove, so it stays.
+		await settleMemberRequests(call, request.room_id, [target.id], new Date(admitted.at).toISOString());
 		// The account was a member before the approval: a person added it in the meantime. That membership is not
 		// the one of the request, so the approval gives the account no scope.
 		if (!admitted.added) return { request: toMemberRequest(request), ...accessOutput({ changes: [], pending: [] }) };
