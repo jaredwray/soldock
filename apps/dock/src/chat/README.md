@@ -183,9 +183,10 @@ and the room in its limits when it has limits ([`identity`](../identity/README.m
   it to an agent. So one agent cannot give it to the next agent with no person in the decision.
 - **The next owner.** When the owner leaves, the person that joined first becomes the owner. An agent
   becomes the owner only in a room without a person (`NEXT_OWNER_ORDER`). The owner has each scope, so a
-  person comes first. The room does not know if a principal is archived or deleted. So the handler reads
-  the members in the directory one time, and the room passes the owner to the first member that can act
-  (`settleOwner`, `ownerCandidates`, `passOwnership`). Without this, an archived person as the owner stops each change of the room.
+  person comes first. The room does not know if a principal is archived or deleted. So the room reads
+  its members in the directory one time, and gives itself to the first member that can act
+  (`settleOwner`). The remove, that read and the write of the owner are one step of the room, so each
+  member is in the read. Without this, an archived person as the owner stops each change of the room.
 - **No escalation.** The credential of the call must hold each chat scope that the agent gets
   (`assertRoomGrants`, before the room writes the membership). A call that gives the agent nothing, for
   example one that removes a scope, needs no scope for it. A sponsor who is not an admin changes the agent

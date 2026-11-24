@@ -160,22 +160,6 @@ export function releaseOf(room: ReturnType<typeof roomStub>): (agent: PrincipalR
 	return async (agent) => room.releaseLimits(toActor(agent));
 }
 
-/**
- * The room gave itself a new owner: a person before an agent, then the member that joined first. The room
- * does not know if that principal can still act. An archived or deleted principal cannot sign in, so it
- * cannot be the owner: nobody could then change the room. One read of the directory tells which members
- * cannot act, and the room passes the owner to the first member that can. The owner stays when no member can.
- */
-async function settleOwner(call: CallContext, room: ReturnType<typeof roomStub>): Promise<void> {
-	const candidates = await room.ownerCandidates();
-	const principals = await getPrincipals(call.env.DIRECTORY, candidates);
-	const active = new Set(principals.filter((principal) => principal.archived_at === null).map(({ id }) => id));
-	const skip = candidates.filter((id) => !active.has(id));
-	// The room takes the next owner only from the members of this read: a later member is not checked.
-	const eligible = candidates.filter((id) => active.has(id));
-	if (skip.length > 0) await room.passOwnership(skip, eligible);
-}
-
 /** The fields of a result that tell what the call changed on the agents that the caller manages. */
 export function accessOutput(access: { changes: AgentAccessChange[]; pending: string[] }) {
 	return { agent_access_changes: access.changes, agent_access_pending: access.pending };
@@ -693,7 +677,6 @@ export const chatHandlers: Pick<HandlerMap<CallContext>, ChatOperation> = {
 		if (result.removed) {
 			auditOk(call, "chat.remove_member", `${input.room_id}:${input.principal_id}`);
 			recordServiceMemberships(call, [input.principal_id], "chat.remove_member", input.room_id);
-			if (result.newOwnerId) await settleOwner(call, opened.room);
 			// The room took itself out of the limits of an agent, in one step with the remove.
 			if (result.limitsDropped) await afterLimitsDrop(call, input.principal_id);
 		}

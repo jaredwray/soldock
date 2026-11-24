@@ -32,6 +32,7 @@ import {
 	type CredentialRef,
 	checkCredentials,
 	dropRoomFromLimits,
+	getPrincipals,
 	THREADS_PER_ROOM,
 	UNREAD_COUNT_MAX,
 } from "../identity/index.ts";
@@ -1662,7 +1663,7 @@ export class ChatRoomDO extends DurableObject<Env> {
 	async removeMember(
 		call: RoomCall,
 		principalId: string,
-	): Promise<{ removed: boolean; newOwnerId?: string | null; limitsDropped?: boolean } | Refusal> {
+	): Promise<{ removed: boolean; limitsDropped?: boolean } | Refusal> {
 		const opened = this.openAsMember(call);
 		if ("error" in opened) return opened;
 		if (this.isDmKind(opened.room.kind)) return refuse("invalid", "Direct messages keep their members.");
@@ -1675,27 +1676,26 @@ export class ChatRoomDO extends DurableObject<Env> {
 		if (self && opened.room.kind === "private" && this.memberCount() === 1) {
 			return refuse("conflict", "You are the last member of this room, so you cannot leave it.");
 		}
-		let newOwnerId: string | null = null;
 		let limitsDropped = false;
-		// The remove and the write of the limits are one step of the room: no other call of the room runs
-		// between them. See `dropLimits`.
+		// The remove, the write of the limits and the check of a new owner are one step of the room: no other
+		// call of the room runs between them. See `dropLimits` and `settleOwner`.
 		await this.ctx.blockConcurrencyWhile(async () => {
-			this.removeRows(call, target, (ownerId) => {
-				newOwnerId = ownerId;
-			});
+			const newOwner = this.removeRows(call, target);
 			limitsDropped = await this.dropLimits(target);
+			if (newOwner) await this.settleOwner();
 		});
 		// The sockets of the removed member close in the same step, so no later event reaches them.
 		for (const socket of this.ctx.getWebSockets(socketTag(principalId))) {
 			this.end(socket, CHAT_SOCKET_CLOSE.ended, "You are not a member of this room now.");
 		}
 		await this.publish({ type: "room" });
-		return { removed: true, newOwnerId, limitsDropped };
+		return { removed: true, limitsDropped };
 	}
 
-	/** The rows of a member that leaves, and the next owner when the owner leaves. */
-	private removeRows(call: RoomCall, target: MemberRow, onNewOwner: (principalId: string) => void): void {
+	/** The rows of a member that leaves, and the next owner when the owner leaves. True: the room has a new owner. */
+	private removeRows(call: RoomCall, target: MemberRow): boolean {
 		const principalId = target.principal_id;
+		let newOwner = false;
 		this.ctx.storage.transactionSync(() => {
 			this.keepScopes(target);
 			this.sql.exec("DELETE FROM members WHERE principal_id = ?", principalId);
@@ -1709,11 +1709,12 @@ export class ChatRoomDO extends DurableObject<Env> {
 				if (next) {
 					this.sql.exec("UPDATE members SET role = 'owner' WHERE principal_id = ?", next.principal_id);
 					this.touch(`member:${next.principal_id}`);
-					onNewOwner(next.principal_id);
+					newOwner = true;
 				}
 			}
 			this.roomChanged(call.actor.principal_id);
 		});
+		return newOwner;
 	}
 
 	/**
@@ -1786,27 +1787,34 @@ export class ChatRoomDO extends DurableObject<Env> {
 		});
 	}
 
-	/** The members of the room in the order in which they become the owner: `NEXT_OWNER_ORDER`. */
-	ownerCandidates(): string[] {
-		if (!this.room()) return [];
-		return this.all<{ principal_id: string }>(`${NEXT_OWNER_FROM} ${NEXT_OWNER_SORT}`).map((row) => row.principal_id);
-	}
-
 	/**
-	 * Gives the room to the next member when its owner is one of `skip`: principals that cannot act, because
-	 * they are archived or deleted. The handler knows that from the directory, and the room does not.
+	 * The room gave itself a new owner: a person before an agent, then the member that joined first. The room
+	 * does not know if that principal can still act. An archived or deleted principal cannot sign in, so it
+	 * cannot be the owner: nobody could then change the room. One read of the directory tells which members
+	 * can act, and the first of them in the order of the next owner becomes the owner. The owner stays when
+	 * no member can act, or when the directory fails.
 	 *
-	 * `eligible` has the members that the handler found able to act, in the order of the next owner. The next
-	 * owner is the first of them that is still a member. A principal that became a member after the read of
-	 * the handler is not in the list, so the room does not give itself to a member that nobody checked.
-	 * Returns the owner after the call. Without such a member, the owner does not change.
+	 * `removeMember` holds the room with `blockConcurrencyWhile` for this call. So the members do not change
+	 * between the read of the directory and the write of the owner, and each member is in that read.
 	 */
-	async passOwnership(skip: readonly string[], eligible: readonly string[]): Promise<{ ownerId: string | null }> {
-		const room = this.room();
+	private async settleOwner(): Promise<void> {
 		const owner = this.one<{ principal_id: string }>("SELECT principal_id FROM members WHERE role = 'owner' LIMIT 1");
-		if (!room || !owner || !skip.includes(owner.principal_id)) return { ownerId: owner?.principal_id ?? null };
-		const next = eligible.find((id) => !skip.includes(id) && this.member(id) !== null);
-		if (next === undefined) return { ownerId: owner.principal_id };
+		if (!owner) return;
+		const candidates = this.all<{ principal_id: string }>(`${NEXT_OWNER_FROM} ${NEXT_OWNER_SORT}`).map(
+			(row) => row.principal_id,
+		);
+		let active: Set<string>;
+		try {
+			const principals = await getPrincipals(this.env.DIRECTORY, candidates);
+			active = new Set(principals.filter((principal) => principal.archived_at === null).map(({ id }) => id));
+		} catch (error) {
+			log("warn", "chat room: the room did not check that its new owner can act", {
+				error: error instanceof Error ? error.message : String(error),
+			});
+			return;
+		}
+		const next = candidates.find((id) => active.has(id));
+		if (active.has(owner.principal_id) || next === undefined) return;
 		this.ctx.storage.transactionSync(() => {
 			this.sql.exec("UPDATE members SET role = 'member' WHERE principal_id = ?", owner.principal_id);
 			this.sql.exec("UPDATE members SET role = 'owner' WHERE principal_id = ?", next);
@@ -1814,8 +1822,6 @@ export class ChatRoomDO extends DurableObject<Env> {
 			this.touch(`member:${next}`);
 			this.roomChanged("system");
 		});
-		await this.publish({ type: "room" });
-		return { ownerId: next };
 	}
 
 	/** Archives a room so it becomes read-only. Room owner, or org admin/owner on a public room. */
