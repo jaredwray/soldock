@@ -1013,12 +1013,13 @@ Each call passes three checks:
      narrow key cannot become a full session or lock a person out.
    - Only the person turns on their own two-step verification: the TOTP operations that make or
      check a secret take no `principal_id`.
-   - A browser session that changes its own sign-in (`account.set_password`, `account.enable_totp`,
+   - A browser session that changes its own two-step verification (`account.enable_totp`,
      `account.disable_totp`) must also send `current_password`, when the person has a password. So
-     somebody with a stolen session cookie cannot replace the password or the second step. Each check
-     counts toward the sign-in lock. A wrong or missing password gets `forbidden`. An API key does not
-     need it: a key with every human scope is the recovery credential of the owner. An owner or an
-     admin who changes the sign-in of somebody else does not need it either.
+     somebody with a stolen session cookie cannot replace the second step. Each check counts toward
+     the sign-in lock. A wrong or missing password gets `forbidden`. An API key does not need it: a
+     key with every human scope is the recovery credential of the owner. An owner or an admin who
+     changes the sign-in of somebody else does not need it either.
+   - `account.set_password` does not ask for the current password, also from a browser session.
    - A change of sign-in from a browser session commits only while that session still exists, in the
      same transaction. So a slow request from a session that a password reset ended cannot choose the
      new password or second step. It gets `unauthenticated` (`conflict` for `account.enable_totp`).

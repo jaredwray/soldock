@@ -241,8 +241,8 @@ function assertFullCredential(caller: AuthContext): void {
 }
 
 /**
- * A browser session that changes its own sign-in proves the current password again, so somebody with a
- * stolen session cookie cannot replace the password or the second step. A wrong password counts toward
+ * A browser session that changes its own two-step verification proves the current password again, so
+ * somebody with a stolen session cookie cannot replace the second step. A wrong password counts toward
  * the sign-in lock. An API key does not need it: a key with every human scope is the recovery credential
  * of the owner. A person without a password has nothing to prove.
  */
@@ -850,7 +850,7 @@ export const identityHandlers: Pick<HandlerMap<CallContext>, IdentityOperation |
 		const target = await credentialOwner(call, input.principal_id);
 		if (target.kind !== "human") throw new OperationError("invalid", "Only a person has a password.");
 		assertFullCredential(call.caller);
-		await confirmCurrentPassword(call, target, input.current_password);
+		// A browser session does not prove the current password first.
 		// The change ends the other sessions of the person, so somebody who knew the old password loses
 		// each session made with it. The session that makes its own change stays.
 		const keep = target.id === call.caller.principal.id ? call.caller.sessionHash : null;
