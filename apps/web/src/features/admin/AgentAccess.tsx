@@ -1,7 +1,7 @@
-import { allowsResource, type Principal, type ResourceKind } from "@asterra/contracts";
+import type { Principal } from "@asterra/contracts";
 import { useId } from "react";
 import { expiryPhrase } from "../settings/ttl.ts";
-import { limitText, resourceChoicesOf, roomLabel } from "./resourceChoices.ts";
+import { roomLabel } from "./roomLabel.ts";
 import type { AgentAccess as Access } from "./useAgentAccess.ts";
 
 const ROOM_KINDS: Record<string, string> = {
@@ -22,30 +22,23 @@ interface AgentAccessProps {
 }
 
 /**
- * What an agent or a service account can reach (`directory.get_agent_access`): its limits, its own mailbox
- * and drive, the team mailboxes, shared drives and rooms that it is a member of, and its live API keys (the
- * tokens of a service account). The scopes of the agent decide what it can do with each of them.
+ * What an agent or a service account can reach (`directory.get_agent_access`): its own mailbox and drive,
+ * the team mailboxes, shared drives and rooms that it is a member of, the Drive items that others shared
+ * with it, and its live API keys (the tokens of a service account). The scopes of the agent decide what it
+ * can do with each of them.
  */
 export function AgentAccess({ agent, access, error, onRetry }: AgentAccessProps) {
 	const headingId = useId();
 	const service = agent.kind === "service";
 	// The word for the agent in the text: a service account is an "account".
 	const noun = service ? "account" : "agent";
-	// A new agent has limits, and a membership alone gives it nothing. So each membership that the limits do
-	// not name gets a mark: the agent does not reach it until a manager selects it under Permissions.
-	const outside = (kind: ResourceKind, id: string, text = "Not in the limits") =>
-		access !== null && !allowsResource(access.resources, kind, id) ? (
-			<span className="chip chip-small">{text}</span>
-		) : null;
 
 	return (
 		<section aria-labelledby={headingId}>
 			<h2 id={headingId} className="subpanel-title">
 				Access
 			</h2>
-			<p className="field-hint">
-				The scopes of the {noun} decide what it can do. Membership and shares decide where, inside its limits.
-			</p>
+			<p className="field-hint">The scopes of the {noun} decide what it can do. Membership and shares decide where.</p>
 			{error && (
 				<div className="form-error" role="alert">
 					<p>The access did not load. {error}</p>
@@ -75,21 +68,8 @@ export function AgentAccess({ agent, access, error, onRetry }: AgentAccessProps)
 							</ul>
 						)}
 					</dd>
-					<dt>Limits</dt>
-					<dd>
-						{access.resources === null ? (
-							<span className="muted">
-								None. The {noun} reaches each membership below, and each room that it joins or opens.
-							</span>
-						) : (
-							<>Only: {limitText(access.resources, resourceChoicesOf(agent, access))}</>
-						)}
-					</dd>
 					<dt>Own mailbox and drive</dt>
-					<dd>
-						{agent.address} {outside("mailbox", agent.id, "Mailbox not in the limits")}{" "}
-						{outside("drive", agent.id, "Drive not in the limits")}
-					</dd>
+					<dd>{agent.address}</dd>
 					<dt>Team mailboxes</dt>
 					<dd>
 						{access.team_mailboxes.length === 0 ? (
@@ -98,8 +78,7 @@ export function AgentAccess({ agent, access, error, onRetry }: AgentAccessProps)
 							<ul>
 								{access.team_mailboxes.map((mailbox) => (
 									<li key={mailbox.id}>
-										{mailbox.display_name} <span className="muted">{mailbox.address}</span>{" "}
-										{outside("mailbox", mailbox.id)}
+										{mailbox.display_name} <span className="muted">{mailbox.address}</span>
 									</li>
 								))}
 							</ul>
@@ -113,7 +92,7 @@ export function AgentAccess({ agent, access, error, onRetry }: AgentAccessProps)
 							<ul>
 								{access.shared_drives.map((drive) => (
 									<li key={drive.id}>
-										{drive.name} <span className="muted">{drive.role}</span> {outside("drive", drive.id)}
+										{drive.name} <span className="muted">{drive.role}</span>
 									</li>
 								))}
 							</ul>
@@ -132,11 +111,6 @@ export function AgentAccess({ agent, access, error, onRetry }: AgentAccessProps)
 								))}
 							</ul>
 						)}
-						{access.resources !== null && access.drive_shared_items.length > 0 && (
-							<p className="field-hint">
-								The {noun} has limits, so it does not reach these items. Limits name a drive, not one item.
-							</p>
-						)}
 						{access.drive_shared_items_truncated && (
 							<p className="field-hint">Others shared more items. The list shows the newest shares.</p>
 						)}
@@ -153,8 +127,7 @@ export function AgentAccess({ agent, access, error, onRetry }: AgentAccessProps)
 										<span className="muted">
 											{ROOM_KINDS[room.kind] && room.name ? `${ROOM_KINDS[room.kind]}, ` : ""}
 											{room.role}
-										</span>{" "}
-										{outside("room", room.id)}
+										</span>
 									</li>
 								))}
 							</ul>

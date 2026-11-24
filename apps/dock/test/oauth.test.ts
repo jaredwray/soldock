@@ -118,10 +118,7 @@ function refresh(clientId: string, refreshToken: string) {
 	return token({ grant_type: "refresh_token", refresh_token: refreshToken, client_id: clientId });
 }
 
-/**
- * The whole flow: a client registers, `approver` approves it for a new agent, and the client gets tokens. The
- * agent has no limits, so the tests reach each membership of the agent.
- */
+/** The whole flow: a client registers, `approver` approves it for a new agent, and the client gets tokens. */
 async function connectNewAgent(approver: Actor, address = "claude@dock.test") {
 	const clientId = await registerClient();
 	const { requestId, verifier } = await startAuthorization(clientId);
@@ -129,7 +126,6 @@ async function connectNewAgent(approver: Actor, address = "claude@dock.test") {
 		request_id: requestId,
 		new_agent: { display_name: "Claude", address },
 		scopes: ["account.read", "mail.read", "chat.read"],
-		limits: "none",
 	});
 	const res = await exchange(clientId, approved.redirect_to, verifier);
 	expect(res.status).toBe(200);
@@ -341,12 +337,10 @@ describe("OAuth approval", () => {
 		expect(tools).toContain("chat_list_rooms");
 		expect(tools).not.toContain("mail_send");
 		expect(tools).not.toContain("drive_list_items");
-		// The approval sent no `limits`, so the new agent is limited to its own mailbox and its own drive.
 		const whoami = await callTool(tokens.access_token, "account_whoami");
 		expect(whoami.structuredContent).toMatchObject({
 			principal: { id: approved.principal.id, kind: "agent" },
 			credential: "oauth",
-			resources: { mailbox_ids: [approved.principal.id], drive_ids: [approved.principal.id], room_ids: [] },
 		});
 		// The token works on REST too, and an agent that connects with OAuth gets no API key.
 		expect(await api(tokens.access_token)("account.whoami")).toMatchObject({ credential: "oauth" });
@@ -500,13 +494,15 @@ describe("OAuth approval", () => {
 			scopes: ["mail.read"],
 		});
 		expect(await codeOf(own)).toBe("invalid");
-		// A connection has no limits of its own either: the agent keeps its limits.
-		const unlimited = owner.call("oauth.approve_authorization", {
+		// An agent has no resource limits. The call refuses a client that asks for them: the client must not
+		// get an agent that reaches more than it asked for.
+		const limited = owner.call("oauth.approve_authorization", {
 			request_id: requestId,
-			agent_id: bot.id,
-			limits: "none",
-		});
-		expect(await codeOf(unlimited)).toBe("invalid");
+			new_agent: { display_name: "Limited", address: "limited@dock.test" },
+			scopes: ["mail.read"],
+			limits: "own",
+		} as never);
+		expect(await codeOf(limited)).toBe("invalid");
 		const keys = owner.call("oauth.approve_authorization", {
 			request_id: requestId,
 			new_agent: { display_name: "Keys", address: "keys@dock.test" },
@@ -878,7 +874,6 @@ describe("OAuth connections follow their agent", () => {
 		expect(set.structuredContent).toEqual({
 			principal_id: agent.id,
 			scopes: ["account.read", "mail.webhooks", "chat.read"],
-			resources: null,
 		});
 		// The token that the client holds gets the new access at once: no refresh and no new approval.
 		const tools = toolNames((await mcp(tokens.access_token, "tools/list")).body);
@@ -910,22 +905,21 @@ describe("OAuth connections follow their agent", () => {
 		vi.useFakeTimers({ toFake: ["Date"] });
 		await owner.call("directory.set_agent_access", {
 			principal_id: agent.id,
-			resources: { mailbox_ids: [], drive_ids: [], room_ids: [room.id] },
+			scopes: ["account.read", "chat.read", "chat.write"],
 		});
 		expect(await events.next()).toEqual({ closed: EVENTS_SOCKET_CLOSE.reconnect });
 		vi.setSystemTime(Date.now() + SOCKET_RECHECK_MS);
 		await owner.call("chat.post_message", { room_id: room.id, text: "Deploy 42 is done." });
 		expect(await roomSocket.next()).toEqual({ closed: CHAT_SOCKET_CLOSE.reconnect });
 		vi.useRealTimers();
-		// The same token opens the listed room again. The agent is limited now, so the events socket, which
-		// carries each room, is refused.
+		// The same token opens the room socket and the events socket again.
 		const again = await connectRoomSocket(room.id, bearer(tokens.access_token));
 		const next = await owner.call("chat.post_message", { room_id: room.id, text: "Deploy 43 is done." });
 		expect(await again.next()).toEqual({ type: "message", message: next.message });
-		const refused = await request(EVENTS_SOCKET_PATH, {
-			headers: { upgrade: "websocket", ...bearer(tokens.access_token) },
-		});
-		expect(refused.status).toBe(403);
+		const eventsAgain = readSocket(
+			await request(EVENTS_SOCKET_PATH, { headers: { upgrade: "websocket", ...bearer(tokens.access_token) } }),
+		);
+		expect(await eventsAgain.next()).toMatchObject({ type: "hello" });
 	});
 
 	// An agent cannot change its own access. A person changes it only with scopes that they hold, for an agent
@@ -957,14 +951,6 @@ describe("OAuth connections follow their agent", () => {
 			scopes: ["directory.write", "account.read", "mail.read"],
 		});
 		expect(await codeOf(set(api(api_key.secret), ["account.read", "mail.send"]))).toBe("forbidden");
-		// The narrow key also cannot remove the limits for a scope that it does not hold.
-		await owner.call("directory.set_agent_access", {
-			principal_id: bot.id,
-			scopes: ["account.read", "mail.read", "mail.send"],
-			resources: { mailbox_ids: [bot.id], drive_ids: [], room_ids: [] },
-		});
-		const unlimit = api(api_key.secret)("directory.set_agent_access", { principal_id: bot.id, resources: null });
-		expect(await codeOf(unlimit)).toBe("forbidden");
 		const keys = ada.call("directory.set_agent_access", {
 			principal_id: bot.id,
 			scopes: ["account.keys" as "mail.read"],
@@ -980,7 +966,7 @@ describe("OAuth connections follow their agent", () => {
 				DIRECTORY: racing(
 					`UPDATE principals SET sponsor_id = '${owner.id}' WHERE id = ?`,
 					bot.id,
-					"agent_scopes = CASE",
+					"UPDATE principals SET agent_scopes",
 				),
 			},
 			`/api/v1/directory/agents/${bot.id}/access`,
@@ -994,16 +980,11 @@ describe("OAuth connections follow their agent", () => {
 		expect((await owner.call("directory.get_agent_access", { principal_id: bot.id })).scopes).toEqual([
 			"account.read",
 			"mail.read",
-			"mail.send",
 		]);
 		await owner.call("directory.update_principal", { principal_id: bot.id, sponsor_id: ada.id });
 
 		// The sponsor, and an admin who does not sponsor the bot. Each change reaches the token.
-		expect(await set(ada.call, ["account.read"])).toEqual({
-			principal_id: bot.id,
-			scopes: ["account.read"],
-			resources: { mailbox_ids: [bot.id], drive_ids: [], room_ids: [] },
-		});
+		expect(await set(ada.call, ["account.read"])).toEqual({ principal_id: bot.id, scopes: ["account.read"] });
 		expect((await api(tokens.access_token)("account.whoami")).scopes).toEqual(["account.read"]);
 		await owner.call("directory.set_agent_access", { principal_id: bot.id, scopes: ["account.read", "chat.read"] });
 		expect((await api(tokens.access_token)("account.whoami")).scopes).toEqual(["account.read", "chat.read"]);
@@ -1028,8 +1009,6 @@ describe("OAuth and webhooks", () => {
 			request_id: requestId,
 			new_agent: { display_name: "Claude", address: "claude@dock.test" },
 			scopes: [`${domain}.read`, `${domain}.webhooks`],
-			// A limited agent cannot make a chat webhook.
-			limits: "none",
 		});
 		const tokens = (await (await exchange(clientId, approved.redirect_to, verifier)).json()) as Tokens;
 		const agent = approved.principal;
@@ -1092,9 +1071,9 @@ describe("OAuth and webhooks", () => {
 		expect(listed).toMatchObject([{ endpoint: { status: "disabled", disabled_reason: "credential_revoked" } }]);
 	});
 
-	// The scopes and the limits of an agent can change after it made a subscription. A delivery needs the
-	// access that a new subscription needs now.
-	it("stops the webhook of an agent that loses the webhook scope or the resource of the event", async () => {
+	// The scopes of an agent can change after it made a subscription. A delivery needs the scopes that a new
+	// subscription needs now.
+	it("stops the webhook of an agent that loses the webhook scope", async () => {
 		const owner = await setupOwner();
 		const { tokens, agent } = await connectNewAgent(owner);
 		await owner.call("directory.set_agent_access", {
@@ -1166,9 +1145,9 @@ describe("OAuth and webhooks", () => {
 			};
 			return { room, job };
 		};
-		const listed = { room: await chatJob("Listed"), other: await chatJob("Other") };
+		const roomJob = (await chatJob("Builds")).job;
 		const posts = receiveWebhooks();
-		await consumeWebhooks([mailJob, driveJob, listed.room.job]);
+		await consumeWebhooks([mailJob, driveJob, roomJob]);
 		expect(posts).toHaveLength(3);
 		const status = async (domain: keyof typeof events) =>
 			(domain === "mail"
@@ -1178,34 +1157,13 @@ describe("OAuth and webhooks", () => {
 					: (await owner.call("chat.list_webhook_subscriptions", { principal_id: agent.id })).subscriptions
 			).map((row) => [row.status, row.disabled_reason]);
 
-		// The agent gets limits: its own mailbox and one room are in the lists, and its own drive is not. The
-		// drive subscription stops for good. A chat subscription covers each room, so only the event of the
-		// other room is skipped.
-		await owner.call("directory.set_agent_access", {
-			principal_id: agent.id,
-			resources: { mailbox_ids: [agent.id], drive_ids: [], room_ids: [listed.room.room.id] },
-		});
-		await consumeWebhooks([mailJob, driveJob, listed.other.job, listed.room.job]);
-		expect(posts).toHaveLength(5);
-		expect(await status("drive")).toEqual([["disabled", "access_lost"]]);
-		expect(await status("mail")).toEqual([["active", null]]);
-		expect(await status("chat")).toEqual([["active", null]]);
-
-		// The mailbox goes out of the list: the mail subscription stops for good too.
-		await owner.call("directory.set_agent_access", {
-			principal_id: agent.id,
-			resources: { mailbox_ids: [], drive_ids: [], room_ids: [listed.room.room.id] },
-		});
-		await consumeWebhooks([mailJob, listed.other.job, listed.room.job]);
-		expect(posts).toHaveLength(6);
-		expect(await status("mail")).toEqual([["disabled", "access_lost"]]);
-		expect(await status("chat")).toEqual([["active", null]]);
-
-		// The agent loses chat.webhooks: the chat subscription stops too.
+		// The agent loses each webhook scope: no event goes out, and each subscription stops for good.
 		await owner.call("directory.set_agent_access", { principal_id: agent.id, scopes: ["chat.read"] });
-		await consumeWebhooks([listed.room.job]);
-		expect(posts).toHaveLength(6);
-		expect(await status("chat")).toEqual([["disabled", "access_lost"]]);
+		await consumeWebhooks([mailJob, driveJob, roomJob]);
+		expect(posts).toHaveLength(3);
+		for (const domain of ["mail", "chat", "drive"] as const) {
+			expect(await status(domain), domain).toEqual([["disabled", "access_lost"]]);
+		}
 	});
 
 	// A dot of ChatGPT connects with OAuth. Its access token changes each hour, and its subscription of
@@ -1219,8 +1177,6 @@ describe("OAuth and webhooks", () => {
 			request_id: first.requestId,
 			new_agent: { display_name: "Dot", address: "dot@dock.test" },
 			scopes: [...scopes],
-			// A chat event without a room needs an agent without limits.
-			limits: "none",
 		});
 		const tokens = (await (await exchange(clientId, approved.redirect_to, first.verifier)).json()) as Tokens;
 		const agent = approved.principal;

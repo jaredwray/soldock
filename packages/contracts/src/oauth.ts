@@ -1,15 +1,14 @@
 import { EmailAddress, prefixedId, Timestamp } from "./common.ts";
 import { DisplayName, Principal } from "./directory.ts";
 import { defineOperation } from "./operation.ts";
-import { NewAgentLimits } from "./restrictions.ts";
 import { AGENT_SCOPES, type Scope } from "./scopes.ts";
 import { z } from "./zod.ts";
 
 // OAuth for agents. An MCP client gets only the URL of the MCP endpoint. It registers itself
 // (`/oauth/register`) and sends a person to `/oauth/authorize`. The person approves the request with
 // the operations below: they create a new agent with an address and scopes, or they connect an agent
-// that they manage. The client then gets tokens that act as that agent, with the scopes and the resource
-// limits of the agent. A connection has no scopes of its own. The `/oauth/*` and
+// that they manage. The client then gets tokens that act as that agent, with the scopes of the agent. A
+// connection has no scopes of its own. The `/oauth/*` and
 // `/.well-known/*` routes are ceremonies, not operations, because they create credentials for a client
 // that has no credential yet.
 
@@ -104,8 +103,8 @@ export const approveAuthorization = defineOperation({
 		"Approves an OAuth authorization request of an MCP client, so that its tokens act as an agent.",
 		"Send new_agent to create an agent with a name and an address on a mail domain of the deployment, or agent_id to connect an agent that exists.",
 		"The approver is the sponsor of a new agent, which gets the internal-only outbound policy and the scopes of the call. scopes is necessary for new_agent, and can differ from the requested scopes.",
-		'A new agent is limited to its own mailbox and its own drive, and it reaches no chat room. Send limits: "none" with new_agent for an agent without limits.',
-		"Do not send scopes or limits with agent_id: the connection has the scopes and the resource limits of the agent. Change them with directory.set_agent_access.",
+		"A new agent reaches its own mailbox and its own drive, and each team mailbox, shared drive and room that it is a member of.",
+		"Do not send scopes with agent_id: the connection has the scopes of the agent. Change them with directory.set_agent_access.",
 		MANAGE,
 		"A credential cannot grant a scope that it does not hold: for agent_id, the credential must hold each scope of the agent.",
 		"The result has redirect_to: send the browser of the person there, so that the client gets its code.",
@@ -121,11 +120,6 @@ export const approveAuthorization = defineOperation({
 			agent_id: PrincipalId.optional(),
 			/** The scopes of a new agent. Not for agent_id: the connection has the scopes of the agent. */
 			scopes: z.array(AgentScope).min(1).optional(),
-			/**
-			 * The resource limits of a new agent. `own` (the default): its own mailbox and its own drive. `none`:
-			 * no limits. Not for agent_id: the connection has the limits of the agent.
-			 */
-			limits: NewAgentLimits.optional(),
 		})
 		.refine((input) => (input.new_agent === undefined) !== (input.agent_id === undefined), {
 			message: "send new_agent or agent_id, not both",
@@ -138,10 +132,6 @@ export const approveAuthorization = defineOperation({
 		.refine((input) => input.agent_id === undefined || input.scopes === undefined, {
 			message: "a connection has the scopes of the agent: change them with directory.set_agent_access",
 			path: ["scopes"],
-		})
-		.refine((input) => input.agent_id === undefined || input.limits === undefined, {
-			message: "a connection has the limits of the agent: change them with directory.set_agent_access",
-			path: ["limits"],
 		}),
 	output: z.object({ principal: Principal, redirect_to: z.string() }),
 	errors: ["conflict", "not_found"],

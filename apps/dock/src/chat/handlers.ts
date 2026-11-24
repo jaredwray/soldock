@@ -6,7 +6,6 @@ import {
 	type ChatThreadFollow,
 	defaultRoomMemberScopes,
 	isCustomEmoji,
-	listedIds,
 	mentionDirectory,
 	type OperationName,
 	prefixedId,
@@ -15,7 +14,6 @@ import {
 import { filesForMessage } from "../drive/index.ts";
 import {
 	accessOutput,
-	afterLimitsDrop,
 	assertMemberGrants,
 	type CallContext,
 	chatPresenceHandlers,
@@ -153,11 +151,6 @@ async function principalsOf(call: CallContext, ids: readonly string[]): Promise<
 
 function toActor(principal: PrincipalRecord): ActorRecord {
 	return { principal_id: principal.id, kind: principal.kind, display_name: principal.display_name };
-}
-
-/** `releaseLimits` of a room, for `giveMemberAccess`: the room takes back the limits of a principal that is not a member. */
-export function releaseOf(room: ReturnType<typeof roomStub>): (agent: PrincipalRecord) => Promise<boolean> {
-	return async (agent) => room.releaseLimits(toActor(agent));
 }
 
 /** A new member with the scopes of its kind, for the access that an agent gets with its membership. */
@@ -486,13 +479,10 @@ export const chatHandlers: Pick<HandlerMap<CallContext>, ChatOperation> = {
 	...chatPresenceHandlers,
 	...chatLayer8Handlers,
 	async "chat.list_rooms"(call, input) {
-		// A service account with resource limits sees only its listed rooms. The queries keep only those, so the cursor
-		// never names a different room.
 		const list = {
 			query: input.query ?? null,
 			cursor: input.cursor ?? null,
 			limit: input.limit ?? DEFAULT_PAGE,
-			ids: listedIds(call.caller.restriction, "room"),
 		};
 		const page =
 			input.view === "public"
@@ -562,7 +552,7 @@ export const chatHandlers: Pick<HandlerMap<CallContext>, ChatOperation> = {
 		const members = principals.map(toActor);
 		// An agent that the caller manages gets the access of its membership. Refuse what the caller cannot
 		// give before the room exists.
-		assertMemberGrants(call, "room", undefined, principals, (principal) => defaultRoomMemberScopes(principal.kind));
+		assertMemberGrants(call, principals, (principal) => defaultRoomMemberScopes(principal.kind));
 		const opened = openRoom(call, newId("rm"));
 		const room = accept(
 			await opened.room.create(opened.ctx, {
@@ -581,13 +571,7 @@ export const chatHandlers: Pick<HandlerMap<CallContext>, ChatOperation> = {
 		);
 		// The members are in the room now. An agent that did not get its access does not fail the call: the
 		// result names it, and `chat.add_members` completes it.
-		const access = await giveMemberAccess(
-			call,
-			"room",
-			room.id,
-			principals.map(defaultMembership),
-			releaseOf(opened.room),
-		);
+		const access = await giveMemberAccess(call, principals.map(defaultMembership));
 		return { room: toRoom(room), ...accessOutput(access) };
 	},
 
@@ -599,20 +583,14 @@ export const chatHandlers: Pick<HandlerMap<CallContext>, ChatOperation> = {
 		const roomId = await dmRoomId(call.caller.id, input.principal_id);
 		// A person who manages the agent and opens a direct message with it decided that the agent can use
 		// the room. Each call does this, so a second call completes a write that failed.
-		assertMemberGrants(call, "room", roomId, principals, (principal) => defaultRoomMemberScopes(principal.kind));
+		assertMemberGrants(call, principals, (principal) => defaultRoomMemberScopes(principal.kind));
 		const opened = openRoom(call, roomId);
 		const result = accept(await opened.room.openDm(opened.ctx, toActor(principals[0] as PrincipalRecord)));
 		if (result.created) {
 			auditOk(call, "chat.open_dm", result.room.id);
 			recordServiceMemberships(call, [input.principal_id], "chat.open_dm", result.room.id);
 		}
-		const access = await giveMemberAccess(
-			call,
-			"room",
-			roomId,
-			principals.map(defaultMembership),
-			releaseOf(opened.room),
-		);
+		const access = await giveMemberAccess(call, principals.map(defaultMembership));
 		return { room: toRoom(result.room), ...accessOutput(access) };
 	},
 
@@ -646,19 +624,13 @@ export const chatHandlers: Pick<HandlerMap<CallContext>, ChatOperation> = {
 		// The room comes first. A caller without access gets the same answer for each principal id.
 		accept(await opened.room.checkAddMembers(opened.ctx, input.scopes));
 		const principals = await principalsOf(call, input.principal_ids);
-		assertMemberGrants(
-			call,
-			"room",
-			input.room_id,
-			principals,
-			(principal) => input.scopes ?? defaultRoomMemberScopes(principal.kind),
-		);
+		assertMemberGrants(call, principals, (principal) => input.scopes ?? defaultRoomMemberScopes(principal.kind));
 		const result = accept(await opened.room.addMembers(opened.ctx, principals.map(toActor), input.scopes));
 		if (result.added.length > 0) auditOk(call, "chat.add_members", `${input.room_id}:${result.added.join(",")}`);
 		recordServiceMemberships(call, result.added, "chat.add_members", input.room_id);
 		// Each named agent that the caller manages gets the access of its membership, also a member from
 		// before. So a second call completes a write that failed.
-		const access = await giveMemberAccess(call, "room", input.room_id, result.members, releaseOf(opened.room));
+		const access = await giveMemberAccess(call, result.members);
 		return { members_added: result.added.length, room: toRoom(result.room), ...accessOutput(access) };
 	},
 
@@ -666,7 +638,7 @@ export const chatHandlers: Pick<HandlerMap<CallContext>, ChatOperation> = {
 		const opened = openRoom(call, input.room_id);
 		// A principal that left the directory can still be a member. The room decides if the member exists.
 		const principals = await getPrincipals(call.env.DIRECTORY, [input.principal_id]);
-		assertMemberGrants(call, "room", input.room_id, principals, () => input.scopes);
+		assertMemberGrants(call, principals, () => input.scopes);
 		const result = accept(
 			await opened.room.setMemberScopes(opened.ctx, {
 				principalId: input.principal_id,
@@ -680,7 +652,7 @@ export const chatHandlers: Pick<HandlerMap<CallContext>, ChatOperation> = {
 			recordServiceMemberships(call, [input.principal_id], "chat.set_member_scopes", input.room_id);
 		}
 		// Each call for an agent that the caller manages gives the agent the access of its membership.
-		const access = await giveMemberAccess(call, "room", input.room_id, [result.member], releaseOf(opened.room));
+		const access = await giveMemberAccess(call, [result.member]);
 		return { member: { ...result.member, joined_at: iso(result.member.joined_at) }, ...accessOutput(access) };
 	},
 
@@ -690,8 +662,6 @@ export const chatHandlers: Pick<HandlerMap<CallContext>, ChatOperation> = {
 		if (result.removed) {
 			auditOk(call, "chat.remove_member", `${input.room_id}:${input.principal_id}`);
 			recordServiceMemberships(call, [input.principal_id], "chat.remove_member", input.room_id);
-			// The room took itself out of the limits of an agent, in one step with the remove.
-			if (result.limitsDropped) await afterLimitsDrop(call, input.principal_id);
 		}
 		return { removed: result.removed };
 	},

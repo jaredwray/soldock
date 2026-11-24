@@ -70,11 +70,6 @@ export interface ListInput {
 	query: string | null;
 	cursor: string | null;
 	limit: number;
-	/**
-	 * Keep only these rooms: the list of a service account with resource limits. The page and its cursor then come from
-	 * these rooms only, so the cursor never names a different room. Null for no filter.
-	 */
-	ids?: readonly string[] | null;
 }
 
 function page(rows: IndexRow[], limit: number, cursorOf: (row: IndexRow) => (string | number)[]): RoomPage {
@@ -100,7 +95,6 @@ export async function listPublicRooms(db: D1Database, principalId: string, input
 			WHERE r.kind = 'public' AND r.archived_at IS NULL
 				AND (?2 IS NULL OR instr(r.name_key, ?2) > 0)
 				AND (?3 IS NULL OR r.name_key > ?3 OR (r.name_key = ?3 AND r.id > ?4))
-				AND (?6 IS NULL OR r.id IN (SELECT value FROM json_each(?6)))
 			ORDER BY r.name_key, r.id LIMIT ?5`,
 		)
 		.bind(
@@ -109,7 +103,6 @@ export async function listPublicRooms(db: D1Database, principalId: string, input
 			cursor?.[0] ?? null,
 			cursor?.[1] ?? null,
 			input.limit + 1,
-			input.ids == null ? null : JSON.stringify(input.ids),
 		)
 		.all<IndexRow>();
 	return page(results, input.limit, (row) => [row.name_key ?? "", row.id]);

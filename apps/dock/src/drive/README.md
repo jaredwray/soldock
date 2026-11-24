@@ -280,11 +280,8 @@ This table is for a personal drive. A shared drive has no `owner`. Its roles are
   view of an agent or a service account (`directory.get_agent_access`). It acts as that principal, so each
   drive checks the access of the principal, not of the person who asks. It checks no access of the caller:
   the identity handler does that first.
-- An agent or a service account with resource limits gets no item of a drive outside its list in the
-  `shared` and the `starred` views, and `drive.list_shared_drives` leaves out each drive outside the list
-  ([identity](../identity/README.md#resource-limits-of-an-agent)). The queries keep only the listed drives
-  (`spaceIds` of `listRefs`, `ids` of `listSharedDriveRows`), so `next_cursor` never names a different
-  drive.
+- An agent or a service account gets these views as a person does. No list on its account names its
+  drives ([identity](../identity/README.md#where-an-agent-can-act)).
 - A star is in the own drive of the principal that set it (`stars`), also for an item of somebody
   else. Nobody else sees it. A star can go away after the access ended.
 - A page of the `shared` or `starred` view can have fewer items than `limit`, because a pointer
@@ -350,24 +347,28 @@ count for the drive. No principal is the owner of an item.
 
 ### An agent as a member
 
-The role says what the agent can do in the drive. The agent also needs the drive scopes on its account,
-and the drive in its limits when it has limits ([`identity`](../identity/README.md#access-of-an-agent)).
+The role says what the agent can do in the drive. The agent also needs the drive scopes on its account
+([`identity`](../identity/README.md#access-of-an-agent)). The agent reaches the drive because it is a
+member, as a person does ([`identity`](../identity/README.md#where-an-agent-can-act)).
 
 - **Who.** A person who can change the access of the agent: its sponsor, an owner or an admin
   (`canManageAgent`). The credential must hold `directory.write`, as `directory.set_agent_access` needs
-  it (`managedAgents` of `identity`). A manager of the drive who does not manage the agent can add it,
-  and that membership gives the agent no new access.
+  it (`managedAgents` of `identity`). A manager of the drive who does not manage the agent can add it.
+  The agent then uses the drive with the scopes that it holds. That membership gives the agent no new
+  scope.
 - **What.** A manager of the agent who gives it a role decided that the agent can use the drive. That
-  call gives the agent the scopes of its role that it does not hold, and puts the drive into its limits
+  call gives the agent the scopes of its role that it does not hold
   (`giveMemberAccess`). A viewer needs `drive.read`. An editor also needs `drive.write`
   (`SHARED_DRIVE_ROLE_SCOPES` of the contracts). The result has each change in `agent_access_changes`.
+  An entry is `{ principal_id, scopes_added }`.
 - **No escalation.** The credential of the call must hold each scope that the agent gets
-  (`assertMemberGrants`, before the drive writes the member). When the drive goes into the limits of
-  the agent, the credential must hold each scope of the role: the limits then let these scopes reach
-  the drive, also a scope that the agent held before. A refused call changes no member.
+  (`assertMemberGrants`, before the drive writes the member). If it does not, the call gets `forbidden`.
+  A refused call changes no member.
 - **Two stores.** The drive object owns the members, and the directory owns the access of an agent, so
   the two writes are not one transaction. The member comes first. The write of the access is idempotent.
-  When it does not complete, the result names the agent in `agent_access_pending`, and a later
+  The write matches only while `access_version` is the one of the read, and the handler tries three
+  times. When a parallel change of the access of the agent defeats each try, the result names the agent
+  in `agent_access_pending`. A later
   `drive.add_shared_drive_members` call with the same role completes it. A retry of
   `drive.create_shared_drive` with its idempotency key changes no agent: the members can be different
   at that time.
@@ -376,27 +377,9 @@ and the drive in its limits when it has limits ([`identity`](../identity/README.
   without access to the drive gets `not_found` for each list.
 - **A lower role.** A change from editor to viewer does not take `drive.write` from the account of the
   agent: the scope also applies to its own drive. The role still limits what it does in this drive.
-- **A remove.** The limits of an agent must not name a drive that it is not a member of. If they did, a
-  manager of the drive who does not manage the agent would add it, and the old limits would give it
-  access. So the drive object removes the member and takes the drive out of the limits in one
-  `blockConcurrencyWhile` step (`dropLimits` of `identity/limit-drops.ts`). No other call of the drive
-  runs between the two writes. The transaction that deletes the member also puts the principal into
-  the table `limit_drops`, and the row goes away when the write of the limits completes. So when the
-  object stops between the two writes, the row is there.
-- **A remove during an add.** A different call can remove the agent between the write of the drive and
-  the write of the access. So after `giveMemberAccess` put the drive into the limits, the drive takes it
-  out again when the membership of the add is gone (`releaseLimits`). A different manager can also
-  remove the agent and add it again in that time. Each member has `added_version`, the change counter
-  of the drive at its add, so the drive knows that this membership is a new one, and takes the access
-  back too.
-- **When the directory fails during the write of a remove, or the object stops,** the limits still name
-  the drive, and the principal is in `limit_drops`. Before that principal is a member again, the drive
-  completes the write, in one step with the write of the member (`afterLimitDrops`). When the directory
-  fails again, the call gets `conflict`.
-- Known limit: the write of the access and `releaseLimits` are two calls of the Worker. When the Worker
-  stops between them, and a remove came in that time, the limits name the drive of a principal that is
-  not a member. A later call of a person who manages the agent corrects it.
-- Known limit: a shared drive that an owner or an admin deletes stays in the limits, and gives nothing.
+- **A remove.** `drive.remove_shared_drive_member` changes nothing on the account of the agent: the agent
+  keeps its scopes. The membership is gone, so the agent does not reach the drive. A grant for one item
+  stays until `drive.unshare_item` removes it.
 
 ### The index in D1
 
@@ -649,7 +632,7 @@ Delivery uses that list. A job with no list sends nothing.
 A permanent delete of a folder sends one `drive.item.deleted` for the folder.
 The alarm sends the event to `soldock-webhooks`.
 A move to another drive sends `drive.item.moved` from the source and `drive.item.created` from the target.
-For a subscription that an agent created, each delivery also needs `drive.webhooks` on the agent, and the drive inside the limits of the agent ([identity](../identity/README.md#access-of-an-agent)).
+For a subscription that an agent created, each delivery also needs `drive.webhooks` on the agent ([identity](../identity/README.md#access-of-an-agent)).
 See the [webhook module](../webhooks/README.md).
 
 ## Safety
@@ -686,8 +669,7 @@ See the [webhook module](../webhooks/README.md).
 | Idempotency keys | `DriveSpaceDO` table `idempotency` | Kept 24 hours, with the SHA-256 hash of the request |
 | Change counter and space id | `DriveSpaceDO` table `meta` | |
 | Name, creator, time of creation and `deleted_at` of a shared drive | `DriveSpaceDO` table `meta`, row `drive` | A personal drive has no such row |
-| Members of a shared drive | `DriveSpaceDO` table `members` | The principal, the role, who added it, and `added_version`: the change counter of the drive at the add. The source of the access |
-| Principals whose limits can still name the shared drive after a remove | `DriveSpaceDO` table `limit_drops` | The principal id. The remove writes the row, and the row goes away when the drive completes the write of the limits. See [An agent as a member](#an-agent-as-a-member) |
+| Members of a shared drive | `DriveSpaceDO` table `members` | The principal, the role, and who added it. The source of the access. The column `added_version` and the table `limit_drops` are from the time when an agent had resource limits. Nothing uses them now. They stay, so a Worker from before that change still works after a rollback |
 | Rows of the D1 index that are behind | `DriveSpaceDO` table `index_outbox` | Rows are deleted after the write to D1 |
 | Moves to a different drive that are not complete | `DriveSpaceDO` tables `transfers` and `transfer_items`, in the source drive | The target, the folder, the actor, the totals, the next step, and each item of the move. Deleted when the move is complete or stopped |
 | Where a moved item went | `DriveSpaceDO` table `moved`, in the source drive | The item id, the target drive and the time. Kept 30 days |

@@ -10,7 +10,7 @@
 | **Owns** | D1 `directory` tables, except `chat_rooms`, `chat_members`, `chat_custom_emoji`, `chat_incoming_webhooks`, `chat_slash_commands` (`chat`) and `webhooks` and `chat_webhooks` (`webhooks`). `PrincipalDO` owns the Chat state, personal Chat views (activity, sections, saved messages, drafts, scheduled messages, reminders), notification settings and events sockets of each principal. Later: R2 `audit`. |
 | **Depends on** | `platform`. |
 | **Operations** | `chat.get_presence`, `chat.set_status`, `account.whoami`, `account.list_api_keys`, `account.create_api_key`, `account.revoke_api_key`, `account.rotate_api_key`, `account.end_api_key_rotation`, `account.set_password`, `account.create_totp_secret`, `account.enable_totp`, `account.disable_totp`, `directory.list_principals`, `directory.get_principals`, `directory.create_principal`, `directory.update_agent_policy`, `directory.update_principal`, `directory.archive_principal`, `directory.restore_principal`, `directory.delete_principal`, `directory.list_mail_domains`, `directory.add_mail_domain`, `directory.remove_mail_domain`, `directory.list_team_mailboxes`, `directory.create_team_mailbox`, `directory.update_team_mailbox`, `directory.add_team_mailbox_member`, `directory.remove_team_mailbox_member`, `directory.create_service_account`, `directory.list_service_account_activity`, `directory.get_agent_access`, `directory.set_agent_access`, `oauth.get_authorization`, `oauth.approve_authorization`, `oauth.deny_authorization`, `oauth.list_grants`, `oauth.revoke_grant` |
-| **Data inventory** | D1 `directory`: `principals` (with `password_hash`, `totp_secret`, `totp_pending_secret`, `totp_last_step`, `sign_in_failures`, `sign_in_locked_until`, `chat_online_until`, `chat_active_until`, `chat_status_json`, `archived_at`, `deleted_at`, and the name aliases of a Chat mention `alias_first`, `alias_full` and `aliases_set`, and the name in the form of a search `name_folded`, which come from the display name, and `service`, `description` and `created_by` of [service accounts](#service-accounts), and the `agent_scopes`, `agent_resources` and `access_version` of each agent and service account, see [Access of an agent](#access-of-an-agent); `service_scopes` and `service_resources` are not read since migration `0027` and stay for the Worker from before it), `addresses`, `api_keys` (with `expires_at`, `description` and `revoked_by`, and for a rotation `prev_key_hash`, `prev_expires_at`, `rotation`, `rotated_at` and `rotated_by`, `expiry_notice_at` for the notice before a token ends, `scopes`, which the Worker reads only for a key of a person since migration `0027`, and `resources`, which is not read since migration `0026`), `sessions`, `setup_lock`, `mail_domains`, `team_mailboxes` (name, address, creator), `team_mailbox_members` (mailbox, principal, who added the member, and `scopes`: what the member can do in the mailbox), `oauth_clients` (registered MCP clients: name, URI, redirect URIs), `oauth_requests` (authorization requests: client, redirect URI, state, PKCE challenge, requested scopes, approval, code hash, the grant that the code made, and `granted_scopes`, which is not read since migration `0027`), `oauth_grants` (approved connections: client, principal, approver, hashes of the access token and of the current, previous and consumed refresh tokens, and `scopes`, which is not read since migration `0027`) ([`migrations/`](../../migrations/)). The TOTP secrets are stored as plain base32 in D1, because a server must read them to check a code. Unused and empty since migration `0004`, kept for the Worker from before it: `principals.sign_in_email` and `sign_in_codes`. A later migration removes them. `PrincipalDO` (one for each principal, keyed by the principal id): tables `chat_rooms`, `chat_threads`, `chat_addressed`, `chat_activity`, `chat_sections`, `chat_section_rooms`, `chat_saved_messages`, `chat_drafts`, `chat_scheduled_messages`, `chat_reminders`, `chat_notification_levels`, `chat_push_devices`, and `chat_notification_sounds` (see [The object of a principal](#the-object-of-a-principal)), table `service_activity` (the activity log of a service account: at most 10,000 calls, at most 1,000 membership changes by members, its admin changes, and 90 days, see [Service accounts](#service-accounts)), table `meta` (schema version, the owner id in `presence_principal`, `chat_seeded` after the first fill, and `chat_threads_filled` after the first fill of the threads), and the hibernatable sockets of `/ws/events` (not in the database: each keeps the reference to its credential, the time of its open and of its last check, and its latest activity report; no backup). Backups: not built yet. |
+| **Data inventory** | D1 `directory`: `principals` (with `password_hash`, `totp_secret`, `totp_pending_secret`, `totp_last_step`, `sign_in_failures`, `sign_in_locked_until`, `chat_online_until`, `chat_active_until`, `chat_status_json`, `archived_at`, `deleted_at`, and the name aliases of a Chat mention `alias_first`, `alias_full` and `aliases_set`, and the name in the form of a search `name_folded`, which come from the display name, and `service`, `description` and `created_by` of [service accounts](#service-accounts), and the `agent_scopes` and `access_version` of each agent and service account, see [Access of an agent](#access-of-an-agent); `agent_resources` is not used: the Worker does not read it or write it, and no migration removes it; `service_scopes` and `service_resources` are not read since migration `0027` and stay for the Worker from before it), `addresses`, `api_keys` (with `expires_at`, `description` and `revoked_by`, and for a rotation `prev_key_hash`, `prev_expires_at`, `rotation`, `rotated_at` and `rotated_by`, `expiry_notice_at` for the notice before a token ends, `scopes`, which the Worker reads only for a key of a person since migration `0027`, and `resources`, which is not read since migration `0026`), `sessions`, `setup_lock`, `mail_domains`, `team_mailboxes` (name, address, creator), `team_mailbox_members` (mailbox, principal, who added the member, and `scopes`: what the member can do in the mailbox), `oauth_clients` (registered MCP clients: name, URI, redirect URIs), `oauth_requests` (authorization requests: client, redirect URI, state, PKCE challenge, requested scopes, approval, code hash, the grant that the code made, and `granted_scopes`, which is not read since migration `0027`), `oauth_grants` (approved connections: client, principal, approver, hashes of the access token and of the current, previous and consumed refresh tokens, and `scopes`, which is not read since migration `0027`) ([`migrations/`](../../migrations/)). The TOTP secrets are stored as plain base32 in D1, because a server must read them to check a code. Unused and empty since migration `0004`, kept for the Worker from before it: `principals.sign_in_email` and `sign_in_codes`. A later migration removes them. `PrincipalDO` (one for each principal, keyed by the principal id): tables `chat_rooms`, `chat_threads`, `chat_addressed`, `chat_activity`, `chat_sections`, `chat_section_rooms`, `chat_saved_messages`, `chat_drafts`, `chat_scheduled_messages`, `chat_reminders`, `chat_notification_levels`, `chat_push_devices`, and `chat_notification_sounds` (see [The object of a principal](#the-object-of-a-principal)), table `service_activity` (the activity log of a service account: at most 10,000 calls, at most 1,000 membership changes by members, its admin changes, and 90 days, see [Service accounts](#service-accounts)), table `meta` (schema version, the owner id in `presence_principal`, `chat_seeded` after the first fill, and `chat_threads_filled` after the first fill of the threads), and the hibernatable sockets of `/ws/events` (not in the database: each keeps the reference to its credential, the time of its open and of its last check, and its latest activity report; no backup). Backups: not built yet. |
 
 Public surface: `index.ts` only. Other domains must not import files from this folder directly.
 
@@ -110,7 +110,7 @@ contract of the socket.
   with one D1 query, before an event, when the last check is 60 seconds old or more; `4003`
   (`ended`) for a credential that stopped; `4001` (`reconnect`) at the next event after one hour, for
   an OAuth access token that stopped while its connection works, and when the check fails. A key or a
-  token whose agent got new scopes or limits also gets `4001`.
+  token whose agent got new scopes also gets `4001`.
   The presence alarm also checks the credentials before it renews the online state.
 - Known limit: the limit of 20 sockets is for all credentials of the principal together. A key or an
   OAuth client of the principal can open 20 sockets, and so close the sockets of the browser tabs
@@ -169,9 +169,11 @@ The directory stores these fields in `chat_status_json`. Each read checks the en
   and `internal-only` allows no webhook ([`mail`](../mail/README.md#webhooks)). The same rule
   limits the web addresses that the agent imports an image from
   ([`docs`](../docs/README.md#an-image-from-a-web-address)).
-- An agent holds its **scopes** and its optional **resource limits**. Each API key and each OAuth
-  connection of the agent has them, and has none of its own. A key of a person keeps its own scopes.
+- An agent holds its **scopes**. Each API key and each OAuth connection of the agent has them, and has
+  none of its own. A key of a person keeps its own scopes.
   [Access of an agent](#access-of-an-agent) has the rules.
+- An agent reaches its own mailbox and its own drive, and each team mailbox, shared drive and room that
+  it is a member of. [Where an agent can act](#where-an-agent-can-act) has the rules.
 - A **service account** gives a script or a system access through the API. It is an agent row with
   `service = 1`, so mail, Drive and Chat apply each agent rule to it. The directory and
   `account.whoami` show the kind `service`. [Service accounts](#service-accounts) has the rules.
@@ -180,8 +182,8 @@ The directory stores these fields in `chat_status_json`. Each read checks the en
   or an admin can also create a key for the person. A new agent needs `scopes`: the scopes of the
   agent, inside `AGENT_SCOPES`. The credential of the call must hold each one (`grantableScopes`). The
   agent also gets a first key, `First key`, with no scopes of its own. Its secret shows once. A human
-  with `scopes` is `invalid`. A new agent gets the default limits, or no limits with `limits: "none"`
-  ([Resource limits of an agent](#resource-limits-of-an-agent)). A human with `limits` is `invalid`.
+  with `scopes` is `invalid`. The input is strict, and it has no `limits`: a call that sends `limits`
+  gets `invalid`.
 - Owners and admins can read the own mailbox of each agent (`canReadAgentMailboxes`). They cannot
   change it or send from it. The mailbox of a person stays private. The sponsor of an agent does not
   get this access. The [`mail`](../mail/README.md#agent-mailboxes) module applies the rule.
@@ -331,7 +333,7 @@ the API, with tokens. Nobody signs in as it, and it never connects through OAuth
   Owners and admins can read its mailbox, as they read the mailbox of an agent. They can create a token
   with `mail.read` too, so a different rule would protect nothing.
 - **Who manages it.** Only owners and admins create it (`directory.create_service_account`), change it,
-  set its scopes and its limits, manage its tokens and read its activity and access. `created_by` records the creator. `sponsor_id`
+  set its scopes, manage its tokens and read its activity and access. `created_by` records the creator. `sponsor_id`
   names the accountable person, the creator by default. Neither gives a right: a creator or a sponsor
   who is not an admin cannot list, create or revoke its tokens, change its policy, or add a webhook for
   it. An admin who becomes a member loses these rights at once.
@@ -346,14 +348,17 @@ the API, with tokens. Nobody signs in as it, and it never connects through OAuth
   admins return them, and `account.whoami` returns them for the record of the caller.
 - **Scopes.** The account holds the scopes, not its tokens, as each agent does (`principals.agent_scopes`,
   migrations `0026` and `0027`). `directory.create_service_account` takes `scopes` (at least one), and
-  `directory.set_agent_access` changes them. A new account gets the default limits of a new agent, or no
-  limits with `limits: "none"`. An account can hold only `SERVICE_SCOPES`:
+  `directory.set_agent_access` changes them. The input is strict, and it has no `limits`: a call that
+  sends `limits` gets `invalid`. An account can hold only `SERVICE_SCOPES`:
   `account.read`, `directory.read`, `mail.read`, `mail.modify`, `mail.send`, `drive.read`, `drive.write`,
   `drive.share`, `chat.read` and `chat.write`. It never holds `account.keys`, `directory.write` or a
   webhook scope, so it cannot widen its own access and it cannot create a webhook. Its outbound policy
   limits its mail, as for an agent. See [Access of an agent](#access-of-an-agent).
+- **Where it acts.** The account reaches its own mailbox and its own drive, and each team mailbox,
+  shared drive and room that it is a member of. Only an owner or an admin who makes it a member gives it
+  the scopes of the membership ([Where an agent can act](#where-an-agent-can-act)).
 - **Tokens.** A token is an API key of the service account (`account.create_api_key` with its
-  `principal_id`). It is only a credential of the account: it has no scopes and no limits of its own.
+  `principal_id`). It is only a credential of the account: it has no scopes of its own.
   Tokens are there for a rotation, and for more than one system that uses the account. A token has a
   label, an optional description, its creator, an optional end, and, after a revoke, who revoked it. A
   service account can have many tokens. `account.revoke_api_key` stops one token at once and closes its
@@ -490,10 +495,11 @@ hourly cron runs the job (`runScheduled` in `src/scheduled.ts`).
 
 ## Access of an agent
 
-An agent holds its scopes and its resource limits. A service account is an agent row with `service = 1`,
-so the same rules apply to it. Each API key and each OAuth connection of the agent has the scopes and the
-limits of the agent. A key or a connection is only a credential: it has no scopes and no limits of its
-own. A key of a person keeps its own scopes (`api_keys.scopes`).
+An agent holds its scopes. A service account is an agent row with `service = 1`, so the same rules apply
+to it. Each API key and each OAuth connection of the agent has the scopes of the agent. A key or a
+connection is only a credential: it has no scopes of its own. A key of a person keeps its own scopes
+(`api_keys.scopes`). The scopes say what the agent can do. Its memberships say where
+([Where an agent can act](#where-an-agent-can-act)).
 
 - **Why.** One place says what an agent can do. A change applies to each credential of the agent,
   without a new secret or a new approval. A new key or a new connection needs no second selection of
@@ -504,13 +510,13 @@ own. A key of a person keeps its own scopes (`api_keys.scopes`).
   its own access: the operations accept humans only, and an agent cannot hold `directory.write`. Each
   other caller gets `forbidden`. A principal that is not an agent gets `not_found`.
 - **Set.** `directory.set_agent_access` (`POST /api/v1/directory/agents/{principal_id}/access`) takes
-  `scopes`, `resources` or both. A field that the call does not send does not change. `scopes` replaces
-  the list, with at least one scope: of `AGENT_SCOPES` for an agent, and of `SERVICE_SCOPES` for a service
-  account. `resources: null` removes the limits. For a sponsor who is not an owner or an admin, the write
-  matches only while that person still sponsors the agent. A sponsor that a parallel change replaced gets
-  `conflict`.
+  `principal_id` and `scopes`, and returns them. `scopes` is necessary. It replaces the list, with at
+  least one scope: of `AGENT_SCOPES` for an agent, and of `SERVICE_SCOPES` for a service account. The
+  input is strict: a call that sends `resources` gets `invalid`. For a sponsor who is not an owner or an
+  admin, the write matches only while that person still sponsors the agent. A sponsor that a parallel
+  change replaced gets `conflict`.
 - **Read.** `directory.get_agent_access` (`GET /api/v1/directory/agents/{principal_id}/access`) has the
-  same rule of who. It returns the scopes and the limits of the agent, and its live API keys in `tokens`
+  same rule of who. It returns the scopes of the agent, and its live API keys in `tokens`
   (id, label and end). It also returns its team mailboxes, its shared drives and its rooms, with its
   role, and the Drive items that others shared directly with it, with its role. `tokens` does not list
   the OAuth connections: `oauth.list_grants` lists them. The memberships come from the index tables in D1
@@ -525,24 +531,13 @@ own. A key of a person keeps its own scopes (`api_keys.scopes`).
 - **First scopes.** `directory.create_principal` takes the `scopes` of a new agent.
   `oauth.approve_authorization` with `new_agent` takes the `scopes` of the agent of a new connection.
   `directory.create_service_account` takes the `scopes` of a service account.
-- **First limits.** The same three operations give a new agent or service account the default limits:
-  its own mailbox and its own drive, and no room (`defaultAgentResources`). So a new agent reaches only
-  what it has at its start. A membership of a team mailbox, and a membership of a room or a shared drive
-  that a manager of the agent makes, add the resource to the limits themselves.
-  `limits` in the call is `own` (the default) or `none`, which creates the agent without limits. The call
-  takes no list, because the own mailbox and the own drive have the id of the agent, which does not exist
-  before the call. The wide value is a word and not null: a client that sends null for a field that it did
-  not set does not remove the limits. `limits` with `agent_id` of `oauth.approve_authorization`, or for a
-  human, is `invalid`.
-  `createPrincipal` writes the limits in the insert of the agent, so no agent exists without them for a
-  moment.
+  These three operations take no `limits`: a call that sends it gets `invalid`.
 - **No escalation.** The credential of the call must hold each scope of the new list (`grantableScopes`),
   so a narrow key with `directory.write` cannot give an agent a scope that the key does not hold. The
-  limits say where each scope applies, so a change of `resources` needs a credential that holds each scope
-  of the agent too. The same rule applies to a new agent and a new service account. A new key, a
+  same rule applies to a new agent and a new service account. A new key, a
   rotation, and the approval of a connection for an agent that exists need a credential that holds each
   scope of the agent.
-- **No change.** A call that sends the scopes and the limits that the agent has writes nothing. The live
+- **No change.** A call that sends the scopes that the agent has writes nothing. The live
   connections stay open, and the audit log and the activity log get no entry. So a script can send the
   wanted access again.
 - **A wider agent widens each credential.** A key or a connection follows its agent. When a manager adds
@@ -550,8 +545,8 @@ own. A key of a person keeps its own scopes (`api_keys.scopes`).
   a narrower credential created before. The person who adds the scope makes that decision, and the audit
   line records it. So the check of a new key is not tied to `access_version`. A change at the same moment
   gives the same result as a change one second later.
-- **Next call.** `authenticate` reads the scopes and the limits from the agent row on each call
-  (`agent_scopes`, `agent_resources`, `credentialScopes`). This applies to an API key and to an OAuth
+- **Next call.** `authenticate` reads the scopes from the agent row on each call
+  (`agent_scopes`, `credentialScopes`). This applies to an API key and to an OAuth
   access token. The ceiling of the kind applies again: `AGENT_SCOPES` for an agent, `SERVICE_SCOPES` for
   a service account. So a change applies to the next call of each credential. An MCP client can keep its
   old tool list for the `ttlMs` of `tools/list` (5 minutes).
@@ -561,33 +556,31 @@ own. A key of a person keeps its own scopes (`api_keys.scopes`).
   a different number. So a room socket and a feed close with `4001` (`reconnect`) at their next check, at
   most 60 seconds later. The events sockets of each key and each OAuth token of the agent close at once
   with `4001` (`endSockets` with `agentAccess`). The client then opens them again, and gets the new
-  access. A `subscriptions/listen` stream of MCP authenticates again at its check, and ends when a watched
-  resource is outside the new scopes or limits ([`mcp`](../mcp/README.md)).
+  access. A `subscriptions/listen` stream of MCP authenticates again at its check, and ends when the new
+  scopes do not let the agent read a watched resource ([`mcp`](../mcp/README.md)).
 - **Stored values.** Stored scopes that are not a list give an agent without a scope. A value outside the
-  ceiling of its kind is left out. Stored limits that are not valid give an agent that reaches nothing. A
+  ceiling of its kind is left out. A
   value on the row of a person is ignored.
 - **Log.** A change adds an audit line (`directory.set_agent_access`). For a service account, it also
-  adds an `admin` entry to the activity log of the account. An agent has no activity log.
+  adds an `admin` entry to the activity log of the account. An agent has no activity log. The target of
+  the audit line is the id of the agent and its new scopes: `<id>:<scopes>`. The target of the audit
+  line of `directory.create_principal` and of `directory.create_service_account` is the id of the new
+  principal.
 - **Scheduled messages.** A scheduled chat message is a lasting effect of a credential. When it is due,
   the `PrincipalDO` reads the agent again (`lostScheduleAccess`). The message fails, and does not post,
-  when the agent has no `chat.write` or has limits: a limited agent cannot schedule a message. A message
+  when the agent has no `chat.write`. A message
   from before the credential binding gets the same check. A message of a person does not get this check.
 - **Webhooks.** A webhook and a subscription of MCP Events are lasting effects too. Before each POST, the
   delivery check (`checkDelivery` of [`webhooks`](../webhooks/README.md#delivery)) reads the agent that
   created it again:
   - The agent must hold the webhook scope of the product (`webhookScope`): `mail.webhooks`,
     `drive.webhooks` or `chat.webhooks`.
-  - The resource must be inside the limits of the agent. For mail, this is the mailbox of the
-    subscription. For Drive, it is the drive of the subscription. For Chat, it is the room of the event.
-  - A lost scope, or a mailbox or a drive outside the limits, disables the subscription with
-    `access_lost`. A chat subscription covers each room of the agent. So an event of a room outside the
-    limits sends no POST, and the subscription stays active.
+  - A lost scope disables the subscription with `access_lost`.
   - A webhook that a person creates, also for an agent that the person sponsors, does not get this check.
-  - `events/subscribe` of MCP Events also applies the limits before it stores a subscription
-    ([Resource limits of an agent](#resource-limits-of-an-agent)).
 - **Agents from before migration `0027`.** The migration adds `principals.agent_scopes` and
   `agent_resources`, and copies `service_scopes` and `service_resources` of each service account into
-  them. It only adds, so the Worker from before keeps working until the deploy. Each agent that is not a
+  them. It only adds, so the Worker from before keeps working until the deploy. The Worker does not use
+  `agent_resources` now. Each agent that is not a
   service account gets each scope of these credentials:
   - its live API keys (not revoked and not expired)
   - its live OAuth connections (not revoked, and the refresh token did not expire)
@@ -596,8 +589,8 @@ own. A key of a person keeps its own scopes (`api_keys.scopes`).
 
   So no client of the agent loses a scope. A key or a connection with fewer scopes then gets the scopes
   of the other live credentials of its agent. The Worker leaves out each value outside `AGENT_SCOPES` when
-  it reads the list. An agent gets no limits. An agent without a live credential gets no scope: its
-  sponsor, an owner or an admin sets its scopes. A service account keeps its scopes and its limits from
+  it reads the list. An agent without a live credential gets no scope: its
+  sponsor, an owner or an admin sets its scopes. A service account keeps its scopes from
   migration `0026`.
   [Self-hosting](../../../../docs/self-hosting.md#upgrade-to-permissions-on-the-agent) has the steps for
   an operator.
@@ -605,14 +598,14 @@ own. A key of a person keeps its own scopes (`api_keys.scopes`).
   account, `oauth_grants.scopes` or `oauth_requests.granted_scopes`. A new row stores an empty list
   there. `oauth_requests.scopes` holds the scopes that the client asked for: they are only the first
   selection for a new agent. `api_keys.resources` is not read since migration `0026`.
+  `principals.agent_resources` held the resource limits of an agent. The Worker does not read it or
+  write it now. The column stays in the table, because a migration that removes it destroys data.
 - **Service accounts from before migration `0026`.** The migration gives an account each scope of its
   live tokens (not revoked and not expired), so no script loses a scope. A token with fewer scopes then
   gets the scopes of the other live tokens of its account. A revoked token and an expired token give
-  nothing: their access ended. An account gets limits only when each of its live tokens had limits: then
-  each mailbox, drive and room that one of them named. An account with one live token without limits
-  stays without limits. An account without a live token gets no scope: set its scopes before a new token.
-  When the limits of the tokens of one account name more than 20 ids of one kind together, the stored
-  limits are not valid, and the account reaches nothing until an admin saves new limits. The same applies
+  nothing: their access ended. The migration also copied the limits of the tokens into
+  `service_resources`. The Worker does not read these limits now. An account without a live token gets no
+  scope: set its scopes before a new token. The same applies
   to an account or a token that the old Worker creates between the migration and the deploy: it has no
   scope on the account. [Self-hosting](../../../../docs/self-hosting.md#upgrade-to-permissions-on-the-service-account)
   has the steps for an operator.
@@ -621,111 +614,47 @@ own. A key of a person keeps its own scopes (`api_keys.scopes`).
   no scope there. Fix a problem with a new deploy. A fresh start of the directory replays `0027`
   (`setup.ts`).
 
-## Resource limits of an agent
+## Where an agent can act
 
-An agent can name the mailboxes, the drives and the rooms that it reaches (`resources` of
-`directory.set_agent_access`). A service account can do the same. Each API key and each OAuth connection
-of the agent has the same limits. The limits apply on top of the memberships of the agent: a listed room
-that the agent left gives nothing. An agent without `resources` reaches each membership. The limits also
-stop a wider reach. A limited agent cannot join or create a room, and it does not reach an item that a
-person shared directly with it.
+An agent or a service account reaches its own mailbox and its own drive. It also reaches each team
+mailbox, shared drive and chat room that it is a member of, exactly as a person does. No list on the
+account names its resources.
 
-- `resources` has three lists: `mailbox_ids`, `drive_ids` and `room_ids`, each at most 20 ids
-  (`AGENT_RESOURCE_LIMITS`). Each list is complete: an empty list allows nothing of that product. The own
-  mailbox and the own drive have the id of the agent, and a list names them like each other id.
-- Only an agent or a service account can have limits. A mailbox id is the agent or a team mailbox that
-  exists, a drive id is the agent or a shared drive, and a room id is a room id. Each other id gets
-  `invalid` (also the id of a person: a limited agent does not reach items that a person shared directly
-  with it). An unknown team mailbox gets `not_found`.
-- A manager can change the limits at each time. A rotation of a key does not change them.
-  `principals.agent_resources` stores them as JSON (migrations `0026` and `0027`).
-- `account.whoami` and `directory.get_agent_access` show `resources`.
-
-**A new agent is limited.** A new agent or service account gets `defaultAgentResources`: its own mailbox
-and its own drive, and no room ([Access of an agent](#access-of-an-agent), First limits).
-
-- Why: the least access is the default. A person who adds an agent to a room, or shares a drive with it,
-  does not widen what the credentials of the agent reach. Only a manager of the agent does.
-- A manager who makes the agent a member gives the access with the membership, so nobody sets the
-  permissions a second time (`widening.ts`):
-  - A team mailbox: only an owner or an admin adds a member, and the add puts the mailbox into the limits
-    ([Team mailboxes](#team-mailboxes), Member scopes).
-  - A room: a person who manages the agent and adds it to a room, or opens a direct message with it, puts
-    the room into the limits and gives the chat scopes of the membership
-    ([`chat`](../chat/README.md#an-agent-as-a-new-member)). The credential needs `directory.write`, as
-    `directory.set_agent_access` does. A member that does not manage the agent can add it, and that
-    membership gives the agent nothing. A remove takes the room out of the limits again.
-  - A shared drive: a person who manages the agent and gives it a role in a shared drive puts the drive
-    into the limits and gives the drive scopes of the role
-    ([`drive`](../drive/README.md#an-agent-as-a-member)). The same rules apply as for a room.
-- A person who does not manage a limited agent can open a direct message with it. The agent does not see
-  the room until a manager opens the direct message, or adds the room to the limits.
-- A limited agent cannot open the events socket, make a chat webhook, open a direct message or create a
-  room (see the rules below). An agent that needs them gets no limits.
-- `limits: "none"` in the create call, or `resources: null` in `directory.set_agent_access` later, gives an
-  agent without limits. The audit line of the create call has `limits` or `no limits` after the id
-  (`createdTarget`).
-- A webhook that the sponsor creates for the agent is a credential of the sponsor, not of the agent. It
-  does not get the limits of the agent ([`webhooks`](../webhooks/README.md#delivery)): a chat webhook of
-  the sponsor sends the events of each room of the agent. The sponsor is a manager of the agent.
-- No migration changes an agent or a service account from before this default. Its `agent_resources`
-  stays as it is, also when it is null.
-
-**Where the limits apply.** Each one fails closed.
-
-1. The invoker (`platform/operations/invoke.ts`) checks `Caller.restriction` after the input check and
-   before the handler (`resourceRefusal` of the contracts). So REST, the MCP tools, the MCP resource reads,
-   `/dl/`, `/blob/` and the operation of a slash command all get the check. A refusal is `forbidden` and
-   an audit line. For a service account, it is also a `denied` entry in the activity log.
-2. `RESOURCE_RULES` of the contracts has one rule for each operation that an agent or a service account
-   can call:
-   - `none` (the scope decides): `account.whoami`, `directory.list_principals`, `directory.get_principals`,
-     `directory.list_team_mailboxes`, `chat.list_custom_emoji`, `chat.list_slash_commands` and
-     `chat.get_presence`. The directory is not narrowed: leave `directory.read` off the agent to stop it.
-     - The status of an agent names no room: `chat.set_status`.
-     - An endpoint names no resource, and the outbound policy limits its host: `webhooks.create_endpoint`,
-       `webhooks.list_endpoints`, `webhooks.update_endpoint` and `webhooks.delete_endpoint`.
-     - `chat.list_webhook_subscriptions`, and a delete of a subscription of the caller
-       (`mail.delete_webhook_subscription`, `drive.delete_webhook_subscription` and
-       `chat.delete_webhook_subscription`), name no resource either.
-   - `filter`: `mail.list_mailboxes`, `drive.list_shared_drives` and `chat.list_rooms` leave out each
-     resource outside the list. The shared and the starred views of `drive.list_items` leave out each
-     drive outside the list. Each list that has pages gives the ids of the list to its query
-     (`listedIds`), so the page and its `next_cursor` come only from listed resources. A cursor holds the
-     name or the id of its last entry, so it never names a resource outside the list.
-   - `check`: `mailbox_id` (the own mailbox when it is not set) for each other mail operation, `space_id`
-     (the own drive when it is not set) for Drive, Docs and Sheets, `drive_id`, `room_id` (required) for
-     Chat, and the second field of a copy, a move or a forward (`target_space_id`, `from_space_id`,
-     `target_room_id`). The files of a chat message come from the own drive, so `file_ids` needs the own
-     drive in the list. `chat.search_messages` needs a listed `room_id`.
-     - The webhook subscriptions of mail and Drive have this rule too: `mail.create_webhook_subscription`
-       and `mail.list_webhook_subscriptions` check `mailbox_id`, and `drive.create_webhook_subscription`
-       and `drive.list_webhook_subscriptions` check `space_id`. `mail.list_webhook_subscriptions` without
-       `mailbox_id` lists the subscriptions in each mailbox, so it needs the own mailbox in the list.
-     - `chat.list_incoming_webhooks` and `chat.set_room_notification_level` check `room_id`.
-   - `refuse`: a new room or direct message, and the personal views of Chat (threads, addressed changes,
-     activity, sections, saved messages, scheduled messages, reminders and drafts), which read or write
-     state across rooms. Also `chat.get_notification_settings` and `chat.set_notification_settings`: the
-     settings hold the level of each room of the agent (`room_levels`). Also
-     `chat.create_webhook_subscription`: a chat subscription sends the messages of each room of the agent.
-   An operation without a rule is refused, so a new operation cannot bypass the limits. The registry test
-   keeps the map complete and makes each rule name each input field that names a mailbox, a drive or a room.
-3. MCP: `tools/list` hides each tool with no rule or the rule `refuse`. Each resource kind says how a
-   limited agent treats it (`restricted`). `chat.rooms` and `chat.addressed` are hidden, and a URI of a
-   mailbox, a room, a drive or an item outside the list names no resource, for `resources/read` and for
-   `subscriptions/listen`.
-4. Sockets: `openEventsSocket` refuses a limited agent, because the events socket carries each room.
-   `openRoomSocket` opens only a listed room. The routes and the feeds of MCP both call them.
-5. `/dl/chat/emoji/{name}` is data of the organization, so a limited agent with `chat.read` reads it.
-6. MCP Events: `events/subscribe` is not an operation, so it does not go through the invoker. It applies
-   the limits itself (`webhooks/events.ts`), before the Mail or the Drive hook records events for the
-   target. An event of a mailbox or a drive outside the list gets `forbidden`. A chat event needs a listed
-   `room_id`, because a chat event without a room covers each room of the agent.
-7. Webhooks: the delivery check applies the limits again before each POST, as a second guard
-   ([Access of an agent](#access-of-an-agent)).
-
-Rollback: a rollback to a Worker from before migration `0027` is not supported
-([Access of an agent](#access-of-an-agent)).
+- **Three parts.** The membership says where the agent can act. The role or the member scopes of the
+  membership say what it can do there. The scopes on its account say what it can do at all
+  ([Access of an agent](#access-of-an-agent)).
+- **A manager gives the scopes with the membership.** A person manages an agent when the person is its
+  sponsor, an owner or an admin, and the credential holds `directory.write` (`managedAgents`). Only an
+  owner or an admin manages a service account. When that person makes the agent a member, the agent gets
+  each scope of the membership that it does not hold. So nobody sets its permissions a second time
+  (`widening.ts`).
+  - A room or a shared drive: `assertMemberGrants` checks the call before the write of the membership.
+    `giveMemberAccess` writes the scopes after it
+    ([`chat`](../chat/README.md#an-agent-as-a-new-member), [`drive`](../drive/README.md#an-agent-as-a-member)).
+  - A team mailbox: only an owner or an admin adds a member. One transaction writes the membership and
+    the scopes (`agentWidening`, [Team mailboxes](#team-mailboxes)).
+  - The credential must hold each scope that the agent gets (`grantableScopes`). For a team mailbox, it
+    must hold each scope of the membership. If it does not, the call gets `forbidden` before any write.
+  - The result has each change in `agent_access_changes`. An entry is `{ principal_id, scopes_added }`.
+  - The write of a room or a shared drive matches only while `access_version` is the one of the read.
+    `agent_access_pending` names an agent only when a parallel change of its access defeated the write
+    three times (`WIDENING_TRIES`). The membership is in the resource. A later call for the member
+    completes the scopes.
+- **A person who does not manage the agent can still add it.** The agent then uses the resource with the
+  scopes that it holds. It gets no new scope: only a manager of the agent gives one.
+- **An agent does not join a room.** `chat.join_room` accepts people only (`callers: ["human"]`). A
+  member of the room adds an agent or a service account with `chat.add_members`.
+- **A remove changes nothing on the account.** After a remove from a room, a shared drive or a team
+  mailbox, the agent keeps its scopes. The membership is gone, so the agent does not reach the resource.
+- **Open operations.** No operation refuses an agent because of where it acts. An agent with the scopes
+  can call `chat.create_room`, `chat.open_dm` and `chat.open_group_dm`. It can call the chat operations
+  that read or write across rooms: threads, activity, sections, saved messages, scheduled messages,
+  reminders, drafts and notification settings. It can create a chat webhook, and it can open the events
+  socket `/ws/events`. The caller kind still applies: a service account calls only an operation that
+  names `"service"` in its callers.
+- **No resource check.** The invoker (`platform/operations/invoke.ts`) checks the caller kind, the scopes
+  and the input. The handler of each operation checks the membership, as it does for a person. `canCall`
+  and the lists of MCP hide a tool or a resource kind only for the caller kind and the scopes.
 
 ## Team mailboxes
 
@@ -736,8 +665,9 @@ credential. The [`mail`](../mail/README.md#mailboxes) module holds its mail.
 
 **Member scopes.** A membership says what the member can do in the mailbox, with the mail scopes
 `mail.read`, `mail.modify` and `mail.send` (`MAILBOX_MEMBER_SCOPES`). The rule is the same for a person,
-an agent and a service account. This is the first resource with scopes for each member. Rooms and shared
-drives get the same model later.
+an agent and a service account. A room has scopes for each member too
+([`chat`](../chat/README.md#member-scopes)), and a shared drive has a role for each member
+([`drive`](../drive/README.md#shared-drives)).
 
 - A new member gets the three scopes. `directory.add_team_mailbox_member` takes `scopes` for fewer. The
   first members of `directory.create_team_mailbox` get the three.
@@ -755,15 +685,14 @@ drives get the same model later.
   `mail.list_mailboxes` and `directory.get_agent_access` show the scopes of the membership.
 - **An agent or a service account gets the access with the membership.** Only an owner or an admin adds a
   member, so the add is the decision. The agent gets each scope of the membership that it does not hold
-  (`scopes_added` in `agent_access_changes` of the result), and the mailbox goes into its limits when it
-  has limits (`limits_widened`)
-  (`agentWidening`). So it can use the mailbox at once, with each key and each connection.
+  (`scopes_added` in `agent_access_changes` of the result, `agentWidening`). So it can use the mailbox at
+  once, with each key and each connection.
   - The scopes of an agent apply to its own mailbox too. An admin who wants less gives fewer `scopes`.
     `directory.create_team_mailbox` and `directory.add_team_mailbox_member` return each change in
     `agent_access_changes`, and the web app shows it, so no agent gets a scope without a notice.
   - Each call for a member that is an agent is the decision that the agent can use the mailbox with the
-    scopes of its membership. This includes a call that removes a scope, and a membership from before this
-    rule that the limits did not name. So the settings of the mailbox show what the agent can do.
+    scopes of its membership. This includes a call that removes a scope. So the settings of the mailbox
+    show what the agent can do.
   - No escalation: the credential of the call must hold each scope of the membership of an agent
     (`grantableScopes`). A narrow key with `directory.write` cannot give a scope that it does not hold.
     A refused call writes nothing. A person needs no check: a key of a person has its own scopes.
@@ -776,11 +705,8 @@ drives get the same model later.
     and the handler reads the agent and tries again, at most three times. After that, the call gets
     `conflict`. The write adds one to `access_version`. After it, the handler ends the events sockets of the
     agent and writes the audit line `directory.set_agent_access`.
-  - The limits of an agent name at most 20 mailboxes. A membership that needs place 21 gets `invalid`.
-    Each try checks the place again (`assertPlaceInLimits`), because a parallel call can fill the limits
-    after the first check.
-  - A remove does not take the scopes from the agent, and does not change its limits. The membership is
-    gone, so a mailbox in the limits gives nothing.
+  - A remove changes nothing on the account of the agent: the agent keeps its scopes. The membership is
+    gone, so the agent does not reach the mailbox.
 
 - Only owners and admins create a team mailbox, rename it, and change its members
   (`directory.create_team_mailbox`, `directory.update_team_mailbox`,
@@ -982,7 +908,7 @@ with `account.keys`.
   host, and the requested scopes. The requested scopes are only the first selection for a new agent.
 - `oauth.approve_authorization` takes `new_agent` (a name and an address) or `agent_id`. It returns
   `redirect_to`, the redirect URI with the code and the `state`. A connection is only a credential of
-  its agent: its tokens have the scopes and the limits of the agent
+  its agent: its tokens have the scopes of the agent
   ([Access of an agent](#access-of-an-agent)).
   - A new agent follows the rules of `directory.create_principal`: owners and admins only, with
     `directory.write`, and an address on a saved mail domain. The approver is the sponsor. The agent
@@ -991,8 +917,9 @@ with `account.keys`.
     decided request creates no agent.
   - `scopes` is necessary with `new_agent`: they become the scopes of the new agent. They must be agent
     scopes that the credential of the approver holds (`grantableScopes`).
-  - A new agent gets the default limits: its own mailbox and its own drive. `limits: "none"` with
-    `new_agent` creates it without limits. `limits` with `agent_id` is `invalid`.
+  - A new agent reaches its own mailbox and its own drive, and each resource that it becomes a member of
+    ([Where an agent can act](#where-an-agent-can-act)). The input is strict, and it has no `limits`: a
+    call that sends `limits` gets `invalid`.
   - An agent that exists follows the rules of API keys: its sponsor, an owner or an admin. `scopes`
     with `agent_id` is `invalid`. The credential of the approver must hold each scope of the agent,
     because the tokens give each one.
@@ -1071,7 +998,7 @@ Each call passes three checks:
    - Only owners and admins create and rename team mailboxes and change their members. A principal uses a team
      mailbox only as a member. The mail handlers check the membership on each call.
    - Only the sponsor of an agent, an owner or an admin changes the agent's policy and its access
-     (scopes and limits, `canManageAgent`). An agent never can: it has no `directory.write` scope,
+     (its scopes, `canManageAgent`). An agent never can: it has no `directory.write` scope,
      and the operations accept humans only.
    - A human manages their own credentials (keys, password and two-step verification) and the keys
      of the agents that they sponsor. Owners and admins manage the credentials of others, except the owner's: only the
@@ -1121,14 +1048,14 @@ OAuth access token. `checkCredentials` tells for a list of references what each 
 now, with one query. It uses the rules of `authenticate`. So a sign-out ends a session reference, and
 the expiry or the refresh of an OAuth access token stops the reference of that token. The answer for
 such a token is `renew` while its grant works: the client can get a new token. A key or a token of an
-agent also keeps the `access_version` of the agent at the open (`av`). When the scopes or the limits of
+agent also keeps the `access_version` of the agent at the open (`av`). When the scopes of
 the agent change, a key or a token that still works gets `renew`. The client then opens a new connection
 with the new access.
 
 A change with the session cookie must come from this origin (`Origin` header), because SameSite=Lax
 alone does not stop each cross-site request. `/mcp` accepts API keys and OAuth access tokens only.
 
-An OAuth access token acts as an agent, with the scopes and the limits of the agent, never more than
+An OAuth access token acts as an agent, with the scopes of the agent, never more than
 the agent ceiling. An agent cannot call the `oauth.*` operations or `directory.set_agent_access`, so it
 cannot approve a connection for itself or add a scope to itself.
 

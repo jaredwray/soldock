@@ -1,6 +1,6 @@
 import { Address, EmailAddress, prefixedId, Timestamp } from "./common.ts";
 import { defineOperation } from "./operation.ts";
-import { MAIL_WEBHOOK_EVENTS, MailWebhookSubscription, WEBHOOK_LIMITS } from "./webhooks.ts";
+import { MAIL_WEBHOOK_EVENTS, MailWebhookSubscription } from "./webhooks.ts";
 import { z } from "./zod.ts";
 
 /** System labels. Every mailbox has them, and nobody can rename or delete them. */

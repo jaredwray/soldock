@@ -159,7 +159,7 @@ it("notifies all joined room kinds and later joins, without text, self notificat
 		const queue = await capture(current.id);
 		if (current.id === publicRoom.id) {
 			await ada.call("chat.post_message", { room_id: current.id, text: "Before join" });
-			await bot.call("chat.join_room", { room_id: current.id });
+			await ada.call("chat.add_members", { room_id: current.id, principal_ids: [bot.id] });
 		}
 		const { message } = await ada.call("chat.post_message", { room_id: current.id, text: "Private message text" });
 		sentMessages.push(message.id);

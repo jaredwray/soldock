@@ -103,16 +103,6 @@ async function askRooms(env: Env, principalId: string, roomIds: readonly string[
 	return failed;
 }
 
-/**
- * The fill for the list of a service account with resource limits: only the listed rooms that the object does not
- * have yet, at most `SERVICE_RESOURCE_LIMITS.perKind` calls. The list of the account has no other room, so the
- * page needs no other state, and gives no cursor to a place of the whole fill.
- */
-async function seedListedRooms(env: Env, principalId: string, roomIds: readonly string[]): Promise<void> {
-	const unknown = await principalStub(env, principalId).unknownChatRooms(roomIds);
-	await askRooms(env, principalId, unknown);
-}
-
 /** A place in the joined list: the newest activity first, then the highest id. */
 interface Position {
 	activityAt: number;
@@ -144,19 +134,13 @@ export async function listJoinedRooms(
 		until: null,
 		starred,
 		limit: input.limit,
-		roomIds: input.ids ?? null,
 	};
 	let listed = await principal.listChatRooms(query);
 	// While the fill is not complete, the page ends at the place that the fill reached. The rooms after
 	// it can come in a later part, so the page gives a cursor to that place. The next list continues
 	// the fill, and then the list after that place. A search then finds an old room too.
 	let reached: Position | null = null;
-	if (!listed.seeded && input.ids != null) {
-		// The place of the fill can be a room outside the list of a limited account, so a limited list gives no
-		// cursor to it. It fills its listed rooms only, and lists them all.
-		await seedListedRooms(env, principalId, input.ids);
-		listed = await principal.listChatRooms(query);
-	} else if (!listed.seeded) {
+	if (!listed.seeded) {
 		reached = await seedJoinedRooms(env, principalId);
 		if (reached !== null && after !== null && !isAfter(reached, after)) reached = null;
 		listed = await principal.listChatRooms({ ...query, until: reached });

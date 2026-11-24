@@ -311,8 +311,7 @@ MCP clients. The app has no UI-only path.
       A toast tells the admin to open it to add a token.
       An agent (`directory.create_principal`) gets its scopes in the same way: the form shows `AGENT_SCOPES` with the texts for a person (`scopeDescription` with the kind `agent`), selects only `account.read` first, and sends the selected scopes as `scopes`.
       The first API key of the agent has no scopes of its own. It has the scopes of the agent.
-      For an agent and a service account, the form has the check box **Limit this agent to its own mailbox and its own drive** (**Limit this account …**), which is on first.
-      With it, the form sends no `limits`, and the server gives the default limits. Without it, the form sends `limits: "none"`, and the new member has no limits.
+      The form has no control for where a new agent or service account can act. A line tells that it reaches its own mailbox and its own drive, and a shared mailbox, a shared drive or a room after a member adds it there.
       A credential cannot grant a scope that it does not hold.
       The form offers only the scopes of the session.
       A person also needs a first password. The admin gives the password to the person.
@@ -335,21 +334,15 @@ MCP clients. The app has no UI-only path.
       The confirmation says that delete cannot be undone.
       For a person who sponsors agents, the dialog names the agents.
       It tells the admin to give each agent a different sponsor first, or to archive or delete the agent.
-    - The agent card and the service account card share two parts. An agent and a service account hold their scopes and their limits. Each API key and each OAuth connection of an agent, and each token of a service account, has them, and has none of its own.
-      **Permissions** (`directory.set_agent_access`, `AgentPermissions.tsx`): the scopes of the agent, and **Limit this agent to specific mailboxes, drives and rooms** (**Limit this account …** for a service account).
+    - The agent card and the service account card share two parts. An agent and a service account hold their scopes. Each API key and each OAuth connection of an agent, and each token of a service account, has them, and has none of its own.
+      **Permissions** (`directory.set_agent_access`, `AgentPermissions.tsx`): the scopes of the agent, and no other control.
+      The scopes do not say where the agent can act. A hint under the scopes tells that the agent reaches its own mailbox and drive and each membership, and that the settings of each shared mailbox, room and shared drive change what it can do there.
       The form offers `AGENT_SCOPES` for an agent and `SERVICE_SCOPES` for a service account (`scopesFor` of `admin/permissionsDraft.ts`).
       The scope texts come from `scopeDescription`: the texts for a person for an agent, and the texts for a service account (`SERVICE_SCOPE_DESCRIPTIONS`, without "your") for a service account.
-      A new agent or service account has the limit, with its own mailbox and its own drive selected: the default of the server.
-      With the limit, the form shows a list of check boxes for each product: the own mailbox, the team mailboxes, the own drive, the shared drives and the rooms.
-      When the limit goes on for an agent without saved limits, the form selects what the agent reaches now: its own mailbox and drive, and its memberships, at most 20 of each kind (`withLimit`). So the check box alone never saves a limit to nothing.
-      The choices come from the access of the agent (`admin/resourceChoices.ts`). A listed resource that is not in these lists shows with its id, so a manager can remove it.
-      A selection key has the kind and the id, because the own mailbox and the own drive have the same id.
-      A list stops a further selection at 20 (`AGENT_RESOURCE_LIMITS.perKind`), with a count when it has more choices.
-      A direct message shows the name of its other member (`peer_name`).
-      **Save permissions** sends only the fields that changed (`admin/permissionsDraft.ts`), and is off when nothing changed. A line tells when the choices are not saved.
+      **Save permissions** sends the full list of the selected scopes (`permissionsChange` of `admin/permissionsDraft.ts`), and is off when nothing changed. A line tells when the choices are not saved.
       After a save, the form shows the saved values from the answer of the save at once, also when the next read of the access is slow or fails. The card ignores the answer of a read that is older than its newest read.
-      **Access** (`directory.get_agent_access`, `AgentAccess.tsx`): the live API keys (**Live tokens** for a service account), the limits, the own mailbox and drive, the team mailboxes, the shared drives, the rooms with the role, and **Shared directly in Drive** (the items that a member shared with the agent).
-      For a limited agent, each membership that the limits do not name has the mark **Not in the limits**: the agent does not reach it. A line under **Shared directly in Drive** tells that a limited agent does not reach these items.
+      **Access** (`directory.get_agent_access`, `AgentAccess.tsx`): the live API keys (**Live tokens** for a service account), the own mailbox and drive, the team mailboxes, the shared drives, the rooms with the role, and **Shared directly in Drive** (the items that a member shared with the agent).
+      The agent reaches each of them. A direct message shows the name of its other member (`peer_name`, `admin/roomLabel.ts`).
       The list of live API keys of an agent does not show the apps that connect with OAuth.
       The card reads the access one time for **Permissions** and for **Access** (`admin/useAgentAccess.ts`).
       A create, a rotation or a revoke of a key, and a save of the permissions, load the access again.
@@ -406,8 +399,8 @@ MCP clients. The app has no UI-only path.
         `mailboxScopes.ts`).
       - **The new member can** has the same three check boxes for a new member. Each one is on at the start.
       - The rule is the same for a person, an agent and a service account. The toast names the scopes that
-        an agent or a service account got on its account, and says when the mailbox went into its limits
-        (`agent_access_changes`, `accessChangeText`). The toast of a new shared mailbox names them too.
+        an agent or a service account got on its account (`agent_access_changes`, `accessChangeText`).
+        The toast of a new shared mailbox names them too.
     - **Webhooks of …**, each webhook that gets the mail event of the shared mailbox (`mail.list_webhook_subscriptions`).
       **Edit events** opens the check box of that event. An owner or an admin can clear it
       (`mail.delete_webhook_subscription`), for example when the mailbox reaches its limit of active subscriptions.
@@ -424,8 +417,9 @@ MCP clients. The app has no UI-only path.
       confirmation (`drive.remove_shared_drive_member`). A form below the table adds a person or an
       agent with a role. The role menu of an agent has no Manager entry. For an agent or a service
       account, the form tells that the account also gets the Drive scopes of its role. The toast of
-      an add or a role change tells what the account got (`driveAccessText` of `lib/accessChange.ts`):
-      the new scopes, and the drive in its limits. It also names an agent that did not get its access.
+      an add or a role change names the scopes that the account got (`driveAccessText` of
+      `lib/accessChange.ts`). It also names an agent that did not get the scopes of its role, because
+      the access of the account changed at the same time.
       The row of such an agent then has a note and a **Try again** button, which sends the role of the
       member again. The role menu sends no call for the role that the member has.
       The card of a new shared drive shows the same note for an agent that the create call named.
@@ -457,13 +451,15 @@ MCP clients. The app has no UI-only path.
   - For a new agent, the scopes are the agent scopes that the session holds. The page selects the
     requested scopes and `account.read` first, or each scope when the client asked for none. The app
     sends them as `scopes` with `new_agent`.
-  - For a new agent, the check box **Limit this agent to its own mailbox and its own drive** is on first.
-    Without it, the page sends `limits: "none"` with `new_agent`, and the new agent has no limits.
+  - For a new agent, the page has no control for where the agent can act. A line tells that the agent
+    reaches its own mailbox and its own drive, and a shared mailbox, a shared drive or a room after a
+    member adds it there.
   - For an agent that exists, the page offers no scopes and sends only `agent_id`. A line tells that
     the app gets each permission of the agent, and that the agent card in Admin › Members changes them.
     The page reads the selected agent (`directory.get_agent_access`) and lists each scope of the agent.
-    It marks a scope as **Requested** or **Not requested**, names the requested scopes that the agent
-    does not hold, and tells if the agent is limited to listed resources (`agentGrant` in `connect.ts`).
+    It marks a scope as **Requested** or **Not requested**, and names the requested scopes that the agent
+    does not hold (`agentGrant` in `connect.ts`). A line tells that the app reaches each mailbox, drive
+    and room that the agent reaches.
     It does not make this read for a new agent. If the read fails, the page shows the error and **Try again**.
   - **Approve and connect** (`oauth.approve_authorization`) and **Deny** (`oauth.deny_authorization`)
     send the browser to the `redirect_to` of the result. A member who cannot approve sees only Deny.
@@ -1507,9 +1503,10 @@ MCP clients. The app has no UI-only path.
       a principal, it asks what the new member can do, with the rights of its kind selected
       (`offeredRights`): a person can post and add members, and an agent can post. The form does not offer
       **Post** to a person who cannot post: a member gives only what its membership has.
-    - The toast names the scopes that an agent got on its account, and says when the room went into its
-      limits (`agent_access_changes`, `roomAccessText` in `lib/accessChange.ts`). It also names an agent
-      that is a member and cannot use the room yet (`agent_access_pending`). A new direct message, the quick
+    - The toast names the scopes that an agent got on its account (`agent_access_changes`,
+      `roomAccessText` in `lib/accessChange.ts`). It also names an agent that is a member and did not get
+      the scopes of its membership, because the access of the account changed at the same time
+      (`agent_access_pending`). The toast tells the person to add it again. A new direct message, the quick
       switcher and **Message** on a profile show the same toast: the change is on the account of the agent.
     - A member without `chat.write` has no box for a message. The room says **You can read this room. The
       owner of the room can let you post.**

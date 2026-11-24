@@ -41,7 +41,7 @@ type PageState =
  * the person here. The person creates a new agent with an address and scopes for the client, or
  * connects an agent that they manage, or denies the request. A connection of an agent has the scopes of
  * the agent, so the page offers scopes only for a new agent. For an agent that exists, it shows the scopes
- * and the limits that the app gets.
+ * that the app gets.
  */
 export function ConnectPage({ requestId }: { requestId: string }) {
 	const { whoami } = useSession();
@@ -155,9 +155,6 @@ function ApprovalForm({ authorization, agents, domains, canCreate, offered, onDo
 	const [scopes, setScopes] = useState<ReadonlySet<Scope>>(
 		() => new Set(defaultScopes(authorization.requested_scopes, offered)),
 	);
-	// A new agent starts with a limit to its own mailbox and its own drive: the default of the server. Without
-	// the check, the form sends `limits: "none"`, and the new agent has no limits.
-	const [limited, setLimited] = useState(true);
 	const [busy, setBusy] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 	const ids = {
@@ -167,7 +164,6 @@ function ApprovalForm({ authorization, agents, domains, canCreate, offered, onDo
 		addressHint: useId(),
 		agent: useId(),
 		warning: useId(),
-		limitHint: useId(),
 	};
 	const requested = new Set(authorization.requested_scopes);
 	const canApprove = canCreate || agents.length > 0;
@@ -189,7 +185,6 @@ function ApprovalForm({ authorization, agents, domains, canCreate, offered, onDo
 					? {
 							new_agent: { display_name: name.trim(), address: address.trim() },
 							scopes: offered.filter((scope) => scopes.has(scope)),
-							...(limited ? {} : { limits: "none" as const }),
 						}
 					: { agent_id: agentId }),
 			});
@@ -355,26 +350,10 @@ function ApprovalForm({ authorization, agents, domains, canCreate, offered, onDo
 											</label>
 										))}
 									</fieldset>
-									<div className="field form-grid-wide">
-										<label className="check-row">
-											<input
-												type="checkbox"
-												className="checkbox"
-												checked={limited}
-												onChange={() => setLimited((current) => !current)}
-												aria-describedby={ids.limitHint}
-												disabled={busy}
-											/>
-											<span>Limit this agent to its own mailbox and its own drive</span>
-										</label>
-										<p id={ids.limitHint} className="field-hint">
-											With the limit, the app reaches no chat room, no team mailbox and no shared drive. Without the
-											limit, the app reaches each mailbox, drive and room that the agent is a member of.
-										</p>
-									</div>
 									<p className="field-hint form-grid-wide">
-										A new agent can send mail only inside this organization. Open the agent under Admin › Members to
-										change its policy, its scopes and its limits.
+										A new agent reaches its own mailbox and its own drive. It reaches a shared mailbox, a shared drive
+										or a room after a member adds it there. A new agent can send mail only inside this organization.
+										Open the agent under Admin › Members to change its policy and its scopes.
 									</p>
 								</>
 							) : (
@@ -407,8 +386,7 @@ function ApprovalForm({ authorization, agents, domains, canCreate, offered, onDo
 }
 
 /**
- * What the app gets from an agent that exists: each scope of the agent and its limits, next to the request
- * of the app. The person who approves is the sponsor, an owner or an admin, so `directory.get_agent_access`
+ * What the app gets from an agent that exists: each scope of the agent, next to the request of the app. The person who approves is the sponsor, an owner or an admin, so `directory.get_agent_access`
  * lets them read it. The page shows this part only for an agent that exists, never for a new agent.
  */
 function AgentGrantSummary({ agentId, requested }: { agentId: string; requested: readonly string[] }) {
@@ -477,9 +455,8 @@ function AgentGrantSummary({ agentId, requested }: { agentId: string; requested:
 						</p>
 					)}
 					<p className="field-hint">
-						{loaded.resources === null
-							? "The agent has no resource limits: the app reaches each mailbox, drive and room of the agent."
-							: `The agent is limited to listed resources: ${loaded.resources.mailbox_ids.length} mailboxes, ${loaded.resources.drive_ids.length} drives and ${loaded.resources.room_ids.length} rooms.`}
+						The app reaches each mailbox, drive and room that the agent reaches. The Access part of the agent under
+						Admin › Members lists them.
 					</p>
 				</div>
 			)}

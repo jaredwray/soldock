@@ -154,7 +154,7 @@ function MembersPart({ mailbox, principals, onChanged }: PartProps & { principal
 			});
 			onChanged(result.team_mailbox);
 			toast({
-				message: `${principal.display_name} can now ${scopesText(scopes)} in ${mailbox.display_name}.${accessChangeText(principal.display_name, result.agent_access_changes, "mailbox")}`,
+				message: `${principal.display_name} can now ${scopesText(scopes)} in ${mailbox.display_name}.${accessChangeText(principal.display_name, result.agent_access_changes)}`,
 			});
 		} catch (caught) {
 			setError(errorMessage(caught));
@@ -184,7 +184,7 @@ function MembersPart({ mailbox, principals, onChanged }: PartProps & { principal
 			setNewScopes([...MAILBOX_MEMBER_SCOPES]);
 			onChanged(result.team_mailbox);
 			toast({
-				message: `${principal.display_name} can now ${scopesText(newScopes)} in ${mailbox.display_name}.${accessChangeText(principal.display_name, result.agent_access_changes, "mailbox")}`,
+				message: `${principal.display_name} can now ${scopesText(newScopes)} in ${mailbox.display_name}.${accessChangeText(principal.display_name, result.agent_access_changes)}`,
 			});
 		} catch (caught) {
 			setError(errorMessage(caught));

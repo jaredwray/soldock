@@ -1,5 +1,4 @@
 import {
-	type AgentResources,
 	ALL_SCOPES,
 	API_KEY_LIMITS,
 	commaListEntries,
@@ -8,10 +7,8 @@ import {
 	MAILBOX_MEMBER_SCOPES,
 	mentionDirectory,
 	mentionHandle,
-	RoomId,
 	type Scope,
 	SERVICE_ACTIVITY_LIMITS,
-	SharedDriveId,
 	SIGN_IN_LOCK_MINUTES,
 	searchFold,
 	TEAM_MAILBOX_LIMITS,
@@ -20,7 +17,6 @@ import { audit, decodeCursor, encodeCursor, type HandlerMap, OperationError } fr
 import {
 	auditOk,
 	canManageAgent,
-	createdTarget,
 	credentialOwner,
 	grantableScopes,
 	isAdmin,
@@ -74,7 +70,6 @@ import {
 	addTeamMailboxMember,
 	createTeamMailbox,
 	getTeamMailbox,
-	isTeamMailboxId,
 	listTeamMailboxes,
 	removeTeamMailboxMember,
 	renameTeamMailbox,
@@ -187,38 +182,6 @@ function keyExpiry(input: { expires_in_days?: number | undefined; expires_at?: s
 /** True when the two lists have the same ids, in any order. */
 function sameIds(a: readonly string[], b: readonly string[]): boolean {
 	return a.length === b.length && a.every((id) => b.includes(id));
-}
-
-/** True when the two limits allow the same mailboxes, drives and rooms. Null: no limits. */
-function sameResources(a: AgentResources | null, b: AgentResources | null): boolean {
-	if (a === null || b === null) return a === b;
-	return sameIds(a.mailbox_ids, b.mailbox_ids) && sameIds(a.drive_ids, b.drive_ids) && sameIds(a.room_ids, b.room_ids);
-}
-
-/**
- * Checks the resource limits of an agent or a service account. A mailbox is the own mailbox of the agent (its
- * id) or a team mailbox that exists. A drive is the own drive of the agent or a shared drive. A room is a room
- * id. Any other id is refused, also the id of a different principal: a limited agent does not reach items
- * that a person shared directly with it.
- */
-async function assertAgentResources(call: CallContext, target: PrincipalRecord, resources: AgentResources) {
-	for (const id of resources.mailbox_ids) {
-		if (id === target.id) continue;
-		if (!isTeamMailboxId(id)) {
-			throw new OperationError("invalid", `${id} is not the own mailbox of the agent or a team mailbox.`);
-		}
-		if (!(await getTeamMailbox(call.env.DIRECTORY, id))) {
-			throw new OperationError("not_found", `No team mailbox has the id ${id}.`);
-		}
-	}
-	for (const id of resources.drive_ids) {
-		if (id !== target.id && !SharedDriveId.safeParse(id).success) {
-			throw new OperationError("invalid", `${id} is not the own drive of the agent or a shared drive.`);
-		}
-	}
-	for (const id of resources.room_ids) {
-		if (!RoomId.safeParse(id).success) throw new OperationError("invalid", `${id} is not a room id.`);
-	}
 }
 
 /** The text for the agents and service accounts that a person sponsors, for a refused archive or delete. */
@@ -335,7 +298,6 @@ export const identityHandlers: Pick<HandlerMap<CallContext>, IdentityOperation |
 			scopes: [...call.caller.scopes],
 			missing_scopes: missingScopes(call.caller),
 			credential: call.caller.credential,
-			resources: call.caller.restriction,
 			sign_in:
 				call.caller.kind === "human"
 					? { password_set: call.caller.principal.password_set, totp_enabled: call.caller.principal.totp_enabled }
@@ -408,8 +370,7 @@ export const identityHandlers: Pick<HandlerMap<CallContext>, IdentityOperation |
 			assertFullCredential(call.caller);
 		}
 		// Each key and each OAuth connection of the agent gives these scopes. So the credential of the call must
-		// hold each one, as for a new key. The contract makes an agent send scopes. The limits say where each of
-		// these scopes applies, so the same credential can create the agent without limits (`limits: "none"`).
+		// hold each one, as for a new key. The contract makes an agent send scopes.
 		const agentScopes =
 			input.kind === "agent" ? grantableScopes(call.caller, { kind: "agent", service: false }, input.scopes ?? []) : [];
 		// A person signs in with the password and creates keys in Settings. Only an agent gets a first key, which
@@ -427,7 +388,6 @@ export const identityHandlers: Pick<HandlerMap<CallContext>, IdentityOperation |
 				password_hash: input.kind === "human" && input.password ? await hashPassword(input.password) : null,
 				created_by: call.caller.principal.id,
 				agent_scopes: agentScopes,
-				no_limits: input.limits === "none",
 			},
 			firstKey,
 			// A sponsor archived or deleted during the request must not get a new agent.
@@ -439,7 +399,7 @@ export const identityHandlers: Pick<HandlerMap<CallContext>, IdentityOperation |
 				"A directory reset is in progress, or the sponsor changed during the request. Try again.",
 			);
 		}
-		auditOk(call, "directory.create_principal", createdTarget(created.principal));
+		auditOk(call, "directory.create_principal", created.principal.id);
 		return {
 			principal: toPrincipalOutput(created.principal),
 			api_key:
@@ -476,7 +436,6 @@ export const identityHandlers: Pick<HandlerMap<CallContext>, IdentityOperation |
 				description: input.description ?? null,
 				created_by: call.caller.principal.id,
 				agent_scopes: scopes,
-				no_limits: input.limits === "none",
 			},
 			null,
 			// A sponsor archived or deleted during the request must not get a new service account.
@@ -488,7 +447,7 @@ export const identityHandlers: Pick<HandlerMap<CallContext>, IdentityOperation |
 				"A directory reset is in progress, or the sponsor changed during the request. Try again.",
 			);
 		}
-		auditOk(call, "directory.create_service_account", createdTarget(created.principal));
+		auditOk(call, "directory.create_service_account", created.principal.id);
 		recordServiceChange(call, created.principal, "directory.create_service_account");
 		return { principal: toPrincipalOutput(created.principal) };
 	},
@@ -529,7 +488,6 @@ export const identityHandlers: Pick<HandlerMap<CallContext>, IdentityOperation |
 			drive_shared_items_truncated: false,
 			tokens: keys.map((key) => ({ key_id: key.id, label: key.label, expires_at: key.expires_at })),
 			scopes: target.agent_scopes,
-			resources: target.agent_resources,
 		};
 	},
 
@@ -537,34 +495,24 @@ export const identityHandlers: Pick<HandlerMap<CallContext>, IdentityOperation |
 		const target = await agentToManage(call, input.principal_id, "change the access");
 		// Each key and each OAuth connection of the agent gets the new scopes. So the credential of the call must
 		// hold each one.
-		const scopes = input.scopes === undefined ? undefined : grantableScopes(call.caller, target, input.scopes);
-		// The limits say where each scope of the agent applies. So a change of the limits also needs a credential
-		// that holds each scope of the agent: a narrow key with `directory.write` cannot remove the limits for a
-		// scope that it does not hold.
-		if (input.resources !== undefined) grantableScopes(call.caller, target, scopes ?? target.agent_scopes);
-		if (input.resources != null) await assertAgentResources(call, target, input.resources);
+		const scopes = grantableScopes(call.caller, target, input.scopes);
 		// A call that changes nothing writes nothing. So the live connections of the agent stay open, and the log
 		// gets no entry: a script can send the wanted access again and again.
-		const newScopes = scopes !== undefined && !sameIds(scopes, target.agent_scopes);
-		const newResources = input.resources !== undefined && !sameResources(input.resources, target.agent_resources);
-		if (!newScopes && !newResources) {
-			return { principal_id: target.id, scopes: target.agent_scopes, resources: target.agent_resources };
-		}
+		if (sameIds(scopes, target.agent_scopes)) return { principal_id: target.id, scopes: target.agent_scopes };
 		// A sponsor who is not an admin acts only while the agent still has that sponsor, in the write itself.
 		const updated = await setAgentAccess(
 			call.env.DIRECTORY,
 			target,
-			{ scopes: newScopes ? scopes : undefined, resources: newResources ? input.resources : undefined },
+			scopes,
 			isAdmin(call.caller) ? null : call.caller.principal.id,
 		);
 		if (!updated) throw new OperationError("conflict", DIRECTORY_CHANGED);
 		// Each live connection of the agent has the access of its open. The events sockets close at once, and a
 		// room socket or a feed closes at its next check (`access_version`). A client then opens them again.
 		await endEventSockets(call.env, target.id, { agentAccess: true });
-		const limits = updated.agent_resources === null ? "no limits" : "limits";
-		auditOk(call, "directory.set_agent_access", `${target.id}:${updated.agent_scopes.join(",")}:${limits}`);
+		auditOk(call, "directory.set_agent_access", `${target.id}:${updated.agent_scopes.join(",")}`);
 		recordServiceChange(call, target, "directory.set_agent_access");
-		return { principal_id: target.id, scopes: updated.agent_scopes, resources: updated.agent_resources };
+		return { principal_id: target.id, scopes: updated.agent_scopes };
 	},
 
 	async "directory.update_agent_policy"(call, input) {
@@ -700,7 +648,7 @@ export const identityHandlers: Pick<HandlerMap<CallContext>, IdentityOperation |
 		let widenings: MemberWidening[] = [];
 		let created: TeamMailboxRecord | null = null;
 		for (let attempt = 0; created === null && attempt < WIDENING_TRIES; attempt++) {
-			for (const member of firstMembers) assertAgentMembership(call, member, "mailbox", MAILBOX_MEMBER_SCOPES);
+			for (const member of firstMembers) assertAgentMembership(call, member, MAILBOX_MEMBER_SCOPES);
 			const members = firstMembers;
 			created = await createTeamMailbox(
 				DIRECTORY,
@@ -710,10 +658,8 @@ export const identityHandlers: Pick<HandlerMap<CallContext>, IdentityOperation |
 					member_ids: input.member_ids,
 					created_by: call.caller.principal.id,
 				},
-				(mailboxId) => {
-					widenings = members.flatMap(
-						(member) => agentWidening(member, "mailbox", mailboxId, MAILBOX_MEMBER_SCOPES) ?? [],
-					);
+				() => {
+					widenings = members.flatMap((member) => agentWidening(member, MAILBOX_MEMBER_SCOPES) ?? []);
 					return widenings;
 				},
 			);
@@ -766,8 +712,8 @@ export const identityHandlers: Pick<HandlerMap<CallContext>, IdentityOperation |
 		for (let attempt = 0; !written && attempt < WIDENING_TRIES; attempt++) {
 			const member = await getPrincipal(DIRECTORY, input.principal_id);
 			if (!member) throw new OperationError("not_found", "No principal has that id.");
-			assertAgentMembership(call, member, "mailbox", scopes, mailbox.id);
-			widening = agentWidening(member, "mailbox", mailbox.id, scopes);
+			assertAgentMembership(call, member, scopes);
+			widening = agentWidening(member, scopes);
 			written = await addTeamMailboxMember(
 				DIRECTORY,
 				mailbox.id,

@@ -1,8 +1,6 @@
 import {
-	allowsResource,
 	DRIVE_LIMITS,
 	driveDownloadPath,
-	listedIds,
 	type OperationName,
 	SHARED_DRIVE_ROLE_SCOPES,
 	type SharedDrive,
@@ -11,7 +9,6 @@ import {
 import { type AttachmentRecord, attachmentKey, documentStub } from "../collab/index.ts";
 import {
 	accessOutput,
-	afterLimitsDrop,
 	assertMemberGrants,
 	type CallContext,
 	getPrincipals,
@@ -99,10 +96,6 @@ async function hydrate(call: CallContext, refs: ItemRef[]): Promise<ItemRecord[]
 	// The drive of a deleted principal, and a deleted shared drive, stay in storage, but openSpace refuses
 	// them. Their items leave the lists too.
 	for (const spaceId of await unknownSpaceIds(call.env.DIRECTORY, [...bySpace.keys()])) bySpace.delete(spaceId);
-	// A service account with resource limits gets no item of a drive outside its list.
-	for (const spaceId of [...bySpace.keys()]) {
-		if (!allowsResource(call.caller.restriction, "drive", spaceId)) bySpace.delete(spaceId);
-	}
 	const found = new Map<string, ItemRecord>();
 	await Promise.all(
 		[...bySpace].map(async ([spaceId, itemIds]) => {
@@ -225,7 +218,7 @@ async function toSharedDrive(
 	);
 	const members = record.members
 		.filter((member) => !gone.has(member.principal_id))
-		.map(({ added_version: _, ...member }) => ({ ...member, created_at: new Date(member.created_at).toISOString() }));
+		.map((member) => ({ ...member, created_at: new Date(member.created_at).toISOString() }));
 	return {
 		shared_drive: {
 			id: record.id,
@@ -269,37 +262,20 @@ async function memberInputs(
 	const bad = memberRefusal(inputs, driveId === undefined);
 	if (bad) accept(bad);
 	const roles = new Map(members.map((member) => [member.principal_id, member.role]));
-	assertMemberGrants(
-		call,
-		"drive",
-		driveId,
-		principals,
-		(principal) => SHARED_DRIVE_ROLE_SCOPES[roles.get(principal.id) ?? "viewer"],
-	);
+	assertMemberGrants(call, principals, (principal) => SHARED_DRIVE_ROLE_SCOPES[roles.get(principal.id) ?? "viewer"]);
 	return inputs;
 }
 
 /**
  * A shared drive for the output of a call that gave `members` their roles in this call. Each agent of them
- * that the caller manages gets the access of its membership: the drive scopes of its role, and the drive in
- * its limits (`giveMemberAccess`).
+ * that the caller manages gets the drive scopes of its role that it does not hold (`giveMemberAccess`).
  */
-async function withAgentAccess(
-	call: CallContext,
-	opened: Pick<OpenSpace, "space" | "ctx">,
-	record: SharedDriveRecord,
-	members: MemberRole[],
-) {
-	const current = new Map(record.members.map((member) => [member.principal_id, member]));
+async function withAgentAccess(call: CallContext, record: SharedDriveRecord, members: MemberRole[]) {
 	const memberships = members.map((member) => ({
 		principal_id: member.principal_id,
 		scopes: SHARED_DRIVE_ROLE_SCOPES[member.role],
 	}));
-	// The access is for the membership of this result. A different person can remove the member and add it
-	// again before the write of the access. The drive then takes the access back: see `releaseLimits`.
-	const access = await giveMemberAccess(call, "drive", record.id, memberships, (agent) =>
-		opened.space.releaseLimits(opened.ctx, agent.id, current.get(agent.id)?.added_version ?? null),
-	);
+	const access = await giveMemberAccess(call, memberships);
 	return { ...(await toSharedDrive(call, record)), ...accessOutput(access) };
 }
 
@@ -339,16 +315,7 @@ export const driveHandlers: Pick<HandlerMap<CallContext>, DriveOperation> = {
 		}
 		if (input.view === "starred" || input.view === "shared") {
 			const own = await ownSpace(call);
-			// A service account with resource limits gets the pointers into its listed drives only, so the cursor never names
-			// a different drive. `hydrate` checks each drive again.
-			const page = accept(
-				await own.space.listRefs(own.ctx, {
-					list: input.view,
-					cursor,
-					limit,
-					spaceIds: listedIds(call.caller.restriction, "drive"),
-				}),
-			);
+			const page = accept(await own.space.listRefs(own.ctx, { list: input.view, cursor, limit }));
 			const records = (await hydrate(call, page.items)).filter((record) => kind === null || record.kind === kind);
 			return { items: await toItems(call, records), next_cursor: page.nextCursor };
 		}
@@ -757,7 +724,7 @@ export const driveHandlers: Pick<HandlerMap<CallContext>, DriveOperation> = {
 		// A retry changes no agent. The members can be different now: a person who does not manage an agent
 		// can be the one who made it a member again. `drive.add_shared_drive_members` completes an access.
 		if (created.duplicate) return { ...(await toSharedDrive(call, created.drive)), ...NO_ACCESS_CHANGE };
-		return withAgentAccess(call, opened, created.drive, input.members);
+		return withAgentAccess(call, created.drive, input.members);
 	},
 
 	async "drive.list_shared_drives"(call, input) {
@@ -766,13 +733,10 @@ export const driveHandlers: Pick<HandlerMap<CallContext>, DriveOperation> = {
 			throw new OperationError("forbidden", "Only owners and admins of the organization can list each shared drive.");
 		}
 		const limit = input.limit ?? DEFAULT_PAGE;
-		// A service account with resource limits sees only its listed drives. The query keeps only those, so the cursor
-		// never names a different drive.
 		const rows = await listSharedDriveRows(call.env.DIRECTORY, call.caller.id, {
 			all,
 			after: input.cursor === undefined ? null : decodeDriveCursor(input.cursor),
 			limit: limit + 1,
-			ids: listedIds(call.caller.restriction, "drive"),
 		});
 		const page = rows.slice(0, limit);
 		const last = page[page.length - 1];
@@ -818,7 +782,7 @@ export const driveHandlers: Pick<HandlerMap<CallContext>, DriveOperation> = {
 		);
 		// Each named agent that the caller manages gets the access of its membership, also a member from
 		// before. So a second call completes a write that failed.
-		return withAgentAccess(call, opened, result.drive, input.members);
+		return withAgentAccess(call, result.drive, input.members);
 	},
 
 	async "drive.remove_shared_drive_member"(call, input) {
@@ -827,11 +791,9 @@ export const driveHandlers: Pick<HandlerMap<CallContext>, DriveOperation> = {
 		if (result.removed) {
 			auditOk(call, opened, "drive.remove_shared_drive_member", input.principal_id);
 			recordServiceMemberships(call, [input.principal_id], "drive.remove_shared_drive_member", input.drive_id);
-			// The drive took itself out of the limits of an agent, in one step with the remove.
-			if (result.limitsDropped) await afterLimitsDrop(call, input.principal_id);
 			await loseDriveAccess(call.env.DIRECTORY, input.drive_id, input.principal_id);
 		}
-		return { removed: result.removed };
+		return result;
 	},
 
 	async "drive.delete_shared_drive"(call, input) {

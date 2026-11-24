@@ -59,7 +59,7 @@ export async function serviceMembersOfDrive(db: D1Database, driveId: string): Pr
 export async function listSharedDriveRows(
 	db: D1Database,
 	principalId: string,
-	input: { all: boolean; after: [string, string] | null; limit: number; ids?: readonly string[] | null },
+	input: { all: boolean; after: [string, string] | null; limit: number },
 ): Promise<SharedDriveRow[]> {
 	const { results } = await db
 		.prepare(
@@ -71,17 +71,9 @@ export async function listSharedDriveRows(
 			WHERE d.deleted_at IS NULL
 				AND (?2 = 1 OR m.role IS NOT NULL)
 				AND (?3 IS NULL OR d.name_key > ?3 OR (d.name_key = ?3 AND d.id > ?4))
-				AND (?6 IS NULL OR d.id IN (SELECT value FROM json_each(?6)))
 			ORDER BY d.name_key, d.id LIMIT ?5`,
 		)
-		.bind(
-			principalId,
-			input.all ? 1 : 0,
-			input.after?.[0] ?? null,
-			input.after?.[1] ?? null,
-			input.limit,
-			input.ids == null ? null : JSON.stringify(input.ids),
-		)
+		.bind(principalId, input.all ? 1 : 0, input.after?.[0] ?? null, input.after?.[1] ?? null, input.limit)
 		.all<SharedDriveRow>();
 	return results;
 }

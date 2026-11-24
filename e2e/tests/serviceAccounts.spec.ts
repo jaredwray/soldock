@@ -82,21 +82,12 @@ test("an admin creates a service account with scopes and a 7-day token, sees its
 		const old = await context.request.get("/api/v1/account", { headers: { authorization: `Bearer ${secret}` } });
 		expect(old.status()).toBe(401);
 
-		// A change of the permissions applies to the token at once, without a new secret. A new account is
-		// limited to its own mailbox and its own drive. They have the same id, so the removal of the own drive
-		// from the limits must not remove the own mailbox.
+		// A change of the permissions applies to the token at once, without a new secret.
 		await card.getByRole("checkbox", { name: /^chat\.read/ }).check();
-		await expect(card.getByLabel("Limit this account to specific mailboxes, drives and rooms")).toBeChecked();
-		await card.getByLabel("Own drive").uncheck();
-		await expect(card.getByLabel(/^Own mailbox/)).toBeChecked();
 		await card.getByRole("button", { name: "Save permissions" }).click();
-		// The exact text: before the save, the limits also name the own drive.
-		await expect(card.getByText(`Only: Own mailbox (${local}@example.com)`, { exact: true })).toBeVisible();
+		await expect(page.getByText(`Permissions of ${name} saved.`)).toBeVisible();
 		const changed = await context.request.get("/api/v1/account", { headers: { authorization: `Bearer ${rotated}` } });
-		expect(await changed.json()).toMatchObject({
-			scopes: ["account.read", "mail.read", "chat.read"],
-			resources: { mailbox_ids: [accountId], drive_ids: [], room_ids: [] },
-		});
+		expect(await changed.json()).toMatchObject({ scopes: ["account.read", "mail.read", "chat.read"] });
 
 		await card.getByRole("button", { name: "Revoke token GitHub Actions" }).click();
 		await page.getByRole("dialog").getByRole("button", { name: "Revoke token" }).click();

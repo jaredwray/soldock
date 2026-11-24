@@ -37,7 +37,7 @@ import {
 } from "../platform/index.ts";
 import { bodyMarkdown, type MessageContent, messageContent, textBody } from "./body.ts";
 import { createCustomEmoji, deleteCustomEmoji, listCustomEmoji } from "./custom-emoji.ts";
-import { dmRoomId, releaseOf } from "./handlers.ts";
+import { dmRoomId } from "./handlers.ts";
 import {
 	createIncomingWebhook,
 	deleteIncomingWebhook,
@@ -722,25 +722,25 @@ export const chatLayer8Handlers: Pick<HandlerMap<CallContext>, Layer8ChatOperati
 		if (peers.length === 1) {
 			const peer = peers[0] as ActorRecord;
 			const dmId = await dmRoomId(call.caller.id, peer.principal_id);
-			assertMemberGrants(call, "room", dmId, principals, scopesOf);
+			assertMemberGrants(call, principals, scopesOf);
 			const opened = openRoom(call, dmId);
 			const res = accept(await opened.room.openDm(opened.ctx, peer));
 			if (res.created) {
 				auditOk(call, "chat.open_dm", res.room.id);
 				recordServiceMemberships(call, [peer.principal_id], "chat.open_dm", res.room.id);
 			}
-			const access = await giveMemberAccess(call, "room", dmId, memberships, releaseOf(opened.room));
+			const access = await giveMemberAccess(call, memberships);
 			return { room: toRoom(res.room), agent_access_changes: access.changes, agent_access_pending: access.pending };
 		}
 		const roomId = await groupDmRoomId([call.caller.id, ...uniqueOthers]);
-		assertMemberGrants(call, "room", roomId, principals, scopesOf);
+		assertMemberGrants(call, principals, scopesOf);
 		const opened = openRoom(call, roomId);
 		const res = accept(await opened.room.openGroupDm(opened.ctx, peers));
 		if (res.created) {
 			auditOk(call, "chat.open_group_dm", res.room.id);
 			recordServiceMemberships(call, uniqueOthers, "chat.open_group_dm", res.room.id);
 		}
-		const access = await giveMemberAccess(call, "room", roomId, memberships, releaseOf(opened.room));
+		const access = await giveMemberAccess(call, memberships);
 		return { room: toRoom(res.room), agent_access_changes: access.changes, agent_access_pending: access.pending };
 	},
 

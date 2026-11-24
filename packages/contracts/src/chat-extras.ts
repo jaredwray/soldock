@@ -1,3 +1,4 @@
+import { AgentAccessChange } from "./agent-access.ts";
 import {
 	CHAT_LIMITS,
 	ChatBody,
@@ -17,7 +18,6 @@ import {
 import { prefixedId, Timestamp } from "./common.ts";
 import { Actor } from "./drive.ts";
 import { defineOperation } from "./operation.ts";
-import { AgentAccessChange } from "./restrictions.ts";
 import { z } from "./zod.ts";
 
 const READ = { readOnly: true, destructive: false, idempotent: true, openWorld: false } as const;

@@ -1,6 +1,6 @@
+import { AgentAccessChange } from "./agent-access.ts";
 import { prefixedId, RoomId, Timestamp } from "./common.ts";
 import { defineOperation } from "./operation.ts";
-import { AgentAccessChange } from "./restrictions.ts";
 import type { Scope } from "./scopes.ts";
 import { DRIVE_WEBHOOK_EVENTS, DriveWebhookSubscription } from "./webhooks.ts";
 import { z } from "./zod.ts";
@@ -912,11 +912,10 @@ const SHARED_ROLES =
 const AGENT_MEMBER = [
 	"The call also changes each agent and each service account that it makes a member and that you manage.",
 	"You manage an agent when you are its sponsor, an owner or an admin, and your credential holds directory.write.",
-	"The agent gets the drive scopes of its role that it does not hold: drive.read for a viewer, and also drive.write for an editor. The drive goes into its resource limits when it has limits.",
-	"Your credential must hold each scope that the agent gets. When the drive goes into the limits, it must hold each scope of the role.",
+	"The agent gets the drive scopes of its role that it does not hold: drive.read for a viewer, and also drive.write for an editor. Your credential must hold each scope that the agent gets.",
 	"agent_access_changes has these changes. agent_access_pending names each agent that did not get them.",
 	"For such an agent, call drive.add_shared_drive_members with the same role again.",
-	"A membership gives no new access to an agent that you do not manage. Its sponsor, an owner or an admin gives it.",
+	"A membership gives no new scope to an agent that you do not manage. Such an agent uses the drive with the scopes that it holds. Its sponsor, an owner or an admin gives it more.",
 ].join(" ");
 
 /** The fields of a result that tell what the call changed on the agents that the caller manages. */
@@ -924,8 +923,8 @@ const AGENT_ACCESS = {
 	agent_access_changes: z.array(AgentAccessChange).default([]),
 	/**
 	 * The agents that you manage, that are members of the drive, and that did not get the access of their
-	 * membership. Their limits have no place for the drive, or a different call changed their access at the
-	 * same time. A later call for the member completes it.
+	 * membership: a different call changed their access at the same time. A later call for the member
+	 * completes it.
 	 */
 	agent_access_pending: z.array(PrincipalId).default([]),
 };
@@ -1037,7 +1036,7 @@ export const removeSharedDriveMember = defineOperation({
 	name: "drive.remove_shared_drive_member",
 	summary: "Remove a member from a shared drive",
 	description:
-		"The access of the member to the drive ends at once. The drive also goes out of the resource limits of an agent or a service account. A grant that a manager gave that principal for one item stays: remove it with drive.unshare_item. An agent with limits cannot use such a grant while the drive is not in its limits. The managers of the drive, and the owners and admins of the organization, can call this. You can also remove yourself. The last manager cannot be removed: add a different manager first.",
+		"The access of the member to the drive ends at once. A grant that a manager gave that principal for one item stays: remove it with drive.unshare_item. The managers of the drive, and the owners and admins of the organization, can call this. You can also remove yourself. The last manager cannot be removed: add a different manager first.",
 	http: { method: "DELETE", path: "/api/v1/drive/shared-drives/{drive_id}/members/{principal_id}" },
 	scopes: ["drive.share"],
 	callers: ["human"],
