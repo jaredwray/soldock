@@ -1,4 +1,5 @@
 import {
+	AGENT_RESOURCE_LIMITS,
 	AGENT_SCOPES,
 	AgentResources,
 	ALL_SCOPES,
@@ -920,6 +921,25 @@ export async function dropRoomFromLimits(
 		.bind(principalId, roomId)
 		.run();
 	return result.meta.changes === 1 ? getPrincipal(db, principalId) : null;
+}
+
+/**
+ * Puts a room back into the limits of an agent, in one statement. `dropRoomFromLimits` took it out, and the
+ * agent is a member of the room again. The list keeps its most ids. Returns false when the limits name the
+ * room, have no place, or are gone.
+ */
+export async function restoreRoomToLimits(db: D1Database, principalId: string, roomId: string): Promise<boolean> {
+	const result = await db
+		.prepare(
+			`UPDATE principals SET access_version = access_version + 1,
+				agent_resources = json_insert(agent_resources, '$.room_ids[#]', ?2)
+			WHERE id = ?1 AND kind = 'agent' AND deleted_at IS NULL AND json_valid(agent_resources)
+			AND json_array_length(agent_resources, '$.room_ids') < ?3
+			AND NOT EXISTS (SELECT 1 FROM json_each(agent_resources, '$.room_ids') room WHERE room.value = ?2)`,
+		)
+		.bind(principalId, roomId, AGENT_RESOURCE_LIMITS.perKind)
+		.run();
+	return result.meta.changes === 1;
 }
 
 /** The changes of `updatePrincipal`. A field that is undefined does not change. */

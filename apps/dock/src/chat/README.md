@@ -197,7 +197,8 @@ and the room in its limits when it has limits ([`identity`](../identity/README.m
   each try. A later call for the member completes the access.
 - **A removed agent.** `chat.remove_member` takes the room out of the limits of an agent
   (`dropRoomAccess`). So a later add by a member that does not manage the agent gives no access. The
-  scopes of the agent do not change. Known limit: a room that an owner or an admin deletes stays in the
+  scopes of the agent do not change. A different call can add the agent again before this write. So after
+  the write, the handler asks the room again (`hasMember`), and puts the room back for a member. Known limit: a room that an owner or an admin deletes stays in the
   limits, and gives nothing.
 
 ## Messages

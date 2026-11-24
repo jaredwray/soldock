@@ -1576,6 +1576,14 @@ export class ChatRoomDO extends DurableObject<Env> {
 		});
 	}
 
+	/**
+	 * True when the principal is a member of the room now. The handler of `chat.remove_member` asks this after
+	 * a remove, before the limits of an agent lose the room for good: a different call can add the agent again.
+	 */
+	hasMember(principalId: string): boolean {
+		return this.room() !== null && this.member(principalId) !== null;
+	}
+
 	/** The members of the room among these principals, for a caller that is a member. */
 	membersOf(call: RoomCall, principalIds: readonly string[]): { members: MemberRecord[] } | Refusal {
 		const opened = this.openAsMember(call);

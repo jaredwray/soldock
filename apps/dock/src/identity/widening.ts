@@ -14,6 +14,7 @@ import {
 	dropRoomFromLimits,
 	getPrincipals,
 	type PrincipalRecord,
+	restoreRoomToLimits,
 	widenAgentAccess,
 } from "./store.ts";
 
@@ -231,15 +232,23 @@ export async function giveRoomAccess(
  * this, the room stays in the limits, and a later add by a member that does not manage the agent gives the
  * agent access again. The change only removes reach, so each caller that removed the member makes it. The
  * scopes of the agent do not change.
+ *
+ * The room object and the directory are two stores, so a different call can make the agent a member again
+ * between the remove and this write. That add found the room in the limits, and wrote nothing. So after the
+ * write, `isMember` asks the room again. For a member, the room goes back into the limits: the access is
+ * then the access from before the remove, which the new membership has.
  */
 export async function dropRoomAccess(
 	call: CallContext,
 	roomId: string,
 	principalIds: readonly string[],
+	isMember: (principalId: string) => Promise<boolean>,
 ): Promise<void> {
+	const { DIRECTORY } = call.env;
 	for (const principalId of principalIds) {
-		const agent = await dropRoomFromLimits(call.env.DIRECTORY, principalId, roomId);
+		const agent = await dropRoomFromLimits(DIRECTORY, principalId, roomId);
 		if (!agent) continue;
+		if ((await isMember(principalId)) && (await restoreRoomToLimits(DIRECTORY, principalId, roomId))) continue;
 		auditOk(call, "directory.set_agent_access", `${agent.id}:${agent.agent_scopes.join(",")}:limits`);
 		await endEventSockets(call.env, agent.id, { agentAccess: true });
 	}

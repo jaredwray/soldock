@@ -675,7 +675,7 @@ export const chatHandlers: Pick<HandlerMap<CallContext>, ChatOperation> = {
 		}
 		// The limits of an agent must not name a room that it is not a member of: a later add by a member
 		// that does not manage the agent would then give it access. A second call completes a write that failed.
-		await dropRoomAccess(call, input.room_id, [input.principal_id]);
+		await dropRoomAccess(call, input.room_id, [input.principal_id], (id) => opened.room.hasMember(id));
 		return result;
 	},
 
