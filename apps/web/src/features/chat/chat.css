@@ -905,67 +905,6 @@ a.chat-author:hover {
 	font-size: 12px;
 }
 
-/* The profile of a person or an agent, in the place of a room. */
-.chat-profile {
-	display: flex;
-	flex-direction: column;
-	align-items: center;
-	gap: 6px;
-	flex: 1;
-	min-height: 0;
-	padding: 40px 22px;
-	overflow-y: auto;
-	text-align: center;
-}
-
-.chat-profile-avatar {
-	display: grid;
-	place-items: center;
-	width: 72px;
-	height: 72px;
-	margin-bottom: 8px;
-	border: 1px solid var(--border);
-	border-radius: 12px;
-	background: var(--hover);
-	font-size: 24px;
-	font-weight: 600;
-	user-select: none;
-}
-
-.chat-profile-name {
-	display: flex;
-	flex-wrap: wrap;
-	align-items: center;
-	justify-content: center;
-	gap: 8px;
-	max-width: 100%;
-	overflow-wrap: anywhere;
-	font-size: 22px;
-	font-weight: 650;
-	letter-spacing: -0.025em;
-}
-
-.chat-profile-handle,
-.chat-profile-note {
-	color: var(--muted-foreground);
-	overflow-wrap: anywhere;
-}
-
-.chat-profile .chat-start {
-	margin-top: 10px;
-}
-
-.chat-profile-details {
-	width: 100%;
-	max-width: 480px;
-	margin-top: 20px;
-	text-align: left;
-}
-
-.chat-profile-details dd {
-	overflow-wrap: anywhere;
-}
-
 .chat-composer-bar {
 	display: flex;
 	align-items: center;
@@ -2337,36 +2276,6 @@ a.chat-author:hover {
 	margin: 0;
 	color: var(--muted-foreground);
 	font-size: 0.8rem;
-}
-
-.chat-profile-status,
-.chat-presence {
-	display: inline-flex;
-	align-items: center;
-	gap: 0.4em;
-}
-
-.chat-presence {
-	min-width: 0.6rem;
-	min-height: 0.6rem;
-	color: var(--muted-foreground);
-	font-size: 0.85rem;
-}
-
-.chat-presence-dot {
-	width: 0.55rem;
-	height: 0.55rem;
-	flex-shrink: 0;
-	border-radius: 50%;
-	background: var(--muted-foreground);
-}
-
-.chat-presence-active {
-	background: var(--positive);
-}
-
-.chat-presence-away {
-	background: var(--warning);
 }
 
 .dialog.room-settings {

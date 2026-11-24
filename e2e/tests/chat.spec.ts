@@ -1310,10 +1310,13 @@ test("a mention links to a profile, and the @ list puts the members first, witho
 	const chidiId = (await newest(nadia, roomId))[0]?.mentions[0] as string;
 	expect(lookups.some((lookup) => lookup.ids.includes(chidiId))).toBe(true);
 	await mention.click();
-	await expect(page).toHaveURL(new RegExp(`/chat/people/${chidiId}$`));
+	// The profile is a page of the workspace: it has the rail, and not the navigation of Chat.
+	await expect(page).toHaveURL(new RegExp(`/people/${chidiId}$`));
 	await expect(page.getByRole("heading", { name: /Chidi/ })).toBeVisible();
-	await expect(page.locator(".chat-profile-handle")).toHaveText("@chidi");
+	await expect(page.locator(".profile-handle")).toHaveText("@chidi");
 	await expect(page.getByRole("button", { name: "Send a direct message" })).toBeVisible();
+	await expect(page.getByRole("navigation", { name: "Products" })).toBeVisible();
+	await expect(page.getByRole("navigation", { name: "Rooms" })).toHaveCount(0);
 
 	// "@" alone shows the members of the room first, then people who are not members, from one page of the list.
 	await page.goBack();
@@ -1370,7 +1373,7 @@ test("the profile of an agent shows when the read of its sponsor fails", async (
 		(url) => url.pathname === "/api/v1/directory/lookup" && url.searchParams.get("ids") === agent.sponsor_id,
 		(route) => route.abort(),
 	);
-	await page.goto(`/chat/people/${agent.id}`);
+	await page.goto(`/people/${agent.id}`);
 	await expect(page.getByRole("heading", { name: agent.display_name })).toBeVisible();
 	await expect(page.getByText("The sponsor did not load.")).toBeVisible();
 });

@@ -3615,6 +3615,33 @@ fieldset {
 	gap: 16px;
 }
 
+/* The presence and the custom status of a person (Chat and the profile page). A dot shows the availability. */
+.chat-presence {
+	display: inline-flex;
+	align-items: center;
+	gap: 0.4em;
+	min-width: 0.6rem;
+	min-height: 0.6rem;
+	color: var(--muted-foreground);
+	font-size: 0.85rem;
+}
+
+.chat-presence-dot {
+	width: 0.55rem;
+	height: 0.55rem;
+	flex-shrink: 0;
+	border-radius: 50%;
+	background: var(--muted-foreground);
+}
+
+.chat-presence-active {
+	background: var(--positive);
+}
+
+.chat-presence-away {
+	background: var(--warning);
+}
+
 .kind {
 	display: inline-block;
 	padding: 2px 8px;

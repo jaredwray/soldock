@@ -1,8 +1,7 @@
 import type { IconName } from "../../lib/icons.tsx";
 import { ADMIN_SECTIONS, type AdminSection, adminPath } from "../../routes.ts";
-import { ADMIN_NAV_ID, domainOf } from "../../shell/nav.ts";
+import { ADMIN_NAV_ID } from "../../shell/nav.ts";
 import { SectionSidebar } from "../../shell/SectionSidebar.tsx";
-import { useSession } from "../auth/session.tsx";
 
 /** The title and the icon of each section. Only owners and admins see a section with `adminOnly`. */
 const SECTIONS: Record<AdminSection, { title: string; icon: IconName; adminOnly: boolean }> = {
@@ -42,7 +41,6 @@ interface AdminSidebarProps {
 
 /** The sidebar of the admin page. At 900px and below it is part of the drawer that the menu button opens. */
 export function AdminSidebar({ active, elevated, open, onClose }: AdminSidebarProps) {
-	const { whoami } = useSession();
 	const links = ADMIN_SECTIONS.filter((section) => elevated || !SECTIONS[section].adminOnly).map((section) => ({
 		path: adminPath(section),
 		title: sectionTitle(section, elevated),
@@ -54,7 +52,6 @@ export function AdminSidebar({ active, elevated, open, onClose }: AdminSidebarPr
 			id={ADMIN_NAV_ID}
 			label="Admin sections"
 			title="Admin"
-			subtitle={domainOf(whoami.principal.address)}
 			links={links}
 			open={open}
 			onClose={onClose}

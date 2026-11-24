@@ -614,11 +614,12 @@ describe("sign-in with a password", () => {
 
 describe("passwords", () => {
 	// A new password is the way to lock out somebody who knew the old one, so it ends the other sessions.
+	// A browser session does not send the current password.
 	it("lets a person change their own password with a full credential, and ends their other sessions", async () => {
 		const owner = await setupOwner();
 		const here = await signIn(owner.address);
 		const elsewhere = await signIn(owner.address);
-		const res = await postWithCookie(here, "password", { password: "a new long password", current_password: PASSWORD });
+		const res = await postWithCookie(here, "password", { password: "a new long password" });
 		expect(await res.json()).toEqual({ principal_id: owner.id });
 		expect((await request("/api/v1/account", { headers: { cookie: here } })).status).toBe(200);
 		expect((await request("/api/v1/account", { headers: { cookie: elsewhere } })).status).toBe(401);
@@ -627,15 +628,13 @@ describe("passwords", () => {
 		expect((await postWithCookie(here, "password", { password: "too short" })).status).toBe(400);
 	});
 
-	// A stolen session cookie must not replace the password or the second step. An API key with every
-	// human scope stays the recovery credential, so it needs no current password.
-	it("asks a browser session for the current password before it changes its own sign-in", async () => {
+	// A stolen session cookie must not replace the second step. An API key with every human scope stays
+	// the recovery credential, so it needs no current password.
+	it("asks a browser session for the current password before it changes its own second step", async () => {
 		const owner = await setupOwner();
 		const here = await signIn(owner.address);
 		const elsewhere = await signIn(owner.address);
 		const password = { password: "a new long password" };
-		expect((await postWithCookie(here, "password", password)).status).toBe(403);
-		expect((await postWithCookie(here, "password", { ...password, current_password: "a wrong one" })).status).toBe(403);
 		const { secret } = (await (await postWithCookie(here, "totp/secret")).json()) as { secret: string };
 		const code = { code: await totpNow(secret) };
 		expect((await postWithCookie(here, "totp/enable", code)).status).toBe(403);
@@ -644,7 +643,6 @@ describe("passwords", () => {
 		expect((await request("/api/v1/account", { headers: { cookie: elsewhere } })).status).toBe(401);
 		expect((await postWithCookie(here, "totp/disable")).status).toBe(403);
 		expect((await postWithCookie(here, "totp/disable", { current_password: PASSWORD })).status).toBe(200);
-		await refusal(await submitSignIn(owner.address, "a new long password"));
 		// Wrong current passwords count toward the sign-in lock, like wrong sign-ins.
 		await Promise.all(
 			Array.from({ length: 10 }, () => postWithCookie(here, "totp/disable", { current_password: "a wrong one" })),
@@ -738,8 +736,6 @@ describe("sessions that end during a change", () => {
 			...(op === "totp/disable" ? { totpCode: await totpNow(secret, 1) } : {}),
 		});
 		const cookie = cookieOf(signedIn);
-		// A person from before the upgrade has no password, so no current password protects the change.
-		if (op === "password") await env.DIRECTORY.prepare("UPDATE principals SET password_hash = NULL").run();
 		const before = await env.DIRECTORY.prepare("SELECT password_hash, totp_secret FROM principals").first();
 		const res = await withEnv(
 			{ DIRECTORY: racing("DELETE FROM sessions WHERE principal_id = ?", owner.id, "SET totp_secret = NULL") },

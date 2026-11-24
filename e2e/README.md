@@ -1,6 +1,6 @@
 # End-to-end tests
 
-> Status: **started**. The harness runs on each pull request. The Chat flows of layer 2, the files of a chat message, the search of Chat, the webhook check boxes, the reload after a deploy, the images of a doc, the download of a doc, a paste of Markdown into a doc, the service accounts of Admin, a new person or agent in Admin, the member scopes of a shared mailbox and of a room, the member requests of agents, Admin › AI and inbox auto labels have tests.
+> Status: **started**. The harness runs on each pull request. The Chat flows of layer 2, the files of a chat message, the search of Chat, the webhook check boxes, the reload after a deploy, the images of a doc, the download of a doc, a paste of Markdown into a doc, the service accounts of Admin, a new person or agent in Admin, the member scopes of a shared mailbox and of a room, the member requests of agents, Admin › AI, inbox auto labels and the tooltip of the Asterra mark have tests.
 > The run after a deploy, and the other flows below, are not built yet.
 
 Playwright tests run in two places, both in GitHub Actions:
@@ -56,6 +56,7 @@ pnpm e2e
 | [`tests/aiAdmin.spec.ts`](tests/aiAdmin.spec.ts) | An admin connects the AI Gateway in **Admin › AI**, allows a model, turns on AI and inbox auto labels, and sets the budget. The values stay after a reload. Without the token, the page says that AI makes no calls. A member has no AI section |
 | [`tests/autoLabels.spec.ts`](tests/autoLabels.spec.ts) | A person turns on auto labels for their mailbox. A calendar invitation gets **Meeting** from the rules, with the auto mark in the list and in the thread. The person removes the label from the thread, and a toast says that auto labels learn from it |
 | [`tests/newVersion.spec.ts`](tests/newVersion.spec.ts) | A page chunk that a deploy removed: the page reloads one time and shows Drive of the new version. A person who goes back to Mail before the version check ends stays on Mail, and the reload waits until Drive shows again. A page chunk that does not load in the current version: the page asks for a reload, and does not reload by itself |
+| [`tests/shell.spec.ts`](tests/shell.spec.ts) | The mark of Asterra in the rail has the tooltip `Asterra - <version>`, with the version of the root `package.json` |
 
 The first flows to cover, because they are tested by hand only:
 
