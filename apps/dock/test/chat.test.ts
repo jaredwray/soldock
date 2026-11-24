@@ -1,8 +1,9 @@
-import { runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
+import { evictDurableObject, runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
-import { CHAT_LIMITS, type InputOf, mentionDirectory } from "@asterra/contracts";
+import { CHAT_LIMITS, type InputOf, mentionDirectory, type OperationName, type OutputOf } from "@asterra/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { messageContent } from "../src/chat/body.ts";
+import { dmRoomId } from "../src/chat/handlers.ts";
 import { MEMBER_DELAY_MS } from "../src/chat/room.ts";
 import { type ChatRoomState, listPrincipals, mentionCandidates } from "../src/identity/index.ts";
 import {
@@ -1223,6 +1224,523 @@ describe("an agent in a room", () => {
 			agent_access_pending: [],
 		});
 		expect((await agent.call("chat.post_message", hello)).message.text).toBe("Hello.");
+	});
+});
+
+describe("a request of an agent to add an agent", () => {
+	afterEach(() => {
+		vi.useRealTimers();
+	});
+
+	/** The scopes of a request that names no scopes. */
+	const USUAL = ["chat.read", "chat.write"] as const;
+	const CHAT_AGENT = ["account.read", "chat.read", "chat.write"] as const;
+	const UNKNOWN_PRINCIPAL = "prn_01JD0000000000000000000000";
+	const UNKNOWN_REQUEST = "mrq_01JD0000000000000000000000";
+
+	/** A new agent that Ada sponsors. Without `scopes`, it holds no chat scope. */
+	const newAgent = (name: string, scopes: InputOf<"directory.create_principal">["scopes"] = ["account.read"]) =>
+		createActor(owner, {
+			kind: "agent",
+			display_name: name,
+			address: `${name.toLowerCase()}@dock.test`,
+			sponsor_id: ada.id,
+			scopes,
+		});
+
+	const newPerson = (name: string, role: "member" | "admin" = "member") =>
+		createActor(owner, {
+			kind: "human",
+			display_name: name,
+			address: `${name.toLowerCase()}@dock.test`,
+			password: PASSWORD,
+			org_role: role,
+		});
+
+	/** A new service account with the chat scopes and a token. Without `sponsor`, the owner is its sponsor. */
+	async function newService(name: string, sponsor: Actor = owner): Promise<Actor> {
+		const { principal } = await owner.call("directory.create_service_account", {
+			display_name: name,
+			address: `${name.toLowerCase()}@dock.test`,
+			sponsor_id: sponsor.id,
+			scopes: [...CHAT_AGENT],
+		});
+		const { api_key } = await owner.call("account.create_api_key", { principal_id: principal.id, label: name });
+		return {
+			id: principal.id,
+			address: `${name.toLowerCase()}@dock.test`,
+			key: api_key.secret,
+			call: api(api_key.secret),
+		};
+	}
+
+	const ask = async (by: Actor, room_id: string, account: Actor) =>
+		(await by.call("chat.request_member", { room_id, principal_id: account.id })).request;
+
+	const requestsOf = async (actor: Actor, principal_id?: string) =>
+		(await actor.call("chat.list_member_requests", principal_id ? { principal_id } : {})).requests;
+
+	/** The requests in the activity list of a person. */
+	const requestItems = async (actor: Actor) =>
+		(await actor.call("chat.list_activity", { filter: "member_request" })).items;
+
+	/** The members of a room, from the room. Two members that joined at the same time have no fixed order. */
+	const membersOf = async (actor: Actor, room_id: string) =>
+		new Set((await actor.call("chat.get_room", { room_id })).members.map((member) => member.principal_id));
+	const these = (...actors: Actor[]) => new Set(actors.map((actor) => actor.id));
+
+	const scopesOf = async (id: string) => (await owner.call("directory.get_agent_access", { principal_id: id })).scopes;
+
+	// An agent in a room reads what the room has. So a person decides where an agent is a member, and an
+	// agent cannot put a different agent into a room.
+	it("refuses an agent or a service account that makes a different one a member, in each of the four operations, and changes nothing", async () => {
+		const helper = await newAgent("Helper", [...CHAT_AGENT]);
+		const service = await newService("CI");
+		const cy = await newPerson("Cy");
+		const roomCount = async () =>
+			(await env.DIRECTORY.prepare("SELECT COUNT(*) AS n FROM chat_rooms").first<{ n: number }>())?.n;
+		const roomIds = async (actor: Actor) => (await joined(actor)).map((room) => room.id).sort();
+		for (const [caller, other] of [
+			[bot, helper],
+			[bot, service],
+			[service, bot],
+		] as const) {
+			// The caller makes a room with a person. It can name itself as a member. The directory has the
+			// new room at once, so the count shows a room that a refused call made.
+			const start = Number(await roomCount());
+			const room = await createRoom(caller, "private", "Builds", [caller.id, cy.id]);
+			expect(await roomCount()).toBe(start + 1);
+			const ids = await roomIds(caller);
+			const refused = [
+				() => caller.call("chat.create_room", { kind: "private", name: "Agents", member_ids: [cy.id, other.id] }),
+				() => caller.call("chat.add_members", { room_id: room.id, principal_ids: [owner.id, other.id] }),
+				() => caller.call("chat.open_dm", { principal_id: other.id }),
+				() => caller.call("chat.open_group_dm", { principal_ids: [other.id] }),
+				() => caller.call("chat.open_group_dm", { principal_ids: [cy.id, other.id] }),
+			];
+			for (const call of refused) expect(await codeOf(call())).toBe("forbidden");
+			// No call made a room, and the person of a refused call is not a member.
+			expect(await roomCount()).toBe(start + 1);
+			expect(await roomIds(caller)).toEqual(ids);
+			expect(await membersOf(caller, room.id)).toEqual(these(caller, cy));
+			// The same calls work with a person in place of the account, and a person adds the account.
+			expect((await caller.call("chat.open_dm", { principal_id: cy.id })).room.kind).toBe("dm");
+			expect((await caller.call("chat.open_group_dm", { principal_ids: [cy.id, owner.id] })).room.kind).toBe(
+				"group_dm",
+			);
+			expect((await cy.call("chat.add_members", { room_id: room.id, principal_ids: [other.id] })).members_added).toBe(
+				1,
+			);
+		}
+
+		// A direct message of two agents from before this rule stays open for the two. No operation makes
+		// such a room now. So the room object makes it for a caller with the kind of a person. The test then
+		// stores the kind that the earlier Worker stored.
+		const dmId = await dmRoomId(bot.id, helper.id);
+		const botActor = { principal_id: bot.id, kind: "agent" as const, display_name: "Billing Bot" };
+		const helperActor = { principal_id: helper.id, kind: "agent" as const, display_name: "Helper" };
+		await roomStub(dmId).openDm({ roomId: dmId, actor: { ...botActor, kind: "human" } }, helperActor);
+		await runInDurableObject(roomStub(dmId), (_instance, state) => {
+			const stored = JSON.stringify(botActor);
+			state.storage.sql.exec("UPDATE members SET actor_json = ? WHERE principal_id = ?", stored, bot.id);
+			state.storage.sql.exec("UPDATE room SET created_by_json = ?", stored);
+		});
+		const fromBot = (await bot.call("chat.open_dm", { principal_id: helper.id })).room;
+		expect(fromBot).toMatchObject({ id: dmId, kind: "dm", member_count: 2, peer: helperActor });
+		expect((await helper.call("chat.open_group_dm", { principal_ids: [bot.id] })).room).toMatchObject({
+			id: dmId,
+			peer: botActor,
+		});
+		expect((await post(helper, dmId, "Still here.")).text).toBe("Still here.");
+	});
+
+	// An agent with chat.add_members asks for other agents. A person decides which agent does that, also in
+	// a room that an agent owns.
+	it("refuses an agent owner of a room that gives chat.add_members to a different agent or service account", async () => {
+		const helper = await newAgent("Helper");
+		const service = await newService("CI");
+		const cy = await newPerson("Cy");
+		const all = ["chat.read", "chat.write", "chat.add_members"] as const;
+		const room = await createRoom(bot, "private", "Builds", [cy.id]);
+		// A person of the room adds the two accounts.
+		await cy.call("chat.add_members", { room_id: room.id, principal_ids: [helper.id, service.id] });
+		const set = (by: Actor, room_id: string, member: Actor, scopes: readonly (typeof all)[number][]) =>
+			by.call("chat.set_member_scopes", { room_id, principal_id: member.id, scopes: [...scopes] });
+		const scopesIn = async (room_id: string, member: Actor) =>
+			(await cy.call("chat.get_room", { room_id })).members.find((m) => m.principal_id === member.id)?.scopes;
+		for (const account of [helper, service]) {
+			expect(await codeOf(set(bot, room.id, account, all))).toBe("forbidden");
+			expect(await scopesIn(room.id, account)).toEqual(USUAL);
+		}
+		// The agent owner still sets the other scopes of an agent, and gives chat.add_members to a person.
+		expect((await set(bot, room.id, helper, ["chat.read"])).member.scopes).toEqual(["chat.read"]);
+		await set(bot, room.id, cy, USUAL);
+		expect((await set(bot, room.id, cy, all)).member.scopes).toEqual([...all]);
+		// A person who owns a room gives the scope to an agent, as before.
+		const second = await createRoom(ada, "private", "Releases", [helper.id]);
+		expect((await set(ada, second.id, helper, all)).member.scopes).toEqual([...all]);
+	});
+
+	type Send = <N extends OperationName>(actor: Actor, name: N, input: InputOf<N>) => Promise<OutputOf<N>>;
+	const rest: Send = (actor, name, input) => actor.call(name, input);
+	const tool: Send = async (actor, name, input) => {
+		const result = await callTool(actor.key, name.replace(".", "_"), input as Record<string, unknown>);
+		expect(result.isError, result.content[0]?.text).toBeUndefined();
+		return result.structuredContent as never;
+	};
+
+	// Parity: an agent asks and a person decides through REST and through MCP, with the same result.
+	it.each([
+		["REST", rest],
+		["MCP tools", tool],
+	] as const)(
+		"makes the account a member after the person who manages it approves the request, through %s",
+		async (_name, send) => {
+			const helper = await newAgent("Helper");
+			const cy = await newPerson("Cy");
+			const { room } = await send(bot, "chat.create_room", { kind: "private", name: "Builds", member_ids: [cy.id] });
+			await post(cy, room.id, "The build is green.");
+			const input = { room_id: room.id, principal_id: helper.id };
+			const asked = await send(bot, "chat.request_member", input);
+			expect(asked).toEqual({
+				request: {
+					id: expect.stringMatching(/^mrq_[0-9A-Z]{26}$/),
+					room_id: room.id,
+					room_name: "Builds",
+					principal_id: helper.id,
+					requested_by: bot.id,
+					scopes: USUAL,
+					created_at: expect.any(String),
+				},
+				created: true,
+			});
+			const { request } = asked;
+			// A second call makes no second request and no second activity item.
+			expect(await send(bot, "chat.request_member", input)).toEqual({ request, created: false });
+			expect(await send(bot, "chat.list_member_requests", {})).toEqual({ requests: [request] });
+
+			// Ada sponsors the account. She is not a member of the room, and she gets the request.
+			expect(await send(ada, "chat.list_member_requests", {})).toEqual({ requests: [request] });
+			const feed = await send(ada, "chat.list_activity", {});
+			expect(feed).toMatchObject({ unread_count: 1, next_cursor: null });
+			expect(feed.items).toHaveLength(1);
+			expect(feed.items[0]).toMatchObject({
+				kind: "member_request",
+				message_id: request.id,
+				room_id: room.id,
+				room_name: "Builds",
+				seq: 0,
+				actor: { principal_id: bot.id, kind: "agent", display_name: "Billing Bot" },
+				subject: { principal_id: helper.id, kind: "agent", display_name: "Helper" },
+				preview: "Asks to add Helper to Builds",
+				read_at: null,
+			});
+			expect(await send(ada, "chat.list_activity", { filter: "member_request" })).toEqual(feed);
+			expect((await send(ada, "chat.list_activity", { filter: "mention" })).items).toEqual([]);
+			// The account is not a member before the approval.
+			expect(await membersOf(bot, room.id)).toEqual(these(bot, cy));
+
+			// The approval makes the member, and gives the account the chat scopes that it did not hold.
+			expect(await send(ada, "chat.approve_member_request", { request_id: request.id })).toEqual({
+				request,
+				agent_access_changes: [{ principal_id: helper.id, scopes_added: USUAL }],
+				agent_access_pending: [],
+			});
+			const { members } = await bot.call("chat.get_room", { room_id: room.id });
+			expect(members.find((member) => member.principal_id === helper.id)).toMatchObject({
+				role: "member",
+				scopes: USUAL,
+			});
+			expect(await texts(helper, room.id)).toEqual(["The build is green."]);
+			expect((await post(helper, room.id, "Ready.")).text).toBe("Ready.");
+			// The request is gone for the two, and the activity item with it.
+			for (const actor of [ada, bot])
+				expect(await send(actor, "chat.list_member_requests", {})).toEqual({ requests: [] });
+			expect(await send(ada, "chat.list_activity", {})).toMatchObject({ items: [], unread_count: 0 });
+			expect(await codeOf(ada.call("chat.approve_member_request", { request_id: request.id }))).toBe("not_found");
+		},
+	);
+
+	// The person who manages an account decides where it is a member. Each other caller learns nothing
+	// about a request: it gets the answer for an id that no request has.
+	it("lets only a person who manages the account see and decide its request", async () => {
+		const helper = await newAgent("Helper", [...CHAT_AGENT]);
+		const second = await newAgent("Second");
+		// Ada sponsors this service account. Only an owner or an admin manages a service account.
+		const service = await newService("CI", ada);
+		const cy = await newPerson("Cy");
+		const admin = await newPerson("Di", "admin");
+		const room = await createRoom(bot, "private", "Builds");
+		// Only the clock is fake: each request gets a different time, for the order of the lists.
+		vi.useFakeTimers({ toFake: ["Date"] });
+		const askLater = (account: Actor) => {
+			vi.setSystemTime(Date.now() + 1000);
+			return ask(bot, room.id, account);
+		};
+		const forHelper = await askLater(helper);
+		const forSecond = await askLater(second);
+		const forService = await askLater(service);
+
+		// A person gets the requests for the accounts that the person manages, the newest first.
+		expect(await requestsOf(ada)).toEqual([forSecond, forHelper]);
+		expect(await requestsOf(ada, helper.id)).toEqual([forHelper]);
+		for (const manager of [owner, admin]) expect(await requestsOf(manager)).toEqual([forService, forSecond, forHelper]);
+		expect(await requestsOf(cy)).toEqual([]);
+		// An agent gets the requests that it made.
+		expect(await requestsOf(bot)).toEqual([forService, forSecond, forHelper]);
+		expect(await requestsOf(bot, second.id)).toEqual([forSecond]);
+		expect(await requestsOf(helper)).toEqual([]);
+
+		for (const operation of ["chat.approve_member_request", "chat.deny_member_request"] as const) {
+			// A person who does not manage the account, and the sponsor of a service account.
+			expect(await codeOf(cy.call(operation, { request_id: forHelper.id }))).toBe("not_found");
+			expect(await codeOf(ada.call(operation, { request_id: forService.id }))).toBe("not_found");
+			expect(await codeOf(ada.call(operation, { request_id: UNKNOWN_REQUEST }))).toBe("not_found");
+			// No agent decides: not the agent that asked, and not the account of the request.
+			for (const agent of [bot, helper, service]) {
+				expect(await codeOf(agent.call(operation, { request_id: forHelper.id }))).toBe("forbidden");
+			}
+		}
+		expect(await requestsOf(owner)).toHaveLength(3);
+		expect(await membersOf(bot, room.id)).toEqual(these(bot));
+
+		// The sponsor, an admin and the owner each decide a request.
+		await ada.call("chat.approve_member_request", { request_id: forHelper.id });
+		await admin.call("chat.approve_member_request", { request_id: forSecond.id });
+		await owner.call("chat.approve_member_request", { request_id: forService.id });
+		expect(await membersOf(bot, room.id)).toEqual(these(bot, helper, second, service));
+		expect(await requestsOf(owner)).toEqual([]);
+	});
+
+	// The approval gives an agent the chat scopes of its membership, as chat.add_members does for a person
+	// who manages the agent. A credential gives only what it holds.
+	it("gives the account the scopes of its membership only when the credential of the approval can give them", async () => {
+		const helper = await newAgent("Helper");
+		const second = await newAgent("Second");
+		const room = await createRoom(bot, "private", "Builds");
+		const forHelper = await ask(bot, room.id, helper);
+		const forSecond = await ask(bot, room.id, second);
+		const keyOf = async (scopes: ("chat.read" | "chat.write" | "directory.write")[]) =>
+			api((await ada.call("account.create_api_key", { label: "Narrow", scopes })).api_key.secret);
+
+		// A key of the sponsor without directory.write approves. The account is a member, and holds no new scope.
+		const chatOnly = await keyOf(["chat.read", "chat.write"]);
+		expect(await chatOnly("chat.approve_member_request", { request_id: forHelper.id })).toEqual({
+			request: forHelper,
+			agent_access_changes: [],
+			agent_access_pending: [],
+		});
+		expect(await membersOf(bot, room.id)).toEqual(these(bot, helper));
+		expect(await scopesOf(helper.id)).toEqual(["account.read"]);
+		expect(await codeOf(helper.call("chat.list_messages", { room_id: room.id }))).toBe("forbidden");
+
+		// A key with directory.write changes the account, and this key cannot give chat.read. The call
+		// makes no member, and the request stays.
+		const writer = await keyOf(["directory.write", "chat.write"]);
+		expect(await codeOf(writer("chat.approve_member_request", { request_id: forSecond.id }))).toBe("forbidden");
+		expect(await membersOf(bot, room.id)).toEqual(these(bot, helper));
+		expect(await scopesOf(second.id)).toEqual(["account.read"]);
+		expect(await requestsOf(ada)).toEqual([forSecond]);
+		// A credential that holds each scope completes the request.
+		const approved = await ada.call("chat.approve_member_request", { request_id: forSecond.id });
+		expect(approved.agent_access_changes).toEqual([{ principal_id: second.id, scopes_added: USUAL }]);
+		expect((await post(second, room.id, "Ready.")).text).toBe("Ready.");
+	});
+
+	it("refuses a request from a caller that cannot add members, and a request for an account that cannot become a member", async () => {
+		const helper = await newAgent("Helper", [...CHAT_AGENT]);
+		const inside = await newAgent("Inside", [...CHAT_AGENT]);
+		const archived = await newAgent("Old");
+		await owner.call("directory.archive_principal", { principal_id: archived.id });
+		const cy = await newPerson("Cy");
+		const room = await createRoom(bot, "private", "Builds", [cy.id]);
+		await cy.call("chat.add_members", { room_id: room.id, principal_ids: [inside.id] });
+		const request = (by: Actor, input: Partial<InputOf<"chat.request_member">>) =>
+			codeOf(by.call("chat.request_member", { room_id: room.id, principal_id: helper.id, ...input }));
+
+		// The account of the request: a person, an archived agent, a member, and an id that no principal has.
+		expect(await request(bot, { principal_id: ada.id })).toBe("invalid");
+		expect(await request(bot, { principal_id: archived.id })).toBe("invalid");
+		expect(await request(bot, { principal_id: inside.id })).toBe("conflict");
+		expect(await request(bot, { principal_id: UNKNOWN_PRINCIPAL })).toBe("not_found");
+		// Only a person gives chat.add_members to an agent, so a request cannot give it.
+		expect(await request(bot, { scopes: ["chat.read", "chat.add_members"] })).toBe("invalid");
+		// A direct message keeps its members.
+		const dm = (await bot.call("chat.open_dm", { principal_id: cy.id })).room;
+		expect(await request(bot, { room_id: dm.id })).toBe("invalid");
+
+		// The caller: a person adds the agent with chat.add_members, and does not ask.
+		expect(await request(cy, {})).toBe("forbidden");
+		// An agent member without chat.add_members.
+		expect(await request(inside, {})).toBe("forbidden");
+		// An agent that is not a member of the private room.
+		expect(await request(helper, { principal_id: inside.id })).toBe("not_found");
+		// The room answers first. A caller that cannot add members gets the same answer for each principal id.
+		const open = await createRoom(bot, "public", "Launch");
+		expect(await request(helper, { room_id: open.id, principal_id: inside.id })).toBe("forbidden");
+		expect(await request(helper, { room_id: open.id, principal_id: UNKNOWN_PRINCIPAL })).toBe("forbidden");
+
+		// No refused call made a request or an activity item.
+		expect(await requestsOf(owner)).toEqual([]);
+		expect(await requestItems(ada)).toEqual([]);
+	});
+
+	// Each request is an item in the activity list of a person. An agent must not fill that list.
+	it("keeps no more requests that wait for an answer in one room than the limit", async () => {
+		const most = CHAT_LIMITS.memberRequestsPerRoom;
+		const room = await createRoom(bot, "private", "Builds");
+		const agents: Actor[] = [];
+		for (let n = 1; n <= most + 1; n++) agents.push(await newAgent(`Agent${n}`));
+		const [first, ...rest] = agents.slice(0, most) as [Actor, ...Actor[]];
+		const extra = agents[most] as Actor;
+		const kept = await ask(bot, room.id, first);
+		for (const agent of rest) await ask(bot, room.id, agent);
+
+		const input = { room_id: room.id, principal_id: extra.id };
+		expect(await codeOf(bot.call("chat.request_member", input))).toBe("conflict");
+		expect(await requestsOf(bot)).toHaveLength(most);
+		// A second call for a request of the room returns that request, also at the limit.
+		expect(await bot.call("chat.request_member", { room_id: room.id, principal_id: first.id })).toEqual({
+			request: kept,
+			created: false,
+		});
+		// The limit is for one room, and a decision makes space for the next request.
+		const other = await createRoom(bot, "private", "Ops");
+		expect((await bot.call("chat.request_member", { ...input, room_id: other.id })).created).toBe(true);
+		await ada.call("chat.deny_member_request", { request_id: kept.id });
+		expect((await bot.call("chat.request_member", input)).created).toBe(true);
+	});
+
+	// An approval gives no more than the agent that asked can give at the time of the approval.
+	it("makes no member after a denial, and after an approval when the agent that asked cannot add members then", async () => {
+		const helper = await newAgent("Helper", [...CHAT_AGENT]);
+		/** A room of Ada where the bot adds members. */
+		const roomWithBot = async (name: string) => {
+			const room = await createRoom(ada, "private", name, [bot.id]);
+			const scopes = ["chat.read", "chat.write", "chat.add_members"] as const;
+			await ada.call("chat.set_member_scopes", { room_id: room.id, principal_id: bot.id, scopes: [...scopes] });
+			return room;
+		};
+		const decide = (operation: "chat.approve_member_request" | "chat.deny_member_request", request_id: string) =>
+			ada.call(operation, { request_id });
+		const notMember = async (room_id: string) =>
+			expect(await codeOf(helper.call("chat.get_room", { room_id }))).toBe("not_found");
+
+		const stops: [string, (room_id: string) => Promise<unknown>][] = [
+			["the agent left the room", (room_id) => bot.call("chat.remove_member", { room_id, principal_id: bot.id })],
+			[
+				"the agent lost chat.add_members",
+				(room_id) => ada.call("chat.set_member_scopes", { room_id, principal_id: bot.id, scopes: ["chat.read"] }),
+			],
+			["the room is archived", (room_id) => ada.call("chat.archive_room", { room_id })],
+			["the room is deleted", (room_id) => ada.call("chat.delete_room", { room_id })],
+		];
+		for (const [reason, stop] of stops) {
+			const room = await roomWithBot("Builds");
+			const request = await ask(bot, room.id, helper);
+			await stop(room.id);
+			expect(await codeOf(decide("chat.approve_member_request", request.id)), reason).toBe("conflict");
+			await notMember(room.id);
+			// The request cannot complete, so the call removed it.
+			expect(await codeOf(decide("chat.approve_member_request", request.id)), reason).toBe("not_found");
+		}
+
+		const room = await roomWithBot("Releases");
+		const request = await ask(bot, room.id, helper);
+		expect(await requestItems(ada)).toHaveLength(1);
+		expect(await decide("chat.deny_member_request", request.id)).toEqual({ denied: true });
+		await notMember(room.id);
+		expect(await codeOf(decide("chat.deny_member_request", request.id))).toBe("not_found");
+		expect(await codeOf(decide("chat.approve_member_request", request.id))).toBe("not_found");
+		await notMember(room.id);
+		// Each request is gone from the lists, and from the activity list.
+		for (const actor of [ada, bot]) expect(await requestsOf(actor)).toEqual([]);
+		expect(await requestItems(ada)).toEqual([]);
+	});
+
+	// Only an owner or an admin manages a service account. So the item must go to a person who can decide
+	// the request, and its sponsor is not always that person.
+	it("puts the request for a service account into the activity list of a person who can decide it", async () => {
+		const admin = await newPerson("Di", "admin");
+		const helper = await newAgent("Helper");
+		const ofMember = await newService("CI", ada);
+		const ofAdmin = await newService("Deploy", admin);
+		const room = await createRoom(bot, "private", "Builds");
+		const forAgent = await ask(bot, room.id, helper);
+		const forFirst = await ask(bot, room.id, ofMember);
+		const forSecond = await ask(bot, room.id, ofAdmin);
+
+		// Ada sponsors the agent and the first service account. She decides only for the agent, so the owner
+		// of the organization gets the item of the service account.
+		expect(await requestItems(ada)).toMatchObject([{ message_id: forAgent.id, subject: { principal_id: helper.id } }]);
+		expect(await requestItems(owner)).toMatchObject([
+			{
+				message_id: forFirst.id,
+				actor: { principal_id: bot.id },
+				subject: { principal_id: ofMember.id, kind: "agent", display_name: "CI" },
+				preview: "Asks to add CI to Builds",
+			},
+		]);
+		// An admin sponsors the second service account, and gets its item.
+		expect(await requestItems(admin)).toMatchObject([
+			{ message_id: forSecond.id, subject: { principal_id: ofAdmin.id } },
+		]);
+
+		// The item goes away when a different person decides the request.
+		await owner.call("chat.deny_member_request", { request_id: forSecond.id });
+		expect(await requestItems(admin)).toEqual([]);
+		await admin.call("chat.approve_member_request", { request_id: forFirst.id });
+		expect(await requestItems(owner)).toEqual([]);
+		expect(await membersOf(bot, room.id)).toEqual(these(bot, ofMember));
+		expect(await requestItems(ada)).toHaveLength(1);
+	});
+
+	// The object of each principal makes its activity table again for the new kind. A person must not lose
+	// the items from before.
+	it("keeps the activity items from before the request kind, and then takes a request", async () => {
+		const helper = await newAgent("Helper");
+		const room = await createRoom(bot, "private", "Launch", [ada.id]);
+		const mention = await post(bot, room.id, "The plan is ready, @ada.");
+		await soon(async () => expect((await ada.call("chat.list_activity")).items).toHaveLength(1));
+		const before = await ada.call("chat.list_activity");
+		expect(before.items[0]).toMatchObject({ kind: "mention", message_id: mention.id, subject: null });
+
+		// Back to schema 10: the table has the CHECK of the kinds from before, and no `subject_json`.
+		const principal = principalStub(ada.id);
+		const columns =
+			"id, kind, room_id, room_name, message_id, parent_id, seq, parent_seq, actor_json, emoji, preview, untrusted, created_at, read_at";
+		await runInDurableObject(principal, (_instance, state) => {
+			const sql = state.storage.sql;
+			sql.exec(`CREATE TABLE chat_activity_before (
+				id TEXT PRIMARY KEY,
+				kind TEXT NOT NULL CHECK (kind IN ('mention', 'reply', 'reaction', 'reminder', 'card_action')),
+				room_id TEXT NOT NULL,
+				room_name TEXT,
+				message_id TEXT NOT NULL,
+				parent_id TEXT,
+				seq INTEGER NOT NULL,
+				parent_seq INTEGER,
+				actor_json TEXT NOT NULL,
+				emoji TEXT,
+				preview TEXT NOT NULL,
+				untrusted INTEGER NOT NULL DEFAULT 0,
+				created_at INTEGER NOT NULL,
+				read_at INTEGER
+			) WITHOUT ROWID`);
+			sql.exec(`INSERT INTO chat_activity_before (${columns}) SELECT ${columns} FROM chat_activity`);
+			sql.exec("DROP TABLE chat_activity");
+			sql.exec("ALTER TABLE chat_activity_before RENAME TO chat_activity");
+			sql.exec("CREATE INDEX chat_activity_recent ON chat_activity (created_at DESC, id DESC)");
+			sql.exec("CREATE INDEX chat_activity_room ON chat_activity (room_id)");
+			sql.exec("CREATE INDEX chat_activity_unread ON chat_activity (created_at DESC, id DESC) WHERE read_at IS NULL");
+			sql.exec("UPDATE meta SET value = '10' WHERE key = 'schema_version'");
+		});
+		await evictDurableObject(principal);
+		expect(await ada.call("chat.list_activity")).toEqual(before);
+		// The table from before refuses the new kind. The table after the change takes it.
+		const request = await ask(bot, room.id, helper);
+		const items = (await ada.call("chat.list_activity")).items.map((item) => `${item.kind} ${item.message_id}`);
+		expect(items.sort()).toEqual([`member_request ${request.id}`, `mention ${mention.id}`]);
 	});
 });
 
