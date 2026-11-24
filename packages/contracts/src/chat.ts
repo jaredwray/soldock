@@ -886,6 +886,7 @@ export const addMembers = defineOperation({
 		`A principal that is a member already is skipped. A room has at most ${CHAT_LIMITS.membersPerRoom} members. A direct message keeps its two members.`,
 		"scopes says what each new member can do in the room. You cannot give a scope that your membership does not have.",
 		NEW_MEMBER_SCOPES,
+		"Without scopes, a new member gets only the scopes of this list that your membership has.",
 		AGENT_MEMBER,
 		MEMBERS_ONLY,
 	].join(" "),

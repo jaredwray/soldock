@@ -925,7 +925,12 @@ describe("the scopes of a member of a room", () => {
 		const add = { room_id: room.id, principal_ids: [person.id] };
 		expect(await codeOf(bot.call("chat.add_members", { ...add, scopes: [...WRITE] }))).toBe("forbidden");
 		expect((await ada.call("chat.get_room", { room_id: room.id })).room.member_count).toBe(2);
-		expect((await bot.call("chat.add_members", { ...add, scopes: [...READ] })).members_added).toBe(1);
+		// Without scopes, the new member gets the scopes of its kind that the bot has: a person gets no chat.write.
+		expect((await bot.call("chat.add_members", add)).members_added).toBe(1);
+		expect((await ada.call("chat.get_room", { room_id: room.id })).members[2]?.scopes).toEqual([
+			"chat.read",
+			"chat.add_members",
+		]);
 		expect(await codeOf(person.call("chat.post_message", { room_id: room.id, text: "Hello" }))).toBe("forbidden");
 		// A stored value that is not a list of scopes gives only chat.read.
 		await runInDurableObject(roomStub(room.id), (_instance, state) => {

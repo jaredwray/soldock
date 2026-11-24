@@ -1472,8 +1472,9 @@ export class ChatRoomDO extends DurableObject<Env> {
 
 	/**
 	 * Adds principals as members. A new member starts with each message read, and can read them all. With
-	 * `scopes`, each new member gets these scopes, and without them the scopes of its kind. The result has the
-	 * scopes of each named principal that is a member after the call, also a member from before.
+	 * `scopes`, each new member gets these scopes. Without them, it gets the scopes of its kind that the
+	 * membership of the caller has: a member gives only what it has, also when it names no scopes. The result
+	 * has the scopes of each named principal that is a member after the call, also a member from before.
 	 */
 	async addMembers(
 		call: RoomCall,
@@ -1483,13 +1484,21 @@ export class ChatRoomDO extends DurableObject<Env> {
 		const allowed = this.checkAddMembers(call, scopes);
 		if ("error" in allowed) return allowed;
 		const room = this.room() as RoomRow;
+		const held = this.scopesOf(this.member(call.actor.principal_id) as MemberRow);
+		/** The scopes to store for a new member. Null: the scopes of its kind. */
+		const given = (actor: ActorRecord): readonly RoomMemberScope[] | null => {
+			if (scopes) return scopes;
+			const usual = defaultRoomMemberScopes(actor.kind);
+			const allowed = usual.filter((scope) => held.includes(scope));
+			return allowed.length === usual.length ? null : allowed;
+		};
 		const fresh = new Map<string, ActorRecord>();
 		for (const actor of actors) if (!this.member(actor.principal_id)) fresh.set(actor.principal_id, actor);
 		if (fresh.size > 0) {
 			if (this.memberCount() + fresh.size > CHAT_LIMITS.membersPerRoom) return refuse("conflict", FULL);
 			this.ctx.storage.transactionSync(() => {
 				const now = Date.now();
-				for (const actor of fresh.values()) this.insertMember(actor, "member", now, room.last_seq, scopes ?? null);
+				for (const actor of fresh.values()) this.insertMember(actor, "member", now, room.last_seq, given(actor));
 				this.roomChanged(call.actor.principal_id);
 			});
 			await this.publish({ type: "room" });

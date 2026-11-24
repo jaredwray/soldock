@@ -141,7 +141,8 @@ person, an agent and a service account. This is the model of a
   of their kind. So an agent that added members before this rule cannot add them now: the owner of the
   room gives it `chat.add_members`. A stored value that is not a list of scopes gives only `chat.read`.
 - **Who sets them.** `chat.add_members` takes `scopes` for the new members. A member gives only the scopes
-  that its own membership has. `chat.set_member_scopes` changes the scopes of one member. Only the owner
+  that its own membership has. Without `scopes`, a new member gets the scopes of its kind that the
+  membership of the caller has. `chat.set_member_scopes` changes the scopes of one member. Only the owner
   of the room calls it, or an owner or an admin of the organization for a public room. The web app has
   these in the members dialog of the room.
 - **Without `chat.write`,** a member reads the room and sets its own state: what it read, its star, the
