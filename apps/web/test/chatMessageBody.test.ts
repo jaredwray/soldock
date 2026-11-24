@@ -35,7 +35,7 @@ describe("a mention node in a message", () => {
 	// The node has the id. The link must follow the id, not the label: a handle can change.
 	it("links to the profile of its id with its label, marks a mention of the reader or a group, and shows an unknown id as text", () => {
 		const html = render(paragraph({ type: "mention", attrs: { id: ADA.id, label: "old-handle" } }));
-		expect(html).toContain(`href="/chat/people/${ADA.id}"`);
+		expect(html).toContain(`href="/people/${ADA.id}"`);
 		expect(html).toContain(">@old-handle</a>");
 		expect(html).toContain('title="Ada Lovelace"');
 		expect(html).not.toContain("chat-mention-own");

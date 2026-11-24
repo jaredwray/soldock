@@ -28,7 +28,6 @@ import { BrowseRoomsDialog, NewDmDialog, NewRoomDialog } from "./dialogs.tsx";
 import { SectionDialog, ShortcutsDialog } from "./Layer8Dialogs.tsx";
 import { roomTitle, sidebarRooms } from "./model.ts";
 import { Presence, PresenceProvider } from "./Presence.tsx";
-import { ProfileView } from "./ProfileView.tsx";
 import { QuickSwitcher } from "./QuickSwitcher.tsx";
 import { RoomView } from "./RoomView.tsx";
 import { SavedView } from "./SavedView.tsx";
@@ -44,8 +43,6 @@ export interface ChatAppProps {
 	messageSeq: number | null;
 	/** The seq of a reply in the thread of that message, for a link to a reply, or null. */
 	replySeq: number | null;
-	/** The person or the agent whose profile shows, or null. */
-	profileId: string | null;
 	/** True for the Threads view: the threads that the person follows. */
 	threads: boolean;
 	/** Personal view: activity, saved, or drafts. */
@@ -66,7 +63,7 @@ type ChatDialog =
 	| { kind: "section"; existing?: ChatSection }
 	| null;
 
-/** Chat: the rooms and the direct messages of the person at the left, and one room or one profile at the right. */
+/** Chat: the rooms and the direct messages of the person at the left, and one room or one view at the right. */
 export function ChatApp(props: ChatAppProps) {
 	return (
 		<PresenceProvider>
@@ -81,7 +78,6 @@ function ChatWorkspace({
 	roomId,
 	messageSeq,
 	replySeq,
-	profileId,
 	threads,
 	view = null,
 	search,
@@ -117,10 +113,10 @@ function ChatWorkspace({
 	const listed = roomId === null ? null : (rooms.rooms.find((room) => room.id === roomId) ?? null);
 
 	useEffect(() => {
-		if (roomId === null && profileId === null && !threads && view === null && search === null) {
+		if (roomId === null && !threads && view === null && search === null) {
 			setPageTitle("Chat – Asterra");
 		}
-	}, [roomId, profileId, threads, view, search]);
+	}, [roomId, threads, view, search]);
 
 	// Global Chat shortcuts: Cmd/Ctrl+K (quick switcher) and ? (shortcuts help).
 	useEffect(() => {
@@ -143,7 +139,7 @@ function ChatWorkspace({
 	}, []);
 
 	const searching = search !== null;
-	const roomShown = roomId !== null && profileId === null && !threads && view === null && !searching;
+	const roomShown = roomId !== null && !threads && view === null && !searching;
 	useSearchKeys(
 		roomShown
 			? null
@@ -199,9 +195,7 @@ function ChatWorkspace({
 					onDeleteSection={(id) => void deleteSection(id)}
 				/>
 				<main id="main" className="chat-main" tabIndex={-1}>
-					{profileId !== null ? (
-						<ProfileView key={profileId} principalId={profileId} directory={directory} onOpened={open} />
-					) : search !== null ? (
+					{search !== null ? (
 						<SearchView query={search.query} roomId={search.roomId} rooms={rooms.rooms} />
 					) : threads ? (
 						<ThreadsView tick={rooms.threadsTick} directory={directory} />

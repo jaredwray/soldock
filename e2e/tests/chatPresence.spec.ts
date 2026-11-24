@@ -30,7 +30,7 @@ test("a person sets and clears a status that another person sees on the open pro
 	await expect(change).toBeEnabled();
 	const other = await viewer.newPage();
 	await other.goto(profile.url());
-	const displayed = other.locator(".chat-profile-status");
+	const displayed = other.locator(".profile-status");
 	await expect(displayed).toContainText(/Active|Away|Offline/);
 	await expect(other.getByRole("button", { name: "Set status" })).toHaveCount(0);
 

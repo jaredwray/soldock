@@ -1,0 +1,79 @@
+/* The profile of a person or an agent: a page of the workspace, with the rail and no sidebar of a
+   product. The colors come from the custom properties of styles.css, so dark mode needs no rules here. */
+
+.profile {
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	gap: 6px;
+	padding: 40px 22px 48px;
+	text-align: center;
+}
+
+.profile-avatar {
+	display: grid;
+	place-items: center;
+	width: 72px;
+	height: 72px;
+	margin-bottom: 8px;
+	border: 1px solid var(--border);
+	border-radius: 12px;
+	background: var(--hover);
+	font-size: 24px;
+	font-weight: 600;
+	user-select: none;
+}
+
+.profile-avatar-agent {
+	border-radius: 50%;
+}
+
+.profile-name {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	justify-content: center;
+	gap: 8px;
+	max-width: 100%;
+	overflow-wrap: anywhere;
+	font-size: 22px;
+	font-weight: 650;
+	letter-spacing: -0.025em;
+}
+
+.profile-handle,
+.profile-note {
+	color: var(--muted-foreground);
+	overflow-wrap: anywhere;
+}
+
+.profile-status {
+	display: inline-flex;
+	align-items: center;
+	gap: 0.4em;
+}
+
+.profile-actions {
+	display: flex;
+	flex-wrap: wrap;
+	justify-content: center;
+	gap: 8px;
+	margin-top: 10px;
+}
+
+.profile-details {
+	width: 100%;
+	max-width: 480px;
+	margin-top: 20px;
+	text-align: left;
+}
+
+.profile-details dd {
+	overflow-wrap: anywhere;
+}
+
+@media (max-width: 900px), (pointer: coarse) {
+	.profile-actions .button {
+		min-height: 44px;
+	}
+}
