@@ -2769,8 +2769,10 @@ export class DriveSpaceDO extends DurableObject<Env> {
 			this.touch("drive");
 			this.bump();
 		});
+		// The record is the state of the write. A different call can change the members during the next wait.
+		const drive = this.driveRecord(call, facts);
 		await this.flush();
-		return { drive: this.driveRecord(call, facts), duplicate: false };
+		return { drive, duplicate: false };
 	}
 
 	/** The shared drive and its members, for a member, an owner or an admin. */
@@ -2854,14 +2856,17 @@ export class DriveSpaceDO extends DurableObject<Env> {
 					this.noteWebhook("drive.members.changed", call.spaceId, boundary);
 				});
 			}
-			return { facts, changed };
+			// The record is the state of this write, with the `added_version` of each member of the call. A
+			// different call can change the members during the waits below. The handler gives the access of an
+			// agent for the membership of this record: see `releaseLimits`.
+			return { drive: this.driveRecord(call, facts), changed };
 		});
 		if ("unsettled" in settled) return refuse("conflict", UNSETTLED_DROP);
 		const result = settled.written;
 		if ("error" in result) return result;
 		await this.schedule();
 		await this.flush();
-		return { drive: this.driveRecord(call, result.facts), changed: result.changed };
+		return result;
 	}
 
 	/**

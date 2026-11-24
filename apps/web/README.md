@@ -428,6 +428,7 @@ MCP clients. The app has no UI-only path.
       the new scopes, and the drive in its limits. It also names an agent that did not get its access.
       The row of such an agent then has a note and a **Try again** button, which sends the role of the
       member again. The role menu sends no call for the role that the member has.
+      The card of a new shared drive shows the same note for an agent that the create call named.
     - **Webhooks of …**, each webhook that gets a drive event of that drive (`drive.list_webhook_subscriptions`).
       **Edit events** opens the check boxes of the drive events. An owner or an admin can clear an event
       (`drive.delete_webhook_subscription`). A member creates a webhook with the API.

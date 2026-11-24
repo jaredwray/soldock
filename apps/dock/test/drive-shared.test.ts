@@ -717,6 +717,42 @@ describe("an agent in a shared drive", () => {
 		expect(await codeOf(agent.call("drive.get_about", { space_id: driveId }))).toBe("forbidden");
 	});
 
+	// The drive writes its index after the write of the members, and a different call can change the members
+	// in that time. The access of the add is for the membership that the add wrote, not for the membership
+	// at the time of the answer.
+	it("gets no access when its membership is a different one before the drive answers the add", async () => {
+		const agent = await newAgent(["account.read", "drive.read"]);
+		const stub = env.DRIVE_SPACE.get(env.DRIVE_SPACE.idFromName(driveId));
+		// At the first write of the index, the agent has a new membership, as after a remove and an add of a
+		// different manager: a higher `added_version`.
+		await runInDurableObject(stub, (instance, state) => {
+			const target = instance as unknown as { env: Env };
+			let changed = false;
+			const directory = new Proxy(target.env.DIRECTORY, {
+				get(db, property) {
+					if (property === "batch") {
+						return (statements: D1PreparedStatement[]) => {
+							if (!changed) {
+								changed = true;
+								state.storage.sql.exec(
+									"UPDATE members SET added_version = added_version + 100 WHERE principal_id = ?",
+									agent.id,
+								);
+							}
+							return db.batch(statements);
+						};
+					}
+					const value = Reflect.get(db, property);
+					return typeof value === "function" ? value.bind(db) : value;
+				},
+			});
+			target.env = { ...target.env, DIRECTORY: directory };
+		});
+		expect((await add(ada, agent.id, "viewer")).agent_access_changes).toEqual([]);
+		expect((await rolesOf(ada))[agent.id]).toBe("viewer");
+		expect((await access(agent.id)).resources?.drive_ids).toEqual([agent.id]);
+	});
+
 	// A retry of a create call returns the first drive. The members can be different at that time: here a
 	// manager who does not manage the agent made it a member again. So the retry must change no agent.
 	it("gets no access from a retry of the create call, after a different manager made it a member again", async () => {

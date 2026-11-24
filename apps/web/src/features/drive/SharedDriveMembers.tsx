@@ -100,6 +100,8 @@ interface MembersPartProps {
 	selfId: string;
 	/** True for a manager of the drive, an owner or an admin. Each other member sees the list only. */
 	canManage: boolean;
+	/** The agents that did not get the access of their membership in the call that created the drive. */
+	pendingIds?: readonly string[] | undefined;
 	/** Called after each change, with the drive as it is now. */
 	onChanged: (drive: SharedDrive) => void;
 	/** Called after the person removed themselves and has no other access to the drive. */
@@ -117,6 +119,7 @@ export function SharedDriveMembersPart({
 	principals,
 	selfId,
 	canManage,
+	pendingIds,
 	onChanged,
 	onLeft,
 }: MembersPartProps) {
@@ -128,8 +131,8 @@ export function SharedDriveMembersPart({
 	const [busy, setBusy] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 	const [removing, setRemoving] = useState<Principal | null>(null);
-	// The agents that did not get the access of their membership in a call of this page.
-	const [pending, setPending] = useState<ReadonlySet<string>>(new Set());
+	// The agents that did not get the access of their membership, in a call of this part or in the create call.
+	const [pending, setPending] = useState<ReadonlySet<string>>(() => new Set(pendingIds));
 	const ids = { heading: useId(), select: useId(), role: useId(), hint: useId(), lastManager: useId() };
 	const byId = useMemo(() => new Map(principals.map((principal) => [principal.id, principal])), [principals]);
 
