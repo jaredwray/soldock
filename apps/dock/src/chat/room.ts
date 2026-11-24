@@ -694,6 +694,13 @@ const NOT_MEMBER = "You are not a member of this room. Join it first with chat.j
 const NO_MESSAGE = "No message has that id in this room.";
 const EMPTY_MESSAGE = "A message needs text or a file.";
 const FULL = `A room can have ${CHAT_LIMITS.membersPerRoom} members at most.`;
+/**
+ * The member that becomes the owner when the owner leaves: the person that joined first, or the member that
+ * joined first in a room without a person. The owner has each scope, so a person comes before an agent: an
+ * agent adds members only when a person decided that.
+ */
+const NEXT_OWNER = `SELECT principal_id FROM members
+	ORDER BY json_extract(actor_json, '$.kind') = 'human' DESC, joined_at, principal_id LIMIT 1`;
 const NO_WRITE = "Your membership of this room does not have chat.write. The owner of the room can add it.";
 const NO_ADD_MEMBERS = "Your membership of this room does not have chat.add_members. The owner of the room can add it.";
 /**
@@ -1539,6 +1546,15 @@ export class ChatRoomDO extends DurableObject<Env> {
 		};
 		const fresh = new Map<string, ActorRecord>();
 		for (const actor of actors) if (!this.member(actor.principal_id)) fresh.set(actor.principal_id, actor);
+		// An agent adds members only when the owner of the room decided that. So a member that has the scope
+		// cannot give it to an agent, or one agent would give it to the next with no person in the decision.
+		if (
+			!byOwner &&
+			scopes?.includes("chat.add_members") &&
+			[...fresh.values()].some((actor) => actor.kind === "agent")
+		) {
+			return refuse("forbidden", "Only the owner of the room can give chat.add_members to an agent.");
+		}
 		if (fresh.size > 0) {
 			if (this.memberCount() + fresh.size > CHAT_LIMITS.membersPerRoom) return refuse("conflict", FULL);
 			this.ctx.storage.transactionSync(() => {
@@ -1590,7 +1606,7 @@ export class ChatRoomDO extends DurableObject<Env> {
 		if (!canManage) {
 			return refuse(
 				"forbidden",
-				"Only the owner of the room, or an owner or an admin of the organization for a public room, can change the scopes of a member.",
+				"Only the owner of the room can change the scopes of a member. An owner or an admin of the organization can also change them in a public room.",
 			);
 		}
 		const archived = this.ensureNotArchived(room);
@@ -1642,9 +1658,7 @@ export class ChatRoomDO extends DurableObject<Env> {
 			this.touch(`member:${principalId}`);
 			this.touch(`${PRINCIPAL_TARGET}${principalId}`);
 			if (target.role === "owner") {
-				const next = this.one<{ principal_id: string }>(
-					"SELECT principal_id FROM members ORDER BY joined_at, principal_id LIMIT 1",
-				);
+				const next = this.one<{ principal_id: string }>(NEXT_OWNER);
 				if (next) {
 					this.sql.exec("UPDATE members SET role = 'owner' WHERE principal_id = ?", next.principal_id);
 					this.touch(`member:${next.principal_id}`);
@@ -1971,9 +1985,7 @@ export class ChatRoomDO extends DurableObject<Env> {
 			this.touch(`member:${principalId}`);
 			this.touch(`${PRINCIPAL_TARGET}${principalId}`);
 			if (target.role === "owner") {
-				const next = this.one<{ principal_id: string }>(
-					"SELECT principal_id FROM members ORDER BY joined_at, principal_id LIMIT 1",
-				);
+				const next = this.one<{ principal_id: string }>(NEXT_OWNER);
 				if (next) {
 					this.sql.exec("UPDATE members SET role = 'owner' WHERE principal_id = ?", next.principal_id);
 					this.touch(`member:${next.principal_id}`);

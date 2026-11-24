@@ -370,11 +370,19 @@ account.
   `forbidden`, and the text names the scope.
 - `chat.add_members` is a scope of a membership only. A credential needs `chat.write` to add members, as
   before.
-- **An agent that you manage gets its access with the membership.** When you are its sponsor, an owner or
-  an admin, and you add it to a room or open a direct message with it, it gets the chat scopes of its
-  membership that it does not hold, and the room goes into its limits. The result has each change in
-  `agent_access_changes`, and the web app shows it. For an agent that you do not manage, its sponsor, an
-  owner or an admin does this.
+- **An agent that you manage gets its access with the membership.** You manage an agent when you are its
+  sponsor, an owner or an admin. Add it to a room, or open a direct message with it. It then gets the chat
+  scopes of its membership that it does not hold, and the room goes into its limits.
+  - The result has each change in `agent_access_changes`, and the web app shows it.
+  - An API key needs `directory.write` for this change, as `directory.set_agent_access` does. A key with
+    only the chat scopes makes the member, and changes no agent.
+  - `agent_access_pending` names an agent that did not get its access: its limits name 20 rooms, or a
+    different call changed its access at the same time. Add the member again.
+  - For an agent that you do not manage, its sponsor, an owner or an admin adds it again.
+- Only the owner of a room gives `chat.add_members` to an agent or a service account.
+- A member that leaves with fewer scopes than its kind has them again when it comes back. Only the owner
+  of the room gives more.
+- When an agent leaves a room, or a member removes it, the room goes out of its limits.
 
 ## Team mailboxes
 

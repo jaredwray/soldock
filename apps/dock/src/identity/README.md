@@ -655,8 +655,9 @@ and its own drive, and no room ([Access of an agent](#access-of-an-agent), First
     ([Team mailboxes](#team-mailboxes), Member scopes).
   - A room: a person who manages the agent and adds it to a room, or opens a direct message with it, puts
     the room into the limits and gives the chat scopes of the membership
-    ([`chat`](../chat/README.md#an-agent-as-a-new-member)). A member that does not manage the agent can
-    add it, and that membership gives the agent nothing.
+    ([`chat`](../chat/README.md#an-agent-as-a-new-member)). The credential needs `directory.write`, as
+    `directory.set_agent_access` does. A member that does not manage the agent can add it, and that
+    membership gives the agent nothing. A remove takes the room out of the limits again.
 - A person who does not manage a limited agent can open a direct message with it. The agent does not see
   the room until a manager opens the direct message, or adds the room to the limits.
 - A limited agent cannot open the events socket, make a chat webhook, open a direct message or create a

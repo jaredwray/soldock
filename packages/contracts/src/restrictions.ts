@@ -30,8 +30,9 @@ export type AgentResources = z.infer<typeof AgentResources>;
 
 /**
  * The limits of a new agent or service account: its own mailbox and its own drive, and no room. A new agent
- * has no membership, so these limits name each resource that it reaches. A manager adds a team mailbox, a
- * shared drive or a room, or removes the limits, with `directory.set_agent_access`.
+ * has no membership, so these limits name each resource that it reaches. A manager who makes the agent a
+ * member of a team mailbox or a room adds that resource to the limits. A manager adds a shared drive, or
+ * removes the limits, with `directory.set_agent_access`.
  */
 export function defaultAgentResources(agentId: string): AgentResources {
 	return { mailbox_ids: [agentId], drive_ids: [agentId], room_ids: [] };

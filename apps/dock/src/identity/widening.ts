@@ -6,10 +6,16 @@ import {
 	type Scope,
 } from "@asterra/contracts";
 import { OperationError } from "../platform/index.ts";
-import { auditOk, canManageAgent, grantableScopes, recordServiceChange } from "./access.ts";
+import { auditOk, canManageAgent, grantableScopes, isAdmin, recordServiceChange } from "./access.ts";
 import type { CallContext } from "./auth.ts";
 import { endEventSockets } from "./principal.ts";
-import { type AgentWidening, getPrincipals, type PrincipalRecord, widenAgentAccess } from "./store.ts";
+import {
+	type AgentWidening,
+	dropRoomFromLimits,
+	getPrincipals,
+	type PrincipalRecord,
+	widenAgentAccess,
+} from "./store.ts";
 
 // What a membership gives to an agent or a service account. A membership of a team mailbox or a room says
 // what the agent can do in that resource. The agent also needs the scopes on its account, and the resource
@@ -88,14 +94,15 @@ export function agentWidening(
 	return { agent: member, scopes: [...held, ...added], resources, added };
 }
 
-/** The effects of a write of `agentWidening`: the live connections of the agent end, and the logs get a line. */
+/** The effects of a write of `agentWidening`: the logs get a line, and the live connections of the agent end. */
 export async function afterWidening(call: CallContext, widening: MemberWidening): Promise<void> {
 	const { agent, scopes, resources } = widening;
-	// Each live connection of the agent has the access of its open: see `directory.set_agent_access`.
-	await endEventSockets(call.env, agent.id, { agentAccess: true });
 	const limits = resources === null ? "no limits" : "limits";
+	// The line comes first: the write is in the directory, so the log must have it when a later step fails.
 	auditOk(call, "directory.set_agent_access", `${agent.id}:${scopes.join(",")}:${limits}`);
 	recordServiceChange(call, agent, "directory.set_agent_access");
+	// Each live connection of the agent has the access of its open: see `directory.set_agent_access`.
+	await endEventSockets(call.env, agent.id, { agentAccess: true });
 }
 
 /** The change of an agent, as the result of an operation gives it. */
@@ -122,28 +129,37 @@ function credentialScopes(scopes: readonly string[]): Scope[] {
 }
 
 /**
- * The agents and the service accounts of these principals whose access the caller can change: the caller is
- * a person who is their sponsor, an owner or an admin (`canManageAgent`). A member of a room can add an agent
- * that it does not manage. That membership gives the agent no new access: only a manager of the agent does
- * that.
+ * The agents and the service accounts of these principals whose access the call can change. The caller is
+ * a person who is their sponsor, an owner or an admin (`canManageAgent`), and the credential holds
+ * `directory.write`, as `directory.set_agent_access` needs it. So a key of a manager with only the chat
+ * scopes changes no agent. An archived agent gets no change.
+ *
+ * A member of a room can add an agent that it does not manage. That membership gives the agent no new
+ * access: only a manager of the agent does that.
  */
 export function managedAgents(call: CallContext, principals: readonly PrincipalRecord[]): PrincipalRecord[] {
-	return principals.filter((principal) => principal.kind === "agent" && canManageAgent(call.caller, principal));
+	if (!call.caller.scopes.has("directory.write")) return [];
+	return principals.filter(
+		(principal) =>
+			principal.kind === "agent" && principal.archived_at === null && canManageAgent(call.caller, principal),
+	);
 }
 
 /**
- * Refuses a membership of a room that the caller cannot give to an agent that it manages, before the room
- * writes the membership. `scopes` gives the scopes that the membership of a principal gets. `roomId` is
- * undefined for a room that does not exist yet.
+ * Refuses a membership of a room that gives an agent a scope that the credential of the call does not hold
+ * (`grantableScopes`), before the room writes the membership. Only the scopes that the agent would get
+ * count: a call that gives the agent nothing, for example one that removes a scope, needs no scope for it.
+ * `scopes` gives the scopes that the membership of a principal gets.
  */
-export function assertRoomMemberships(
+export function assertRoomGrants(
 	call: CallContext,
 	principals: readonly PrincipalRecord[],
 	scopes: (principal: PrincipalRecord) => readonly string[],
-	roomId?: string,
 ): void {
 	for (const agent of managedAgents(call, principals)) {
-		assertAgentMembership(call, agent, "room", credentialScopes(scopes(agent)), roomId);
+		const held = agent.agent_scopes;
+		const added = credentialScopes(scopes(agent)).filter((scope) => !held.includes(scope));
+		if (added.length > 0) grantableScopes(call.caller, agent, added);
 	}
 }
 
@@ -152,8 +168,8 @@ export interface RoomAccessResult {
 	changes: AgentAccessChange[];
 	/**
 	 * The agents that the caller manages, that are members of the room, and that did not get the access of
-	 * their membership: a parallel change of their access came first each time, or their limits have no place
-	 * now. The same call again, or `chat.add_members` for them, completes it.
+	 * their membership. Their limits have no place for the room, or a different call changed their access at
+	 * the same time. The membership is in the room. A later call for the member completes the access.
 	 */
 	pending: string[];
 }
@@ -165,9 +181,11 @@ export interface RoomAccessResult {
  * membership comes first. This write is idempotent: when it does not complete, a later call completes it.
  *
  * The write matches only while the access of the agent is the access of the read (`access_version`), so a
- * parallel change of the access is not lost. Then the function reads the agent and tries again. It does not
- * throw for an agent that it cannot complete: the membership is in the room, so the caller decides what the
- * call returns.
+ * parallel change of the access is not lost. It also matches only while a sponsor who is not an admin is
+ * still the sponsor. The function reads the agent and tries again.
+ *
+ * It does not throw for an agent that it cannot complete. The membership is in the room, so the call
+ * returns its result, and `pending` names the agent.
  */
 export async function giveRoomAccess(
 	call: CallContext,
@@ -176,25 +194,27 @@ export async function giveRoomAccess(
 ): Promise<RoomAccessResult> {
 	const { DIRECTORY } = call.env;
 	const scopesOf = new Map(members.map((member) => [member.principal_id, credentialScopes(member.scopes)]));
+	// A sponsor who is not an admin acts only while the agent still has that sponsor, in the write itself.
+	const sponsorId = isAdmin(call.caller) ? null : call.caller.principal.id;
 	const changes: AgentAccessChange[] = [];
 	const refused: string[] = [];
 	let agents = managedAgents(call, await getPrincipals(DIRECTORY, [...scopesOf.keys()]));
 	for (let attempt = 0; agents.length > 0 && attempt < WIDENING_TRIES; attempt++) {
 		const lost: string[] = [];
 		for (const agent of agents) {
-			const scopes = scopesOf.get(agent.id) ?? [];
+			const widening = agentWidening(agent, "room", roomId, scopesOf.get(agent.id) ?? []);
+			if (!widening) continue;
 			try {
-				// The handler made this check before the room wrote the membership. A parallel change of the agent
-				// can make it fail now, for example when its limits have no place.
-				assertAgentMembership(call, agent, "room", scopes, roomId);
+				// The handler checked the scopes before the room wrote the membership. A parallel change of the
+				// agent can make the check fail now. The limits can have no place for one more room.
+				if (widening.added.length > 0) grantableScopes(call.caller, agent, widening.added);
+				if (widening.resources !== agent.agent_resources) assertPlaceInLimits(agent, "room", roomId);
 			} catch (error) {
 				if (!(error instanceof OperationError)) throw error;
 				refused.push(agent.id);
 				continue;
 			}
-			const widening = agentWidening(agent, "room", roomId, scopes);
-			if (!widening) continue;
-			if (await widenAgentAccess(DIRECTORY, widening)) {
+			if (await widenAgentAccess(DIRECTORY, { ...widening, sponsorId })) {
 				await afterWidening(call, widening);
 				changes.push(toAccessChange(widening));
 			} else {
@@ -207,21 +227,20 @@ export async function giveRoomAccess(
 }
 
 /**
- * The same as `giveRoomAccess`, for an operation that the caller can send again for the same room. When an
- * agent did not get its access, the call gets `conflict`: the members are in the room, and the same call
- * again completes the access.
+ * Takes a room out of the limits of each agent or service account that is no longer a member of it. Without
+ * this, the room stays in the limits, and a later add by a member that does not manage the agent gives the
+ * agent access again. The change only removes reach, so each caller that removed the member makes it. The
+ * scopes of the agent do not change.
  */
-export async function widenAgentsForRoom(
+export async function dropRoomAccess(
 	call: CallContext,
 	roomId: string,
-	members: readonly RoomMembership[],
-): Promise<AgentAccessChange[]> {
-	const { changes, pending } = await giveRoomAccess(call, roomId, members);
-	if (pending.length > 0) {
-		throw new OperationError(
-			"conflict",
-			"The access of an agent changed during the call. The members are in the room. Send the call again.",
-		);
+	principalIds: readonly string[],
+): Promise<void> {
+	for (const principalId of principalIds) {
+		const agent = await dropRoomFromLimits(call.env.DIRECTORY, principalId, roomId);
+		if (!agent) continue;
+		auditOk(call, "directory.set_agent_access", `${agent.id}:${agent.agent_scopes.join(",")}:limits`);
+		await endEventSockets(call.env, agent.id, { agentAccess: true });
 	}
-	return changes;
 }

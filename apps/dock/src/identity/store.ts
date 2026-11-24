@@ -850,6 +850,8 @@ export interface AgentWidening {
 	/** Each scope of the agent after the write. */
 	scopes: readonly Scope[];
 	resources: AgentResources | null;
+	/** For a sponsor who is not an admin: the write matches only while the agent still has this sponsor. */
+	sponsorId?: string | null;
 }
 
 /**
@@ -872,7 +874,8 @@ export function widenAgentAccessStatement(
 		.prepare(
 			`UPDATE principals SET agent_scopes = ?2, agent_resources = ?3, access_version = access_version + 1
 			WHERE id = ?1 AND kind = 'agent' AND service = ?4 AND deleted_at IS NULL AND access_version = ?5
-			AND (?6 IS NULL OR EXISTS (SELECT 1 FROM team_mailbox_members WHERE mailbox_id = ?6 AND principal_id = ?1))`,
+			AND (?6 IS NULL OR EXISTS (SELECT 1 FROM team_mailbox_members WHERE mailbox_id = ?6 AND principal_id = ?1))
+			AND (?7 IS NULL OR sponsor_id = ?7)`,
 		)
 		.bind(
 			agent.id,
@@ -881,6 +884,7 @@ export function widenAgentAccessStatement(
 			agent.service ? 1 : 0,
 			agent.access_version,
 			mailboxId,
+			widening.sponsorId ?? null,
 		);
 }
 
@@ -892,6 +896,30 @@ export function widenAgentAccessStatement(
 export async function widenAgentAccess(db: D1Database, widening: AgentWidening): Promise<boolean> {
 	const result = await widenAgentAccessStatement(db, widening, null).run();
 	return result.meta.changes === 1;
+}
+
+/**
+ * Takes a room out of the limits of an agent or a service account, in one statement, so a parallel change of
+ * the access is not lost. Returns the agent after the write, or null when its limits did not name the room.
+ * The write adds one to `access_version`.
+ */
+export async function dropRoomFromLimits(
+	db: D1Database,
+	principalId: string,
+	roomId: string,
+): Promise<PrincipalRecord | null> {
+	const result = await db
+		.prepare(
+			`UPDATE principals SET access_version = access_version + 1, agent_resources = json_set(
+				agent_resources, '$.room_ids',
+				json((SELECT json_group_array(room.value) FROM json_each(agent_resources, '$.room_ids') room WHERE room.value != ?2))
+			)
+			WHERE id = ?1 AND kind = 'agent' AND deleted_at IS NULL AND json_valid(agent_resources)
+			AND EXISTS (SELECT 1 FROM json_each(agent_resources, '$.room_ids') room WHERE room.value = ?2)`,
+		)
+		.bind(principalId, roomId)
+		.run();
+	return result.meta.changes === 1 ? getPrincipal(db, principalId) : null;
 }
 
 /** The changes of `updatePrincipal`. A field that is undefined does not change. */

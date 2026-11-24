@@ -10,7 +10,7 @@ import {
 	useRef,
 	useState,
 } from "react";
-import { accessChangeText } from "../../lib/accessChange.ts";
+import { type RoomAccessResult, roomAccessText } from "../../lib/accessChange.ts";
 import { accountChangeCount } from "../../lib/account.ts";
 import { api, errorMessage } from "../../lib/api.ts";
 import { useNotificationSettings } from "../../lib/chatNotificationSettings.tsx";
@@ -291,6 +291,7 @@ export function BrowseRoomsDialog({ onClose, onOpen }: { onClose: () => void; on
 /** Opens a 1:1 direct message or a group direct message with people or agents. */
 export function NewDmDialog({ onClose, onOpened }: { onClose: () => void; onOpened: (room: ChatRoom) => void }) {
 	const ownId = useSession().whoami.principal.id;
+	const toast = useToast();
 	const principals = usePrincipals();
 	const [filter, setFilter] = useState("");
 	const [selectedIds, setSelectedIds] = useState<string[]>([]);
@@ -314,6 +315,13 @@ export function NewDmDialog({ onClose, onOpened }: { onClose: () => void; onOpen
 		});
 	}
 
+	/** Tells the person what the call changed on an agent that the person manages: the change is on its account. */
+	function announce(result: RoomAccessResult) {
+		const nameOf = (id: string) => principals?.find((principal) => principal.id === id)?.display_name ?? "An agent";
+		const text = roomAccessText(result, nameOf).trim();
+		if (text) toast({ message: text });
+	}
+
 	async function openSelected() {
 		if (selectedIds.length === 0 || busy) return;
 		setBusy(true);
@@ -321,11 +329,13 @@ export function NewDmDialog({ onClose, onOpened }: { onClose: () => void; onOpen
 		try {
 			const first = selectedIds[0];
 			if (selectedIds.length === 1 && first) {
-				const { room } = await api.call("chat.open_dm", { principal_id: first });
-				onOpened(room);
+				const result = await api.call("chat.open_dm", { principal_id: first });
+				announce(result);
+				onOpened(result.room);
 			} else {
-				const { room } = await api.call("chat.open_group_dm", { principal_ids: selectedIds });
-				onOpened(room);
+				const result = await api.call("chat.open_group_dm", { principal_ids: selectedIds });
+				announce(result);
+				onOpened(result.room);
 			}
 		} catch (caught) {
 			setError(errorMessage(caught));
@@ -482,7 +492,7 @@ export function MembersDialog({ room, onClose, onChanged, onLeft }: MembersDialo
 				scopes: scopesOf(rights),
 			});
 			toast({
-				message: `${candidate.display_name} can now ${rightsText(rights)} in ${roomTitle(room)}.${accessChangeText(candidate.display_name, result.agent_access_changes, "room")}`,
+				message: `${candidate.display_name} can now ${rightsText(rights)} in ${roomTitle(room)}.${roomAccessText(result, () => candidate.display_name)}`,
 			});
 			setPrincipalId("");
 			setChosen(null);
@@ -500,7 +510,7 @@ export function MembersDialog({ room, onClose, onChanged, onLeft }: MembersDialo
 				scopes: scopesOf(next),
 			});
 			toast({
-				message: `${member.display_name} can now ${rightsText(next)} in ${roomTitle(room)}.${accessChangeText(member.display_name, result.agent_access_changes, "room")}`,
+				message: `${member.display_name} can now ${rightsText(next)} in ${roomTitle(room)}.${roomAccessText(result, () => member.display_name)}`,
 			});
 			await load();
 			onChanged();

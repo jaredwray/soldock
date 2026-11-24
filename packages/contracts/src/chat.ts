@@ -756,8 +756,13 @@ const MEMBERS_ONLY = "You must be a member of the room.";
 const NEW_MEMBER_SCOPES =
 	"A new member that is a person gets chat.read, chat.write and chat.add_members. An agent or a service account gets chat.read and chat.write.";
 /** What a membership changes on an agent or a service account. */
-const AGENT_MEMBER =
-	"When you manage an agent or a service account that the call makes a member, it also gets the chat scopes of its membership that it does not hold, and the room goes into its resource limits when it has limits. agent_access_changes has these changes. For an agent that you do not manage, its sponsor, an owner or an admin does this (directory.set_agent_access).";
+const AGENT_MEMBER = [
+	"The call also changes each agent and each service account that it makes a member and that you manage.",
+	"You manage an agent when you are its sponsor, an owner or an admin, and your credential holds directory.write.",
+	"The agent gets the chat scopes of its membership that it does not hold. The room goes into its resource limits when it has limits.",
+	"agent_access_changes has these changes. agent_access_pending names each agent that did not get them: send the call for that member again.",
+	"A membership gives no new access to an agent that you do not manage. Its sponsor, an owner or an admin gives it.",
+].join(" ");
 const MENTIONS = `To mention a person or an agent, write @ and the local part of its address in text or markdown, for example @ada. When two principals have the same local part, write the full address, for example @ada@example.org. The server stores each mention as a mention node with the id of the principal, and the message lists the ids in mentions. In a private room, a mention of a principal that is not a member stays text. In a body, write a mention node: { type: mention, attrs: { id, label } }. @here and @channel mention each member of the room, except you: the message lists them in group_mentions. In a room with more than ${CHAT_LIMITS.groupMentionMembers} members, only an owner of the room can mention a group: a different member gets forbidden. In a body, write { type: group_mention, attrs: { group } }.`;
 const RATE_LIMIT = `You can send ${CHAT_LIMITS.messageBurst} new or changed messages to one room at once, and then one in each ${CHAT_LIMITS.messageRefillSeconds === 1 ? "second" : `${CHAT_LIMITS.messageRefillSeconds} seconds`}. A call above that gets rate_limited: wait, then try again.`;
 
@@ -800,7 +805,6 @@ export const createRoom = defineOperation({
 		`Set member_ids to add people and agents at once, at most ${CHAT_LIMITS.membersPerCall}.`,
 		NEW_MEMBER_SCOPES,
 		AGENT_MEMBER,
-		"The room exists when the call returns. agent_access_pending names each agent that did not get its access: call chat.add_members for it.",
 		"Two rooms can have the same name. For a conversation with one person or one agent, use chat.open_dm.",
 	].join(" "),
 	http: { method: "POST", path: "/api/v1/chat/rooms" },
@@ -817,8 +821,9 @@ export const createRoom = defineOperation({
 		room: ChatRoom,
 		agent_access_changes: z.array(AgentAccessChange).default([]),
 		/**
-		 * The agents that you manage, that are members of the new room, and that did not get their access: a
-		 * different call changed their access at the same time. Call chat.add_members for them to complete it.
+		 * The agents that you manage, that are members of the room, and that did not get the access of their
+		 * membership. Their limits have no place for the room, or a different call changed their access at the
+		 * same time. A later call for the member completes it.
 		 */
 		agent_access_pending: z.array(z.string()).default([]),
 	}),
@@ -834,7 +839,16 @@ export const openDm = defineOperation({
 	callers: ["human", "agent", "service"],
 	annotations: CHANGE,
 	input: z.strictObject({ principal_id: PrincipalId }),
-	output: z.object({ room: ChatRoom, agent_access_changes: z.array(AgentAccessChange).default([]) }),
+	output: z.object({
+		room: ChatRoom,
+		agent_access_changes: z.array(AgentAccessChange).default([]),
+		/**
+		 * The agents that you manage, that are members of the room, and that did not get the access of their
+		 * membership. Their limits have no place for the room, or a different call changed their access at the
+		 * same time. A later call for the member completes it.
+		 */
+		agent_access_pending: z.array(z.string()).default([]),
+	}),
 	errors: ["not_found", "invalid"],
 });
 
@@ -894,6 +908,8 @@ export const addMembers = defineOperation({
 		`Makes each principal a member of the room. Your membership must have chat.add_members: a person has it from the start, and the owner of the room gives it to an agent with chat.set_member_scopes.`,
 		`A principal that is a member already is skipped. A room has at most ${CHAT_LIMITS.membersPerRoom} members. A direct message keeps its two members.`,
 		"scopes says what each new member can do in the room. You cannot give a scope that your membership does not have.",
+		"Only the owner of the room gives chat.add_members to an agent or a service account.",
+		"A principal that left the room with fewer scopes than its kind gets no more from you: only the owner of the room gives more.",
 		NEW_MEMBER_SCOPES,
 		"Without scopes, a new member gets only the scopes of this list that your membership has.",
 		AGENT_MEMBER,
@@ -915,6 +931,12 @@ export const addMembers = defineOperation({
 		room: ChatRoom,
 		/** The change of each agent and each service account that you manage and that got new access. */
 		agent_access_changes: z.array(AgentAccessChange).default([]),
+		/**
+		 * The agents that you manage, that are members of the room, and that did not get the access of their
+		 * membership. Their limits have no place for the room, or a different call changed their access at the
+		 * same time. A later call for the member completes it.
+		 */
+		agent_access_pending: z.array(z.string()).default([]),
 	}),
 	errors: ["not_found", "invalid", "conflict"],
 });
@@ -939,6 +961,12 @@ export const setMemberScopes = defineOperation({
 		member: ChatMember,
 		/** The change of the agent or the service account, when you manage it and it got new access. */
 		agent_access_changes: z.array(AgentAccessChange).default([]),
+		/**
+		 * The agents that you manage, that are members of the room, and that did not get the access of their
+		 * membership. Their limits have no place for the room, or a different call changed their access at the
+		 * same time. A later call for the member completes it.
+		 */
+		agent_access_pending: z.array(z.string()).default([]),
 	}),
 	errors: ["not_found", "invalid"],
 });

@@ -658,7 +658,12 @@ export const openGroupDm = defineOperation({
 	input: z.strictObject({
 		principal_ids: z.array(PrincipalId).min(1).max(CHAT_LIMITS.groupDmOthersMax),
 	}),
-	output: z.object({ room: ChatRoom, agent_access_changes: z.array(AgentAccessChange).default([]) }),
+	output: z.object({
+		room: ChatRoom,
+		agent_access_changes: z.array(AgentAccessChange).default([]),
+		/** The agents that you manage, that are members of the room, and that did not get their access. */
+		agent_access_pending: z.array(z.string()).default([]),
+	}),
 	errors: ["not_found", "invalid"],
 });
 

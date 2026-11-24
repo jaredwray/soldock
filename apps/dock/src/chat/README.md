@@ -166,27 +166,39 @@ person, an agent and a service account. This is the model of a
 A membership says what the agent can do in the room. The agent also needs the chat scopes on its account,
 and the room in its limits when it has limits ([`identity`](../identity/README.md#access-of-an-agent)).
 
-- A person who can change the access of the agent (its sponsor, an owner or an admin: `canManageAgent`)
-  and who makes it a member decided that the agent can use the room. That call gives the agent the chat
-  scopes of its membership that it does not hold, and puts the room into its limits (`widenAgentsForRoom`
-  of `identity`). The result has each change in `agent_access_changes`.
-- This applies to `chat.create_room`, `chat.add_members`, `chat.set_member_scopes`, `chat.open_dm` and
+- **Who.** A person who can change the access of the agent: its sponsor, an owner or an admin
+  (`canManageAgent`). The credential must hold `directory.write`, as `directory.set_agent_access` needs
+  it (`managedAgents` of `identity`). So a key of a manager with only the chat scopes changes no agent.
+- **What.** A manager who makes the agent a member decided that the agent can use the room. That call
+  gives the agent the chat scopes of its membership that it does not hold, and puts the room into its
+  limits (`giveRoomAccess`). The result has each change in `agent_access_changes`.
+- **Which calls.** `chat.create_room`, `chat.add_members`, `chat.set_member_scopes`, `chat.open_dm` and
   `chat.open_group_dm`. Each call does it, also for a member from before. So a sponsor who opens the
   direct message with its agent again makes the agent see it.
-- A member that does not manage the agent can add it, but that membership gives the agent no new access.
-  An agent never widens a different agent. **Access** on the card of the agent marks the membership, and
-  its sponsor, an owner or an admin adds the member again or changes the limits.
-- No escalation: the credential of the call must hold each chat scope of the membership of an agent that
-  it manages (`grantableScopes`). The limits of an agent name at most 20 rooms: a membership that needs
-  place 21 gets `invalid`. The handler makes these checks before the room writes the membership.
-- The room object owns the members, and the directory owns the access of an agent. So the two writes are
-  not one transaction: the membership comes first. The write of the access matches only while
-  `access_version` is the one of the read, and the handler tries three times (`giveRoomAccess`). After
-  that, the call gets `conflict` with the members in the room, and the same call again completes the
-  access.
-- `chat.create_room` is different: a second call would make a second room. So it does not fail for an
-  agent that did not get its access. The result has the room, and `agent_access_pending` names the agent.
-  `chat.add_members` for that agent completes the access.
+- **A member that does not manage the agent** can add it, but that membership gives the agent no new
+  access. An agent never changes a different agent. **Access** on the card of the agent marks the
+  membership, and its sponsor, an owner or an admin adds the member again.
+- **`chat.add_members` for an agent.** Only the owner of the room gives this scope to an agent or a
+  service account, with an add or with `chat.set_member_scopes`. A member that has the scope cannot give
+  it to an agent. So one agent cannot give it to the next agent with no person in the decision.
+- **The next owner.** When the owner leaves, the person that joined first becomes the owner. An agent
+  becomes the owner only in a room without a person (`NEXT_OWNER`). The owner has each scope, so a person
+  comes first.
+- **No escalation.** The credential of the call must hold each chat scope that the agent gets
+  (`assertRoomGrants`, before the room writes the membership). A call that gives the agent nothing, for
+  example one that removes a scope, needs no scope for it. A sponsor who is not an admin changes the agent
+  only while that person is still its sponsor: the write has this condition.
+- **Two stores.** The room object owns the members, and the directory owns the access of an agent. So the
+  two writes are not one transaction: the membership comes first. The write of the access matches only
+  while `access_version` is the one of the read, and the handler tries three times.
+- **An agent that did not get its access** does not fail the call: the members are in the room, and a
+  second `chat.create_room` would make a second room. The result names the agent in
+  `agent_access_pending`. The causes are limits that name 20 rooms, and a parallel change of the agent at
+  each try. A later call for the member completes the access.
+- **A removed agent.** `chat.remove_member` takes the room out of the limits of an agent
+  (`dropRoomAccess`). So a later add by a member that does not manage the agent gives no access. The
+  scopes of the agent do not change. Known limit: a room that an owner or an admin deletes stays in the
+  limits, and gives nothing.
 
 ## Messages
 
