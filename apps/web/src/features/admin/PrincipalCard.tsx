@@ -12,7 +12,10 @@ interface PrincipalCardProps {
 	me: Principal;
 	/** The people of the directory. The sponsor list of an agent uses them. */
 	humans: readonly Principal[];
-	/** The whole directory, for the names of the creators of a service account and of its tokens. */
+	/**
+	 * The whole directory, for the names of the creators of a service account and of its tokens, and for the
+	 * name of the agent of a member request.
+	 */
 	principals: readonly Principal[];
 	/** True for an owner or an admin. A sponsor sees the agent tools only. */
 	elevated: boolean;
@@ -25,8 +28,8 @@ interface PrincipalCardProps {
 /**
  * One person, agent or service account, as a card that opens. An owner or an admin changes the account
  * in the card. An agent card also has the policy, the permissions, the connected apps, the webhooks, the API
- * keys and the access. A service account card has the policy, the permissions, the tokens, the access and
- * the activity.
+ * keys, the member requests and the access. A service account card has the policy, the permissions, the
+ * tokens, the member requests, the access and the activity.
  */
 export function PrincipalCard({
 	principal,
@@ -82,6 +85,7 @@ export function PrincipalCard({
 				<AgentDetails
 					agent={principal}
 					sponsor={sponsor}
+					principals={principals}
 					canReadMail={elevated}
 					showSponsor={!elevated}
 					onChanged={onChanged}
