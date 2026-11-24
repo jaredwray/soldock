@@ -7,7 +7,7 @@ import { newPasswordError } from "../settings/SignInSettings.tsx";
 
 /**
  * An owner or an admin helps a person who cannot sign in: a new password (`account.set_password`), or
- * two-step verification off after a lost phone (`account.disable_totp`). The card of each other person
+ * two-step verification off after a lost phone (`account.disable_totp`). The page of each other person
  * shows this part. The owner and you do not get it. People change their own sign-in in Settings.
  */
 export function ResetSignIn({ person }: { person: Principal }) {

@@ -3694,11 +3694,15 @@ fieldset {
 	border-radius: 9px;
 }
 
-/* The Agents and Shared mailboxes sections: one card for each item. The card opens and shows its settings. */
+/* The Members, Shared mailboxes and Shared drives sections: one card for each item. A shared mailbox card and a
+   shared drive card open and show their settings. A member card is a link to the page of the member. */
 .admin-card-list {
 	display: flex;
 	flex-direction: column;
 	gap: 12px;
+	margin: 0;
+	padding: 0;
+	list-style: none;
 }
 
 .admin-card {
@@ -3764,8 +3768,49 @@ fieldset {
 }
 
 .admin-card-chevron {
+	flex: none;
 	color: var(--muted-foreground);
 	transition: transform 0.15s ease;
+}
+
+/* A row of the member list: the whole card is the link. */
+.member-row {
+	color: inherit;
+	text-decoration: none;
+}
+
+/* The page of one member: a summary, then each part in its own card. */
+.member-summary {
+	display: flex;
+	align-items: center;
+	gap: 14px;
+	padding: 18px 20px;
+	border: 1px solid var(--border);
+	border-radius: var(--radius);
+	background: var(--surface);
+}
+
+.member-summary .member-avatar {
+	width: 48px;
+	height: 48px;
+	font-size: 16px;
+}
+
+.member-summary .admin-card-name {
+	font-size: 16px;
+}
+
+.member-parts {
+	display: flex;
+	flex-direction: column;
+	gap: 16px;
+}
+
+.member-parts > * {
+	padding: 20px;
+	border: 1px solid var(--border);
+	border-radius: var(--radius);
+	background: var(--surface);
 }
 
 .admin-card[open] .admin-card-chevron {
@@ -3784,31 +3829,36 @@ fieldset {
 	border-top: 1px solid var(--border);
 }
 
-/* In an open card, the list of a part is in a box on the canvas color. The title and the note of the
-   part are above the box, so each part shows as one unit. */
-.admin-card-body .panel-card {
+/* In an open card and in a part of a member page, the list of a part is in a box on the canvas color. The
+   title and the note of the part are above the box, so each part shows as one unit. */
+.admin-card-body .panel-card,
+.member-parts .panel-card {
 	padding: 2px 16px;
 	border-radius: var(--radius-md);
 	background: var(--background);
 }
 
-.admin-card-body .panel-card > .panel-empty {
+.admin-card-body .panel-card > .panel-empty,
+.member-parts .panel-card > .panel-empty {
 	padding: 20px 0;
 }
 
 .admin-card-body .panel-title,
+.member-parts .panel-title,
 .subpanel-title {
 	margin-bottom: 4px;
 	font-size: 15px;
 	font-weight: 600;
 }
 
-.admin-card-body .panel-form-divided {
+.admin-card-body .panel-form-divided,
+.member-parts .panel-form-divided {
 	padding-bottom: 0;
 }
 
 /* A form in the box of a part keeps a space below its button. */
-.admin-card-body .panel-card .panel-form-divided {
+.admin-card-body .panel-card .panel-form-divided,
+.member-parts .panel-card .panel-form-divided {
 	padding-bottom: 16px;
 }
 
@@ -3977,6 +4027,10 @@ fieldset {
 	display: flex;
 	flex-wrap: wrap;
 	gap: 8px;
+}
+
+.member-account .admin-card-actions {
+	margin-top: 12px;
 }
 
 .admin-card-muted .admin-card-name {
@@ -4360,8 +4414,25 @@ fieldset {
 		padding: 0 14px;
 	}
 
-	.admin-card-body .panel-card {
+	.admin-card-body .panel-card,
+	.member-parts .panel-card {
 		padding: 2px 12px;
+	}
+
+	.member-summary {
+		flex-wrap: wrap;
+		padding: 14px;
+	}
+
+	/* On a phone, the chips go on their own line under the address, so the name and the address keep their width. */
+	.member-summary .admin-card-chips {
+		flex-basis: 100%;
+		justify-content: flex-start;
+		padding-left: 62px;
+	}
+
+	.member-parts > * {
+		padding: 16px 14px;
 	}
 
 	.connect-page {

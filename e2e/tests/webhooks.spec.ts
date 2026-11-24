@@ -3,7 +3,7 @@ import { expect, test } from "@playwright/test";
 import { signIn, unique } from "../support/chat.ts";
 import { BASE_URL } from "../support/server.ts";
 
-// These tests use one agent card. A parallel run would add events to the wrong webhook.
+// These tests use the page of one agent. A parallel run would add events to the wrong webhook.
 test.describe.configure({ mode: "serial" });
 
 interface Subscription {
@@ -42,7 +42,7 @@ test("a sponsor sends the events of an agent to a webhook, and an admin can only
 	expect(created.ok(), `endpoint: ${await created.text()}`).toBe(true);
 	const page = await sponsor.newPage();
 	await page.goto("/admin/members");
-	await page.locator("summary").filter({ hasText: "Research Agent" }).click();
+	await page.getByRole("link", { name: /^Research Agent/ }).click();
 
 	// An endpoint with no events stays in the list. Edit events adds the first events.
 	const pending = page.getByRole("row").filter({ hasText: label });
@@ -82,7 +82,7 @@ test("a sponsor sends the events of an agent to a webhook, and an admin can only
 	const admin = await signIn(browser, "tomasz");
 	const adminPage = await admin.newPage();
 	await adminPage.goto("/admin/members");
-	await adminPage.locator("summary").filter({ hasText: "Research Agent" }).click();
+	await adminPage.getByRole("link", { name: /^Research Agent/ }).click();
 	const adminRow = adminPage.getByRole("row").filter({ hasText: label });
 	await adminRow.getByRole("button", { name: `Edit events of ${label}` }).click();
 	const events = adminPage.getByRole("dialog", { name: `Events of ${label}` });
@@ -100,12 +100,12 @@ test("a sponsor sends the events of an agent to a webhook, and an admin can only
 	await admin.close();
 });
 
-test("a sponsor creates a webhook on the agent card, and Settings does not list it", async ({ browser }) => {
+test("a sponsor creates a webhook on the agent page, and Settings does not list it", async ({ browser }) => {
 	const sponsor = await signIn(browser, "chidi");
 	const page = await sponsor.newPage();
 	const label = unique("Card hook");
 	await page.goto("/admin/members");
-	await page.locator("summary").filter({ hasText: "Research Agent" }).click();
+	await page.getByRole("link", { name: /^Research Agent/ }).click();
 
 	await page.getByRole("button", { name: "Add webhook" }).click();
 	const add = page.getByRole("dialog", { name: "Add a webhook for Research Agent" });
@@ -139,7 +139,7 @@ test("a sponsor creates a webhook on the agent card, and Settings does not list 
 	}
 
 	await page.goto("/admin/members");
-	await page.locator("summary").filter({ hasText: "Research Agent" }).click();
+	await page.getByRole("link", { name: /^Research Agent/ }).click();
 	await page
 		.getByRole("row")
 		.filter({ hasText: label })
@@ -180,7 +180,7 @@ test("a save that fails in part stays open, and a second save sends only the rem
 		});
 	});
 	await page.goto("/admin/members");
-	await page.locator("summary").filter({ hasText: "Research Agent" }).click();
+	await page.getByRole("link", { name: /^Research Agent/ }).click();
 
 	const pending = page.getByRole("row").filter({ hasText: label });
 	await pending.getByRole("button", { name: `Edit events of ${label}` }).click();
@@ -219,7 +219,7 @@ test("a new webhook shows its secret when an event fails", async ({ browser }) =
 		});
 	});
 	await page.goto("/admin/members");
-	await page.locator("summary").filter({ hasText: "Research Agent" }).click();
+	await page.getByRole("link", { name: /^Research Agent/ }).click();
 
 	await page.getByRole("button", { name: "Add webhook" }).click();
 	const add = page.getByRole("dialog", { name: "Add a webhook for Research Agent" });
@@ -249,12 +249,12 @@ test("a new webhook shows its secret when an event fails", async ({ browser }) =
 	await sponsor.close();
 });
 
-test("an endpoint with no events stays on the agent card until the sponsor deletes it", async ({ browser }) => {
+test("an endpoint with no events stays on the agent page until the sponsor deletes it", async ({ browser }) => {
 	const sponsor = await signIn(browser, "chidi");
 	const page = await sponsor.newPage();
 	const label = unique("Empty hook");
 	await page.goto("/admin/members");
-	await page.locator("summary").filter({ hasText: "Research Agent" }).click();
+	await page.getByRole("link", { name: /^Research Agent/ }).click();
 
 	await page.getByRole("button", { name: "Add webhook" }).click();
 	const add = page.getByRole("dialog", { name: "Add a webhook for Research Agent" });

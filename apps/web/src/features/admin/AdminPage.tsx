@@ -2,7 +2,7 @@ import type { CreatedApiKey, Principal } from "@asterra/contracts";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { errorMessage } from "../../lib/api.ts";
 import { setPageTitle } from "../../lib/pageTitle.ts";
-import { navigate } from "../../lib/router.tsx";
+import { Link, navigate } from "../../lib/router.tsx";
 import { useToast } from "../../lib/toast.tsx";
 import { useOnChange } from "../../lib/useOnChange.ts";
 import { listAllPrincipals } from "../../lib/usePrincipals.ts";
@@ -14,7 +14,9 @@ import { AdminSidebar, defaultSection, isAdminOnly, sectionIcon, sectionTitle } 
 import { AiSection } from "./AiSection.tsx";
 import { ChatAdminSection } from "./ChatAdminSection.tsx";
 import { MailDomainsCard } from "./MailDomainsCard.tsx";
-import { MembersSection } from "./MembersSection.tsx";
+import { memberIcon } from "./MemberIdentity.tsx";
+import { MemberPage } from "./MemberPage.tsx";
+import { listedPrincipals, type MemberFilter, MembersSection } from "./MembersSection.tsx";
 import { SharedDrivesSection } from "./SharedDrivesSection.tsx";
 import { SharedMailboxesSection } from "./SharedMailboxesSection.tsx";
 
@@ -26,29 +28,34 @@ type DirectoryState =
 interface AdminPageProps {
 	/** The section of the route, or null for `/admin`. */
 	section: AdminSection | null;
+	/** The account whose page shows in Members, or null for the list. */
+	memberId: string | null;
 	/** True while the navigation drawer is open, at 900px and below. */
 	navOpen: boolean;
 	onCloseNav: () => void;
 }
 
 /**
- * Owners and admins see the directory. They create, change, archive and delete people and agents, and
- * they manage each agent, in one list. A member who sponsors an agent sees only those agents. The side
- * navigation selects one section. The page loads the directory at the start, and again when a card
- * opens, when the window gets focus, or when the tab becomes visible. It keeps the list while the
- * section changes. A failed refresh keeps a list that is already shown.
+ * Owners and admins see the directory. They create people, agents and service accounts in one list, and
+ * each account has its own page, where they change, archive or delete it. A member who sponsors an agent
+ * sees only those agents. The side navigation selects one section. The page loads the directory at the
+ * start, and again when the page of an account opens, when the window gets focus, or when the tab becomes
+ * visible. It keeps the list while the section changes. A failed refresh keeps a list that is already shown.
  */
-export function AdminPage({ section: routeSection, navOpen, onCloseNav }: AdminPageProps) {
+export function AdminPage({ section: routeSection, memberId: routeMemberId, navOpen, onCloseNav }: AdminPageProps) {
 	const { whoami } = useSession();
 	const toast = useToast();
 	const me = whoami.principal;
 	const elevated = isOrgAdmin(me);
 	const section = routeSection ?? defaultSection();
+	const memberId = section === "members" ? routeMemberId : null;
 	const title = sectionTitle(section, elevated);
 	const mainRef = useRef<HTMLElement>(null);
 	const loadGeneration = useRef(0);
 	const [state, setState] = useState<DirectoryState>({ status: "loading" });
 	const [created, setCreated] = useState<{ principal: Principal; key: CreatedApiKey } | null>(null);
+	// The filter of the member list stays while the page of an account shows, so Back gives the same list.
+	const [memberFilter, setMemberFilter] = useState<MemberFilter>("all");
 
 	const load = useCallback(async () => {
 		const generation = ++loadGeneration.current;
@@ -82,27 +89,54 @@ export function AdminPage({ section: routeSection, navOpen, onCloseNav }: AdminP
 		};
 	}, [load]);
 
+	const principals = state.status === "ready" ? state.principals : [];
+	const agents = principals.filter((p) => p.kind === "agent" && (elevated || p.sponsor_id === me.id));
+	const allowed = elevated || agents.length > 0;
+	// The page of an account shows only an account that the list shows.
+	const member =
+		memberId === null ? null : (listedPrincipals(principals, me, elevated).find((p) => p.id === memberId) ?? null);
+
+	const pageTitle = member ? `${member.display_name} – ${title}` : title;
 	useEffect(() => {
-		setPageTitle(`${title} – Admin – Asterra`);
-	}, [title]);
+		setPageTitle(`${pageTitle} – Admin – Asterra`);
+	}, [pageTitle]);
 
 	// `/admin` gets the path of the section that it shows, so a reload and the back button stay in that section.
 	useEffect(() => {
 		if (routeSection === null) navigate(adminPath(section), { replace: true });
 	}, [routeSection, section]);
 
-	// Each section starts at its top.
-	useOnChange(section, () => mainRef.current?.scrollTo({ top: 0 }));
+	// The page of an account loads the directory again, so it shows the current record.
+	useOnChange(memberId, () => {
+		if (memberId !== null) void load();
+	});
 
-	const principals = state.status === "ready" ? state.principals : [];
-	const agents = principals.filter((p) => p.kind === "agent" && (elevated || p.sponsor_id === me.id));
-	const allowed = elevated || agents.length > 0;
+	// Each section and the page of each account start at their top, and the page of an account gets the
+	// focus. Back in the list, the focus goes to the row of the account that was open.
+	const shownMember = useRef(memberId);
+	useOnChange(memberId ?? section, () => {
+		const left = shownMember.current;
+		shownMember.current = memberId;
+		const main = mainRef.current;
+		if (!main) return;
+		const row =
+			memberId === null && left !== null
+				? main.querySelector<HTMLElement>(`[data-member-id="${CSS.escape(left)}"]`)
+				: null;
+		if (row) return row.focus();
+		main.scrollTo({ top: 0 });
+		if (memberId !== null) main.focus({ preventScroll: true });
+	});
 
 	return (
 		<div className="section-layout">
 			<AdminSidebar active={section} elevated={elevated} open={navOpen} onClose={onCloseNav} />
 			<main id="main" ref={mainRef} className="section-main" tabIndex={-1}>
-				<PageHeader title={title} icon={sectionIcon(section)} />
+				<PageHeader
+					title={member?.display_name ?? title}
+					icon={member ? memberIcon(member) : sectionIcon(section)}
+					back={memberId === null ? undefined : { to: adminPath("members"), label: `Back to ${title}` }}
+				/>
 				<div className="section-content">
 					{state.status === "loading" && <p className="panel-card panel-empty">Loading the directory…</p>}
 					{state.status === "error" && (
@@ -141,14 +175,45 @@ export function AdminPage({ section: routeSection, navOpen, onCloseNav }: AdminP
 		}
 		switch (section) {
 			case "members":
+				if (memberId !== null) {
+					if (!member) {
+						return (
+							<div className="panel-card panel-form">
+								<p>This account is not in the directory, or you cannot manage it.</p>
+								<Link to={adminPath("members")} className="button">
+									Show all {elevated ? "members" : "your agents"}
+								</Link>
+							</div>
+						);
+					}
+					return (
+						<MemberPage
+							// Each account gets its own parts, so a form never keeps the text of a different account.
+							key={member.id}
+							principal={member}
+							me={me}
+							humans={principals.filter((p) => p.kind === "human")}
+							principals={principals}
+							elevated={elevated}
+							onChanged={() => void load()}
+							onDeleted={() => {
+								// The row of a deleted account does not get the focus: the next load removes it.
+								shownMember.current = null;
+								navigate(adminPath("members"), { replace: true });
+								void load();
+							}}
+						/>
+					);
+				}
 				return (
 					<MembersSection
 						me={me}
 						elevated={elevated}
 						principals={principals}
-						onChanged={() => void load()}
+						filter={memberFilter}
+						onFilterChange={setMemberFilter}
 						onCreated={(principal, key) => {
-							// Only an agent has a first key. A person signs in with the password. A service account card adds tokens.
+							// Only an agent has a first key. A person signs in with the password. The page of a service account adds tokens.
 							if (key) setCreated({ principal, key });
 							else if (principal.kind === "service") {
 								toast({ message: `${principal.display_name} is ready. Open it to add a token.` });

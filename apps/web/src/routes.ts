@@ -28,7 +28,7 @@ export type DriveView =
 
 /**
  * The sections of the admin page. Each has one path under `/admin`. People and agents share `members`.
- * The old `/admin/agents` path redirects there.
+ * The old `/admin/agents` path redirects there. Each member has its own page under `/admin/members`.
  */
 export const ADMIN_SECTIONS = ["members", "shared-mailboxes", "shared-drives", "chat", "domains", "ai"] as const;
 export type AdminSection = (typeof ADMIN_SECTIONS)[number];
@@ -67,8 +67,11 @@ export type Route =
 			view?: ChatView;
 			search?: { query: string; roomId: string | null };
 	  }
-	/** `section` is null for `/admin`. The page then shows the first section that the person can use. */
-	| { page: "admin"; section: AdminSection | null }
+	/**
+	 * `section` is null for `/admin`. The page then shows the first section that the person can use.
+	 * `memberId` is the person, agent or service account whose page shows in the Members section.
+	 */
+	| { page: "admin"; section: AdminSection | null; memberId?: string }
 	/** The approval page of an OAuth request from an MCP client. `/oauth/authorize` sends the browser here. */
 	| { page: "connect"; requestId: string }
 	/** `section` is null for `/settings`. The page then shows the first section. */
@@ -122,6 +125,8 @@ export function parseRoute(location: string): Route {
 	if (first === "admin" && parts.length === 2 && second === "agents")
 		return { page: "redirect", to: adminPath("members") };
 	if (first === "admin" && parts.length === 2 && isAdminSection(second)) return { page: "admin", section: second };
+	if (first === "admin" && parts.length === 3 && second === "members" && isPrincipalId(third))
+		return { page: "admin", section: "members", memberId: third };
 	if (first === "settings" && parts.length === 1) return { page: "settings", section: null };
 	if (first === "settings" && parts.length === 2 && isSettingsSection(second))
 		return { page: "settings", section: second };
@@ -296,6 +301,11 @@ export function itemPath(item: {
 /** The path of a section of the admin page. */
 export function adminPath(section: AdminSection): string {
 	return `${ADMIN_PATH}/${section}`;
+}
+
+/** The path of the page of one person, agent or service account in Admin › Members. */
+export function memberPath(principalId: string): string {
+	return `${adminPath("members")}/${encodeURIComponent(principalId)}`;
 }
 
 /** The path of a section of the settings page. */

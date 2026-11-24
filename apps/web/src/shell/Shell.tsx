@@ -155,7 +155,14 @@ export function Shell() {
 					/>
 				);
 			case "admin":
-				return <AdminPage section={route.section} navOpen={navOpen} onCloseNav={() => setNavOpen(false)} />;
+				return (
+					<AdminPage
+						section={route.section}
+						memberId={route.memberId ?? null}
+						navOpen={navOpen}
+						onCloseNav={() => setNavOpen(false)}
+					/>
+				);
 			case "connect":
 				return <ConnectPage key={route.requestId} requestId={route.requestId} />;
 			case "settings":

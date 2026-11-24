@@ -455,7 +455,7 @@ Do these steps before the deploy, in the old version:
    most 200 rooms: for an account with more rooms, read the members of each room.
 3. Remove each membership that the account must not use. Do this in the settings of that mailbox, drive
    or room.
-4. Read **Shared directly in Drive** on the same card. An account with limits did not reach these items.
+4. Read **Shared directly in Drive** on the same page. An account with limits did not reach these items.
    After the upgrade, it reaches each one. Remove each grant that the account must not use
    (`drive.unshare_item`, or **Share** on the item in Drive).
 5. Each account always reaches its own mailbox and its own drive after the upgrade, with the scopes that
