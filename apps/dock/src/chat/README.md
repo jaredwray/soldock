@@ -209,9 +209,10 @@ and the room in its limits when it has limits ([`identity`](../identity/README.m
   for a principal that is not a member now (`releaseLimits`), in one step with the read of its members.
 - **When the directory fails during that write,** the limits still name the room. The room keeps the
   principal in its table `limit_drops`. Before that principal is a member again (an add, a join, or an
-  owner that an admin assigns), the room completes the write (`settleDrops`). When the directory fails
+  owner that an admin assigns), the room completes the write (`afterDrops`). When the directory fails
   again, the call gets `conflict`, and the principal does not become a member. So old limits never give
-  access to a new membership.
+  access to a new membership. That write and the write of the new member are one step of the room too: no
+  other call of the room runs between them.
 - Known limit: a room that an owner or an admin deletes stays in the limits, and gives nothing.
 
 ## Messages

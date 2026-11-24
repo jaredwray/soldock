@@ -1255,6 +1255,80 @@ describe("an agent in a room", () => {
 		expect(await codeOf(agent.call("chat.list_messages", { room_id: room.id }))).toBe("forbidden");
 	});
 
+	// The room completes a failed write of the limits in the step that makes the agent a member again. A
+	// different call must not run during that step. If a manager adds the agent and a remove fails again
+	// during the write, the end of the first write would delete the record of the second failure.
+	it("lets no call of the room run while the room completes a failed write of its limits", async () => {
+		const agent = await newAgent();
+		const person = await createActor(owner, {
+			kind: "human",
+			display_name: "Cy",
+			address: "cy@dock.test",
+			password: PASSWORD,
+		});
+		const room = await createRoom(ada, "private", "Builds", [agent.id, person.id]);
+		const member = { room_id: room.id, principal_id: agent.id };
+		const add = { room_id: room.id, principal_ids: [agent.id] };
+		// `fails`: the write that takes the room out of the limits fails. `holds`: the write completes, and
+		// then waits for the test before it returns.
+		const directory = { fails: true, holds: false, held: false, release: false };
+		await runInDurableObject(roomStub(room.id), (instance) => {
+			const target = instance as unknown as { env: Env };
+			const proxy = new Proxy(env.DIRECTORY, {
+				get(db, property) {
+					if (property === "prepare") {
+						return (sql: string) => {
+							const statement = db.prepare(sql);
+							if (!sql.includes("json_group_array(room.value)")) return statement;
+							return {
+								bind: (...values: unknown[]) => ({
+									run: async () => {
+										if (directory.fails) throw new Error("The directory is not available.");
+										const result = await statement.bind(...values).run();
+										if (directory.holds) {
+											directory.holds = false;
+											directory.held = true;
+											while (!directory.release) await scheduler.wait(5);
+										}
+										return result;
+									},
+								}),
+							};
+						};
+					}
+					const value = Reflect.get(db, property);
+					return typeof value === "function" ? value.bind(db) : value;
+				},
+			});
+			target.env = { ...target.env, DIRECTORY: proxy };
+		});
+		await ada.call("chat.remove_member", member);
+		expect((await access(agent.id)).resources?.room_ids).toEqual([room.id]);
+
+		// Cy does not manage the agent. Its add completes the write of the limits, and the write waits.
+		directory.fails = false;
+		directory.holds = true;
+		const late = person.call("chat.add_members", add);
+		while (!directory.held) await scheduler.wait(5);
+		// During the wait, a manager adds the agent, and then a remove fails. These calls must wait for the
+		// add of Cy. The test gives them a short time, and then lets the write of Cy continue.
+		const during = (async () => {
+			await ada.call("chat.add_members", add);
+			directory.fails = true;
+			await ada.call("chat.remove_member", member);
+		})();
+		await Promise.race([during, scheduler.wait(500)]);
+		directory.release = true;
+		await late;
+		await during;
+
+		// The last remove failed, so the limits still name the room. The room must know that: the agent is not
+		// a member, and a member that does not manage it cannot make it a member while the directory fails.
+		expect((await access(agent.id)).resources?.room_ids).toEqual([room.id]);
+		expect(await codeOf(agent.call("chat.list_messages", { room_id: room.id }))).toBe("not_found");
+		expect(await codeOf(person.call("chat.add_members", add))).toBe("conflict");
+	});
+
 	it("gets its access when its manager changes its scopes in a room, or opens a group direct message with it", async () => {
 		const agent = await newAgent();
 		const person = await createActor(owner, {
