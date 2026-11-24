@@ -10,6 +10,8 @@ export interface MailboxEntry {
 	name: string;
 	address: string | null;
 	kind: Mailbox["kind"];
+	/** True for the mailbox of a service account. Its kind is `agent`. */
+	service: boolean;
 }
 
 const OWN_KEY = "own";
@@ -55,13 +57,21 @@ export function mailboxNav(
 	];
 	if (others.length === 0 && current === null) return null;
 	const entries: MailboxEntry[] = [
-		{ id: null, key: OWN_KEY, name: "My mailbox", address: own?.address ?? null, kind: "personal" },
+		{
+			id: null,
+			key: OWN_KEY,
+			name: "My mailbox",
+			address: own?.address ?? null,
+			kind: "personal",
+			service: own?.service ?? false,
+		},
 		...others.map((mailbox) => ({
 			id: mailbox.id,
 			key: mailbox.id,
 			name: mailbox.display_name,
 			address: mailbox.address,
 			kind: mailbox.kind,
+			service: mailbox.service,
 		})),
 	];
 	if (current !== null && !others.some((mailbox) => mailbox.id === current)) {
@@ -72,6 +82,7 @@ export function mailboxNav(
 			name: currentName ?? (agent ? "Agent mailbox" : "Team mailbox"),
 			address: null,
 			kind: agent ? "agent" : "team",
+			service: false,
 		});
 	}
 	return entries;

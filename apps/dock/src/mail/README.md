@@ -111,7 +111,8 @@ receives and sends. `canReadAgentMailboxes` in [`identity`](../identity/README.m
 who can.
 
 - `mail.list_mailboxes` gives an owner or an admin the mailbox of each agent after the team
-  mailboxes, with the kind `agent`, by name.
+  mailboxes, with the kind `agent`, by name. A service account is in this list too. Its `service` is
+  true, so a client can show it with a different icon.
 - With the id of an agent as `mailbox_id`, the read operations work: `mail.get_profile`,
   `mail.list_labels`, `mail.list_threads`, `mail.get_thread`, `mail.get_message`,
   `mail.get_attachment` and `mail.suggest_recipients`.

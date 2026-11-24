@@ -161,7 +161,8 @@ function MailboxNode({
 	children: ReactNode;
 }) {
 	const groupId = useId();
-	const icon = entry.kind === "agent" ? "bot" : entry.kind === "team" ? "team" : "mail";
+	// An agent mailbox of a service account gets the settings icon, as in Admin › Members.
+	const icon = entry.kind === "personal" ? "mail" : entry.kind === "team" ? "team" : entry.service ? "settings" : "bot";
 	// A screen reader also reads the address, and "read only" for the mailbox of an agent.
 	const extra = [entry.address, entry.kind === "agent" ? "read only" : null].filter(Boolean).join(", ");
 	return (

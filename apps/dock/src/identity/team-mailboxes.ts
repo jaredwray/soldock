@@ -277,14 +277,26 @@ export async function teamMailboxFor(
 	return { id: row.id, kind: "team", address: row.address, display_name: row.display_name, scopes };
 }
 
-const AGENT_MAILBOX_SELECT = `SELECT p.id AS id, 'agent' AS kind, a.address AS address, p.display_name AS display_name
+const AGENT_MAILBOX_SELECT = `SELECT p.id AS id, 'agent' AS kind, a.address AS address, p.display_name AS display_name,
+	p.service AS service
 	FROM principals p JOIN addresses a ON a.principal_id = p.id AND a.is_primary = 1
 	WHERE p.kind = 'agent'`;
 
-/** The own mailbox of each agent, by name. Only owners and admins get this list (`canReadAgentMailboxes`). */
-export async function agentMailboxes(db: D1Database): Promise<MailboxRecord[]> {
-	const { results } = await db.prepare(`${AGENT_MAILBOX_SELECT} ORDER BY p.display_name, p.id`).all<MailboxRecord>();
-	return results;
+/** The own mailbox of an agent in the list of an owner or an admin. A service account is an agent row. */
+export interface AgentMailboxRecord extends MailboxRecord {
+	/** True for the mailbox of a service account. */
+	service: boolean;
+}
+
+/**
+ * The own mailbox of each agent and each service account, by name. Only owners and admins get this list
+ * (`canReadAgentMailboxes`).
+ */
+export async function agentMailboxes(db: D1Database): Promise<AgentMailboxRecord[]> {
+	const { results } = await db
+		.prepare(`${AGENT_MAILBOX_SELECT} ORDER BY p.display_name, p.id`)
+		.all<MailboxRecord & { service: number }>();
+	return results.map((row) => ({ ...row, service: row.service === 1 }));
 }
 
 /**
