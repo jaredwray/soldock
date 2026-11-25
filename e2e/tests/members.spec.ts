@@ -35,6 +35,8 @@ test("an admin creates a person with no API key, and an agent with a first key, 
 		await dialog.getByLabel("Address", { exact: true }).fill(`cooper-${local}`);
 		// The domain is a list of the saved domains, not free text. It starts on the domain of the admin.
 		await expect(dialog.getByRole("combobox", { name: "Email domain" })).toHaveText("example.com");
+		// An invite link is the default. The admin can choose the first password instead.
+		await dialog.getByLabel("Set a password").check();
 		await dialog.getByLabel("First password").fill("cooper local password");
 		ids.push(await submit(page, "Create person"));
 		await expect(dialog).toBeHidden();
@@ -134,5 +136,76 @@ test("an admin creates a person with no API key, and an agent with a first key, 
 			await context.request.delete(`/api/v1/directory/principals/${id}`, { headers: { origin: BASE_URL } });
 		}
 		await context.close();
+	}
+});
+
+// An admin creates a person with an invite link instead of a first password. The link shows once. A new link from
+// the page of the person replaces it. The person opens the new link in a browser without a session, chooses a
+// password, and is signed in. Each link then stops.
+test("a new person chooses the password from an invite link, and the link works one time", async ({ browser }) => {
+	const admin = await signIn(browser, "tomasz");
+	const visitor = await browser.newContext();
+	let personId: string | null = null;
+	const local = `grace-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+	const address = `${local}@example.com`;
+	const password = "grace local password";
+	try {
+		const page = await admin.newPage();
+		await page.goto("/admin/members");
+		const dialog = page.getByRole("dialog", { name: "New member" });
+		const person = unique("Grace Hopper");
+		await page.getByRole("button", { name: "New member" }).click();
+		await dialog.getByLabel("Display name").fill(person);
+		await dialog.getByLabel("Address", { exact: true }).fill(local);
+		await expect(dialog.getByLabel("Invite link")).toBeChecked();
+		await expect(dialog.getByLabel("First password")).toHaveCount(0);
+		personId = await submit(page, "Create person");
+		const created = page.getByRole("dialog", { name: `${person} is ready` });
+		const first = await created.getByLabel("Invite link").inputValue();
+		expect(first).toMatch(/\/invite#sdi_[A-Za-z0-9_-]{43}$/);
+		await created.getByRole("button", { name: "Done" }).click();
+
+		// A new link from Reset sign-in replaces the first one.
+		await page.goto(`/admin/members/${personId}`);
+		await page.getByRole("button", { name: "New invite link" }).click();
+		const renewed = page.getByRole("dialog", { name: `Copy the invite link for ${person}` });
+		const second = await renewed.getByLabel("Invite link").inputValue();
+		expect(second).not.toBe(first);
+		await renewed.getByRole("button", { name: "Done" }).click();
+
+		const invited = await visitor.newPage();
+		await invited.goto(first);
+		await expect(invited.getByRole("heading", { name: "This invite link does not work" })).toBeVisible();
+
+		await invited.goto(second);
+		await expect(invited.getByRole("heading", { name: "Set your password" })).toBeVisible();
+		await expect(invited.getByText(address)).toBeVisible();
+		await invited.getByLabel("New password").fill(password);
+		await invited.getByLabel("Type the password again").fill("a different password");
+		await invited.getByRole("button", { name: "Set password and sign in" }).click();
+		await expect(invited.getByRole("alert")).toHaveText("The two passwords are different.");
+		await invited.getByLabel("Type the password again").fill(password);
+		await invited.getByRole("button", { name: "Set password and sign in" }).click();
+		// The app opens for the person, and the address bar no longer holds the link.
+		await expect(invited.getByRole("heading", { name: "Set your password" })).toBeHidden();
+		await expect(invited).not.toHaveURL(/invite/);
+		const whoami = await visitor.request.get("/api/v1/account");
+		expect(whoami.ok()).toBe(true);
+		expect(((await whoami.json()) as { principal: { id: string } }).principal.id).toBe(personId);
+
+		await invited.goto(second);
+		await expect(invited.getByRole("heading", { name: "This invite link does not work" })).toBeVisible();
+		const fresh = await browser.newContext();
+		const signedIn = await fresh.request.post("/auth/session", {
+			headers: { origin: BASE_URL, "content-type": "application/json" },
+			data: { address, password },
+		});
+		expect(signedIn.status()).toBe(200);
+		await fresh.close();
+	} finally {
+		if (personId)
+			await admin.request.delete(`/api/v1/directory/principals/${personId}`, { headers: { origin: BASE_URL } });
+		await visitor.close();
+		await admin.close();
 	}
 });

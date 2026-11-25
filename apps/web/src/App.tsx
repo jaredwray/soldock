@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { endSession, onSessionChange } from "./features/auth/auth.ts";
 import { loadSession, type SessionState } from "./features/auth/boot.ts";
+import { InvitePage } from "./features/auth/InvitePage.tsx";
+import { INVITE_PATH } from "./features/auth/invite.ts";
 import { SignInPage } from "./features/auth/SignInPage.tsx";
 import { type Session, SessionContext } from "./features/auth/session.tsx";
 import { draftStorage, forgetOtherDrafts } from "./features/chat/drafts.ts";
@@ -31,6 +33,8 @@ onAccountChange(forgetOtherPeople);
  */
 export function App() {
 	const [state, setState] = useState<SessionState>({ status: "loading" });
+	// An invite link opens its own page, also while somebody is signed in. It leaves the page after the sign-in.
+	const [invite, setInvite] = useState(() => window.location.pathname === INVITE_PATH);
 
 	/**
 	 * Shows a new state. Code outside the signed-in app learns in the same step who the person is now,
@@ -93,7 +97,25 @@ export function App() {
 
 	return <ToastProvider>{render()}</ToastProvider>;
 
+	/** Leaves the invite page. The link holds a secret, so the address bar and the history do not keep it. */
+	function leaveInvite() {
+		window.history.replaceState(null, "", "/");
+		setInvite(false);
+	}
+
 	function render() {
+		if (invite) {
+			return (
+				<InvitePage
+					signedInAs={state.status === "signed-in" ? state.whoami.principal.address : null}
+					onSignedIn={() => {
+						leaveInvite();
+						void load(false);
+					}}
+					onLeave={leaveInvite}
+				/>
+			);
+		}
 		switch (state.status) {
 			case "loading":
 				return (

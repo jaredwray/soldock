@@ -107,6 +107,7 @@ export {
 	DIRECTORY_LIMITS,
 	DirectoryEntry,
 	DisplayName,
+	Invite,
 	OutboundPolicy,
 	Principal,
 	SERVICE_ACTIVITY_LIMITS,
@@ -275,6 +276,12 @@ export {
 	TabName,
 } from "./sheets.ts";
 export {
+	INVITE_DAYS,
+	InviteAcceptInput,
+	InviteAcceptResult,
+	InviteCheckInput,
+	InviteCheckResult,
+	InviteToken,
 	PASSWORD_MAX_LENGTH,
 	PASSWORD_MIN_LENGTH,
 	Password,

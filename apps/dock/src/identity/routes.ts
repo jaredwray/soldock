@@ -1,5 +1,9 @@
 import {
 	ALL_SCOPES,
+	InviteAcceptInput,
+	type InviteAcceptResult,
+	InviteCheckInput,
+	type InviteCheckResult,
 	SETUP_TOKEN_MIN_LENGTH,
 	SetupInput,
 	type SetupResult,
@@ -21,6 +25,7 @@ import {
 	sha256Hex,
 } from "../platform/index.ts";
 import { isSameOrigin, readCookie, SESSION_COOKIE } from "./auth.ts";
+import { acceptInvite, findInvite } from "./invites.ts";
 import { toApiKeyOutput, toPrincipalOutput } from "./output.ts";
 import { hashPassword } from "./password.ts";
 import { endEventSockets } from "./principal.ts";
@@ -69,6 +74,10 @@ function sessionCookie(value: string, maxAge: number): string {
 	return `${SESSION_COOKIE}=${value}; Path=/; Secure; HttpOnly; SameSite=Lax; Max-Age=${maxAge}`;
 }
 
+/** The answer for an invite link that does not work. It does not tell why. */
+const INVITE_GONE =
+	"This invite link does not work. It was used, it expired, or an admin made a new link. Ask an admin for a new link.";
+
 /** The bodies of these routes are small. A larger body is refused while it streams. */
 const AUTH_BODY_BYTES = 4096;
 
@@ -83,7 +92,8 @@ async function jsonBody(request: Request): Promise<unknown> {
 
 /**
  * The `/auth/*` ceremonies. They are not operations: they create credentials. A human signs in with
- * their Asterra address, their password and, when they turned it on, a TOTP code.
+ * their Asterra address, their password and, when they turned it on, a TOTP code. A person without a password
+ * signs in the first time with an invite link and a new password.
  */
 export function mountAuthRoutes(app: AuthApp): void {
 	// A valid setup secret permits recovery without a query against an old directory schema.
@@ -221,6 +231,56 @@ export function mountAuthRoutes(app: AuthApp): void {
 		const result: SignInResult = { status: "signed_in" };
 		return c.json(result, 200, {
 			"set-cookie": sessionCookie(outcome.sessionToken, SESSION_TTL_SECONDS),
+			"cache-control": "no-store",
+		});
+	});
+
+	// An invite link: the page reads the person of the link, then sends the first password. The secret of the link
+	// is in the body, never in a URL. An unknown, used, replaced or expired link gets the same 404.
+	app.post("/auth/invite/check", async (c) => {
+		if (!isSameOrigin(c.req.raw)) throw new OperationError("forbidden", "Open the invite link in the Asterra web app.");
+		const parsed = InviteCheckInput.safeParse(await jsonBody(c.req.raw));
+		if (!parsed.success) throw new OperationError("invalid", z.prettifyError(parsed.error));
+		const invite = await findInvite(c.env.DIRECTORY, parsed.data.token);
+		if (!invite) throw new OperationError("not_found", INVITE_GONE);
+		const result: InviteCheckResult = {
+			display_name: invite.principal.display_name,
+			address: invite.principal.address,
+			expires_at: invite.expiresAt,
+		};
+		return c.json(result, 200, { "cache-control": "no-store" });
+	});
+
+	// The person of the link sets the first password, and gets a session. The token works one time.
+	app.post("/auth/invite/accept", async (c) => {
+		if (!isSameOrigin(c.req.raw)) throw new OperationError("forbidden", "Open the invite link in the Asterra web app.");
+		const parsed = InviteAcceptInput.safeParse(await jsonBody(c.req.raw));
+		if (!parsed.success) throw new OperationError("invalid", z.prettifyError(parsed.error));
+		// The lookup comes before the hash, so a link that does not work costs no password derivation.
+		const invite = await findInvite(c.env.DIRECTORY, parsed.data.token);
+		const sessionToken = invite
+			? await acceptInvite(
+					c.env.DIRECTORY,
+					{ principalId: invite.principal.id, tokenHash: invite.tokenHash },
+					await hashPassword(parsed.data.password),
+				)
+			: null;
+		if (!invite || !sessionToken) {
+			log("info", "invite refused", { principalId: invite?.principal.id ?? null, requestId: c.var.requestId });
+			throw new OperationError("not_found", INVITE_GONE);
+		}
+		audit({
+			op: "auth.accept_invite",
+			actor: invite.principal.id,
+			actorKind: "human",
+			credential: "invite",
+			target: invite.principal.id,
+			result: "ok",
+			requestId: c.var.requestId,
+		});
+		const result: InviteAcceptResult = { status: "signed_in" };
+		return c.json(result, 200, {
+			"set-cookie": sessionCookie(sessionToken, SESSION_TTL_SECONDS),
 			"cache-control": "no-store",
 		});
 	});

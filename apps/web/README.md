@@ -21,7 +21,19 @@ MCP clients. The app has no UI-only path.
     shows the sign-in page again.
   - The page is one card on the surface: the mark of Asterra, the title and one line of text, then
     the fields and an ink button with the full width. An error shows in a box with a red tint,
-    above the button. Setup uses the same card.
+    above the button. Setup and the invite page use the same card.
+- **Invite page** (`/invite#sdi_…`, [`InvitePage.tsx`](src/features/auth/InvitePage.tsx)). An owner or an
+  admin sends this link to a new person in place of a first password.
+  - `App` shows the page before the boot decides, also while somebody is signed in. Then a notice says that
+    the person of the link signs in in place of that account.
+  - The page reads the secret from the fragment and sends it in the body of `POST /auth/invite/check`. It
+    shows the address of the account. The person types a new password two times
+    (`autocomplete="new-password"`, with a hidden `username` field that holds the address, for a password
+    manager). `POST /auth/invite/accept` sets the password and the session cookie, and the app opens.
+  - After the sign-in, the address bar and the history no longer hold the link (`history.replaceState`).
+  - A link that does not work shows "This invite link does not work", with **Go to sign-in**.
+  - A second link in the same tab changes only the fragment, so the page starts the form again on
+    `hashchange`.
 - **Boot.** The app calls `GET /auth/setup` before `account.whoami`.
   An empty directory or a valid `SETUP_TOKEN` shows setup, even with an old session or schema.
   Otherwise, the session decides between the app and the sign-in page.
@@ -515,13 +527,16 @@ MCP clients. The app has no UI-only path.
       admin, or on the first domain if that domain is not saved (`memberAddress.ts`). The create button
       stays off until the list loads. With no saved domain, a hint tells the admin to add one.
       The first API key of a new agent shows once, with a copy button.
-      A new person gets no API key. A toast tells the admin to give the first password to the person.
+      A new person gets no API key. **First sign-in** has two choices. **Invite link** is the default: after
+      the create, the link shows once, with a copy button, its end and a warning to send it to the person
+      only. **Set a password** shows the **First password** field, and a toast tells the admin to give the
+      first password to the person.
       The person can create keys in Settings after the sign-in.
       A service account (`directory.create_service_account`) gets a name, an address, a description and a sponsor, and no key.
       A toast tells the admin to open it to add a token.
       An agent (`directory.create_principal`) gets a name, an address and a sponsor. Its first API key only proves its identity.
       The form has no scopes and no control for where a new agent or service account can act. A line tells that it reaches its own mailbox and its own drive, and a shared mailbox, a shared drive or a room after a member adds it there, and that the settings of each one decide what it can do.
-      A person also needs a first password. The admin gives the password to the person.
+      A person without a first password gets an invite link (`directory.create_principal` without `password`).
       An archived person cannot be a sponsor.
       The dialog shows the banner when Agent is selected.
     - **Name and role**, or **Name and sponsor**, is the first part of the page of a member.
@@ -532,6 +547,9 @@ MCP clients. The app has no UI-only path.
       The page says that only the owner can change that account.
     - **Reset sign-in** is a part of the page of each other person.
       It sets a new password (`account.set_password`).
+      **New invite link** makes a link for a person who did not set a password yet (`directory.create_invite`),
+      and shows it once. The new link replaces the earlier link. For a person with a password, the error of
+      the server shows.
       It can also turn off two-step verification (`account.disable_totp`) after a confirmation.
       The owner and you have no **Reset sign-in** part.
     - **Account** is a part of the page of each member, except the owner and you (`MemberAccount.tsx`).

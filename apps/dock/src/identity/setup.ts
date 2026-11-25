@@ -30,6 +30,7 @@ import mailSettingsSchema from "../../migrations/0031_mail_settings.sql";
 import driveShareRequestsSchema from "../../migrations/0032_drive_share_requests.sql";
 import resourceAccessSchema from "../../migrations/0033_resource_access.sql";
 import unusedAccessColumnsSchema from "../../migrations/0034_remove_unused_access_columns.sql";
+import inviteSchema from "../../migrations/0035_invites.sql";
 import { log, OperationError, randomToken } from "../platform/index.ts";
 import { allMailboxIds } from "./team-mailboxes.ts";
 
@@ -122,6 +123,8 @@ function freshDirectoryStatements(db: D1Database): D1PreparedStatement[] {
 		"DROP TABLE IF EXISTS oauth_clients",
 		"DROP TABLE IF EXISTS team_mailbox_members",
 		"DROP TABLE IF EXISTS team_mailboxes",
+		// The invite links give a sign-in to the old principals.
+		"DROP TABLE IF EXISTS invites",
 		"DROP TABLE IF EXISTS sessions",
 		"DROP TABLE IF EXISTS sign_in_codes",
 		"DROP TABLE IF EXISTS api_keys",
@@ -167,6 +170,7 @@ function freshDirectoryStatements(db: D1Database): D1PreparedStatement[] {
 		...driveShareRequestsSchema.split("--> statement-breakpoint"),
 		...resourceAccessSchema.split("--> statement-breakpoint"),
 		...unusedAccessColumnsSchema.split("--> statement-breakpoint"),
+		...inviteSchema.split("--> statement-breakpoint"),
 		// The directory now has the schema of each bundled migration. Record them in the table that
 		// `wrangler d1 migrations apply` reads, or it runs them again later. A second run of 0004 would
 		// copy the principals without their passwords. The columns are the ones that wrangler creates.
@@ -211,4 +215,5 @@ const BUNDLED_MIGRATIONS = [
 	"0032_drive_share_requests.sql",
 	"0033_resource_access.sql",
 	"0034_remove_unused_access_columns.sql",
+	"0035_invites.sql",
 ] as const;
