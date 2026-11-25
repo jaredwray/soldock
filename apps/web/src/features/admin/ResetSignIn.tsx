@@ -1,14 +1,16 @@
-import type { Principal } from "@asterra/contracts";
+import type { Invite, Principal } from "@asterra/contracts";
 import { type FormEvent, useId, useState } from "react";
 import { api, errorMessage } from "../../lib/api.ts";
 import { ConfirmDialog } from "../../lib/ConfirmDialog.tsx";
 import { useToast } from "../../lib/toast.tsx";
+import { InviteLinkDialog } from "../settings/SecretDialog.tsx";
 import { newPasswordError } from "../settings/SignInSettings.tsx";
 
 /**
- * An owner or an admin helps a person who cannot sign in: a new password (`account.set_password`), or
- * two-step verification off after a lost phone (`account.disable_totp`). The page of each other person
- * shows this part. The owner and you do not get it. People change their own sign-in in Settings.
+ * An owner or an admin helps a person who cannot sign in: a new password (`account.set_password`),
+ * two-step verification off after a lost phone (`account.disable_totp`), or a new invite link for a person
+ * who has not set a password yet (`directory.create_invite`). The page of each other person shows this part.
+ * The owner and you do not get it. People change their own sign-in in Settings.
  */
 export function ResetSignIn({ person }: { person: Principal }) {
 	const toast = useToast();
@@ -17,6 +19,7 @@ export function ResetSignIn({ person }: { person: Principal }) {
 	const [busy, setBusy] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 	const [confirmOff, setConfirmOff] = useState(false);
+	const [invite, setInvite] = useState<Invite | null>(null);
 	const ids = { password: useId(), passwordHint: useId(), confirmation: useId() };
 
 	async function submit(event: FormEvent<HTMLFormElement>) {
@@ -37,6 +40,19 @@ export function ResetSignIn({ person }: { person: Principal }) {
 		}
 	}
 
+	// The server refuses a person who has a password: the admin learns it from the error.
+	async function makeInvite() {
+		setBusy(true);
+		setError(null);
+		try {
+			setInvite((await api.call("directory.create_invite", { principal_id: person.id })).invite);
+		} catch (caught) {
+			setError(errorMessage(caught));
+		} finally {
+			setBusy(false);
+		}
+	}
+
 	async function turnOff() {
 		await api.call("account.disable_totp", { principal_id: person.id });
 		toast({ message: `Two-step verification is off for ${person.display_name}.` });
@@ -46,7 +62,8 @@ export function ResetSignIn({ person }: { person: Principal }) {
 		<form className="admin-card-form" onSubmit={submit} noValidate>
 			<h2 className="subpanel-title">Reset sign-in</h2>
 			<p className="field-hint">
-				Set a new password after they forget it, or turn off two-step verification after they lose their phone.
+				Set a new password after they forget it, or turn off two-step verification after they lose their phone. If they
+				have not set a password yet, make a new invite link. It replaces the earlier link.
 			</p>
 			<div className="field">
 				<label htmlFor={ids.password} className="field-label">
@@ -86,6 +103,9 @@ export function ResetSignIn({ person }: { person: Principal }) {
 				</p>
 			)}
 			<div className="admin-card-actions">
+				<button type="button" className="button" onClick={() => void makeInvite()} disabled={busy}>
+					New invite link
+				</button>
 				<button type="button" className="button" onClick={() => setConfirmOff(true)} disabled={busy}>
 					Turn off two-step verification
 				</button>
@@ -93,6 +113,7 @@ export function ResetSignIn({ person }: { person: Principal }) {
 					{busy ? "Saving…" : "Set password"}
 				</button>
 			</div>
+			{invite && <InviteLinkDialog person={person} invite={invite} onClose={() => setInvite(null)} />}
 			{confirmOff && (
 				<ConfirmDialog
 					title={`Turn off two-step verification for ${person.display_name}?`}

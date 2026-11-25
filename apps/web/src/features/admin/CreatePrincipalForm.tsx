@@ -2,7 +2,9 @@ import {
 	API_KEY_LIMITS,
 	type CreatedApiKey,
 	EmailAddress,
+	INVITE_DAYS,
 	type InputOf,
+	type Invite,
 	PASSWORD_MAX_LENGTH,
 	PASSWORD_MIN_LENGTH,
 	Password,
@@ -26,8 +28,11 @@ interface CreatePrincipalDialogProps {
 	/** The people who can sponsor a new agent. An archived person cannot. */
 	humans: readonly Principal[];
 	onClose: () => void;
-	/** The new principal, with the first API key of an agent. A person and a service account get no key: null. */
-	onCreated: (principal: Principal, key: CreatedApiKey | null) => void;
+	/**
+	 * The new principal, with the first API key of an agent, and the invite link of a person without a first
+	 * password. Each is null when the account has none.
+	 */
+	onCreated: (principal: Principal, key: CreatedApiKey | null, invite: Invite | null) => void;
 }
 
 /** Creates a person, an agent or a service account in a modal dialog, from the button in the Members section. */
@@ -45,10 +50,18 @@ interface CreatePrincipalFormProps {
 	humans: readonly Principal[];
 	onBusy: (busy: boolean) => void;
 	onCancel: () => void;
-	onCreated: (principal: Principal, key: CreatedApiKey | null) => void;
+	onCreated: (principal: Principal, key: CreatedApiKey | null, invite: Invite | null) => void;
 }
 
 type Kind = "human" | "agent" | "service";
+
+/** How a new person signs in the first time: with an invite link, or with a first password from the admin. */
+type FirstSignIn = "invite" | "password";
+
+const FIRST_SIGN_IN_HINTS: Record<FirstSignIn, string> = {
+	invite: `You get a link to send to the person. The person opens it, chooses a password, and is signed in. It works one time, for ${INVITE_DAYS} days.`,
+	password: "You choose the first password and give it to the person, who can change it in Settings.",
+};
 
 const KIND_HINTS: Record<Kind, string> = {
 	human: "Signs in to the web app with a password.",
@@ -60,8 +73,8 @@ const KIND_HINTS: Record<Kind, string> = {
  * Creates a person, an agent or a service account. A new agent or service account reaches its own mailbox
  * and its own drive, and then each shared mailbox, shared drive and room that a member adds it to: each of
  * them decides what it can do there. Its keys and tokens only prove who it is, so the form has no scopes. The
- * result of an agent holds a first API key, which shows once. A person gets no key: the person signs in with the
- * password and creates keys in Settings. A service account gets its tokens on its page, with a lifetime
+ * result of an agent holds a first API key, which shows once. A person gets an invite link, or a first password
+ * from the admin, and no key: the person signs in with the password and creates keys in Settings. A service account gets its tokens on its page, with a lifetime
  * for each. The address is a mailbox name and a saved mail domain, which the admin selects from a list.
  */
 function CreatePrincipalForm({ me, humans, onBusy, onCancel, onCreated }: CreatePrincipalFormProps) {
@@ -73,6 +86,7 @@ function CreatePrincipalForm({ me, humans, onBusy, onCancel, onCreated }: Create
 	const [domains, setDomains] = useState<readonly string[] | null>(null);
 	const [domainsError, setDomainsError] = useState<string | null>(null);
 	const [domain, setDomain] = useState("");
+	const [firstSignIn, setFirstSignIn] = useState<FirstSignIn>("invite");
 	const [password, setPassword] = useState("");
 	const [role, setRole] = useState<"member" | "admin">("member");
 	const sponsors = humans.filter((human) => human.archived_at === null);
@@ -89,6 +103,7 @@ function CreatePrincipalForm({ me, humans, onBusy, onCancel, onCreated }: Create
 		sponsor: useId(),
 		description: useId(),
 		kindHint: useId(),
+		firstSignInHint: useId(),
 	};
 
 	useEffect(() => {
@@ -116,7 +131,7 @@ function CreatePrincipalForm({ me, humans, onBusy, onCancel, onCreated }: Create
 		if (!domain) return setError("Add an email domain in Admin › Email domains first.");
 		if (localPart.includes("@")) return setError("Enter only the part before @. Select the domain from the list.");
 		if (!EmailAddress.safeParse(address).success) return setError("Enter a mailbox name, such as ada.");
-		if (kind === "human" && !Password.safeParse(password).success) {
+		if (kind === "human" && firstSignIn === "password" && !Password.safeParse(password).success) {
 			return setError(`Enter a first password of ${PASSWORD_MIN_LENGTH} to ${PASSWORD_MAX_LENGTH} characters.`);
 		}
 		setBusy(true);
@@ -130,7 +145,7 @@ function CreatePrincipalForm({ me, humans, onBusy, onCancel, onCreated }: Create
 					sponsor_id: sponsorId,
 					...(description.trim() ? { description: description.trim() } : {}),
 				});
-				onCreated(result.principal, null);
+				onCreated(result.principal, null, null);
 			} catch (caught) {
 				setError(errorMessage(caught));
 				setBusy(false);
@@ -145,7 +160,7 @@ function CreatePrincipalForm({ me, humans, onBusy, onCancel, onCreated }: Create
 						display_name: name.trim(),
 						address,
 						org_role: role,
-						password,
+						...(firstSignIn === "password" ? { password } : {}),
 					}
 				: {
 						kind,
@@ -155,7 +170,7 @@ function CreatePrincipalForm({ me, humans, onBusy, onCancel, onCreated }: Create
 					};
 		try {
 			const result = await api.call("directory.create_principal", input);
-			onCreated(result.principal, result.api_key);
+			onCreated(result.principal, result.api_key, result.invite);
 		} catch (caught) {
 			setError(errorMessage(caught));
 			setBusy(false);
@@ -247,29 +262,55 @@ function CreatePrincipalForm({ me, humans, onBusy, onCancel, onCreated }: Create
 				{kind === "human" ? (
 					<>
 						<div className="field">
-							<label htmlFor={ids.password} className="field-label">
-								First password
-							</label>
-							<input
-								id={ids.password}
-								className="input"
-								type="password"
-								autoComplete="new-password"
-								value={password}
-								onChange={(event) => setPassword(event.target.value)}
-								aria-describedby={ids.passwordHint}
-								disabled={busy}
-							/>
-							<p id={ids.passwordHint} className="field-hint">
-								At least {PASSWORD_MIN_LENGTH} characters. Give it to the person, who can change it in Settings.
-							</p>
-						</div>
-						<div className="field">
 							<label htmlFor={ids.role} className="field-label">
 								Role
 							</label>
 							<Select id={ids.role} value={role} options={ROLE_OPTIONS} onChange={setRole} disabled={busy} />
 						</div>
+						<fieldset className="segmented" aria-describedby={ids.firstSignInHint}>
+							<legend className="field-label">First sign-in</legend>
+							{(
+								[
+									["invite", "Invite link"],
+									["password", "Set a password"],
+								] as const
+							).map(([value, label]) => (
+								<label key={value} className={firstSignIn === value ? "segment segment-active" : "segment"}>
+									<input
+										type="radio"
+										name="first-sign-in"
+										value={value}
+										checked={firstSignIn === value}
+										onChange={() => setFirstSignIn(value)}
+										disabled={busy}
+									/>
+									{label}
+								</label>
+							))}
+							<p id={ids.firstSignInHint} className="field-hint form-grid-wide">
+								{FIRST_SIGN_IN_HINTS[firstSignIn]}
+							</p>
+						</fieldset>
+						{firstSignIn === "password" && (
+							<div className="field form-grid-wide">
+								<label htmlFor={ids.password} className="field-label">
+									First password
+								</label>
+								<input
+									id={ids.password}
+									className="input"
+									type="password"
+									autoComplete="new-password"
+									value={password}
+									onChange={(event) => setPassword(event.target.value)}
+									aria-describedby={ids.passwordHint}
+									disabled={busy}
+								/>
+								<p id={ids.passwordHint} className="field-hint">
+									At least {PASSWORD_MIN_LENGTH} characters.
+								</p>
+							</div>
+						)}
 						<p className="field-hint form-grid-wide">
 							The person gets no API key. The person can create keys in Settings after the sign-in.
 						</p>

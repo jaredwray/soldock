@@ -958,7 +958,7 @@ A disabled endpoint stays disabled. Delete it and create a new one.
 | Outbox | `MailboxDO` table `outbox` | Rows are deleted after delivery or after the last retry |
 | Reset pause | `MailboxDO` table `meta`, keys `delivery_pause`, `delivery_pause_generation` | Keeps the old mailbox paused and rejects calls from an older reset |
 | Idempotency keys of `mail.send` | `MailboxDO` table `idempotency` | Kept 24 hours, with the SHA-256 hash of the request. In a team mailbox, and for a delegate in the mailbox of a person, the key has the principal id of its caller in front |
-| Delegates of the mailbox of a person | D1 table `mailbox_delegates` (migration `0035`) | The [`identity`](../identity/README.md#mailbox-delegates) module owns it. One row for each grant: the owner, the delegate and the scopes |
+| Delegates of the mailbox of a person | D1 table `mailbox_delegates` (migration `0036`) | The [`identity`](../identity/README.md#mailbox-delegates) module owns it. One row for each grant: the owner, the delegate and the scopes |
 | Change counter | `MailboxDO` table `meta` (`version`) | |
 | Sent recipients | `MailboxDO` table `recipients` | One row for each address that the mailbox sent mail to: the address, the number of sent messages, the time of the last one, and `person_sent` (1 when a person sent mail to the address, for the Screener). Rebuildable from the sent messages |
 | Watch sockets | `MailboxDO` hibernatable WebSockets, tag `watch` | Not stored. A socket ends with its `subscriptions/listen` stream, and a restart of the object ends it. No backup |

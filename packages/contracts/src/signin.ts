@@ -56,3 +56,35 @@ export type SignInInput = z.input<typeof SignInInput>;
  */
 export const SignInResult = z.object({ status: z.enum(["signed_in", "totp_required"]) });
 export type SignInResult = z.infer<typeof SignInResult>;
+
+// Invite links (`/auth/invite/*`). An owner or an admin makes a link for a person who has no password yet
+// (`directory.create_principal` without a password, or `directory.create_invite`). The person opens the link,
+// chooses a password, and the server signs the person in. The accept creates a credential, so it is a
+// ceremony and not an operation.
+
+/** The number of days that an invite link works. */
+export const INVITE_DAYS = 7;
+
+/** The secret of an invite link: `sdi_` and 43 base64url characters. The link carries it after the `#`. */
+export const InviteToken = z.string().regex(/^sdi_[A-Za-z0-9_-]{43}$/, "must be the token of an invite link");
+
+/** The body of `POST /auth/invite/check`. */
+export const InviteCheckInput = z.strictObject({ token: InviteToken });
+export type InviteCheckInput = z.input<typeof InviteCheckInput>;
+
+/** The `200` response of `POST /auth/invite/check`: the person of a live invite. */
+export const InviteCheckResult = z.object({
+	display_name: z.string(),
+	address: z.string(),
+	/** When the link stops. */
+	expires_at: z.string(),
+});
+export type InviteCheckResult = z.infer<typeof InviteCheckResult>;
+
+/** The body of `POST /auth/invite/accept`: the token and the first password of the person. */
+export const InviteAcceptInput = z.strictObject({ token: InviteToken, password: Password });
+export type InviteAcceptInput = z.input<typeof InviteAcceptInput>;
+
+/** The `200` response of `POST /auth/invite/accept`. The response sets the session cookie. */
+export const InviteAcceptResult = z.object({ status: z.literal("signed_in") });
+export type InviteAcceptResult = z.infer<typeof InviteAcceptResult>;

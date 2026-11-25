@@ -1,6 +1,8 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { endSession, onSessionChange } from "./features/auth/auth.ts";
 import { loadSession, type SessionState } from "./features/auth/boot.ts";
+import { InvitePage } from "./features/auth/InvitePage.tsx";
+import { INVITE_PATH } from "./features/auth/invite.ts";
 import { SignInPage } from "./features/auth/SignInPage.tsx";
 import { type Session, SessionContext } from "./features/auth/session.tsx";
 import { draftStorage, forgetOtherDrafts } from "./features/chat/drafts.ts";
@@ -31,6 +33,8 @@ onAccountChange(forgetOtherPeople);
  */
 export function App() {
 	const [state, setState] = useState<SessionState>({ status: "loading" });
+	// An invite link opens its own page, also while somebody is signed in. It leaves the page after the sign-in.
+	const [invite, setInvite] = useState(() => window.location.pathname === INVITE_PATH);
 
 	/**
 	 * Shows a new state. Code outside the signed-in app learns in the same step who the person is now,
@@ -46,9 +50,14 @@ export function App() {
 		setState(next);
 	}, []);
 
+	// Only the newest load shows its answer. A load from before can still wait for account.whoami with an old
+	// cookie, for example the first load when a person accepts an invite link, and its answer must not come last.
+	const loadGeneration = useRef(0);
 	const load = useCallback(
 		async (showSetup = true) => {
-			show(await loadSession(showSetup));
+			const generation = ++loadGeneration.current;
+			const next = await loadSession(showSetup);
+			if (generation === loadGeneration.current) show(next);
 		},
 		[show],
 	);
@@ -93,7 +102,29 @@ export function App() {
 
 	return <ToastProvider>{render()}</ToastProvider>;
 
+	/** Leaves the invite page. The link holds a secret, so the address bar and the history do not keep it. */
+	function leaveInvite() {
+		window.history.replaceState(null, "", "/");
+		setInvite(false);
+	}
+
 	function render() {
+		if (invite) {
+			return (
+				<InvitePage
+					signedInAs={state.status === "signed-in" ? state.whoami.principal.address : null}
+					onSignedIn={() => {
+						// The cookie now names the person of the link. A person who was signed in before must not stay in the
+						// app: the page shows the boot state, with nobody signed in, until the newest load gives the new identity.
+						// Like the sign-in page, it skips the setup check.
+						show({ status: "loading" });
+						leaveInvite();
+						void load(false);
+					}}
+					onLeave={leaveInvite}
+				/>
+			);
+		}
 		switch (state.status) {
 			case "loading":
 				return (

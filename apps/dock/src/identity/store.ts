@@ -877,10 +877,10 @@ export async function restorePrincipal(db: D1Database, id: string): Promise<void
 /**
  * Deletes a principal in one transaction. The row stays, because keys, team mailboxes and OAuth rows of
  * other principals refer to it. The credential columns are cleared, the addresses (so the address becomes
- * free and inbound mail to it is refused), the sessions, the team mailbox memberships, the mailbox grants
- * (given and received) and the webhooks are removed, and the keys and grants are revoked. The owner and a
- * human who sponsors an agent cannot be deleted. Returns false, and changes nothing, when the first update
- * matched no row.
+ * free and inbound mail to it is refused), the sessions, an invite link, the team mailbox memberships, the
+ * mailbox grants (given and received) and the webhooks are removed, and the keys and grants are revoked. The
+ * owner and a human who sponsors an agent cannot be deleted. Returns false, and changes nothing, when the first
+ * update matched no row.
  */
 export async function deletePrincipal(db: D1Database, id: string): Promise<boolean> {
 	const now = new Date().toISOString();
@@ -898,6 +898,7 @@ export async function deletePrincipal(db: D1Database, id: string): Promise<boole
 			.bind(now, id),
 		db.prepare(`DELETE FROM addresses WHERE principal_id = ?2 AND ${deleted}`).bind(now, id),
 		db.prepare(`DELETE FROM sessions WHERE principal_id = ?2 AND ${deleted}`).bind(now, id),
+		db.prepare(`DELETE FROM invites WHERE principal_id = ?2 AND ${deleted}`).bind(now, id),
 		db.prepare(`DELETE FROM team_mailbox_members WHERE principal_id = ?2 AND ${deleted}`).bind(now, id),
 		// The grants that the principal got, and the grants that the principal gave in the own mailbox.
 		db
@@ -930,8 +931,8 @@ function liveSession(n: number): string {
 }
 
 /**
- * Sets the password of a human, clears a sign-in lock, and ends the sessions of that human, except
- * `keepSessionHash`: the session that made the change, when the human changes their own password.
+ * Sets the password of a human, clears a sign-in lock, deletes an invite link, and ends the sessions of that
+ * human, except `keepSessionHash`: the session that made the change, when the human changes their own password.
  * Somebody who knew the old password must not keep a session after the change. Returns false, and
  * changes nothing, when `liveSessionHash` names a session that ended.
  */
@@ -953,6 +954,12 @@ export async function setPassword(
 		db
 			.prepare("DELETE FROM sessions WHERE principal_id = ? AND token_hash IS NOT ? AND changes() = 1")
 			.bind(principalId, keepSessionHash),
+		// A person with a password needs no invite link. The new hash has a random salt, so it marks a matched update.
+		db
+			.prepare(
+				"DELETE FROM invites WHERE principal_id = ?1 AND EXISTS (SELECT 1 FROM principals WHERE id = ?1 AND password_hash = ?2)",
+			)
+			.bind(principalId, passwordHash),
 	]);
 	return updated?.meta.changes === 1;
 }

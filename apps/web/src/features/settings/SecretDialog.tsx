@@ -1,4 +1,4 @@
-import type { CreatedApiKey, CreatedWebhookEndpoint } from "@asterra/contracts";
+import type { CreatedApiKey, CreatedWebhookEndpoint, Invite, Principal } from "@asterra/contracts";
 import { type ReactNode, useId, useRef, useState } from "react";
 import { Dialog } from "../../lib/Dialog.tsx";
 import { fullDate } from "../../lib/format.ts";
@@ -60,6 +60,34 @@ export function WebhookSecretDialog({
 					{problem}
 				</p>
 			)}
+		</OneTimeSecretDialog>
+	);
+}
+
+/** Shows a new invite link of a person. The server returns it once and never again. */
+export function InviteLinkDialog({
+	person,
+	invite,
+	title,
+	onClose,
+}: {
+	person: Pick<Principal, "display_name" | "address">;
+	invite: Invite;
+	title?: string | undefined;
+	onClose: () => void;
+}) {
+	return (
+		<OneTimeSecretDialog
+			title={title ?? `Copy the invite link for ${person.display_name}`}
+			label="Invite link"
+			secret={invite.url}
+			warning={`This link is shown only once. Send it to ${person.display_name} only: anyone with the link can set the password of ${person.address}.`}
+			onClose={onClose}
+		>
+			<p className="field-hint">
+				The link works one time, until {fullDate(invite.expires_at)}. {person.display_name} opens it, chooses a
+				password, and is signed in.
+			</p>
 		</OneTimeSecretDialog>
 	);
 }

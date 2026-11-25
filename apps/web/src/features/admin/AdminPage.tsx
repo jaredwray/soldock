@@ -1,4 +1,4 @@
-import type { CreatedApiKey, Principal } from "@asterra/contracts";
+import type { CreatedApiKey, Invite, Principal } from "@asterra/contracts";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { errorMessage } from "../../lib/api.ts";
 import { setPageTitle } from "../../lib/pageTitle.ts";
@@ -9,7 +9,7 @@ import { listAllPrincipals } from "../../lib/usePrincipals.ts";
 import { type AdminSection, adminPath } from "../../routes.ts";
 import { PageHeader } from "../../shell/PageHeader.tsx";
 import { isOrgAdmin, useSession } from "../auth/session.tsx";
-import { SecretDialog } from "../settings/SecretDialog.tsx";
+import { InviteLinkDialog, SecretDialog } from "../settings/SecretDialog.tsx";
 import { AdminSidebar, defaultSection, isAdminOnly, sectionIcon, sectionTitle } from "./AdminSidebar.tsx";
 import { AiSection } from "./AiSection.tsx";
 import { ChatAdminSection } from "./ChatAdminSection.tsx";
@@ -54,7 +54,12 @@ export function AdminPage({ section: routeSection, memberId: routeMemberId, navO
 	const mainRef = useRef<HTMLElement>(null);
 	const loadGeneration = useRef(0);
 	const [state, setState] = useState<DirectoryState>({ status: "loading" });
-	const [created, setCreated] = useState<{ principal: Principal; key: CreatedApiKey } | null>(null);
+	// The secret of a new account, which shows once: the first key of an agent, or the invite link of a person.
+	const [created, setCreated] = useState<
+		| { principal: Principal; key: CreatedApiKey; invite?: never }
+		| { principal: Principal; invite: Invite; key?: never }
+		| null
+	>(null);
 	// The filter of the member list stays while the page of an account shows, so Back gives the same list.
 	const [memberFilter, setMemberFilter] = useState<MemberFilter>("all");
 
@@ -156,9 +161,17 @@ export function AdminPage({ section: routeSection, memberId: routeMemberId, navO
 					{state.status === "ready" && allowed && content()}
 				</div>
 			</main>
-			{created && (
+			{created?.key && (
 				<SecretDialog
 					apiKey={created.key}
+					title={`${created.principal.display_name} is ready`}
+					onClose={() => setCreated(null)}
+				/>
+			)}
+			{created?.invite && (
+				<InviteLinkDialog
+					person={created.principal}
+					invite={created.invite}
 					title={`${created.principal.display_name} is ready`}
 					onClose={() => setCreated(null)}
 				/>
@@ -213,9 +226,11 @@ export function AdminPage({ section: routeSection, memberId: routeMemberId, navO
 						principals={principals}
 						filter={memberFilter}
 						onFilterChange={setMemberFilter}
-						onCreated={(principal, key) => {
-							// Only an agent has a first key. A person signs in with the password. The page of a service account adds tokens.
+						onCreated={(principal, key, invite) => {
+							// Only an agent has a first key. A person signs in with an invite link or the first password. The page
+							// of a service account adds tokens.
 							if (key) setCreated({ principal, key });
+							else if (invite) setCreated({ principal, invite });
 							else if (principal.kind === "service") {
 								toast({ message: `${principal.display_name} is ready. Open it to add a token.` });
 							} else toast({ message: `${principal.display_name} is ready. Give the first password to the person.` });

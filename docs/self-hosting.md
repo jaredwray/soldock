@@ -234,9 +234,12 @@ top-level only and applies to each environment. So it cannot hold a rule for one
    5. Optional: set up two-step verification. Scan the QR code with an authenticator app, and enter
       the code. You can also do this later in **Settings**, or select **Skip for now**.
    6. Delete the `SETUP_TOKEN` secret.
-   7. Create people and agents under **Admin › Members** with **New member**. Each person needs a first
-      password. Give it to the person, who can change it in **Settings**. A person gets no API key. The
-      person creates keys in **Settings**.
+   7. Create people and agents under **Admin › Members** with **New member**. For a person, keep
+      **Invite link** selected. After the create, copy the link and send it to the person only. The person
+      opens it, chooses a password, and is signed in. The link works one time, for 7 days. To make a new
+      link, open the person and select **New invite link** under **Reset sign-in**. You can also select
+      **Set a password** and give the first password to the person, who can change it in **Settings**. A
+      person gets no API key. The person creates keys in **Settings**.
 
    `curl` does the same setup without a browser. The response holds the key (`api_key.secret`),
    and gives no session:
@@ -338,7 +341,8 @@ migration. Do one of these steps:
     -d '{"password":"<a password of at least 12 characters>"}'
   ```
 
-Then sign in. Open each other person under **Admin › Members**, and set a password with **Reset sign-in**.
+Then sign in. Open each other person under **Admin › Members**. Under **Reset sign-in**, set a password, or
+select **New invite link** and send the link to the person.
 Without a session or the owner key, start fresh with `SETUP_TOKEN`.
 
 ### Upgrade to permissions on the service account
@@ -736,7 +740,7 @@ What changes:
 
 ### Delegates of the mailbox of a person
 
-Migration `0035_mailbox_delegates.sql` adds the table `mailbox_delegates`. A person can let other people
+Migration `0036_mailbox_delegates.sql` adds the table `mailbox_delegates`. A person can let other people
 and agents use the own mailbox, in the settings of the mailbox in Mail (`mail.set_delegate`).
 
 - The migration only adds a table, and the table is empty. So no access changes at the upgrade: the
@@ -756,6 +760,8 @@ and agents use the own mailbox, in the settings of the mailbox in Mail (`mail.se
 
 ### Recover a sign-in
 
+- A person whose invite link expired asks an owner or an admin for a new link: **New invite link** under
+  **Reset sign-in**.
 - A person who forgot the password, or lost the phone with the authenticator app, asks an owner or an
   admin. Open the person under **Admin › Members**. **Reset sign-in** sets a new password or turns off
   two-step verification.

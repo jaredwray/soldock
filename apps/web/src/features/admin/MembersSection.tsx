@@ -1,4 +1,4 @@
-import type { CreatedApiKey, Principal } from "@asterra/contracts";
+import type { CreatedApiKey, Invite, Principal } from "@asterra/contracts";
 import { useState } from "react";
 import { Icon } from "../../lib/icons.tsx";
 import { Link } from "../../lib/router.tsx";
@@ -28,8 +28,11 @@ interface MembersSectionProps {
 	/** The kind that the list shows. The admin page keeps it, so it stays after a visit to a member page. */
 	filter: MemberFilter;
 	onFilterChange: (filter: MemberFilter) => void;
-	/** The new principal and the first key of an agent. A person and a service account get no key: null. */
-	onCreated: (principal: Principal, key: CreatedApiKey | null) => void;
+	/**
+	 * The new principal, the first key of an agent, and the invite link of a person without a first password.
+	 * Each is null when the account has none.
+	 */
+	onCreated: (principal: Principal, key: CreatedApiKey | null, invite: Invite | null) => void;
 }
 
 /**
@@ -127,9 +130,9 @@ export function MembersSection({ me, elevated, principals, filter, onFilterChang
 					me={me}
 					humans={humans}
 					onClose={() => setCreating(false)}
-					onCreated={(principal, key) => {
+					onCreated={(principal, key, invite) => {
 						setCreating(false);
-						onCreated(principal, key);
+						onCreated(principal, key, invite);
 					}}
 				/>
 			)}
