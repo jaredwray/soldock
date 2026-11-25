@@ -82,6 +82,22 @@ test("a member queues two conversations, answers one in the focus view and takes
 		const reply = item(second).getByRole("region", { name: "Reply" });
 		await expect(page.getByRole("dialog")).toHaveCount(0);
 		await reply.getByRole("textbox", { name: "Message" }).pressSequentially("It ships on Monday.");
+		// Escape in the link dialog of the editor closes only that dialog. The reply keeps its text.
+		await reply.getByRole("button", { name: "Link", exact: true }).click();
+		await expect(page.getByRole("dialog", { name: "Add link" })).toBeVisible();
+		await page.keyboard.press("Escape");
+		await expect(page.getByRole("dialog")).toHaveCount(0);
+		await expect(reply.getByRole("textbox", { name: "Message" })).toContainText("It ships on Monday.");
+		// A link out of the view asks first, because the reply has text. The person refuses, and the view stays.
+		let question = "";
+		page.once("dialog", (dialog) => {
+			question = dialog.message();
+			void dialog.dismiss();
+		});
+		await view.getByRole("link", { name: "Back to Reply later" }).click();
+		expect(question).toBe("Discard your reply?");
+		await expect(page).toHaveURL(new RegExp(`/mail/team/${mailbox.id}/reply-later/focus$`));
+		await expect(reply.getByRole("textbox", { name: "Message" })).toContainText("It ships on Monday.");
 		await reply.getByRole("button", { name: "Send" }).click();
 
 		// The answered conversation leaves, and the reply of the next one opens at once.

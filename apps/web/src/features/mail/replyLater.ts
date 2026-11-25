@@ -18,21 +18,33 @@ export function replyTarget(thread: Thread): Message | null {
 }
 
 /**
+ * True when a thread that is not in `fresh` left the queue. `fresh` is the queue from the server, newest
+ * first. With `complete` false, the server has older threads than `fresh` shows: a refresh gets one page at
+ * most. A thread that is not newer than the last row of `fresh` can then be on a later page, so it stays.
+ */
+export function leftQueue(thread: ThreadSummary, fresh: readonly ThreadSummary[], complete: boolean): boolean {
+	if (fresh.some((item) => item.id === thread.id)) return false;
+	const oldest = fresh.at(-1);
+	return complete || !oldest || thread.last_message_at > oldest.last_message_at;
+}
+
+/**
  * The items of the focus view after a refresh of the queue. The items on screen keep their order, and new
- * threads go after them, so an item never moves under the person. A thread that left the queue goes away,
- * except while its composer is open (`composing`): a reply by a different member, or a refresh, must not
- * remove text that the person types.
+ * threads go after them, so an item never moves under the person. A thread that left the queue goes away
+ * (`leftQueue`), except while its composer is open (`composing`): a reply by a different member, or a
+ * refresh, must not remove text that the person types.
  */
 export function mergeQueue(
 	current: readonly ThreadSummary[],
 	fresh: readonly ThreadSummary[],
 	composing: ReadonlySet<string>,
+	complete: boolean,
 ): ThreadSummary[] {
 	const freshById = new Map(fresh.map((thread) => [thread.id, thread]));
 	const kept = current.flatMap((thread) => {
 		const next = freshById.get(thread.id);
 		if (next) return [next];
-		return composing.has(thread.id) ? [thread] : [];
+		return composing.has(thread.id) || !leftQueue(thread, fresh, complete) ? [thread] : [];
 	});
 	const known = new Set(current.map((thread) => thread.id));
 	return [...kept, ...fresh.filter((thread) => !known.has(thread.id))];

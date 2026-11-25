@@ -69,6 +69,8 @@ interface ComposerProps {
 	 * for example under a conversation in the focus view of Reply later.
 	 */
 	frame?: "dialog" | "inline";
+	/** Tells the parent when the message gets text that a close discards, and when it has none again. */
+	onDirtyChange?: (dirty: boolean) => void;
 	onClose: () => void;
 	onSent: (result: SendResult) => void;
 }
@@ -89,6 +91,7 @@ export function Composer({
 	initialFrom,
 	signature,
 	frame = "dialog",
+	onDirtyChange,
 	onClose,
 	onSent,
 }: ComposerProps) {
@@ -150,6 +153,14 @@ export function Composer({
 		seed.edited ||
 		!doc.eq(seed.doc) ||
 		attachments.length > 0;
+
+	const onDirtyChangeRef = useRef(onDirtyChange);
+	useEffect(() => {
+		onDirtyChangeRef.current = onDirtyChange;
+	});
+	useEffect(() => {
+		onDirtyChangeRef.current?.(dirty);
+	}, [dirty]);
 
 	const attachmentBytes = attachments.reduce((sum, file) => sum + file.size, 0);
 	const textBytes = new Blob([body.text, body.html, subject]).size;
@@ -521,6 +532,8 @@ export function Composer({
 			aria-label={draft.title}
 			onKeyDown={(event) => {
 				if (event.key !== "Escape" || event.defaultPrevented) return;
+				// The link dialog of the editor is a child in React, so its keys come here. Its Escape closes only it.
+				if (event.target instanceof Element && event.target.closest("dialog")) return;
 				event.preventDefault();
 				requestClose();
 			}}

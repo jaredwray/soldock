@@ -5,7 +5,7 @@ import { Icon } from "../../lib/icons.tsx";
 import { Link, navigate } from "../../lib/router.tsx";
 import { useToast } from "../../lib/toast.tsx";
 import { useOnChange } from "../../lib/useOnChange.ts";
-import { isAgentMailbox, type MailView, mailSettingsPath, replyFocusPath, threadPath, viewPath } from "../../routes.ts";
+import { type MailView, mailSettingsPath, replyFocusPath, threadPath, viewPath } from "../../routes.ts";
 import { SEARCH_INPUT_ID } from "../../shell/nav.ts";
 import { SearchBox } from "../../shell/SearchBox.tsx";
 import {
@@ -22,8 +22,7 @@ import { removesAutoLabel } from "./autoLabels.ts";
 import { type Draft, forwardDraft, replyDraft } from "./compose.ts";
 import { useThread, useThreadList } from "./data.ts";
 import type { ReplyMode } from "./MessageCard.tsx";
-import { mailboxInput, useMailboxId, useMailboxRights } from "./mailbox.tsx";
-import { rightsNotice } from "./mailboxNav.ts";
+import { MailboxNotice, mailboxInput, useMailboxId, useMailboxRights } from "./mailbox.tsx";
 import { isReplyLaterView, REPLY_LATER } from "./replyLater.ts";
 import { ThreadList } from "./ThreadList.tsx";
 import { ThreadView } from "./ThreadView.tsx";
@@ -65,7 +64,6 @@ export function MailPane(props: MailPaneProps) {
 	const mailboxId = useMailboxId();
 	const rights = useMailboxRights();
 	const readOnly = !rights.modify;
-	const notice = rightsNotice(rights);
 	const list = useThreadList(mailboxId, query.status === "ready" ? query.query : null);
 	const thread = useThread(mailboxId, threadId);
 	const [selected, setSelected] = useState<ReadonlySet<string>>(() => new Set());
@@ -328,23 +326,7 @@ export function MailPane(props: MailPaneProps) {
 				}}
 				settingsPath={mailSettingsPath(mailboxId)}
 			/>
-			{isAgentMailbox(mailboxId) ? (
-				<p className="notice read-only-notice">
-					<Icon name="eye" size={18} />
-					<span>
-						<strong>Read only.</strong> This is the mailbox of an agent. As an owner or an admin, you can read it. You
-						cannot change it or send from it, and the conversations that you open stay unread for the agent. The audit
-						log records the lists and the conversations that you open.
-					</span>
-				</p>
-			) : (
-				notice && (
-					<p className="notice read-only-notice">
-						<Icon name="eye" size={18} />
-						<span>{notice} An owner or an admin sets what each member can do.</span>
-					</p>
-				)
-			)}
+			<MailboxNotice />
 			{listMode && isReplyLaterView(view) && rights.send && threads.length > 0 && (
 				<div className="reply-later-bar">
 					<p>{queued === 1 ? "1 conversation waits" : `${queued} conversations wait`} for a reply.</p>

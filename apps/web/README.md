@@ -263,17 +263,23 @@ MCP clients. The app has no UI-only path.
   mailbox, [`ReplyFocus.tsx`](src/features/mail/ReplyFocus.tsx)). Only the conversations in the queue, one
   after the other, each in a card with its thread. The sidebar stays, with Reply later as the current view.
   - The header has a link back to the Reply later view, the title and the number of conversations left.
+    While the queue has more pages, the number is the count of the label.
   - Reply, Reply all and Forward are under each open message, as in the thread view. Reply and Reply all
     open the composer in the card. Forward opens the composer dialog: a forward does not answer.
   - A sent reply takes the conversation out of the queue: the server removes the label. The card goes, the
     next card becomes active, and its reply opens with the focus in the editor.
   - **Done** takes a conversation out without a reply, with a toast and **Undo**. It shows while the card
-    has no open reply, so a click never discards text.
+    has no open reply, so a click never discards text. The next card then gets the focus.
+  - While a reply has text or a file, the app asks "Discard your reply?" before it leaves the view: for a
+    link, for `u` and for a different mailbox (`addNavigationGuard` in
+    [`navigationGuard.ts`](src/lib/navigationGuard.ts), which `navigate` asks). The browser asks before it
+    closes or reloads the tab. The Back button of the browser does not ask, and the reply is lost.
   - The cards keep their order when the queue refreshes. A new conversation goes at the end. A card with
     an open reply stays, also when the conversation left the queue, for example after a reply by a
-    different member (`mergeQueue`).
-  - The active card has a bar at its left and is marked as read, as an open thread is. `j` and `k` move
-    the active card, `r` opens its reply, `b` is Done (not while its reply is open), `c` composes, `u`
+    different member (`mergeQueue`). That card gets its thread again, so the person sees the answer. A
+    refresh gets one page of the queue. A card from **Older** that can be on a later page stays (`leftQueue`).
+  - The active card has a bar at its left and is marked as read, as an open thread is. A click or the
+    focus in a card makes it active. `j` and `k` move the active card and the focus, `r` opens its reply, `b` is Done (not while its reply is open), `c` composes, `u`
     goes back to the Reply later view, and `?` shows the shortcuts.
   - Each card gets its thread once, and again only when a new message arrives in it.
   - The empty state says that no conversation waits, and links to the inbox.
