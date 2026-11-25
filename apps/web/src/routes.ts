@@ -46,6 +46,8 @@ export type Route =
 	 * or an admin reads, or null for the own mailbox of the person.
 	 */
 	| { page: "mail"; mailboxId: string | null; view: MailView; threadId: string | null }
+	/** The settings view of a mailbox, in the main pane of Mail. `mailboxId` is as for `mail`. */
+	| { page: "mail-settings"; mailboxId: string | null }
 	| { page: "drive"; view: DriveView }
 	/** A doc or a sheet in its editor. `spaceId` is the drive that holds the item. */
 	| { page: "doc"; spaceId: string; itemId: string }
@@ -180,6 +182,7 @@ export function parseRoute(location: string): Route {
 /** The view and the thread of a mail path, from the parts after the mailbox. */
 function parseMailView(mailboxId: string | null, parts: string[], url: URL): Route {
 	const [first, second, third] = parts;
+	if (first === "settings" && parts.length === 1) return { page: "mail-settings", mailboxId };
 	if (isSystemView(first) && parts.length <= 2) {
 		return { page: "mail", mailboxId, view: { kind: "system", view: first }, threadId: second ?? null };
 	}
@@ -388,8 +391,14 @@ export function viewPath(view: MailView, mailboxId: string | null = null): strin
  * own mailbox, with all its controls, and not to a read-only view of it.
  */
 export function ownMailboxPath(route: Route, selfId: string): string | null {
+	if (route.page === "mail-settings" && route.mailboxId === selfId) return mailSettingsPath(null);
 	if (route.page !== "mail" || route.mailboxId !== selfId) return null;
 	return route.threadId ? threadPath(route.view, route.threadId) : viewPath(route.view);
+}
+
+/** The path of the settings view of a mailbox: `/mail/settings`, or under the path of a team or agent mailbox. */
+export function mailSettingsPath(mailboxId: string | null = null): string {
+	return `${mailBase(mailboxId)}/settings`;
 }
 
 /** The path of one thread, opened from a view. */

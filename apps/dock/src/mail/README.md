@@ -168,9 +168,9 @@ who can.
 ### Settings of a mailbox
 
 `mail.get_mailbox_settings` and `mail.update_mailbox_settings` read and change the settings of one
-mailbox. For now, the only setting is the plain-text `signature`. The web app opens them from the gear
-in the header of Mail, with the AI switch (`mail.update_auto_labels`), the members of a team mailbox and
-the default address of the person.
+mailbox. For now, the only setting is the plain-text `signature`. The web app shows them in the
+settings view of the mailbox (the gear in the header of Mail), with the AI switch
+(`mail.update_auto_labels`), the members of a team mailbox and the default address of the person.
 
 - The settings live in the mailbox, in the `meta` table (`mailbox_settings`). So the members of a team
   mailbox share them, as they share the labels and the auto-label settings.
@@ -192,8 +192,8 @@ the default address of the person.
 - A read writes no audit line, as for `mail.get_profile`: the settings hold no mail content. A change
   writes the line `mail.update_mailbox_settings` with the mailbox as `target`, and `mailbox` for a team
   mailbox. The line never holds the signature.
-- A change does not change the mailbox `version`. Another open tab keeps the old signature until it
-  opens the mailbox again.
+- A change does not change the mailbox `version`. Another open tab keeps the old signature for its next
+  draft until a reload.
 
 | Caller | Read | Change |
 | --- | --- | --- |

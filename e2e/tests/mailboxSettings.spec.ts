@@ -11,8 +11,8 @@ async function post<T>(context: BrowserContext, path: string, data: unknown): Pr
 	return (await response.json()) as T;
 }
 
-// The gear in the header of Mail opens the settings of the open mailbox: AI, access, the default address and
-// the signature. A member of a shared mailbox sets the signature that the members share and makes the mailbox
+// The gear in the header of Mail opens the settings view of the open mailbox: AI, access, the default address
+// and the signature. A member of a shared mailbox sets the signature that the members share and makes the mailbox
 // the default. The composer then adds the signature, and Mail opens the shared mailbox first.
 test("a member sets the signature and the default address of a shared mailbox in its settings", async ({ browser }) => {
 	const admin = await signIn(browser, "tomasz");
@@ -30,30 +30,37 @@ test("a member sets the signature and the default address of a shared mailbox in
 
 		const page = await member.newPage();
 		await page.goto(`/mail/team/${mailbox.id}/inbox`);
-		await page.getByRole("button", { name: "Mailbox settings" }).click();
-		const dialog = page.getByRole("dialog", { name: "Mailbox settings" });
-		await expect(dialog.getByText(`The settings of ${name} (${address}).`)).toBeVisible();
-		await expect(dialog.getByRole("checkbox", { name: /Use AI in this mailbox/ })).toBeVisible();
+		// The gear opens the settings as a view of the mailbox, with its own path, in place of the list.
+		await page.getByRole("link", { name: "Mailbox settings" }).click();
+		await expect(page).toHaveURL(new RegExp(`/mail/team/${mailbox.id}/settings$`));
+		const view = page.getByRole("main");
+		await expect(view.getByRole("heading", { level: 1, name: `${name}: Settings` })).toBeVisible();
+		await expect(view.getByText(`The settings of ${name} (${address}).`)).toBeVisible();
+		await expect(page.getByRole("dialog")).toHaveCount(0);
+		await expect(view.getByRole("checkbox", { name: /Use AI in this mailbox/ })).toBeVisible();
 
 		// A member who is not an owner or an admin sees who can use the mailbox, and cannot change it.
-		const access = dialog.getByRole("region", { name: "Access" });
+		const access = view.getByRole("region", { name: "Access" });
 		await expect(access.getByText("An owner or an admin adds and removes members")).toBeVisible();
 		await expect(access.getByText("Rafael Ortega")).toBeVisible();
 		await expect(access.getByText("Can read, change and send")).toBeVisible();
 		await expect(access.getByRole("button", { name: "Add member" })).toHaveCount(0);
 
 		// The signature saves for the mailbox. Line breaks stay.
-		const signature = dialog.getByRole("textbox", { name: "Signature" });
+		const signature = view.getByRole("textbox", { name: "Signature" });
 		await signature.fill(`The ${name} team\nexample.com/orders`);
-		await dialog.getByRole("button", { name: "Save signature" }).click();
+		await view.getByRole("button", { name: "Save signature" }).click();
 		await expect(page.getByText("Signature saved.")).toBeVisible();
-		await expect(dialog.getByRole("button", { name: "Save signature" })).toBeDisabled();
+		await expect(view.getByRole("button", { name: "Save signature" })).toBeDisabled();
 
 		// The default address is a setting of the person.
-		await dialog.getByRole("button", { name: `Make ${address} my default` }).click();
-		await expect(dialog.getByText("is your default address.")).toBeVisible();
-		await dialog.getByRole("button", { name: "Done" }).click();
-		await expect(dialog).toHaveCount(0);
+		await view.getByRole("button", { name: `Make ${address} my default` }).click();
+		await expect(view.getByText("is your default address.")).toBeVisible();
+		// A reload keeps the view, because it has its own path.
+		await page.reload();
+		await expect(page.getByRole("main").getByText("is your default address.")).toBeVisible();
+		await page.getByRole("link", { name: "Back to the inbox" }).click();
+		await expect(page).toHaveURL(new RegExp(`/mail/team/${mailbox.id}/inbox$`));
 
 		// The composer starts with the signature after two empty lines.
 		await page.getByRole("button", { name: "Compose" }).click();

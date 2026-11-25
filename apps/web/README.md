@@ -247,9 +247,12 @@ MCP clients. The app has no UI-only path.
   - The web app uses `mail.get_settings` and `mail.update_settings` only for the default mailbox
     (`default_mailbox_id`). Their sidebar settings are for the mailbox sections that the sidebar no
     longer has.
-- **Mailbox settings** ([`MailboxSettingsDialog.tsx`](src/features/mail/MailboxSettingsDialog.tsx)). The gear
-  after Refresh in the header of Mail opens the settings of the open mailbox. The dialog is a separate
-  chunk. Each section loads and saves on its own, with its own error and **Try again**.
+- **Mailbox settings** (`/mail/settings`, `/mail/team/<tmb_id>/settings`, `/mail/agent/<prn_id>/settings`,
+  [`MailboxSettings.tsx`](src/features/mail/MailboxSettings.tsx)). The gear after Refresh in the header of
+  Mail is a link to the settings view of the open mailbox. The view replaces the list in the main pane,
+  next to the sidebar, so a reload and a deep link stay on it. Its header has a link back to the inbox, the
+  title and the search box. The view is a separate chunk. Each section loads and saves on its own, with its
+  own error and **Try again**.
   - **AI features.** The switch of the inbox auto labels (`mail.update_auto_labels` with `enabled`).
     They are the only AI feature of Mail. When the organization has AI or the feature off, a notice says
     so, with a link to Admin › AI for an owner or an admin. **Choose the auto labels** opens the dialog
@@ -1773,8 +1776,9 @@ dock Worker serves `index.html` for each app path, so a deep link works on reloa
 | `/mail/label/<lbl_id>` | The thread list of a user label |
 | `/mail/search?q=<query>` | The search results |
 | `/mail/<view>/<thr_id>`, `/mail/label/<lbl_id>/<thr_id>`, `/mail/search/<thr_id>?q=<query>` | One thread, opened from that view |
-| `/mail/team/<tmb_id>/…` | The same views and threads, in a team mailbox. `/mail/team/<tmb_id>` goes to its inbox |
-| `/mail/agent/<prn_id>/…` | The same views and threads, read only, in the mailbox of an agent, for an owner or an admin. `/mail/agent/<prn_id>` goes to its inbox |
+| `/mail/settings` | The settings view of the own mailbox: AI, access, the default address and the signature |
+| `/mail/team/<tmb_id>/…` | The same views, threads and settings, in a team mailbox. `/mail/team/<tmb_id>` goes to its inbox |
+| `/mail/agent/<prn_id>/…` | The same views, threads and settings, read only, in the mailbox of an agent, for an owner or an admin. `/mail/agent/<prn_id>` goes to its inbox |
 | `/admin` | Goes to the first section of Admin that the person can use |
 | `/admin/<section>` | One section of Admin: `members`, `shared-mailboxes`, `shared-drives`, `chat` or `domains` |
 | `/connect/<oar_id>` | The approval page of an OAuth request from an MCP client |

@@ -13,6 +13,7 @@ import {
 	isAgentMailbox,
 	itemPath,
 	type MailView,
+	mailSettingsPath,
 	ownMailboxPath,
 	parseRoute,
 	profilePath,
@@ -97,6 +98,19 @@ describe("routes", () => {
 		expect(viewPath({ kind: "system", view: "inbox" }, AGENT)).toBe(`/mail/agent/${AGENT}/inbox`);
 		expect(parseRoute(`/mail/agent/${AGENT}`)).toEqual({ page: "redirect", to: `/mail/agent/${AGENT}/inbox` });
 		expect([AGENT, TEAM, null].map(isAgentMailbox)).toEqual([true, false, false]);
+	});
+
+	// The settings view of a mailbox has its own path under the mailbox, so a reload and a deep link stay on it.
+	it("parses the settings path of each mailbox back to the settings view of that mailbox", () => {
+		for (const mailboxId of [null, TEAM, AGENT]) {
+			expect(parseRoute(mailSettingsPath(mailboxId))).toEqual({ page: "mail-settings", mailboxId });
+		}
+		expect(mailSettingsPath()).toBe("/mail/settings");
+		expect(mailSettingsPath(TEAM)).toBe(`/mail/team/${TEAM}/settings`);
+		expect(parseRoute("/mail/settings/more")).toEqual({ page: "not-found" });
+		// The own id of the person in an agent path is the own mailbox, also for its settings.
+		expect(ownMailboxPath(parseRoute(mailSettingsPath(AGENT)), AGENT)).toBe("/mail/settings");
+		expect(ownMailboxPath(parseRoute(mailSettingsPath(AGENT)), "prn_01JD0000000000000000OTHER0")).toBeNull();
 	});
 
 	// The server treats the own id of the person as the own mailbox, so the app must not show it read only.

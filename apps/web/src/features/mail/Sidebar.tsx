@@ -29,7 +29,8 @@ interface SidebarProps {
 	canModify: boolean;
 	/** False when the person cannot send from the mailbox: no compose button. */
 	canSend: boolean;
-	view: MailView;
+	/** The view that shows, or null in the settings view of the mailbox. */
+	view: MailView | null;
 	labels: Label[] | null;
 	labelsError: string | null;
 	open: boolean;

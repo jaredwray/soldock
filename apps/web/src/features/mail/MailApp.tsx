@@ -1,6 +1,6 @@
 import type { Label, Mailbox } from "@asterra/contracts";
-import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Dialog } from "../../lib/Dialog.tsx";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { lazyPage } from "../../lib/lazyPage.tsx";
 import { setPageTitle } from "../../lib/pageTitle.ts";
 import { navigate } from "../../lib/router.tsx";
 import { useToast } from "../../lib/toast.tsx";
@@ -22,51 +22,17 @@ import { viewQuery, viewTitle } from "./views.ts";
 
 type MailDialog =
 	| { type: "help" }
-	| { type: "settings" }
 	| { type: "new-label" }
 	| { type: "auto-labels" }
 	| { type: "delete-label"; label: Label }
 	| null;
 
-// The settings dialog is a separate chunk: a person opens it seldom. A chunk that does not load asks for a reload.
-const MailboxSettingsDialog = lazy(() =>
-	import("./MailboxSettingsDialog.tsx").then(
-		(module) => ({ default: module.MailboxSettingsDialog }),
-		() => ({ default: SettingsUnavailable }),
-	),
-);
-
-function SettingsUnavailable({ onClose }: { onClose: () => void }) {
-	return (
-		<Dialog title="The settings did not load" onClose={onClose} className="dialog-small">
-			<div className="dialog-body">
-				<p>The connection can be down, or a new version of Asterra is available. Reload the page, then try again.</p>
-			</div>
-			<div className="dialog-actions">
-				<button type="button" className="button" onClick={onClose}>
-					Close
-				</button>
-				<button type="button" className="button button-primary" onClick={() => window.location.reload()} data-autofocus>
-					Reload
-				</button>
-			</div>
-		</Dialog>
-	);
-}
-
-function SettingsLoading({ onClose }: { onClose: () => void }) {
-	return (
-		<Dialog title="Mailbox settings" onClose={onClose} className="dialog-small">
-			<p className="dialog-body composer-loading" role="status">
-				<span className="spinner spinner-small" aria-hidden="true" />
-				Loading the settings…
-			</p>
-		</Dialog>
-	);
-}
+// The settings view is a separate chunk: a person opens it seldom.
+const MailboxSettings = lazyPage(() => import("./MailboxSettings.tsx").then((module) => module.MailboxSettings));
 
 interface MailAppProps {
-	route: { mailboxId: string | null; view: MailView; threadId: string | null };
+	/** `view` is null for the settings view of the mailbox. */
+	route: { mailboxId: string | null; view: MailView | null; threadId: string | null };
 	/** The mailboxes that the person can use, from the shell: the list stays when the mailbox changes. */
 	mailboxes: readonly Mailbox[] | null;
 	/** The mailboxes of the sidebar that the person expanded or collapsed, from the shell: the state stays when the mailbox changes. */
@@ -118,8 +84,8 @@ export function MailApp({ route, mailboxes, expandedMailboxes, onSetExpanded, na
 	const mailboxName = mailboxId
 		? (profile?.display_name ?? listed?.display_name ?? (isAgentMailbox(mailboxId) ? "Agent mailbox" : "Team mailbox"))
 		: null;
-	const query = viewQuery(route.view, labels);
-	const title = viewTitle(route.view, labels);
+	const { view } = route;
+	const title = view ? viewTitle(view, labels) : "Settings";
 	const inboxUnread = labelsById.get("INBOX")?.threads_unread ?? profile?.inbox_unread ?? 0;
 
 	useEffect(() => {
@@ -166,7 +132,7 @@ export function MailApp({ route, mailboxes, expandedMailboxes, onSetExpanded, na
 						onSetExpanded={onSetExpanded}
 						canModify={rights.modify}
 						canSend={rights.send}
-						view={route.view}
+						view={view}
 						labels={labels}
 						labelsError={labelsError}
 						open={navOpen}
@@ -176,22 +142,39 @@ export function MailApp({ route, mailboxes, expandedMailboxes, onSetExpanded, na
 						onDeleteLabel={(label) => setDialog({ type: "delete-label", label })}
 						onClose={onCloseNav}
 					/>
-					<MailPane
-						key={viewPath(route.view)}
-						mailboxName={mailboxName}
-						view={route.view}
-						threadId={route.threadId}
-						query={query}
-						title={title}
-						labels={labels}
-						labelsById={labelsById}
-						myAddress={myAddress}
-						refreshKey={refreshKey}
-						onChanged={onChanged}
-						onCompose={compose}
-						onShowHelp={() => setDialog({ type: "help" })}
-						onShowSettings={() => setDialog({ type: "settings" })}
-					/>
+					{view ? (
+						<MailPane
+							key={viewPath(view)}
+							mailboxName={mailboxName}
+							view={view}
+							threadId={route.threadId}
+							query={viewQuery(view, labels)}
+							title={title}
+							labels={labels}
+							labelsById={labelsById}
+							myAddress={myAddress}
+							refreshKey={refreshKey}
+							onChanged={onChanged}
+							onCompose={compose}
+							onShowHelp={() => setDialog({ type: "help" })}
+						/>
+					) : (
+						<MailboxSettings
+							mailbox={{
+								id: mailboxId,
+								kind: mailboxId === null ? "personal" : isAgentMailbox(mailboxId) ? "agent" : "team",
+								address: myAddress,
+								display_name: mailboxName ?? whoami.principal.display_name,
+							}}
+							title={mailboxName ? `${mailboxName}: Settings` : "Settings"}
+							rights={rights}
+							mailboxes={mailboxes}
+							refreshKey={refreshKey}
+							onSettingsSaved={setMailboxSettings}
+							onOpenAutoLabels={() => setDialog({ type: "auto-labels" })}
+							onChanged={onChanged}
+						/>
+					)}
 					{draft && rights.send && (
 						<Composer
 							key={draft.key}
@@ -203,24 +186,6 @@ export function MailApp({ route, mailboxes, expandedMailboxes, onSetExpanded, na
 						/>
 					)}
 					{dialog?.type === "help" && <ShortcutHelp onClose={() => setDialog(null)} />}
-					{dialog?.type === "settings" && (
-						<Suspense fallback={<SettingsLoading onClose={() => setDialog(null)} />}>
-							<MailboxSettingsDialog
-								mailbox={{
-									id: mailboxId,
-									kind: mailboxId === null ? "personal" : isAgentMailbox(mailboxId) ? "agent" : "team",
-									address: myAddress,
-									display_name: mailboxName ?? whoami.principal.display_name,
-								}}
-								rights={rights}
-								mailboxes={mailboxes}
-								onSettingsSaved={setMailboxSettings}
-								onOpenAutoLabels={() => setDialog({ type: "auto-labels" })}
-								onChanged={onChanged}
-								onClose={() => setDialog(null)}
-							/>
-						</Suspense>
-					)}
 					{dialog?.type === "auto-labels" && (
 						<AutoLabelsDialog team={mailboxId !== null} onClose={() => setDialog(null)} onChanged={onChanged} />
 					)}
@@ -239,7 +204,7 @@ export function MailApp({ route, mailboxes, expandedMailboxes, onSetExpanded, na
 							label={dialog.label}
 							onClose={() => setDialog(null)}
 							onDeleted={() => {
-								if (route.view.kind === "label" && route.view.labelId === dialog.label.id) {
+								if (view?.kind === "label" && view.labelId === dialog.label.id) {
 									navigate(viewPath({ kind: "system", view: "inbox" }, mailboxId));
 								}
 								toast({ message: `Label “${dialog.label.name}” deleted.` });

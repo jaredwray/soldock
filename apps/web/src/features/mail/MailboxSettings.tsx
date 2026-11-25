@@ -7,23 +7,24 @@ import {
 	type Principal,
 	type TeamMailbox,
 } from "@asterra/contracts";
-import { type FormEvent, useCallback, useEffect, useId, useState } from "react";
+import { type FormEvent, type ReactNode, useCallback, useEffect, useId, useState } from "react";
 import { api, errorMessage } from "../../lib/api.ts";
-import { Dialog } from "../../lib/Dialog.tsx";
 import { Icon } from "../../lib/icons.tsx";
 import { Link } from "../../lib/router.tsx";
 import { useToast } from "../../lib/toast.tsx";
+import { useOnChange } from "../../lib/useOnChange.ts";
 import { usePrincipals } from "../../lib/usePrincipals.ts";
-import { adminPath } from "../../routes.ts";
+import { adminPath, viewPath } from "../../routes.ts";
+import { SearchBox } from "../../shell/SearchBox.tsx";
 import { memberScopes, scopesText } from "../admin/mailboxScopes.ts";
 import { byName, MembersPart } from "../admin/SharedMailboxPanel.tsx";
 import { isOrgAdmin, useSession } from "../auth/session.tsx";
 import { unavailableText } from "./autoLabels.ts";
-import type { MailboxSettings } from "./data.ts";
+import type { MailboxSettings as MailboxSettingsData } from "./data.ts";
 import { mailboxInput } from "./mailbox.tsx";
 import type { MailboxRights } from "./mailboxNav.ts";
 
-/** The mailbox of the dialog, as the person sees it. `id` is null for the own mailbox of the person. */
+/** The mailbox of the settings view, as the person sees it. `id` is null for the own mailbox of the person. */
 export interface SettingsMailbox {
 	id: string | null;
 	kind: MailboxKind;
@@ -31,46 +32,70 @@ export interface SettingsMailbox {
 	display_name: string;
 }
 
-export interface MailboxSettingsDialogProps {
+export interface MailboxSettingsProps {
 	mailbox: SettingsMailbox;
+	/** The title of the view, with the name of a team mailbox or an agent mailbox in front. */
+	title: string;
 	rights: MailboxRights;
 	/** The mailboxes that the person can use, to know if the saved default still opens. Null while they load. */
 	mailboxes: readonly Mailbox[] | null;
+	/** Grows when the mailbox changes, for example after a change in the dialog of the auto labels. */
+	refreshKey: number;
 	/** Called with the settings that a save returned, so the next draft has the new signature. */
-	onSettingsSaved: (settings: MailboxSettings) => void;
-	/** Closes this dialog and opens the dialog of the auto labels. */
+	onSettingsSaved: (settings: MailboxSettingsData) => void;
+	/** Opens the dialog of the auto labels. */
 	onOpenAutoLabels: () => void;
 	/** Called after a change that can change the labels of the mailbox. */
 	onChanged: () => void;
-	onClose: () => void;
 }
 
 /**
- * The settings of the open mailbox, from the gear in the header of Mail: AI, who can use the mailbox, the
- * default address of the person, and the signature. Each section saves on its own.
+ * The settings view of the open mailbox (`/mail/settings`, or under the path of a team or agent mailbox),
+ * from the gear in the header of Mail: AI, who can use the mailbox, the default address of the person, and
+ * the signature. It replaces the list in the main pane, next to the sidebar. Each section saves on its own.
  */
-export function MailboxSettingsDialog(props: MailboxSettingsDialogProps) {
+export function MailboxSettings(props: MailboxSettingsProps) {
 	const { mailbox } = props;
 	const name = mailbox.id === null ? "your mailbox" : mailbox.display_name;
+	const inbox = viewPath({ kind: "system", view: "inbox" }, mailbox.id);
 	return (
-		<Dialog
-			title="Mailbox settings"
-			description={`The settings of ${name} (${mailbox.address}).`}
-			onClose={props.onClose}
-			className="dialog-wide"
-		>
-			<div className="dialog-body mailbox-settings">
-				<AiSection {...props} />
-				<AccessSection mailbox={mailbox} />
-				<DefaultSection mailbox={mailbox} mailboxes={props.mailboxes} />
-				<SignatureSection mailbox={mailbox} rights={props.rights} onSaved={props.onSettingsSaved} />
+		<main id="main" className="mail-main" tabIndex={-1}>
+			<div className="toolbar">
+				<Link to={inbox} className="icon-button" aria-label="Back to the inbox" title="Back to the inbox">
+					<Icon name="back" />
+				</Link>
+				<div className="page-title">
+					<Icon name="settings" />
+					<h1 className="toolbar-title">{props.title}</h1>
+				</div>
+				<span className="toolbar-spacer" />
+				<SearchBox product="mail" query="" mailboxId={mailbox.id} />
 			</div>
-			<div className="dialog-actions">
-				<button type="button" className="button" onClick={props.onClose}>
-					Done
-				</button>
+			<div className="mail-scroll">
+				<div className="page mailbox-settings">
+					<p className="panel-intro">
+						The settings of {name} ({mailbox.address}).
+					</p>
+					<AiSection {...props} />
+					<AccessSection mailbox={mailbox} />
+					<DefaultSection mailbox={mailbox} mailboxes={props.mailboxes} />
+					<SignatureSection mailbox={mailbox} rights={props.rights} onSaved={props.onSettingsSaved} />
+				</div>
 			</div>
-		</Dialog>
+		</main>
+	);
+}
+
+/** One section of the view: a title and a card. */
+function Panel({ title, children }: { title: string; children: ReactNode }) {
+	const headingId = useId();
+	return (
+		<section className="panel" aria-labelledby={headingId}>
+			<h2 id={headingId} className="panel-title">
+				{title}
+			</h2>
+			<div className="panel-card mailbox-settings-card">{children}</div>
+		</section>
 	);
 }
 
@@ -108,14 +133,16 @@ function LoadError({ error, onRetry }: { error: string; onRetry: () => void }) {
  * AI in the mailbox. Inbox auto labels are the only AI feature of Mail, so the switch is the switch of the
  * auto labels (`mail.update_auto_labels`). The organization must also turn on AI and the feature.
  */
-function AiSection({ mailbox, rights, onOpenAutoLabels, onChanged }: MailboxSettingsDialogProps) {
+function AiSection({ mailbox, rights, refreshKey, onOpenAutoLabels, onChanged }: MailboxSettingsProps) {
 	const { whoami } = useSession();
 	const toast = useToast();
-	const headingId = useId();
 	const load = useCallback(() => api.call("mail.get_auto_labels", mailboxInput(mailbox.id)), [mailbox.id]);
 	const { data: settings, setData, error, setError, reload } = useLoad<AutoLabelSettings>(load);
 	const [busy, setBusy] = useState(false);
 	const unavailable = settings ? unavailableText(settings) : null;
+
+	// A change in the dialog of the auto labels grows refreshKey, so the switch shows it.
+	useOnChange(refreshKey, () => void reload());
 
 	async function toggle(enabled: boolean) {
 		setBusy(true);
@@ -132,10 +159,7 @@ function AiSection({ mailbox, rights, onOpenAutoLabels, onChanged }: MailboxSett
 	}
 
 	return (
-		<section className="dialog-section" aria-labelledby={headingId}>
-			<h3 id={headingId} className="dialog-section-title">
-				AI features
-			</h3>
+		<Panel title="AI features">
 			{!settings && !error && <p className="field-hint">Loading…</p>}
 			{!settings && error && <LoadError error={error} onRetry={() => void reload()} />}
 			{settings && (
@@ -155,7 +179,6 @@ function AiSection({ mailbox, rights, onOpenAutoLabels, onChanged }: MailboxSett
 							checked={settings.enabled}
 							onChange={() => void toggle(!settings.enabled)}
 							disabled={busy || !rights.modify}
-							data-autofocus
 						/>
 						<span>
 							Use AI in this mailbox
@@ -186,7 +209,7 @@ function AiSection({ mailbox, rights, onOpenAutoLabels, onChanged }: MailboxSett
 					)}
 				</>
 			)}
-		</section>
+		</Panel>
 	);
 }
 
@@ -196,15 +219,16 @@ function AiSection({ mailbox, rights, onOpenAutoLabels, onChanged }: MailboxSett
  * no members.
  */
 function AccessSection({ mailbox }: { mailbox: SettingsMailbox }) {
-	const headingId = useId();
 	const { whoami } = useSession();
 	const admin = isOrgAdmin(whoami.principal);
+	if (mailbox.kind === "team" && mailbox.id !== null) return <TeamAccess mailboxId={mailbox.id} admin={admin} />;
 	return (
-		<section className="dialog-section" aria-labelledby={headingId}>
-			<h3 id={headingId} className="dialog-section-title">
-				Access
-			</h3>
-			{mailbox.kind === "personal" && (
+		<Panel title="Access">
+			{mailbox.kind === "agent" ? (
+				<p className="field-hint">
+					The agent uses this mailbox. Owners and admins can read it, and they cannot change it or send from it.
+				</p>
+			) : (
 				<p className="field-hint">
 					Only you can use this mailbox. To share mail with other members, use a shared mailbox: each member reads it
 					and sends from its address.{" "}
@@ -215,13 +239,7 @@ function AccessSection({ mailbox }: { mailbox: SettingsMailbox }) {
 					)}
 				</p>
 			)}
-			{mailbox.kind === "agent" && (
-				<p className="field-hint">
-					The agent uses this mailbox. Owners and admins can read it, and they cannot change it or send from it.
-				</p>
-			)}
-			{mailbox.kind === "team" && mailbox.id !== null && <TeamAccess mailboxId={mailbox.id} admin={admin} />}
-		</section>
+		</Panel>
 	);
 }
 
@@ -235,10 +253,21 @@ function TeamAccess({ mailboxId, admin }: { mailboxId: string; admin: boolean })
 	}, [mailboxId]);
 	const { data: team, setData, error, reload } = useLoad<TeamMailbox>(load);
 
-	if (error) return <LoadError error={error} onRetry={() => void reload()} />;
-	if (!team || !principals) return <p className="field-hint">Loading the members…</p>;
-	if (admin) return <MembersPart mailbox={team} principals={principals} onChanged={setData} />;
-	return <MemberList team={team} principals={principals} />;
+	// An owner or an admin gets the member editor of Admin › Shared mailboxes. It is a section with its own title.
+	if (admin && team && principals) {
+		return <MembersPart mailbox={team} principals={principals} onChanged={setData} heading="Access" />;
+	}
+	return (
+		<Panel title="Access">
+			{error ? (
+				<LoadError error={error} onRetry={() => void reload()} />
+			) : !team || !principals ? (
+				<p className="field-hint">Loading the members…</p>
+			) : (
+				<MemberList team={team} principals={principals} />
+			)}
+		</Panel>
+	);
 }
 
 /** The members of a shared mailbox and what each one can do, for a member who cannot change them. */
@@ -274,19 +303,15 @@ function MemberList({ team, principals }: { team: TeamMailbox; principals: reado
  */
 function DefaultSection({ mailbox, mailboxes }: { mailbox: SettingsMailbox; mailboxes: readonly Mailbox[] | null }) {
 	const toast = useToast();
-	const headingId = useId();
 	const load = useCallback(() => api.call("mail.get_settings"), []);
 	const { data: settings, setData, error, setError, reload } = useLoad<MailSettings>(load);
 	const [busy, setBusy] = useState(false);
 
 	if (mailbox.kind === "agent") {
 		return (
-			<section className="dialog-section" aria-labelledby={headingId}>
-				<h3 id={headingId} className="dialog-section-title">
-					Default address
-				</h3>
+			<Panel title="Default address">
 				<p className="field-hint">Nobody sends from the mailbox of an agent, so it cannot be your default address.</p>
-			</section>
+			</Panel>
 		);
 	}
 
@@ -310,10 +335,7 @@ function DefaultSection({ mailbox, mailboxes }: { mailbox: SettingsMailbox; mail
 	}
 
 	return (
-		<section className="dialog-section" aria-labelledby={headingId}>
-			<h3 id={headingId} className="dialog-section-title">
-				Default address
-			</h3>
+		<Panel title="Default address">
 			<p className="field-hint">
 				Mail opens the mailbox of your default address first, so a new message comes from that address.
 			</p>
@@ -337,7 +359,7 @@ function DefaultSection({ mailbox, mailboxes }: { mailbox: SettingsMailbox; mail
 					{error}
 				</p>
 			)}
-		</section>
+		</Panel>
 	);
 }
 
@@ -352,12 +374,12 @@ function SignatureSection({
 }: {
 	mailbox: SettingsMailbox;
 	rights: MailboxRights;
-	onSaved: (settings: MailboxSettings) => void;
+	onSaved: (settings: MailboxSettingsData) => void;
 }) {
 	const toast = useToast();
-	const ids = { heading: useId(), field: useId(), hint: useId(), count: useId() };
+	const ids = { field: useId(), hint: useId(), count: useId() };
 	const load = useCallback(() => api.call("mail.get_mailbox_settings", mailboxInput(mailbox.id)), [mailbox.id]);
-	const { data: settings, setData, error, setError, reload } = useLoad<MailboxSettings>(load);
+	const { data: settings, setData, error, setError, reload } = useLoad<MailboxSettingsData>(load);
 	const [text, setText] = useState<string | null>(null);
 	const [busy, setBusy] = useState(false);
 	const value = text ?? settings?.signature ?? "";
@@ -388,10 +410,7 @@ function SignatureSection({
 			: `Plain text. The composer adds it to each new message, reply and forward. You can change it there.${mailbox.kind === "team" ? " The members of this shared mailbox share this signature." : ""}`;
 
 	return (
-		<section className="dialog-section" aria-labelledby={ids.heading}>
-			<h3 id={ids.heading} className="dialog-section-title">
-				Signature
-			</h3>
+		<Panel title="Signature">
 			{!settings && !error && <p className="field-hint">Loading…</p>}
 			{!settings && error && <LoadError error={error} onRetry={() => void reload()} />}
 			{settings && (
@@ -435,6 +454,6 @@ function SignatureSection({
 					)}
 				</form>
 			)}
-		</section>
+		</Panel>
 	);
 }

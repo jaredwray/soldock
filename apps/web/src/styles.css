@@ -5412,36 +5412,31 @@ fieldset {
 	gap: 8px;
 }
 
-/* The settings of a mailbox, from the gear in the header of Mail. Each section saves on its own. */
+/* The settings view of a mailbox, from the gear in the header of Mail. Each section saves on its own. */
 .mailbox-settings {
 	display: flex;
 	flex-direction: column;
-	gap: 16px;
+	gap: 24px;
 }
 
-.mailbox-settings .dialog-section {
+.mailbox-settings > .panel-intro {
+	margin: 0;
+}
+
+.mailbox-settings-card {
 	display: flex;
 	flex-direction: column;
 	align-items: flex-start;
-	gap: 8px;
+	gap: 12px;
+}
+
+.mailbox-settings-card > * {
 	margin: 0;
 }
 
-.mailbox-settings .dialog-section > * {
-	margin: 0;
-}
-
-.mailbox-settings .dialog-section > .panel,
-.mailbox-settings .notice {
+.mailbox-settings-card > .notice,
+.mailbox-settings-card > .check-row {
 	align-self: stretch;
-}
-
-/* The member editor of Admin › Shared mailboxes has its own title. Under Access it is a line of text. */
-.mailbox-settings .dialog-section > .panel .panel-title {
-	margin-bottom: 8px;
-	font-size: 13px;
-	font-weight: 400;
-	color: var(--muted-foreground);
 }
 
 .mailbox-member-list {
