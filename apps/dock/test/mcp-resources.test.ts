@@ -164,6 +164,18 @@ describe("MCP resources", () => {
 		expect((await modern(api_key.secret, "resources/read", { uri: inbox(bot.id) })).body?.error).toMatchObject({
 			code: -32602,
 		});
+
+		// A credential without drive.read can call the item tools of a grant (`itemGrant`), but a resource kind lists
+		// and watches the own data of the caller. So it sees no drive template, and the list still works.
+		await owner.call("directory.set_agent_access", { principal_id: bot.id, scopes: ["mail.read"] });
+		const mailOnly = await modern(bot.key, "resources/list");
+		expect(mailOnly.body?.error).toBeUndefined();
+		const mailResult = mailOnly.body?.result as { resources: { uri: string }[] } | undefined;
+		expect(mailResult?.resources.map((resource) => resource.uri)).toContain(inbox(bot.id));
+		const mailTemplates = (await modern(bot.key, "resources/templates/list")).body?.result as {
+			resourceTemplates: { name: string }[];
+		};
+		expect(mailTemplates.resourceTemplates.map((template) => template.name)).not.toContain("drive.item");
 	});
 
 	it("lists the rooms of the caller, and reads the messages of one with the data of REST", async () => {

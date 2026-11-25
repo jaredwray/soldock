@@ -67,6 +67,14 @@ export function canCall(caller: AuthContext, operation: Operation): boolean {
 	);
 }
 
+/**
+ * True when the credential holds the scopes of the operation. A grant on a Drive item (`itemGrant`) does not
+ * count: a resource kind lists and watches the own data of the caller.
+ */
+export function holdsScopesFor(caller: AuthContext, operation: Operation): boolean {
+	return operation.callers.includes(caller.kind) && holdsOperationScopes(operation, caller.scopes);
+}
+
 /** The tools that this credential can call, in the order of the registry. */
 export function listTools(caller: AuthContext): Tool[] {
 	return [...TOOLS.values()].filter((entry) => canCall(caller, entry.operation)).map((entry) => entry.tool);
