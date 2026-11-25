@@ -1053,6 +1053,11 @@ link, chooses a password, and is signed in. The code is in `invites.ts`.
   restore until its end, as the keys of the person do.
 - `directory.create_invite` writes an audit line. A success of the accept writes an `auth.accept_invite` line
   with the credential `invite`.
+- Known limit: a link stays live when the owner or the admin who made it loses that role, is archived or is
+  deleted. That person can keep a copy of the link and use it until its end or its use. A first password from
+  an admin has the same limit, without the end. `created_by` is a record only.
+- Known limit: the accept does not end a session of a different person that the browser holds. The new
+  cookie replaces the old one, as with a sign-in, and the old session stays until its end.
 - Not built yet: an operation that stops a link without a new link, a list of the links that wait, a mail with
   the link, and a link that resets the password of a person who has one.
 
