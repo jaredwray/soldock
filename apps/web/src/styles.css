@@ -1967,6 +1967,99 @@ fieldset {
 	font-size: 13px;
 }
 
+/* Reply later: the banner above its list, the pile at the end of the inbox, and Focus & Reply. */
+
+.reply-later-banner,
+.reply-later-pile {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	justify-content: space-between;
+	gap: 8px 16px;
+	margin: 12px 16px;
+	padding: 10px 12px;
+	border: 1px solid var(--border);
+	border-radius: var(--radius-md);
+	background: var(--surface);
+	font-size: 14px;
+}
+
+.reply-later-banner p {
+	margin: 0;
+	color: var(--muted-foreground);
+}
+
+.reply-later-pile-link {
+	display: inline-flex;
+	align-items: center;
+	gap: 8px;
+	color: var(--foreground);
+	text-decoration: none;
+}
+
+.reply-later-pile-link:hover {
+	text-decoration: underline;
+}
+
+.focus-intro {
+	margin: 0;
+	padding: 16px 22px 0;
+	color: var(--muted-foreground);
+	font-size: 14px;
+}
+
+.focus-list {
+	display: flex;
+	flex-direction: column;
+	gap: 16px;
+	max-width: 1000px;
+	margin: 0;
+	padding: 16px 22px 32px;
+	list-style: none;
+}
+
+.focus-card {
+	padding: 12px 16px 4px;
+	border: 1px solid var(--border);
+	border-radius: var(--radius-md);
+}
+
+.focus-card-header {
+	display: flex;
+	align-items: flex-start;
+	justify-content: space-between;
+	gap: 12px;
+}
+
+.focus-card-title {
+	min-width: 0;
+}
+
+.focus-card-subject {
+	font-size: 17px;
+	font-weight: 650;
+	overflow-wrap: anywhere;
+}
+
+.focus-card-subject a {
+	color: inherit;
+	text-decoration: none;
+}
+
+.focus-card-subject a:hover {
+	text-decoration: underline;
+}
+
+.focus-card-people {
+	margin: 2px 0 0;
+	color: var(--muted-foreground);
+	font-size: 13px;
+}
+
+.focus-card-state {
+	margin: 8px 0 12px;
+}
+
 /* Thread view */
 
 .thread-view {
@@ -4366,6 +4459,18 @@ fieldset {
 
 	.thread-view {
 		padding: 12px 16px 24px;
+	}
+
+	.focus-intro {
+		padding: 12px 16px 0;
+	}
+
+	.focus-list {
+		padding: 12px 16px 24px;
+	}
+
+	.focus-card {
+		padding: 10px 12px 4px;
 	}
 
 	.thread-header {

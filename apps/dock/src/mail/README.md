@@ -413,7 +413,7 @@ send screens the sender in.
 
 ## Labels
 
-- System labels: `INBOX`, `STARRED`, `IMPORTANT`, `SENT`, `SPAM`, `TRASH`, `UNREAD`.
+- System labels: `INBOX`, `STARRED`, `IMPORTANT`, `REPLY_LATER`, `SENT`, `SPAM`, `TRASH`, `UNREAD`.
 - User labels have `lbl_` ids. Their names are unique without regard to case, so a user label
   cannot be named `inbox`. The comparison uses the NFC form in lowercase, for all scripts:
   `Café` and `CAFÉ` are the same name. The `label:` operator uses the same comparison.
@@ -422,6 +422,31 @@ send screens the sender in.
   `TRASH`) brings the thread back to where it was.
 - Views and counts hide messages in `SPAM` or `TRASH`, except the spam and trash views.
 - Views and counts hide the mail that the [Screener](#the-screener) holds.
+
+### Reply later
+
+`REPLY_LATER` holds the conversations that the mailbox answers later. It is a system label, so
+`mail.modify_threads`, `mail.list_labels` and the search use it with no new operation. A person, an agent
+and the web app use it in the same way.
+
+- Reply later: add `REPLY_LATER` and remove `INBOX` in one `mail.modify_threads` call. The thread leaves the
+  inbox and waits in `in:reply_later`. Done: remove `REPLY_LATER`. The thread then stays out of the inbox.
+- A reply removes `REPLY_LATER` from each message of its thread, in the transaction that stores the sent
+  copy. A reply is a send with `reply_to_message_id`. A forward and a new message can join the thread by its
+  subject, but they answer nobody, so the thread stays in Reply later.
+- New mail in the thread does not get the label. The thread stays in Reply later through its older
+  messages, and the new mail also puts it in the inbox.
+- `mail.list_labels` gives its total and unread counts. The web app shows the total.
+- The members of a team mailbox share it, as they share each label. A reply of one member removes it for
+  each member.
+- A change through `mail.modify_threads` needs `mail.modify`. The removal by a reply needs only the scopes of
+  the reply (`mail.send`, and `mail.read` for `reply_to_message_id`). A reply answers the thread, so a member
+  that can answer it can also take it out of Reply later.
+- A `+tag` never selects it, as for each system label.
+- Migration 7 adds the label to each mailbox when the object starts. Label names are unique without regard
+  to case, so a user label named `reply_later` first gets the lowest free number after its name, for example
+  `Reply_Later (1)`. A number is free when no label has that name. The label keeps its id, its threads and
+  its auto label. Mail to `user+reply_later@` then matches no label.
 
 ## Auto labels
 
@@ -525,7 +550,7 @@ message of a run has `may_archive` 0, so the classifier stage keeps the message 
 
 ### Lifecycle and retries
 
-- A send in a thread removes Needs reply from the thread.
+- A send in a thread removes Needs reply from the thread. Only a reply removes [Reply later](#reply-later).
 - The mailbox sends a job again after 15 minutes when no result came, at most 3 times. Then the
   message leaves the outbox with no model label.
 - The consumer retries a timeout, `408`, `429` and `5xx` of the gateway with backoff.
@@ -546,6 +571,8 @@ message of a run has `may_archive` 0, so the classifier stage keeps the message 
   and quoted phrases.
 - `from:me` and `to:me` use the address of the mailbox. They also find the address with a
   `+tag`.
+- `in:` takes `inbox`, `sent`, `starred`, `reply_later`, `important`, `unread`, `spam`, `trash`,
+  `screener`, `screened_out`, `all` and `anywhere`.
 - Other words search the FTS5 index: subject, people, body (first 100,000 characters) and
   attachment names.
 - Dates are the time of receipt, as in Gmail. `before:` and `after:` use dates in UTC.
@@ -850,6 +877,7 @@ A disabled endpoint stays disabled. Delete it and create a new one.
 | --- | --- | --- |
 | Messages, threads, references, labels, message labels | `MailboxDO` SQLite | One object for each principal and each team mailbox, keyed by the mailbox id (`prn_…` or `tmb_…`) |
 | Who sent a message from the mailbox | `MailboxDO` table `messages`, column `sent_by_json` | The principal id, the kind and the name at the time of the send. Null for mail that arrived, and for mail sent before this column |
+| Reply later | `MailboxDO` tables `labels` (the system label `REPLY_LATER`, migration 7) and `message_labels` | No new table. The label is a row of `labels`, and each waiting message has a row in `message_labels` |
 | Search index | `MailboxDO` SQLite, FTS5 table `messages_fts` | Rebuildable from the messages |
 | Delivery status of sent mail | `MailboxDO` table `delivery` | |
 | Outbox | `MailboxDO` table `outbox` | Rows are deleted after delivery or after the last retry |
@@ -913,6 +941,8 @@ Backups: not built yet. mbox/EML export comes with Takeout.
 ## Not built yet
 
 - Drafts, undo send and scheduled send
+- For Reply later: a time that brings a thread back to the inbox, and the order in which threads came into
+  Reply later
 - For recipient suggestions: the names of the people (from the directory, or from mail that they
   sent), the addresses of the directory that the mailbox never wrote to, and a way to remove a
   suggestion

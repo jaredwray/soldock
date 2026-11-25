@@ -1,6 +1,6 @@
 // The app routes. Each path is a deep link: the dock Worker serves index.html for it.
 
-export const SYSTEM_VIEWS = ["inbox", "starred", "sent", "spam", "trash", "all"] as const;
+export const SYSTEM_VIEWS = ["inbox", "reply-later", "starred", "sent", "spam", "trash", "all"] as const;
 export type SystemView = (typeof SYSTEM_VIEWS)[number];
 
 export type MailView =
@@ -56,7 +56,11 @@ export type Route =
 	 * `mailboxId` is the id of a team mailbox (`tmb_`), the id of an agent (`prn_`) whose mailbox an owner
 	 * or an admin reads, or null for the own mailbox of the person.
 	 */
-	| { page: "mail"; mailboxId: string | null; view: MailView; threadId: string | null }
+	/**
+	 * `focus` is true for Focus & Reply: the conversations of Reply later, one after the other, each with its
+	 * newest message. It has the view Reply later and no thread.
+	 */
+	| { page: "mail"; mailboxId: string | null; view: MailView; threadId: string | null; focus?: true }
 	/** The settings view of a mailbox, in the main pane of Mail. `mailboxId` is as for `mail`. */
 	| { page: "mail-settings"; mailboxId: string | null }
 	/** The Screener view of a mailbox, in the main pane of Mail. `mailboxId` is as for `mail`. */
@@ -194,6 +198,9 @@ export function parseRoute(location: string): Route {
 function parseMailView(mailboxId: string | null, parts: string[], url: URL): Route {
 	const [first, second, third] = parts;
 	if (first === "settings" && parts.length === 1) return { page: "mail-settings", mailboxId };
+	if (first === "reply-later" && second === "focus" && parts.length === 2) {
+		return { page: "mail", mailboxId, view: REPLY_LATER_VIEW, threadId: null, focus: true };
+	}
 	if (first === "screener" && parts.length === 1) return { page: "mail-screener", mailboxId, tab: "waiting" };
 	if (first === "screener" && second === "history" && parts.length === 2) {
 		return { page: "mail-screener", mailboxId, tab: "history" };
@@ -414,7 +421,16 @@ export function ownMailboxPath(route: Route, selfId: string): string | null {
 	if (route.page === "mail-settings" && route.mailboxId === selfId) return mailSettingsPath(null);
 	if (route.page === "mail-screener" && route.mailboxId === selfId) return screenerPath(null, route.tab);
 	if (route.page !== "mail" || route.mailboxId !== selfId) return null;
+	if (route.focus) return focusReplyPath(null);
 	return route.threadId ? threadPath(route.view, route.threadId) : viewPath(route.view);
+}
+
+/** The Reply later view: the conversations that the mailbox answers later. */
+export const REPLY_LATER_VIEW: MailView = { kind: "system", view: "reply-later" };
+
+/** The path of Focus & Reply: `/mail/reply-later/focus`, or under the path of a team or agent mailbox. */
+export function focusReplyPath(mailboxId: string | null = null): string {
+	return `${viewPath(REPLY_LATER_VIEW, mailboxId)}/focus`;
 }
 
 /** The path of the settings view of a mailbox: `/mail/settings`, or under the path of a team or agent mailbox. */
