@@ -98,14 +98,48 @@ describe("the Access part of an agent or a service account", () => {
 		]);
 	});
 
-	// A new account holds each scope of its kind. An account from before keeps its narrower list, and the
-	// summary says that the list applies only outside the mailboxes, rooms and drives.
-	it("shows the account scopes, and the scopes of the kind that an account from before does not hold", () => {
-		expect(accountScopes(access, "agent").missing).toEqual([]);
-		expect(accountScopes({ ...access, scopes: [...SERVICE_SCOPES] }, "service").missing).toEqual([]);
-		const legacy = accountScopes({ ...access, scopes: ["account.read", "mail.read"] }, "agent");
-		expect(legacy.held.map((entry) => entry.scope)).toEqual(["account.read", "mail.read"]);
+	// A new account holds each scope of its kind. The summary shows one short row for each product, and no text
+	// for a person. An account from before keeps its narrower list, and its rows show only what it holds.
+	it("shows the account scopes as one row for each product of the kind", () => {
+		const agent = accountScopes(access, "agent", "dot@dock.test");
+		expect(agent.missing).toEqual([]);
+		expect(agent.rows.map((row) => [row.name, row.detail, row.href])).toEqual([
+			["Mailbox (dot@dock.test)", "Can read, change and send", null],
+			["Drive", "Can read, change and share", null],
+			["Chat", "Can find public rooms, create rooms and open direct messages", null],
+			["Webhooks", "Can create for mail, drive and chat events", null],
+			["Directory", "Can read", null],
+			["Account", "Can read", null],
+		]);
+		// A service account cannot create a webhook, so it has no such row.
+		const service = accountScopes({ ...access, scopes: [...SERVICE_SCOPES] }, "service", "ci@dock.test");
+		expect(service.missing).toEqual([]);
+		expect(service.rows.map((row) => row.name)).toEqual([
+			"Mailbox (ci@dock.test)",
+			"Drive",
+			"Chat",
+			"Directory",
+			"Account",
+		]);
+	});
+
+	it("shows what an account from before holds, and the scopes of the kind that it does not hold", () => {
+		const legacy = accountScopes(
+			{ ...access, scopes: ["account.read", "mail.read", "chat.write"] },
+			"agent",
+			"dot@dock.test",
+		);
+		expect(legacy.rows.map((row) => row.detail)).toEqual([
+			"Can read",
+			"Can do nothing",
+			"Can create rooms and open direct messages",
+			"Can do nothing",
+			"Can do nothing",
+			"Can read",
+		]);
 		expect(legacy.missing).toContain("mail.send");
 		expect(legacy.missing).not.toContain("account.read");
+		// An account without a scope gets one line and no rows.
+		expect(accountScopes({ ...access, scopes: [] }, "agent", "dot@dock.test").rows).toEqual([]);
 	});
 });

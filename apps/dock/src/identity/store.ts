@@ -37,11 +37,6 @@ export interface PrincipalRecord {
 	 * them: a credential of an agent has no scopes of its own. Empty for a person, whose keys have scopes.
 	 */
 	agent_scopes: Scope[];
-	/**
-	 * The number of changes of the scopes of an agent. A live connection keeps the number of
-	 * its open, and stops when the number changes.
-	 */
-	access_version: number;
 }
 
 export interface ApiKeyRecord {
@@ -84,7 +79,7 @@ interface ApiKeyRow extends Omit<ApiKeyRecord, "scopes"> {
  */
 const PRINCIPAL_COLUMNS = `p.id, p.kind, p.display_name, p.org_role, p.sponsor_id, p.outbound_mode, p.outbound_allowlist,
 	p.password_hash IS NOT NULL AS password_set, p.totp_secret IS NOT NULL AS totp_enabled, p.created_at, p.archived_at,
-	p.service, p.description, p.created_by, p.agent_scopes, p.access_version`;
+	p.service, p.description, p.created_by, p.agent_scopes`;
 
 const PRINCIPAL_SELECT = `SELECT ${PRINCIPAL_COLUMNS}, a.address
 	FROM principals p JOIN addresses a ON a.principal_id = p.id AND a.is_primary = 1`;

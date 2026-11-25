@@ -45,10 +45,10 @@ function Rows({ rows, empty = "None" }: { rows: readonly AccessRow[]; empty?: st
  * Each team mailbox, shared drive and room decides what the member can do there, and each item share decides
  * it for the item. The rows link to the place where a person changes that access. The account scopes of an
  * agent or a service account apply to its own mailbox, its own drive and the actions that have no mailbox,
- * room or drive, and its keys only prove its identity. A person can do each thing in the own mailbox and the
- * own drive, and each key of a person has its own scopes. For a person, the summary shows only the team
- * mailboxes, the shared drives and the public rooms: the private rooms, the direct messages and the items that
- * others shared with the person stay private.
+ * room or drive, and its keys only prove its identity. The summary shows them as one short row for each
+ * product. A person can do each thing in the own mailbox and the own drive, and each key of a person has its
+ * own scopes. For a person, the summary shows only the team mailboxes, the shared drives and the public rooms:
+ * the private rooms, the direct messages and the items that others shared with the person stay private.
  */
 export function MemberAccess({ member, access, error, viewer, onRetry }: MemberAccessProps) {
 	const headingId = useId();
@@ -56,7 +56,7 @@ export function MemberAccess({ member, access, error, viewer, onRetry }: MemberA
 	const service = member.kind === "service";
 	// The word for the member in the text: a service account is an "account".
 	const noun = person ? "person" : service ? "account" : "agent";
-	const account = access && !person ? accountScopes(access, service ? "service" : "agent") : null;
+	const account = access && !person ? accountScopes(access, service ? "service" : "agent", member.address) : null;
 
 	return (
 		<section aria-labelledby={headingId}>
@@ -123,22 +123,16 @@ export function MemberAccess({ member, access, error, viewer, onRetry }: MemberA
 					)}
 					<dt>Own mailbox, own drive and organization</dt>
 					<dd>
-						<p>{member.address}</p>
 						{account === null ? (
-							<span className="muted">
-								The person can do each thing in the own mailbox and the own drive. The role of the person (owner, admin
-								or member) decides the actions for the organization.
-							</span>
-						) : account.held.length === 0 ? (
-							<span className="muted">The {noun} can do nothing here.</span>
+							<>
+								<p>{member.address}</p>
+								<span className="muted">
+									The person can do each thing in the own mailbox and the own drive. The role of the person (owner,
+									admin or member) decides the actions for the organization.
+								</span>
+							</>
 						) : (
-							<ul>
-								{account.held.map(({ scope, description }) => (
-									<li key={scope}>
-										{description} <span className="muted">{scope}</span>
-									</li>
-								))}
-							</ul>
+							<Rows rows={account.rows} empty={`The ${noun} can do nothing here.`} />
 						)}
 						{account && account.missing.length > 0 && (
 							<p className="field-hint">

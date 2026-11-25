@@ -19,8 +19,7 @@ export const EVENTS_LIMITS = {
 export const EVENTS_SOCKET_CLOSE = {
 	/**
 	 * The server must authenticate the credential again. Open a new socket now. An OAuth client gets this
-	 * code when its access token expired or when a refresh replaced the token: use the new token. A key or a
-	 * token of an agent gets it when the scopes of the agent changed: the new socket has them.
+	 * code when its access token expired or when a refresh replaced the token: use the new token.
 	 */
 	reconnect: 4001,
 	/** The principal opened more sockets than `EVENTS_LIMITS.socketsPerPrincipal`, and this one is the oldest. */

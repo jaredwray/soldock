@@ -447,13 +447,6 @@ export interface CredentialRef {
 	 * without it names the first secret (0), so the refs of keys that never rotated do not change.
 	 */
 	gen?: number;
-	/**
-	 * The `access_version` of an agent at the open, when it is 1 or more: for an API key or an OAuth token of
-	 * an agent or a service account. A change of the scopes of the agent gives a new number, so
-	 * the connection stops at its next check and the client opens a new one with the new access. A ref
-	 * without it has the number 0.
-	 */
-	av?: number;
 }
 
 /** The same credential can open several sockets and register a push device. */
@@ -472,9 +465,6 @@ export function credentialRef(caller: AuthContext): CredentialRef {
 	const ref: CredentialRef = { principalId: caller.principal.id, kind: caller.credential, id };
 	if (caller.grantId !== null) ref.grantId = caller.grantId;
 	if (caller.keyGeneration !== null && caller.keyGeneration > 0) ref.gen = caller.keyGeneration;
-	if (caller.credential !== "session" && caller.principal.access_version > 0) {
-		ref.av = caller.principal.access_version;
-	}
 	return ref;
 }
 
@@ -482,8 +472,7 @@ export function credentialRef(caller: AuthContext): CredentialRef {
  * What a credential can do now.
  * - `live`: it works.
  * - `renew`: the connection must authenticate again. An OAuth access token that expired, or that a refresh
- *   replaced, while its grant works: the client gets a new token. Or a key or a token whose agent got new
- *   scopes after the open: the client opens a new connection, with the new access.
+ *   replaced, while its grant works: the client gets a new token.
  * - `ended`: it does not work, and its owner cannot renew it.
  */
 export type CredentialCheck = "live" | "renew" | "ended";
@@ -492,25 +481,23 @@ export type CredentialCheck = "live" | "renew" | "ended";
  * For each credential, what it can do now, by the rules of `authenticate`: the principal is not
  * archived and not deleted, a session did not expire and its person did not sign out, an API key is
  * not revoked and did not expire, an OAuth access token is the current token of a grant that is not
- * revoked, and did not expire, and the scopes of the agent of a key or a token did not
- * change after the open. So a refresh of a grant, which replaces its access token, stops the old token
- * here too. A live key, and an OAuth token whose grant works, get `renew` when the access of their agent
- * changed: the client connects again.
+ * revoked, and did not expire. So a refresh of a grant, which replaces its access token, stops the old token
+ * here too.
+ * A stored ref from an older Worker, such as the ref of a push device, can have the field `av`. The check
+ * ignores it.
  * One query reads the whole list, and a credential that the list has many times is read one time. So
  * a room with many sockets makes one read.
  */
 export async function checkCredentials(db: D1Database, refs: readonly CredentialRef[]): Promise<CredentialCheck[]> {
 	if (refs.length === 0) return [];
 	// Two secrets of one key are two credentials here: the old one stops with its overlap. The key of a
-	// ref has the number of its secret, and the access version of its open. `credentialKey` stays as it is,
-	// because push devices match on it.
-	const keys = refs.map((ref) => `${credentialKey(ref)}:${ref.gen ?? 0}:${ref.av ?? 0}`);
+	// ref has the number of its secret. `credentialKey` stays as it is, because push devices match on it.
+	const keys = refs.map((ref) => `${credentialKey(ref)}:${ref.gen ?? 0}`);
 	const unique = [...new Map(refs.map((ref, index) => [keys[index] as string, ref])).values()];
 	const { results } = await db
 		.prepare(
 			`SELECT json_extract(ref.value, '$.kind') || ':' || json_extract(ref.value, '$.id') || ':'
-					|| COALESCE(json_extract(ref.value, '$.gen'), 0) || ':'
-					|| COALESCE(json_extract(ref.value, '$.av'), 0) AS key,
+					|| COALESCE(json_extract(ref.value, '$.gen'), 0) AS key,
 				CASE json_extract(ref.value, '$.kind')
 					WHEN 'session' THEN CASE WHEN p.kind = 'human' AND EXISTS (
 						SELECT 1 FROM sessions s
@@ -522,14 +509,12 @@ export async function checkCredentials(db: D1Database, refs: readonly Credential
 							AND ${keyNotExpired(2, "k")}
 							AND (COALESCE(json_extract(ref.value, '$.gen'), 0) = k.rotation
 								OR (COALESCE(json_extract(ref.value, '$.gen'), 0) = k.rotation - 1 AND k.prev_expires_at > ?2)))
-						THEN CASE WHEN COALESCE(json_extract(ref.value, '$.av'), 0) = p.access_version THEN 'live' ELSE 'renew' END
-						END
+						THEN 'live' END
 					WHEN 'oauth' THEN CASE
 						WHEN EXISTS (
 							SELECT 1 FROM oauth_grants g
 							WHERE g.access_hash = json_extract(ref.value, '$.id') AND g.principal_id = p.id
-								AND g.revoked_at IS NULL AND g.access_expires_at > ?2
-								AND COALESCE(json_extract(ref.value, '$.av'), 0) = p.access_version)
+								AND g.revoked_at IS NULL AND g.access_expires_at > ?2)
 							THEN 'live'
 						WHEN EXISTS (
 							SELECT 1 FROM oauth_grants g
