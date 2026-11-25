@@ -183,8 +183,8 @@ MCP clients. The app has no UI-only path.
   - "Add Cc and Bcc" is at the end of the To row. "Attach files" is at the left of the last row.
     Discard and Send are at the right. An attached file is a file card with a Remove button.
   - Each address field (To, Cc and Bcc) is an ARIA combobox ([`RecipientInput.tsx`](src/features/mail/RecipientInput.tsx)).
-    While the person types an address, a list under the field shows the addresses that the mailbox
-    sent mail to (`mail.suggest_recipients`, 8 at most). The part that matches the typed text is
+    While the person types an address, a list under the field shows the addresses that the open mailbox
+    sent mail to (`mail.suggest_recipients`, 8 at most), also after a change of the From. The part that matches the typed text is
     bold. The address can be in any position of the field, not only the last one. In the form
     `Name <address`, the list uses the text after the angle bracket.
   - The arrow keys select an address in the list, and the list scrolls to show it. A new character
@@ -220,13 +220,19 @@ MCP clients. The app has no UI-only path.
     two empty lines, the line `-- `, and the signature. The signature is above the quote of a reply and
     the header of a forward. A draft with only the signature closes without a question. The person can
     change or remove the signature in the draft.
-  - A change of the From puts the signature of the new mailbox in place of the old one. A body that the
-    person did not change starts again with the new signature. In a changed body, the lines of the old
-    signature change (`replaceLines` in [`richText.ts`](src/features/mail/richText.ts)). When the person
-    changed those lines, the body stays as it is. A membership without `mail.read` cannot read the
-    signature of its mailbox, so the body then gets no signature. The focus stays on the From. While the
-    signature of the new mailbox loads, **Send** waits, so a message never goes from the new address with
-    the signature of the old one.
+  - A change of the From puts the signature of the new mailbox in place of the old one (`swapSignature` in
+    [`signatureSwap.ts`](src/features/mail/signatureSwap.ts)). The focus stays on the From.
+    - A body that the person did not change starts again with the new signature.
+    - In a changed body, the lines of the old signature change, also a `> ` line. When the person changed
+      those lines, the body stays as it is.
+    - A changed body without a signature gets the new one above the quote of a reply or the header of a
+      forward, or at the end when the person changed that text.
+    - A membership without `mail.read` cannot read the signature of its mailbox (`forbidden`), so the body
+      then gets no signature. After another error, the body stays as it is, and the composer asks the
+      person to check the signature.
+    - While the signature loads, **Send** waits, so a message never goes from the new address with the
+      signature of the old one. A signature that did not load before the composer opened loads in the
+      composer in the same way.
   - A reply or forward starts with the draft text from [`compose.ts`](src/features/mail/compose.ts).
     Each line becomes a paragraph, and a run of `> ` lines becomes a quote block. A line that starts
     with `>` and no space stays text, so an unchanged draft sends the same text. Quotes nest to a
@@ -319,7 +325,10 @@ MCP clients. The app has no UI-only path.
     `mail.update_settings`). It is a setting of the person, so each member of a shared mailbox has their
     own. At first it is the address of the mailbox. `defaultFromId` in `mailboxNav.ts` decides the current
     value, as for the composer. So the section shows **Loading…** until the list of the mailboxes is
-    there. The mailbox of an agent, and a shared mailbox without `mail.send`, show text and no list.
+    there. When the saved address can no longer send, the list shows the address of the mailbox, and
+    **Save** removes the saved address. The mailbox of an agent, and a shared mailbox without
+    `mail.send`, show text and no list. The shell keeps the mail settings of the person
+    (`useMailSettings`), so they stay when the mailbox changes.
   - **Signature.** Plain text, at most 2,000 characters, with a counter
     (`mail.update_mailbox_settings`). The members of a shared mailbox share it. Without `mail.modify`,
     the field is read only. After a save, the next draft has the new signature. The mail app reads the

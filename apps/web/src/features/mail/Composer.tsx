@@ -1,18 +1,19 @@
-import { MAIL_LIMITS, type OutputOf } from "@asterra/contracts";
+import { ApiError, MAIL_LIMITS, type OutputOf } from "@asterra/contracts";
 import type { Node } from "prosemirror-model";
-import { type ChangeEvent, type FormEvent, type ReactNode, useId, useMemo, useRef, useState } from "react";
+import { type ChangeEvent, type FormEvent, type ReactNode, useEffect, useId, useMemo, useRef, useState } from "react";
 import { api, errorMessage } from "../../lib/api.ts";
 import { fileToBase64 } from "../../lib/base64.ts";
 import { Dialog } from "../../lib/Dialog.tsx";
 import { formatBytes } from "../../lib/format.ts";
 import { Icon } from "../../lib/icons.tsx";
 import { Select } from "../../lib/Select.tsx";
-import { type Draft, parseAddressList, signatureLines, withSignature } from "./compose.ts";
+import { type Draft, parseAddressList, withSignature } from "./compose.ts";
 import { mailboxInput } from "./mailbox.tsx";
 import { type FromOption, mailboxKey } from "./mailboxNav.ts";
 import { RecipientInput } from "./RecipientInput.tsx";
 import { RichTextEditor } from "./RichTextEditor.tsx";
-import { docToHtml, docToText, replaceLines, textToDoc } from "./richText.ts";
+import { docToHtml, docToText, textToDoc } from "./richText.ts";
+import { swapSignature } from "./signatureSwap.ts";
 
 export type SendResult = OutputOf<"mail.send">;
 
@@ -62,8 +63,11 @@ interface ComposerProps {
 	 * of its conversation, so the person cannot change the From of a reply.
 	 */
 	initialFrom: string | null;
-	/** The signature of `initialFrom`. The composer adds it to the draft. */
-	signature: string;
+	/**
+	 * The signature of `initialFrom`, which the composer adds to the draft. Null when it did not load yet: the
+	 * composer then reads it, and adds it when it comes.
+	 */
+	signature: string | null;
 	onClose: () => void;
 	onSent: (result: SendResult) => void;
 }
@@ -88,19 +92,20 @@ export function Composer({ draft, mailDomains, fromOptions, initialFrom, signatu
 	const sender = fromOptions.find((option) => option.id === from);
 	// The body is a rich-text document. The draft text becomes paragraphs, and its "> " lines a quote.
 	const [seed, setSeed] = useState<BodySeed>(() => ({
-		doc: textToDoc(withSignature(draft, signature).text),
+		doc: textToDoc(withSignature(draft, signature ?? "").text),
 		version: 0,
 		edited: false,
 	}));
 	const [doc, setDoc] = useState<Node>(seed.doc);
 	// A change of the From reads the signature of the new mailbox, and the body can change while it loads. So
 	// the change reads the body, the start and the signature in the body from refs.
-	const bodyRef = useRef({ doc: seed.doc, seed, signature });
-	const signatures = useRef(new Map<string | null, string>([[initialFrom, signature]]));
-	const fromChanges = useRef(0);
-	// True while a change of the From loads the signature of the new mailbox. Send waits for it, so a message
-	// never goes from the new address with the signature of the old one.
-	const [loadingSignature, setLoadingSignature] = useState(false);
+	const bodyRef = useRef({ doc: seed.doc, seed, signature: signature ?? "" });
+	// The signatures that loaded, for each From. A signature that did not load is not in the map.
+	const signatures = useRef(new Map<string | null, string>(signature === null ? [] : [[initialFrom, signature]]));
+	const signatureLoads = useRef(0);
+	// True while the composer loads the signature of the From. Send waits for it, so a message never goes from
+	// the new address with the signature of the old one.
+	const [loadingSignature, setLoadingSignature] = useState(signature === null);
 	// Each send has both forms: HTML for the formatting, and plain text for mail apps without HTML.
 	const body = useMemo(() => ({ text: docToText(doc), html: docToHtml(doc) }), [doc]);
 	const [attachments, setAttachments] = useState<PendingAttachment[]>([]);
@@ -155,39 +160,56 @@ export function Composer({ draft, mailDomains, fromOptions, initialFrom, signatu
 	}
 
 	/**
-	 * A new From. The signature of the old mailbox in the body becomes the signature of the new one. A body
-	 * that the person did not change starts again with the new signature. When the person changed the lines of
-	 * the signature, the body stays as it is.
+	 * Puts the signature of the mailbox `id` in the body, in place of the signature that is there now
+	 * (`swapSignature`). It loads the signature first when it is not in the map. Only the newest call changes
+	 * the body, so an older read that comes late changes nothing.
 	 */
-	async function changeFrom(next: string | null) {
-		setFrom(next);
-		setError(null);
-		const change = ++fromChanges.current;
-		let nextSignature = signatures.current.get(next);
-		if (nextSignature === undefined) {
+	async function applySignatureOf(id: string | null) {
+		const load = ++signatureLoads.current;
+		let next = signatures.current.get(id);
+		if (next === undefined) {
 			setLoadingSignature(true);
 			try {
-				nextSignature = (await api.call("mail.get_mailbox_settings", mailboxInput(next))).signature;
-				signatures.current.set(next, nextSignature);
-			} catch {
-				// A membership without mail.read cannot read the signature. The body then gets none.
-				nextSignature = "";
+				next = (await api.call("mail.get_mailbox_settings", mailboxInput(id))).signature;
+			} catch (caught) {
+				// A membership without mail.read cannot read the signature, so the address has none for this person.
+				// After another error, the body stays as it is, and the person checks it.
+				if (!(caught instanceof ApiError && caught.code === "forbidden")) {
+					if (load !== signatureLoads.current) return;
+					setLoadingSignature(false);
+					setError(
+						"The signature of this address did not load. Check the signature in the message before you send it.",
+					);
+					return;
+				}
+				next = "";
 			}
+			signatures.current.set(id, next);
 		}
-		// A newer change of the From decides the body.
-		if (change !== fromChanges.current) return;
+		if (load !== signatureLoads.current) return;
 		setLoadingSignature(false);
 		const current = bodyRef.current;
-		if (nextSignature === current.signature) return;
+		if (next === current.signature) return;
 		const untouched = !current.seed.edited && current.doc.eq(current.seed.doc);
-		const swapped = untouched
-			? textToDoc(withSignature(draft, nextSignature).text)
-			: replaceLines(current.doc, signatureLines(current.signature), signatureLines(nextSignature));
+		const swapped = swapSignature(current.doc, draft, { untouched, previous: current.signature, next });
 		if (!swapped) return;
 		const nextSeed = { doc: swapped, version: current.seed.version + 1, edited: !untouched };
-		bodyRef.current = { doc: swapped, seed: nextSeed, signature: nextSignature };
+		bodyRef.current = { doc: swapped, seed: nextSeed, signature: next };
 		setSeed(nextSeed);
 		setDoc(swapped);
+	}
+
+	// A signature that did not load before the composer opened loads now. The composer opens once, with a key.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: the read runs once, for the first From.
+	useEffect(() => {
+		if (signature === null) void applySignatureOf(initialFrom);
+	}, []);
+
+	/** A new From: the message comes from its address, with its signature. */
+	function changeFrom(next: string | null) {
+		setFrom(next);
+		setError(null);
+		void applySignatureOf(next);
 	}
 
 	function requestClose() {
@@ -357,9 +379,7 @@ export function Composer({ draft, mailDomains, fromOptions, initialFrom, signatu
 									label: option.display_name,
 									description: `<${option.address}>`,
 								}))}
-								onChange={(key) =>
-									void changeFrom(fromOptions.find((option) => mailboxKey(option.id) === key)?.id ?? null)
-								}
+								onChange={(key) => changeFrom(fromOptions.find((option) => mailboxKey(option.id) === key)?.id ?? null)}
 								disabled={sending}
 							/>
 						</div>
