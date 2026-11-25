@@ -26,6 +26,7 @@ import {
 	type ActivityActor,
 	type ActivityInsert,
 	type ActivityRecord,
+	CHAT_ACTIVITY_ITEM_MIGRATION,
 	CHAT_ACTIVITY_SUBJECT_MIGRATION,
 	CHAT_PERSONAL_MIGRATION,
 	ChatPersonalStore,
@@ -366,6 +367,7 @@ const MIGRATIONS: string[][] = [
 	],
 	SERVICE_ACTIVITY_MIGRATION,
 	CHAT_ACTIVITY_SUBJECT_MIGRATION,
+	CHAT_ACTIVITY_ITEM_MIGRATION,
 ];
 
 const COLUMNS = `room_id, kind, name, name_key, topic, created_at, created_by_json, member_count, role, last_seq,
@@ -1049,8 +1051,9 @@ export class PrincipalDO extends DurableObject<Env> {
 		this.ctx.storage.transactionSync(() => {
 			for (const item of items) {
 				// A request of an agent goes to a person who manages the account of the request. That person is
-				// usually not a member of the room, so the check of the membership does not apply to it.
-				if (item.kind !== "member_request") {
+				// usually not a member of the room, and a request to share an item has no room, so the check of the
+				// membership does not apply to them.
+				if (item.kind !== "member_request" && item.kind !== "share_request") {
 					const roomRow = this.sql
 						.exec<{ joined: number }>("SELECT joined FROM chat_rooms WHERE room_id = ?", item.room_id)
 						.toArray()[0];

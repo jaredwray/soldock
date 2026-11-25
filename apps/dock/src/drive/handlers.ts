@@ -45,6 +45,7 @@ import {
 } from "./access.ts";
 import { setPreview, toVersion } from "./preview.ts";
 import { chatFolderFor } from "./rooms.ts";
+import { driveShareRequestHandlers } from "./share-request-handlers.ts";
 import { listSharedDriveRows, serviceMembersOfDrive, sharedDriveState } from "./shared-index.ts";
 import {
 	type ItemRecord,
@@ -281,6 +282,7 @@ async function withAgentAccess(call: CallContext, record: SharedDriveRecord, mem
 
 export const driveHandlers: Pick<HandlerMap<CallContext>, DriveOperation> = {
 	...driveWebhookHandlers,
+	...driveShareRequestHandlers,
 	async "drive.get_about"(call, input) {
 		const own = await openSpace(call, input.space_id);
 		const about = accept(await own.space.about(own.ctx));
@@ -659,17 +661,6 @@ export const driveHandlers: Pick<HandlerMap<CallContext>, DriveOperation> = {
 				created_at: new Date(grant.created_at).toISOString(),
 			})),
 		};
-	},
-
-	async "drive.share_item"(call, input) {
-		const own = await openSpace(call, input.space_id);
-		if ((await unknownPrincipalIds(call.env.DIRECTORY, [input.principal_id])).length > 0) {
-			throw new OperationError("not_found", "No person or agent has the id in principal_id.");
-		}
-		const permission = accept(await own.space.share(own.ctx, input.item_id, input.principal_id, input.role));
-		auditOk(call, own, "drive.share_item", `${input.item_id}:${input.principal_id}:${input.role}`);
-		recordServiceMemberships(call, [input.principal_id], "drive.share_item", input.item_id);
-		return { permission: { ...permission, created_at: new Date(permission.created_at).toISOString() } };
 	},
 
 	async "drive.unshare_item"(call, input) {

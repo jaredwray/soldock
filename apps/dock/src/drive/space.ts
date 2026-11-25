@@ -1961,6 +1961,18 @@ export class DriveSpaceDO extends DurableObject<Env> {
 
 	// --- Share ----------------------------------------------------------------------------------
 
+	/**
+	 * The name of an item that the caller can share, or the refusal of `share` for the item. It changes nothing.
+	 * A request to share an item uses it before a person decides.
+	 */
+	checkShare(call: SpaceCall, itemId: string): { name: string } | Refusal {
+		this.enter(call);
+		const found = this.open(call, itemId, this.top(call));
+		if ("error" in found) return found;
+		if (found.item.trash_root !== null) return refuse("invalid", IN_TRASH);
+		return { name: found.item.name };
+	}
+
 	/** Gives a principal a role for an item. A second call for the same principal changes the role. */
 	async share(
 		call: SpaceCall,

@@ -137,6 +137,7 @@ export {
 	DRIVE_ROLES,
 	DriveItem,
 	type DriveRole,
+	DriveShareRequest,
 	DriveUpload,
 	driveDownloadPath,
 	driveUploadPartPath,
