@@ -396,14 +396,14 @@ export function MailPane(props: MailPaneProps) {
 	);
 }
 
-/** The top of the Reply later list: the way into Focus & Reply. */
+/** The top of the Reply later list: the way into Focus. */
 function FocusBanner({ mailboxId }: { mailboxId: string | null }) {
 	return (
 		<div className="reply-later-banner">
 			<p>Answer these conversations one after the other, each with its newest message.</p>
 			<Link to={focusPath(REPLY_LATER_VIEW, mailboxId)} className="button button-primary button-small">
-				<Icon name="reply" size={16} />
-				Focus &amp; Reply
+				<Icon name="focus" size={16} />
+				Focus
 			</Link>
 		</div>
 	);
@@ -423,13 +423,14 @@ function ReplyLaterPile({ mailboxId, count }: { mailboxId: string | null; count:
 					answer
 				</span>
 			</Link>
-			{/* The header row of the inbox has its own Focus & Reply. This one opens the cards of Reply later. */}
+			{/* The header row of the inbox has its own Focus. This one opens Focus in Reply later. */}
 			<Link
 				to={focusPath(REPLY_LATER_VIEW, mailboxId)}
 				className="button button-small"
-				aria-label="Focus & Reply in Reply later"
+				aria-label="Focus in Reply later"
 			>
-				Focus &amp; Reply
+				<Icon name="focus" size={16} />
+				Focus
 			</Link>
 		</section>
 	);

@@ -183,8 +183,8 @@ MCP clients. The app has no UI-only path.
     brings a new unread message into the open thread, the app removes UNREAD again. The app keeps
     the set of unread message ids that it marked, so it does not send the same change twice.
   - The composer is a modal dialog. It does new mail, reply, reply all and forward, with
-    attachments. One idempotency key for each composed message makes a retry safe. Focus & Reply shows the
-    same composer in the page, in a card (`frame="inline"`). The inline composer gives the focus to the same
+    attachments. One idempotency key for each composed message makes a retry safe. Focus shows the
+    same composer in the page, under the message (`frame="inline"`). The inline composer gives the focus to the same
     field as the dialog does, and Escape closes it.
   - Ctrl+Enter, or Cmd+Enter on a Mac, sends the message from each field of the composer. The keys do not
     send from the link dialog of the editor.
@@ -283,98 +283,110 @@ MCP clients. The app has no UI-only path.
   - The sidebar shows **Reply later** after the inbox, with the number of all its conversations (`navCount`
     in `views.ts`). Its list uses the query `in:reply_later`.
   - At the end of the inbox list, a pile tells how many conversations wait for an answer. It has links to the
-    list and to Focus & Reply. The pile shows only when the count is more than 0.
-  - The Reply later list has a banner with **Focus & Reply** above its rows.
-- **Focus & Reply** ([`FocusReply.tsx`](src/features/mail/FocusReply.tsx), with the rules in
-  [`focusReply.ts`](src/features/mail/focusReply.ts)) shows a card for each conversation of a list. The cards are
-  in one column of 760px, in the order of the list, newest first.
-  - Each list except Spam and Trash has Focus & Reply: the inbox, Reply later, Starred, Sent, All mail, each label
-    and each search. A search of the mail that the Screener holds has no Focus & Reply, because the server does not
-    move that mail. A search that names spam, trash or anywhere, and the label path of Spam or Trash, have no Focus
-    & Reply either. The Focus & Reply path of such a list goes to the list. The label path of a different system
-    label with a view, for example `/mail/label/INBOX/focus`, works as that view.
+    list and to Focus. The pile shows only when the count is more than 0.
+  - The Reply later list has a banner with **Focus** above its rows.
+- **Focus** ([`FocusReply.tsx`](src/features/mail/FocusReply.tsx), with the rules in
+  [`focusReply.ts`](src/features/mail/focusReply.ts)) shows the conversations of a list one at a time, in the order
+  of the list, newest first. The conversation is in one column of 760px.
+  - Each list except Spam and Trash has Focus: the inbox, Reply later, Starred, Sent, All mail, each label and each
+    search. A search of the mail that the Screener holds has no Focus, because the server does not move that mail.
+    A search that names spam, trash or anywhere, and the label path of Spam or Trash, have no Focus either. The
+    Focus path of such a list goes to the list. The label path of a different system label with a view, for
+    example `/mail/label/INBOX/focus`, works as that view.
   - The path is the path of the list and `/focus`, for example `/mail/inbox/focus`, `/mail/label/<id>/focus` or
     `/mail/search/focus?q=…`. A team or agent mailbox has the same paths under its own path (`focusPath`).
-  - The header row of a list with rows has **Focus & Reply** at its right. At 900px and below, the button shows
-    its icon only. The Reply later list also has its banner, and the inbox has its pile. The link of the pile has
-    the name "Focus & Reply in Reply later", because the header row of the inbox has its own Focus & Reply.
-  - The header row of Focus & Reply shows the name of the list after the title. A phone does not show it: the
-    Back button names the list. In a search, the search box shows the query.
-  - Done, Later and a reply do a different change in each list (`focusMode`):
+  - The header row of a list with rows has **Focus** at its right, with the icon `focus` (the Iconoir file
+    `position.svg`). At 900px and below, the button shows its icon only. The Reply later list also has its
+    banner, and the inbox has its pile. The link of the pile has the name "Focus in Reply later", because the
+    header row of the inbox has its own Focus.
+  - The header row of Focus shows the name of the list after the title. A phone does not show it: the Back button
+    names the list. In a search, the search box shows the query.
+  - A strip under the header row has **Previous**, the position and **Next** at its left. The position is, for
+    example, "3 of 12", or "3 of 50+" when more can come. After the first clear, "4 done" counts the conversations
+    that the person cleared in this visit. The actions of the conversation are at the right of the strip. A bar
+    of 2px on the border of the strip shows the part of this visit that is done (`progressFraction`).
+  - At 600px and below, Previous and Next are icons at the two ends of the strip. The actions are in a bar at the
+    bottom of the page, as the actions of a selection in the list. The bar does not show while the reply is open.
+  - The actions, from left to right: **Spam**, a second **Archive** in some lists, **Later**, and the primary
+    button. Reply, Reply all and Forward are under the message. The primary button and the second Archive follow
+    the list and the labels of the conversation (`primaryAction`, `showsArchive`), so two buttons never do the
+    same change:
 
-    | List | Done | Later | After a reply |
-    | --- | --- | --- | --- |
-    | Inbox | Archives | Moves to Reply later | The page archives the conversation |
-    | Reply later | Removes `REPLY_LATER` | None: `l` is Done | The server removes `REPLY_LATER` |
-    | Starred | Removes the star | Moves to Reply later | The star stays |
-    | A label | Removes the label | Moves to Reply later | The label stays |
-    | Sent, All mail, a search | Archives | Moves to Reply later | No change |
+    | List | Primary button (`e`) | Second Archive | Later (`l`) | After a reply |
+    | --- | --- | --- | --- | --- |
+    | Inbox | Archive | No | Moves to Reply later | The page archives the conversation |
+    | Sent, All mail, a search | Archive when the conversation is in the inbox. Else Done, which changes nothing and shows the next conversation | No | Moves to Reply later | No change |
+    | Reply later | Done: removes `REPLY_LATER` | When the conversation is in the inbox | None: `l` is Done | The server removes `REPLY_LATER` |
+    | Starred | Done: removes the star | When the conversation is in the inbox | Moves to Reply later | The star stays |
+    | A label | Done: removes the label | When the conversation is in the inbox | Moves to Reply later | The label stays |
 
-  - In Sent, All mail and a search, the conversation can stay in the list after Done. Its card then leaves the
-    page only. When Done does not change the conversation, the toast says "Conversation marked as done.".
-  - One card is active: the first card at the start. It has the color of a card, a shadow and a bar at its left.
-    The other cards are flat. A click or the focus in a card makes it active. `j` and `k` move to the next or the
-    previous card, give it the focus and bring it to the top of the view. **Skip** on the active card does the
-    same as `j`. It removes nothing.
-  - Reply and Reply all open the composer in the card, under the message. The other cards stay visible. Forward
-    opens the composer dialog, because a forward does not answer the conversation. `r`, `a` and `f` do the same
-    for the active card. In a very large thread, the server can leave out the body of the message. The keys and
-    the step after a send then wait until the card has the body, as the buttons do (`replySource`).
-  - After a send, the card leaves the page, the next card becomes active, and its reply opens with the focus in
-    the message. So the person answers one conversation after the other with no click. No toast shows for a
-    send. A live region says "Reply sent." and the progress. A toast shows when the delivery to a recipient
-    failed.
+  - **Spam** adds `SPAM` in each list. The conversation then leaves each list except Spam.
+  - After Archive, Spam, Later, Done or a send, the next conversation shows. At the end of the list, the previous
+    one shows. When no conversation stays, the page shows the finish state. Previous and Next stop at the two
+    ends. They have `aria-disabled` there, not `disabled`, so they keep the focus.
+  - After a send, the reply of the next conversation opens with the focus in the message. So the person answers
+    one conversation after the other with no click. No toast shows for a send. A toast shows when the delivery to
+    a recipient failed.
   - In the inbox, the page archives the conversation after the send (`mail.modify_threads`). A failed archive
     shows a toast. The archive after a reply has no Undo.
-  - A strip above the cards shows the progress of this visit, for example "2 of 5 done · 3 left", and a bar of
-    2px on its border. "Done" counts the replies, the Done and the Later of this visit. "Left" counts the waiting
-    conversations. On a large screen, the strip also shows the keys. While the focus is in a reply, it shows
-    Ctrl+Enter and Esc.
-  - The page shows the first 50 conversations, and **Older** gets more. With more pages, "left" comes from the
-    count of the label of the list (`waitingCount`). That count also has the cleared conversations that stay in
-    the list, for example a starred conversation after a reply, so the page subtracts them. All mail and a search
-    have no label count. The strip then shows the cards on the page with a plus, for example "50+ left".
-  - When each card on the page is cleared and the list has more pages, the page gets the next page
-    (`queueView`). A refresh cannot do it, because a list can keep the cleared conversations, for example All mail
-    after Done. If the next page does not load, the page shows **Older**. **All caught up.** shows only at the end
-    of the list.
-  - A card that leaves plays a short motion: an answered card moves to the right, and a card that is done or
-    moved to Reply later gets smaller. Then its place closes. The card is inert during the motion. With
-    `prefers-reduced-motion`, the card goes at once.
-  - A card has the subject, the people, the number of other messages, **Later** and **Done**. The subject is a
-    link to the conversation. At 600px and below, **Later** shows its icon only.
-  - A card shows the newest message that the mailbox got, with Reply, Reply all and Forward. A forward can
-    join the conversation, and a reply to it would go to the wrong people. When each message is a sent
-    message, the card shows the newest one.
-  - A card gets its conversation (`mail.get_thread`) when it comes near the visible part of the page. It gets
-    the conversation again only when the list shows a new message in it.
-  - **Done** and **Later** each show a toast. The toast has **Undo** when the change altered the conversation.
-    `e` is Done for the active card. `l` is Later, as in the list, and Done in Reply later. A key does nothing
-    while the reply of the active card is open, so a key never discards text. The buttons ask "Discard your reply?" when the reply of their card has text. **Undo**
-    puts the card back at its old place, with its reply closed.
-  - A conversation that the person cleared in this visit comes back only when a new message comes in it (`isGone`,
-    used by `mergeQueue`). The log keeps the number of messages of each cleared conversation, with one more after a
-    reply. The server can still show a cleared conversation, for example in a refresh that started before a Done,
-    or in Starred after a reply. A new visit shows it again.
-  - When the active card leaves, the focus goes to the subject of the next card. When no card stays, the focus
-    goes to the page.
-  - When the last card leaves, the page shows **All caught up.**, what the person answered, marked as done and
-    moved to Reply later in this visit, and a list of those conversations (at most 8, then a count). Each is a
-    link to the conversation. **Go to the inbox** follows. After the inbox or Reply later, **Reply later list**
-    is second. After a different list, the link back to that list is second. A page that opens with no
-    conversation shows the empty state.
-  - While a reply in a card has text, the app asks "Discard your reply?" before it leaves the page
+  - A button that stays on screen keeps the focus, so a second click acts on the next conversation. After a key,
+    and after the second Archive, the focus goes to the subject heading of the next conversation. When no
+    conversation stays, the focus goes to the page.
+  - After each move, a live region says the position, the subject and the people, for example "Conversation 3 of
+    11: Hiring plan, from Ana Lopez.". After a send, the text starts with "Reply sent.".
+  - The new conversation comes in with a short motion: from the right after Next and after an action, and from the
+    left after Previous and after Undo. With `prefers-reduced-motion`, it shows at once.
+  - Archive, Spam, Later and Done each show a toast. The toast has **Undo** when the change altered the
+    conversation. **Undo** puts the conversation back at its old place and shows it, with its reply closed. While
+    the reply on screen has text, Undo only puts the conversation back into the order. When the Undo fails, the
+    next conversation shows. Undo and the end of a request read the state of the page at that time, not at the
+    time of the action.
+  - The page shows the newest message that the mailbox got, with Reply, Reply all and Forward. A forward can join
+    the conversation, and a reply to it would go to the wrong people. When each message is a sent message, the page
+    shows the newest one. **Show 2 more messages** in the line of the people shows the other messages of the
+    conversation. The subject is a link to the conversation.
+  - Reply and Reply all open the composer in the page, under the message. Forward opens the composer dialog,
+    because a forward does not answer the conversation. `r`, `a` and `f` do the same. In a very large thread, the
+    server can leave out the body of the message. The keys and the step after a send then wait until the page has
+    the body, as the buttons do (`replySource`).
+  - The page has one reply at a time. While the reply has text, Previous, Next and the actions ask "Discard your
+    reply?", and the keys do nothing. A reply with no text closes with no question.
+  - While the reply has text, the app asks "Discard your reply?" before it leaves the page
     ([`navigationGuard.ts`](src/lib/navigationGuard.ts), which `navigate()` asks). The browser asks before it
     closes or reloads the tab. The Back button of the browser does not ask: a `popstate` event cannot stop.
-  - A refresh does not move a card. A card with an open reply stays, also when its conversation left the list,
-    for example after a reply by a different member. The card then says so. A card from **Older** stays until
-    the server shows that it left (`mergeQueue`).
-  - Focus & Reply does not mark a conversation as read.
-  - The shortcuts `j`, `k`, `r`, `a`, `f`, `e`, `l`, `o`, `c`, `/` and `?` work in Focus & Reply, and `u` goes back
-    to the list. The shortcut help has a Focus & Reply group.
-  - Without `mail.modify`, Focus & Reply has no **Done** and no **Later**, and a reply in the inbox does not
-    archive. Without `mail.send`, it has no Reply. The notice of the list says why. The mailbox of an agent shows
-    the notice of a read-only mailbox, because each card opens a conversation, and the audit log records it.
+  - The page gets the thread of the next conversation before it shows (`mail.get_thread`), so Next is fast. It
+    keeps the threads of the last 10 conversations. A thread that has fewer messages than the list does not show.
+    The reply that opens after a send waits for the own thread of the conversation. The conversation on screen
+    gets its thread again only when the list shows a new message in it.
+  - The page loads the first 50 conversations. When the conversation on screen is one of the last 5 loaded, the
+    page gets the next page. Next at the last loaded conversation waits for that page (`aria-busy`). A different
+    move, an action or a reply that opens ends the wait. A failed request shows a toast, and Next then asks again.
+  - With more pages, the total of the position comes from the count of the label of the list (`waitingCount`).
+    That count also has the cleared conversations that stay in the list, for example a starred conversation after
+    a reply, so the page subtracts them. All mail and a search have no label count. The total then has a plus.
+  - When each loaded conversation is cleared and the list has more pages, the page gets the next page
+    (`queueView`). A refresh cannot do it, because a list can keep the cleared conversations, for example All mail
+    after Archive. If the next page does not load, the page shows **Older**. **All caught up.** shows only at the
+    end of the list.
+  - A conversation that the person cleared in this visit comes back only when a new message comes in it (`isGone`,
+    used by `mergeQueue`). The log keeps the number of messages of each cleared conversation: the larger of the
+    list and the thread that the page showed, with one more after a reply. A new visit shows it again. A
+    conversation that comes back goes to the end of the order.
+  - A refresh does not change the conversation on screen. When that conversation left the list, for example after
+    a reply by a different member, it stays with the note "This conversation is not in Reply later now.". It leaves
+    the order when the person moves away.
+  - When no conversation stays, the page shows **All caught up.**, what the person answered, archived, marked as
+    done, moved to Reply later and marked as spam in this visit, and a list of those conversations (at most 8, then
+    a count). Each is a link to the conversation. **Go to the inbox** follows. After the inbox or Reply later,
+    **Reply later list** is second. After a different list, the link back to that list is second. A page that
+    opens with no conversation shows the empty state.
+  - Focus does not mark a conversation as read.
+  - The shortcuts work in Focus: `j` or `→` for Next, `k` or `←` for Previous, `r`, `a`, `f`, `e` for the primary
+    button, `l` for Later (Done in Reply later), `!` for Spam, `o`, `c`, `/` and `?`. `u` goes back to the list.
+    Shift with an arrow key does not move: it selects text. The shortcut help has a Focus group.
+  - Without `mail.modify`, Focus has no Spam, Archive, Later or Done, and a reply in the inbox does not archive.
+    Without `mail.send`, it has no Reply. The notice of the list says why. The mailbox of an agent shows the
+    notice of a read-only mailbox, because each conversation that shows is opened, and the audit log records it.
 - **Mailbox tree.** When the person can use more than the own mailbox, the sidebar shows a row for
   each mailbox (`mail.list_mailboxes`, `mailboxNav.ts`). "My mailbox" is first, then the shared
   (team) mailboxes, then the agent mailboxes. The sidebar has no group headings.
@@ -570,7 +582,7 @@ MCP clients. The app has no UI-only path.
       Each key of a person keeps its own scopes. The person picks them in **Settings › API keys**.
       The rows come from `admin/accessSummary.ts`: each team mailbox with what the membership allows ("Can read and send"), each shared drive and each item shared directly with the role, and each room with its kind and role. A direct message shows the name of its other member (`peer_name`, `admin/roomLabel.ts`).
       Each row links to the place where a person changes the access, when the person who looks can open it: **Admin › Shared mailboxes** and **Admin › Shared drives** for an owner or an admin, the shared drive for a different person, a public room, and an item of the own drive of the person who looks. A private room and a direct message get no link.
-      **Own mailbox, own drive and organization** lists the account scopes with their texts (`scopeDescription`). When the account holds fewer than its kind, a line tells that it is an account from before memberships decided its access, and that the limit applies only there.
+      **Own mailbox, own drive and organization** shows the account scopes as one short row for each product (`accountScopes`): the mailbox with its address, the drive, Chat, the webhooks of an agent, the directory and the account. A row tells what the account can do there ("Can read, change and send"), or "Can do nothing". When the account holds fewer than its kind, a line tells that it is an account from before memberships decided its access, and that the limit applies only there.
       The live API keys (**Live tokens** for a service account) show last. The list of live API keys of an agent does not show the apps that connect with OAuth.
       A create, a rotation or a revoke of a key, and an approval of a member request, load the access again (`admin/useMemberAccess.ts`). The page ignores the answer of a read that is older than its newest read.
     - The page of an agent and the page of a service account also share **Requests** (`chat.list_member_requests` and `drive.list_share_requests`, each with `principal_id`, `AccountRequests.tsx`), above **Access**.
@@ -1991,7 +2003,7 @@ dock Worker serves `index.html` for each app path, so a deep link works on reloa
 | --- | --- |
 | `/`, `/mail` | Goes to `/mail/inbox` |
 | `/mail/<view>` | The thread list of a view: `inbox`, `reply-later`, `starred`, `sent`, `spam`, `trash` or `all` |
-| `/mail/reply-later/focus` | Focus & Reply: each conversation of Reply later with its newest message |
+| `/mail/<view>/focus`, `/mail/label/<lbl_id>/focus`, `/mail/search/focus?q=<query>` | Focus: the conversations of that view, one at a time. Spam and Trash go to their list |
 | `/mail/label/<lbl_id>` | The thread list of a user label |
 | `/mail/search?q=<query>` | The search results |
 | `/mail/<view>/<thr_id>`, `/mail/label/<lbl_id>/<thr_id>`, `/mail/search/<thr_id>?q=<query>` | One thread, opened from that view |

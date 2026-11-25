@@ -18,12 +18,12 @@ interface MessageCardProps {
 	myAddress: string;
 	labelsById: ReadonlyMap<string, Label>;
 	defaultExpanded: boolean;
-	/** The heading of the message: h2 in a thread, h3 under the subject of a card in Focus & Reply. */
+	/** The heading of the message: h2 in a thread, h3 under the subject of the conversation in Focus. */
 	heading?: "h2" | "h3";
 	onReply: (message: Message, mode: ReplyMode) => void;
 	/**
 	 * Gets the message with its full body when that body is there. A parent that starts a reply itself, such as
-	 * a card of Focus & Reply for a key, uses it, so the reply never quotes a body that the server left out.
+	 * the conversation in Focus for a key, uses it, so the reply never quotes a body that the server left out.
 	 */
 	onFullBody?: (message: Message) => void;
 }
