@@ -3,8 +3,20 @@ import { defineOperation } from "./operation.ts";
 import { MAIL_WEBHOOK_EVENTS, MailWebhookSubscription } from "./webhooks.ts";
 import { z } from "./zod.ts";
 
-/** System labels. Every mailbox has them, and nobody can rename or delete them. */
-export const SYSTEM_LABELS = ["INBOX", "STARRED", "IMPORTANT", "SENT", "SPAM", "TRASH", "UNREAD"] as const;
+/**
+ * System labels. Every mailbox has them, and nobody can rename or delete them. REPLY_LATER holds the threads
+ * that the mailbox answers later. A reply in the thread removes it.
+ */
+export const SYSTEM_LABELS = [
+	"INBOX",
+	"STARRED",
+	"IMPORTANT",
+	"REPLY_LATER",
+	"SENT",
+	"SPAM",
+	"TRASH",
+	"UNREAD",
+] as const;
 export type SystemLabel = (typeof SYSTEM_LABELS)[number];
 
 export const MAIL_LIMITS = {
@@ -252,7 +264,7 @@ export const getProfile = defineOperation({
 export const listLabels = defineOperation({
 	name: "mail.list_labels",
 	summary: "List the labels of a mailbox, with counts",
-	description: `Returns the system labels (INBOX, STARRED, IMPORTANT, SENT, SPAM, TRASH, UNREAD) and the user labels of the mailbox, each with its total and unread thread counts. ${IN_MAILBOX_READ} The members of a team mailbox share its labels.`,
+	description: `Returns the system labels (INBOX, STARRED, IMPORTANT, REPLY_LATER, SENT, SPAM, TRASH, UNREAD) and the user labels of the mailbox, each with its total and unread thread counts. ${IN_MAILBOX_READ} The members of a team mailbox share its labels.`,
 	http: { method: "GET", path: "/api/v1/mail/labels" },
 	scopes: ["mail.read"],
 	callers: ["human", "agent", "service"],
@@ -301,7 +313,7 @@ export const listThreads = defineOperation({
 	summary: "List or search threads",
 	description: [
 		"Returns threads that match a Gmail-style search query, newest first. The default query is in:inbox.",
-		"Operators: from:, to:, cc:, subject:, label:, in:inbox|sent|starred|spam|trash|all|anywhere, is:unread|read|starred|important,",
+		"Operators: from:, to:, cc:, subject:, label:, in:inbox|sent|starred|reply_later|spam|trash|all|anywhere, is:unread|read|starred|important,",
 		"has:attachment, filename:, before:YYYY/MM/DD, after:YYYY/MM/DD (UTC days), older_than:/newer_than: (with d, m or y, for example 7d),",
 		"larger:/smaller: (with K or M, for example 2M), quoted phrases, a leading - to negate a term, and OR between terms.",
 		"Other words search the subject, the people, the body and the attachment names.",
@@ -360,6 +372,8 @@ export const modifyThreads = defineOperation({
 		"Adds and removes labels on every message of the given threads.",
 		"Archive: remove INBOX. Mark as read: remove UNREAD. Star: add STARRED. Move to trash: add TRASH. Report spam: add SPAM.",
 		"Restore from trash or spam: remove TRASH or SPAM.",
+		"Reply later: add REPLY_LATER and remove INBOX. The thread then waits in the Reply later list (in:reply_later). Done: remove REPLY_LATER.",
+		"A reply with mail.send (reply_to_message_id) removes REPLY_LATER from its thread. A forward or a new message does not.",
 		"Set dry_run to true to get the counts without a change.",
 		"On a thread that the Screener holds, only UNREAD, STARRED and IMPORTANT can change. A different label fails with conflict: a person screens the sender in or out to move the mail (mail.screen_sender).",
 		`${IN_MAILBOX} A change in a team mailbox applies for each member: the members share the labels and the read state.`,
@@ -420,7 +434,7 @@ export const send = defineOperation({
 		AGENT_READ_ONLY,
 		"For formatted mail, also set html. The message then has two parts: text for mail apps without HTML, and html. Make text the plain-text form of html.",
 		"The signature of the mailbox is not added. Read it with mail.get_mailbox_settings, and add it to text and html yourself.",
-		"To reply, set reply_to_message_id: the message joins that thread, and the subject defaults to Re: and the original subject.",
+		"To reply, set reply_to_message_id: the message joins that thread, and the subject defaults to Re: and the original subject. A reply removes REPLY_LATER from the thread.",
 		"A reply reads the message that it answers. So it also needs mail.read: in your credential, and in your membership of a team mailbox.",
 		"A send by a person to a sender that waits in the Screener screens that sender in, when the credential and the membership of a team mailbox have mail.modify. Without mail.modify, and for an agent, the send decides nothing.",
 		"An agent can send only to the recipients that its policy allows, also from a team mailbox. Otherwise the call fails with policy_denied and nothing is sent.",

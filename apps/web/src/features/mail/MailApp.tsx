@@ -13,6 +13,7 @@ import type { SendResult } from "./Composer.tsx";
 import { Composer, usePreloadComposer } from "./ComposerLoader.tsx";
 import { type Draft, newDraft } from "./compose.ts";
 import { useLabels, useMailboxSettings, useProfilePoll } from "./data.ts";
+import { FocusReply } from "./FocusReply.tsx";
 import { DeleteLabelDialog, NewLabelDialog } from "./LabelDialogs.tsx";
 import { MailPane } from "./MailPane.tsx";
 import { MailboxProvider, MailboxRightsProvider } from "./mailbox.tsx";
@@ -47,9 +48,15 @@ const Screener = lazyPage(() => import("./Screener.tsx").then((module) => module
 interface MailAppProps {
 	/**
 	 * `view` is null for the settings view and the Screener view of the mailbox. `screener` is set for the
-	 * Screener view.
+	 * Screener view. `focus` is true for Focus & Reply.
 	 */
-	route: { mailboxId: string | null; view: MailView | null; threadId: string | null; screener?: ScreenerTab };
+	route: {
+		mailboxId: string | null;
+		view: MailView | null;
+		threadId: string | null;
+		screener?: ScreenerTab;
+		focus?: true;
+	};
 	/** The mailboxes that the person can use, from the shell: the list stays when the mailbox changes. */
 	mailboxes: readonly Mailbox[] | null;
 	/** Loads the mailboxes again, after a change of the members of a team mailbox in its settings view. */
@@ -118,7 +125,13 @@ export function MailApp({
 		? (profile?.display_name ?? listed?.display_name ?? (isAgentMailbox(mailboxId) ? "Agent mailbox" : "Team mailbox"))
 		: null;
 	const { view } = route;
-	const title = view ? viewTitle(view, labels) : route.screener ? "Screener" : "Settings";
+	const title = route.focus
+		? "Focus & Reply"
+		: view
+			? viewTitle(view, labels)
+			: route.screener
+				? "Screener"
+				: "Settings";
 	const screenerEnabled = mailboxSettings?.screener.enabled ?? false;
 	const screenerPending = profile?.screener_pending ?? 0;
 	const inboxUnread = labelsById.get("INBOX")?.threads_unread ?? profile?.inbox_unread ?? 0;
@@ -225,7 +238,17 @@ export function MailApp({
 						onDeleteLabel={(label) => setDialog({ type: "delete-label", label })}
 						onClose={onCloseNav}
 					/>
-					{view ? (
+					{route.focus ? (
+						<FocusReply
+							mailboxName={mailboxName}
+							labelsById={labelsById}
+							myAddress={myAddress}
+							refreshKey={refreshKey}
+							onChanged={onChanged}
+							onCompose={compose}
+							onShowHelp={() => setDialog({ type: "help" })}
+						/>
+					) : view ? (
 						<MailPane
 							key={viewPath(view)}
 							mailboxName={mailboxName}

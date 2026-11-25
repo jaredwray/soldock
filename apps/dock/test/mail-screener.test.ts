@@ -641,8 +641,8 @@ describe("the Screener in a mailbox from before", () => {
 					sql.exec("DROP INDEX messages_from");
 					sql.exec("ALTER TABLE messages DROP COLUMN screen");
 					sql.exec("ALTER TABLE recipients DROP COLUMN person_sent");
-					const version = sql.exec<{ value: string }>("SELECT value FROM meta WHERE key = 'schema_version'").one();
-					sql.exec("UPDATE meta SET value = ? WHERE key = 'schema_version'", String(Number(version.value) - 1));
+					// Schema 5 is the schema before the Screener (migration 6). Later migrations run again too.
+					sql.exec("UPDATE meta SET value = '5' WHERE key = 'schema_version'");
 					await state.storage.sync();
 					state.abort("Restart the mailbox.");
 				}),

@@ -18,6 +18,8 @@ interface MessageCardProps {
 	myAddress: string;
 	labelsById: ReadonlyMap<string, Label>;
 	defaultExpanded: boolean;
+	/** The heading of the message: h2 in a thread, h3 under the subject of a card in Focus & Reply. */
+	heading?: "h2" | "h3";
 	onReply: (message: Message, mode: ReplyMode) => void;
 }
 
@@ -55,7 +57,14 @@ function useFullBody(message: Message, expanded: boolean) {
 	return { body, full, retry: load };
 }
 
-export function MessageCard({ message, myAddress, labelsById, defaultExpanded, onReply }: MessageCardProps) {
+export function MessageCard({
+	message,
+	myAddress,
+	labelsById,
+	defaultExpanded,
+	heading: Heading = "h2",
+	onReply,
+}: MessageCardProps) {
 	const [expanded, setExpanded] = useState(defaultExpanded);
 	const { body, full, retry } = useFullBody(message, expanded);
 	const bodyId = useId();
@@ -81,7 +90,7 @@ export function MessageCard({ message, myAddress, labelsById, defaultExpanded, o
 
 	return (
 		<article className={expanded ? "message message-expanded" : "message"}>
-			<h2 className="message-heading">
+			<Heading className="message-heading">
 				<button
 					type="button"
 					className="message-toggle"
@@ -109,7 +118,7 @@ export function MessageCard({ message, myAddress, labelsById, defaultExpanded, o
 						{expanded ? fullDate(message.date) : shortDate(message.date)}
 					</time>
 				</button>
-			</h2>
+			</Heading>
 			<div id={bodyId} hidden={!expanded} className="message-content">
 				{expanded && (
 					<>

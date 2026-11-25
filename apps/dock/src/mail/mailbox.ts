@@ -9,6 +9,7 @@ import {
 	type MailSettings,
 	ScreenerMode,
 	type ScreenerStatus,
+	SYSTEM_LABELS,
 	WEBHOOK_LIMITS,
 } from "@asterra/contracts";
 import { addressTag, getMailbox, getPrincipal } from "../identity/index.ts";
@@ -229,7 +230,11 @@ export interface LabelRecord {
 	threads_unread: number;
 }
 
-const SYSTEM_LABEL_ORDER = ["INBOX", "STARRED", "IMPORTANT", "SENT", "SPAM", "TRASH", "UNREAD"];
+/** The order of the system labels in `listLabels`. */
+const SYSTEM_LABEL_ORDER: readonly string[] = SYSTEM_LABELS;
+
+/** The system labels of the first migration. Migrations are append only, so this list never changes. */
+const FIRST_SYSTEM_LABELS = ["INBOX", "STARRED", "IMPORTANT", "SENT", "SPAM", "TRASH", "UNREAD"];
 
 /** The tag of the watch sockets of a mailbox. The MCP stream of a subscriber holds one. */
 const WATCH_TAG = "watch";
@@ -331,7 +336,7 @@ const MIGRATIONS: string[][] = [
 			result TEXT NOT NULL,
 			created_at INTEGER NOT NULL
 		)`,
-		...SYSTEM_LABEL_ORDER.map(
+		...FIRST_SYSTEM_LABELS.map(
 			(id) =>
 				`INSERT INTO labels (id, name, name_folded, type, created_at) VALUES ('${id}', '${id}', '${id.toLowerCase()}', 'system', 0)`,
 		),
@@ -391,6 +396,21 @@ const MIGRATIONS: string[][] = [
 	AUTOLABEL_MIGRATION,
 	// The Screener: the held state of a message and the senders (screener/store.ts).
 	SCREENER_MIGRATION,
+	// Reply later: the system label of the threads that the mailbox answers later. Label names are unique
+	// without regard to case. So a user label with the name reply_later first gets the lowest number n after its
+	// name, as "Reply_Later (n)", for which no label has that name. A person can make any name, also
+	// "Reply_Later (1)", so the number is not fixed. Both statements can run again with no change.
+	[
+		`WITH RECURSIVE n(i) AS (
+			SELECT 1
+			UNION ALL
+			SELECT i + 1 FROM n WHERE EXISTS (SELECT 1 FROM labels WHERE name_folded = 'reply_later (' || i || ')')
+		)
+		UPDATE labels SET name = name || ' (' || (SELECT MAX(i) FROM n) || ')',
+			name_folded = 'reply_later (' || (SELECT MAX(i) FROM n) || ')'
+		WHERE type = 'user' AND name_folded = 'reply_later'`,
+		"INSERT OR IGNORE INTO labels (id, name, name_folded, type, created_at) VALUES ('REPLY_LATER', 'REPLY_LATER', 'reply_later', 'system', 0)",
+	],
 ];
 
 /** The sends of one message to the classifier queue. A send that gets no result is repeated after `AUTOLABEL_RESEND_MS`. */
@@ -1806,6 +1826,14 @@ export class MailboxDO extends DurableObject<Env> {
 		);
 	}
 
+	/** Removes REPLY_LATER from each message of a thread. */
+	private clearReplyLater(threadId: string): void {
+		this.sql.exec(
+			"DELETE FROM message_labels WHERE label_id = 'REPLY_LATER' AND message_seq IN (SELECT seq FROM messages WHERE thread_id = ?)",
+			threadId,
+		);
+	}
+
 	/** True when the mailbox sent a message in the thread of this message after it arrived. */
 	private repliedAfter(seq: number): boolean {
 		return (
@@ -2396,6 +2424,8 @@ export class MailboxDO extends DurableObject<Env> {
 			);
 			// A reply answers the thread, so its Needs reply label goes.
 			if (this.autoLabelsOn()) this.clearNeedsReply(stored.threadId);
+			// A reply also takes the thread out of Reply later. A forward or a new message does not.
+			if (input.replyThreadId !== null) this.clearReplyLater(stored.threadId);
 			const recipients: DeliveryRecord[] = [];
 			for (const recipient of input.recipients) {
 				const status = recipient.self ? "delivered" : "queued";
