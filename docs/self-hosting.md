@@ -567,6 +567,67 @@ A rollback to the Worker from before this change works. That Worker does not kno
 The waiting requests stay in the table of the migration, and that Worker does not use them. An agent can
 then add an agent to a room again, until the next deploy of this change.
 
+### An agent asks before it shares an item with an agent
+
+An agent or a service account can no longer share a Drive item with a different agent or service
+account. It asks with `drive.request_share`, and a person who manages that account approves or denies
+the request. A person shares an item as before.
+
+Migration `0032_drive_share_requests.sql` adds the table `drive_share_requests` for the requests. Apply
+it with `wrangler d1 migrations apply`, as for each migration. The migration only adds a table, and the
+old Worker does not read it. The object of each principal also adds the column `item_json` to its
+activity list at its next start. The rows of the list stay.
+
+What changes for a script that calls the API with a key of an agent or a token of a service account:
+
+- `drive.share_item` gets `forbidden` and changes nothing when `principal_id` is a different agent or
+  service account. A grant from before this change stays.
+- To share an item with an agent or a service account, the script calls `drive.request_share` with
+  `item_id`, `principal_id` and `role`. The script must be able to share the item, as for
+  `drive.share_item`.
+- `drive.list_share_requests` returns the requests of the script that wait for an answer. After the
+  answer, the request is not in the list, and `drive.list_permissions` tells if the account has the grant.
+- An item has at most 20 requests at the same time, and one agent has at most 100. The next one gets
+  `conflict`.
+- A script with a key of an agent shares an item with a person as before.
+
+What changes for a script with a key of a person:
+
+- `drive.share_item` and `drive.approve_share_request` give the role on the item only. They change no
+  scope of the account, and `directory.write` has no part in them. The results have no
+  `agent_access_changes`.
+- An agent or a service account uses the item with the role of the grant, also without `drive.read` or
+  `drive.write`. These operations accept the grant: `drive.get_item`, `drive.list_items`,
+  `drive.download_file` (also `GET /dl/drive/…`), `drive.list_versions`, `drive.upload_version`,
+  `drive.rename_item`, `drive.restore_version`, `docs.get`, `docs.get_image`, `docs.update`, and the
+  `sheets.*` operations that read the cells or change the cells, the formats or the tabs.
+- So each person who can share an item can give an agent access to it: the owner of the item, or a
+  manager of its shared drive. The manager of the agent does not take part. Before, an agent without the
+  drive scopes could not use a grant.
+
+A person answers a request in **Chat › Activity**, or on the page of the account in **Admin › Members**.
+With the API, the person calls `drive.approve_share_request` or `drive.deny_share_request`.
+[Agents](agents.md#an-agent-asks-before-it-shares-an-item) has the rules.
+
+The drive object of each principal and of each shared drive adds the column `resource` to its grants
+(`permissions`) at its next start. Each grant from before has the value 0, and it stays as it was:
+
+- An agent that holds the drive scopes uses an old grant as before.
+- An agent without the drive scopes does not use an old grant. A grant that did not work before does not
+  start to work.
+- To make an old grant work for such an agent, share the item with it again, or approve a new request.
+  The share writes the value 1, also on a grant that exists.
+- A change of the role of a grant is also a share (`drive.share_item`). So it writes the value 1 too.
+
+A rollback to the Worker from before this change works. That Worker does not know the activity kind
+`share_request`. Its `chat.list_activity` looks for such an item in the room with the empty id. No such
+room exists, so it removes the item as old. The requests that wait stay in the table of the migration,
+and that Worker does not use them. It does not use the column `item_json` either. An agent can then
+share an item with an agent again, until the next deploy of this change. After that deploy, the next
+call of `drive.request_share` for a request sends its activity item again. That Worker also does not
+read the column `resource`. Its inserts name their columns, and the column has a default. Under that
+Worker, an agent again needs the drive scopes to use a shared item.
+
 ### Recover a sign-in
 
 - A person who forgot the password, or lost the phone with the authenticator app, asks an owner or an

@@ -92,14 +92,18 @@ describe("the MCP endpoint", () => {
 		const { owner, bot } = await seedOrg();
 		const all = names((await mcp(owner.key, "tools/list")).body);
 		expect(all).toContain("directory_update_agent_policy");
-		expect(all).toHaveLength(211);
-		// Only a person decides a member request, and only an agent or a service account makes one.
+		expect(all).toHaveLength(214);
+		// Only a person decides a member request or a share request, and only an agent or a service account makes one.
 		expect(all).not.toContain("chat_request_member");
+		expect(all).not.toContain("drive_request_share");
 		expect(all).toEqual(
 			expect.arrayContaining([
 				"chat_list_member_requests",
 				"chat_approve_member_request",
 				"chat_deny_member_request",
+				"drive_list_share_requests",
+				"drive_approve_share_request",
+				"drive_deny_share_request",
 				"chat_subscribe_push",
 				"chat_unsubscribe_push",
 				"chat_admin_list_rooms",
@@ -213,12 +217,14 @@ describe("the MCP endpoint", () => {
 			"drive_get_upload",
 			"drive_list_items",
 			"drive_list_permissions",
+			"drive_list_share_requests",
 			"drive_list_shared_drives",
 			"drive_list_versions",
 			"drive_list_webhook_subscriptions",
 			"drive_move_items",
 			"drive_move_to_drive",
 			"drive_rename_item",
+			"drive_request_share",
 			"drive_restore_items",
 			"drive_restore_version",
 			"drive_set_preview",

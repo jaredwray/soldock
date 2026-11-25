@@ -23,6 +23,7 @@ export { type AuthContext, authenticate, type CallContext, isSameOrigin, SESSION
 export type {
 	ActivityActor,
 	ActivityInsert,
+	ActivityItemRef,
 	ActivityRecord,
 	DraftRecord,
 	ReminderRecord,
@@ -87,4 +88,4 @@ export {
 	teamMailboxFor,
 	teamMailboxMemberScopes,
 } from "./team-mailboxes.ts";
-export { accessOutput, assertMemberGrants, giveMemberAccess } from "./widening.ts";
+export { accessOutput, assertMemberGrants, deciderOf, giveMemberAccess } from "./widening.ts";

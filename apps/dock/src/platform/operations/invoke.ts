@@ -1,4 +1,5 @@
 import {
+	callableWithItemGrant,
 	holdsOperationScopes,
 	type Operation,
 	type OperationName,
@@ -117,7 +118,11 @@ async function run<C extends { caller: Caller }>(
 	if (!operation.callers.includes(call.caller.kind)) {
 		throw new OperationError("forbidden", `${CALLER_NAMES[call.caller.kind]} cannot call ${operation.name}.`);
 	}
-	if (!holdsOperationScopes(operation, call.caller.scopes)) {
+	// An agent without the scopes of an item operation can still reach the items that a person shared with it. The
+	// handler gets `grantOnly`, and the drive then counts only such grants (`itemGrant`).
+	const grantOnly =
+		!holdsOperationScopes(operation, call.caller.scopes) && callableWithItemGrant(operation, call.caller.kind);
+	if (!grantOnly && !holdsOperationScopes(operation, call.caller.scopes)) {
 		const missing = operation.scopes.filter((scope) => !call.caller.scopes.has(scope));
 		const needed = missing.length > 0 ? missing : (operation.anyOfScopes ?? []);
 		const scopeText = missing.length > 0 ? needed.join(", ") : `one of ${needed.join(", ")}`;
@@ -129,6 +134,7 @@ async function run<C extends { caller: Caller }>(
 	const parsed = operation.input.safeParse(rawInput);
 	if (!parsed.success) throw new OperationError("invalid", z.prettifyError(parsed.error));
 	parsedInput.input = parsed.data;
-	const result = await (handler as (call: C, input: unknown) => Promise<unknown>)(call, parsed.data);
+	const handled = grantOnly ? { ...call, grantOnly: true } : call;
+	const result = await (handler as (call: C, input: unknown) => Promise<unknown>)(handled, parsed.data);
 	return operation.output.parse(result);
 }

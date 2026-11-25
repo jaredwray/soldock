@@ -27,6 +27,7 @@ import aiSchema from "../../migrations/0028_ai.sql";
 import mailboxMemberScopesSchema from "../../migrations/0029_mailbox_member_scopes.sql";
 import chatMemberRequestsSchema from "../../migrations/0030_chat_member_requests.sql";
 import mailSettingsSchema from "../../migrations/0031_mail_settings.sql";
+import driveShareRequestsSchema from "../../migrations/0032_drive_share_requests.sql";
 import { log, OperationError, randomToken } from "../platform/index.ts";
 import { allMailboxIds } from "./team-mailboxes.ts";
 
@@ -98,6 +99,7 @@ function freshDirectoryStatements(db: D1Database): D1PreparedStatement[] {
 		"DROP TABLE IF EXISTS chat_rooms",
 		// The requests name the old principals and the old rooms.
 		"DROP TABLE IF EXISTS chat_member_requests",
+		"DROP TABLE IF EXISTS drive_share_requests",
 		// The index of the shared drives names the old principals. The drives stay in their objects, and
 		// no operation opens them.
 		"DROP TABLE IF EXISTS shared_drive_members",
@@ -160,6 +162,7 @@ function freshDirectoryStatements(db: D1Database): D1PreparedStatement[] {
 		...mailboxMemberScopesSchema.split("--> statement-breakpoint"),
 		...chatMemberRequestsSchema.split("--> statement-breakpoint"),
 		...mailSettingsSchema.split("--> statement-breakpoint"),
+		...driveShareRequestsSchema.split("--> statement-breakpoint"),
 		// The directory now has the schema of each bundled migration. Record them in the table that
 		// `wrangler d1 migrations apply` reads, or it runs them again later. A second run of 0004 would
 		// copy the principals without their passwords. The columns are the ones that wrangler creates.
@@ -201,4 +204,5 @@ const BUNDLED_MIGRATIONS = [
 	"0029_mailbox_member_scopes.sql",
 	"0030_chat_member_requests.sql",
 	"0031_mail_settings.sql",
+	"0032_drive_share_requests.sql",
 ] as const;

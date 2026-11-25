@@ -26,8 +26,18 @@ export interface ActivityRecord {
 	untrusted: boolean;
 	/** For `member_request`: the account that the actor wants to add to the room. Null for each other kind. */
 	subject: ActivityActor | null;
+	/** For `share_request`: the item that the actor wants to share with `subject`. Null for each other kind. */
+	item: ActivityItemRef | null;
 	created_at: number;
 	read_at: number | null;
+}
+
+/** The Drive item of a `share_request`, with the role of the request. */
+export interface ActivityItemRef {
+	space_id: string;
+	item_id: string;
+	name: string;
+	role: "editor" | "viewer";
 }
 
 export interface ActivityInsert {
@@ -43,8 +53,10 @@ export interface ActivityInsert {
 	emoji: string | null;
 	preview: string;
 	untrusted?: boolean | undefined;
-	/** For `member_request`: the account that the actor wants to add to the room. */
+	/** For `member_request` and `share_request`: the account that the actor wants to add, or to share with. */
 	subject?: ActivityActor | null | undefined;
+	/** For `share_request`: the item that the actor wants to share. */
+	item?: ActivityItemRef | null | undefined;
 	created_at: number;
 }
 
@@ -140,6 +152,9 @@ export const CHAT_ACTIVITY_SUBJECT_MIGRATION: string[] = [
 	"CREATE INDEX chat_activity_room ON chat_activity (room_id)",
 	"CREATE INDEX chat_activity_unread ON chat_activity (created_at DESC, id DESC) WHERE read_at IS NULL",
 ];
+
+/** The activity list gets the column `item_json`, for the kind `share_request`. */
+export const CHAT_ACTIVITY_ITEM_MIGRATION: string[] = ["ALTER TABLE chat_activity ADD COLUMN item_json TEXT"];
 
 export const CHAT_PERSONAL_MIGRATION: string[] = [
 	`CREATE TABLE chat_activity (
@@ -247,6 +262,7 @@ interface ActivityRow extends Row {
 	created_at: number;
 	read_at: number | null;
 	subject_json: string | null;
+	item_json: string | null;
 }
 
 interface ScheduledRow extends Row {
@@ -300,6 +316,7 @@ function toActivity(row: ActivityRow): ActivityRecord {
 		preview: row.preview,
 		untrusted: row.untrusted === 1,
 		subject: row.subject_json == null ? null : (JSON.parse(row.subject_json) as ActivityActor),
+		item: row.item_json == null ? null : (JSON.parse(row.item_json) as ActivityItemRef),
 		created_at: row.created_at,
 		read_at: row.read_at,
 	};
@@ -331,8 +348,8 @@ export class ChatPersonalStore {
 			.exec<{ id: string }>(
 				`INSERT OR IGNORE INTO chat_activity (
 					id, kind, room_id, room_name, message_id, parent_id, seq, parent_seq,
-					actor_json, emoji, preview, untrusted, created_at, read_at, subject_json
-				) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?) RETURNING id`,
+					actor_json, emoji, preview, untrusted, created_at, read_at, subject_json, item_json
+				) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?) RETURNING id`,
 				item.id,
 				item.kind,
 				item.room_id,
@@ -347,6 +364,7 @@ export class ChatPersonalStore {
 				item.untrusted ? 1 : 0,
 				item.created_at,
 				item.subject ? JSON.stringify(item.subject) : null,
+				item.item ? JSON.stringify(item.item) : null,
 			)
 			.toArray();
 		if (inserted.length === 0) return false;

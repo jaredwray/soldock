@@ -34,6 +34,12 @@ export interface SpaceCall {
 	 * caller manage the members and the name of a shared drive. It gives no access to an item.
 	 */
 	admin?: boolean;
+	/**
+	 * True for an agent that calls an item operation without the drive scopes of it. The caller then reaches only
+	 * the items of the grants that a person gave it under the rules of single items (`permissions.resource`). It is
+	 * not the owner of its own drive in such a call, and its memberships do not count.
+	 */
+	grantOnly?: boolean;
 }
 
 /** The R2 key of one version of a file. Each object has one owner: the version in its key. */
@@ -304,7 +310,14 @@ export interface StagedItem {
 		/** Absent in a part that a source from before this field staged. */
 		detected_type?: string | null;
 	}[];
-	grants: { principal_id: string; role: "editor" | "viewer"; granted_by_json: string | null; created_at: number }[];
+	grants: {
+		principal_id: string;
+		role: "editor" | "viewer";
+		granted_by_json: string | null;
+		created_at: number;
+		/** 1 for a grant for a single item. Missing in a staged item from a Worker before such grants. */
+		resource?: number;
+	}[];
 }
 
 export interface Page<T> {
@@ -655,6 +668,10 @@ const MIGRATIONS: string[][] = [
 		"CREATE TABLE IF NOT EXISTS limit_drops (principal_id TEXT PRIMARY KEY) WITHOUT ROWID",
 		"ALTER TABLE members ADD COLUMN added_version INTEGER",
 	],
+	// A grant for a single item (`resource = 1`) opens that item for an agent that does not hold the drive scopes.
+	// Each grant from before has 0, so a grant that did not work before does not start to work. A new share or an
+	// approval of a request writes 1.
+	["ALTER TABLE permissions ADD COLUMN resource INTEGER NOT NULL DEFAULT 0"],
 ];
 
 const OUTBOX_MAX_ATTEMPTS = 8;
@@ -719,6 +736,9 @@ const DOWN = `WITH RECURSIVE down (id, depth) AS (
 
 const NOT_FOUND = "No item has that id, or you have no access to it.";
 const OWN_DRIVE_ONLY = "Only the owner of a drive can do this, in their own drive.";
+/** The refusal for an agent that has no drive scope for the call: only its grants on single items count. */
+const GRANT_ONLY =
+	"Your credential does not hold the drive scope of this call. Without it, you reach only the items that a person shared with you, by their space_id and item_id.";
 const IN_TRASH = "The item is in the trash. Restore it first.";
 const MOVING = "The item is moving to a different drive. Try again in a moment.";
 const NO_DRIVE = "No shared drive has that id, or you are not a member of it.";
@@ -881,7 +901,17 @@ export class DriveSpaceDO extends DurableObject<Env> {
 	// --- Access ---------------------------------------------------------------------------------
 
 	private isOwner(call: SpaceCall): boolean {
-		return call.actor.principal_id === call.spaceId;
+		return !call.grantOnly && call.actor.principal_id === call.spaceId;
+	}
+
+	/** The refusal for a caller that is not the owner of this drive. A call with `grantOnly` gets its own text. */
+	private notOwner(call: SpaceCall): Refusal {
+		return refuse("forbidden", call.grantOnly ? GRANT_ONLY : OWN_DRIVE_ONLY);
+	}
+
+	/** The member role of the caller, or null. A call with `grantOnly` has no member role. */
+	private callerRole(call: SpaceCall): SharedDriveRole | null {
+		return call.grantOnly ? null : this.memberRole(call.actor.principal_id);
 	}
 
 	/** True when the principal is a member of this shared drive now. The index in D1 can be behind. */
@@ -909,8 +939,8 @@ export class DriveSpaceDO extends DurableObject<Env> {
 	 * on an item does not count here.
 	 */
 	private gate(call: SpaceCall, need: SharedDriveRole): Refusal | null {
-		if (!isSharedDriveId(call.spaceId)) return this.isOwner(call) ? null : refuse("forbidden", OWN_DRIVE_ONLY);
-		const role = this.memberRole(call.actor.principal_id);
+		if (!isSharedDriveId(call.spaceId)) return this.isOwner(call) ? null : this.notOwner(call);
+		const role = this.callerRole(call);
 		if (role === null) return refuse("not_found", NO_DRIVE);
 		if (RANK[role] < RANK[need]) {
 			return refuse(
@@ -935,15 +965,19 @@ export class DriveSpaceDO extends DurableObject<Env> {
 	 */
 	private access(call: SpaceCall, item: ItemRow): Access | null {
 		if (this.isOwner(call)) return { role: "owner", parentVisible: true, visibleDepth: WALK_LIMIT };
-		const member = isSharedDriveId(call.spaceId) ? this.memberRole(call.actor.principal_id) : null;
+		const member = isSharedDriveId(call.spaceId) ? this.callerRole(call) : null;
 		if (member === "manager" || member === "editor") {
 			return { role: member, parentVisible: true, visibleDepth: WALK_LIMIT };
 		}
 		if (item.trash_root !== null) return null;
+		// A call with `grantOnly` counts only the grants for single items. A grant from before them stays as it was:
+		// it works only for a caller that holds the drive scopes.
 		const grants = this.all<{ role: "editor" | "viewer"; depth: number }>(
-			`${UP} SELECT p.role AS role, up.depth AS depth FROM up JOIN permissions p ON p.item_id = up.id WHERE p.principal_id = ?2`,
+			`${UP} SELECT p.role AS role, up.depth AS depth FROM up JOIN permissions p ON p.item_id = up.id
+			WHERE p.principal_id = ?2 AND (?3 = 0 OR p.resource = 1)`,
 			item.id,
 			call.actor.principal_id,
+			call.grantOnly ? 1 : 0,
 		);
 		// A member with the viewer role reads each item. A grant can make that member an editor of one item.
 		if (member !== null) {
@@ -993,7 +1027,7 @@ export class DriveSpaceDO extends DurableObject<Env> {
 	 */
 	private missing(call: SpaceCall, itemId: string, message: string): Refusal {
 		const moved = this.one<{ target: string }>("SELECT target FROM moved WHERE item_id = ?", itemId);
-		if (moved && (this.isOwner(call) || this.memberRole(call.actor.principal_id) !== null)) {
+		if (moved && (this.isOwner(call) || this.callerRole(call) !== null)) {
 			return refuse("not_found", `The item moved to the drive ${moved.target}. Use that space_id.`);
 		}
 		return refuse("not_found", message);
@@ -1076,7 +1110,7 @@ export class DriveSpaceDO extends DurableObject<Env> {
 		return {
 			kind: shared ? "shared" : "personal",
 			name: shared ? (this.facts()?.name ?? null) : null,
-			role: shared ? (this.memberRole(call.actor.principal_id) as SharedDriveRole) : "owner",
+			role: shared ? (this.callerRole(call) as SharedDriveRole) : "owner",
 			used_bytes: versions + native,
 			items_total: counts?.live ?? 0,
 			trash_total: counts?.trash ?? 0,
@@ -1101,6 +1135,7 @@ export class DriveSpaceDO extends DurableObject<Env> {
 				const refused = this.gate(call, "viewer");
 				if (refused) return refused;
 			} else if (!this.isOwner(call)) {
+				if (call.grantOnly) return refuse("forbidden", GRANT_ONLY);
 				return refuse("forbidden", "You can list the root of your own drive only. Use the shared view.");
 			}
 		} else {
@@ -1224,7 +1259,7 @@ export class DriveSpaceDO extends DurableObject<Env> {
 		input: { list: "starred" | "shared"; cursor: string | null; limit: number },
 	): Page<ItemRef> | Refusal {
 		this.enter(call);
-		if (!this.isOwner(call)) return refuse("forbidden", OWN_DRIVE_ONLY);
+		if (!this.isOwner(call)) return this.notOwner(call);
 		const [table, time] = input.list === "starred" ? ["stars", "created_at"] : ["shared_with_me", "shared_at"];
 		const params: SqlStorageValue[] = [];
 		const where: string[] = [];
@@ -1260,7 +1295,7 @@ export class DriveSpaceDO extends DurableObject<Env> {
 	/** The pointers from the list that have a star of the owner of this drive. */
 	starredAmong(call: SpaceCall, refs: ItemRef[]): ItemRef[] | Refusal {
 		this.enter(call);
-		if (!this.isOwner(call)) return refuse("forbidden", OWN_DRIVE_ONLY);
+		if (!this.isOwner(call)) return this.notOwner(call);
 		return refs.filter(
 			(ref) =>
 				this.one("SELECT 1 AS found FROM stars WHERE space_id = ? AND item_id = ?", ref.spaceId, ref.itemId) !== null,
@@ -1513,7 +1548,7 @@ export class DriveSpaceDO extends DurableObject<Env> {
 	 */
 	reservedId(call: SpaceCall, key: string, requestHash: string): { id: string } | Refusal | null {
 		this.enter(call);
-		if (!this.isOwner(call)) return refuse("forbidden", OWN_DRIVE_ONLY);
+		if (!this.isOwner(call)) return this.notOwner(call);
 		const row = this.one<{ request_hash: string; item_id: string }>(
 			"SELECT request_hash, item_id FROM idempotency WHERE key = ? AND created_at > ?",
 			key,
@@ -1778,7 +1813,7 @@ export class DriveSpaceDO extends DurableObject<Env> {
 	/** Sets or removes the star of the owner of this drive, on items of this drive or of a different one. */
 	star(call: SpaceCall, refs: ItemRef[], starred: boolean): { items_changed: number } | Refusal {
 		this.enter(call);
-		if (!this.isOwner(call)) return refuse("forbidden", OWN_DRIVE_ONLY);
+		if (!this.isOwner(call)) return this.notOwner(call);
 		let changed = 0;
 		this.ctx.storage.transactionSync(() => {
 			for (const ref of refs) {
@@ -1961,6 +1996,18 @@ export class DriveSpaceDO extends DurableObject<Env> {
 
 	// --- Share ----------------------------------------------------------------------------------
 
+	/**
+	 * The name of an item that the caller can share, or the refusal of `share` for the item. It changes nothing.
+	 * A request to share an item uses it before a person decides.
+	 */
+	checkShare(call: SpaceCall, itemId: string): { name: string } | Refusal {
+		this.enter(call);
+		const found = this.open(call, itemId, this.top(call));
+		if ("error" in found) return found;
+		if (found.item.trash_root !== null) return refuse("invalid", IN_TRASH);
+		return { name: found.item.name };
+	}
+
 	/** Gives a principal a role for an item. A second call for the same principal changes the role. */
 	async share(
 		call: SpaceCall,
@@ -1977,8 +2024,9 @@ export class DriveSpaceDO extends DurableObject<Env> {
 		const now = Date.now();
 		this.ctx.storage.transactionSync(() => {
 			this.sql.exec(
-				`INSERT INTO permissions (item_id, principal_id, role, granted_by_json, created_at) VALUES (?, ?, ?, ?, ?)
-				ON CONFLICT (item_id, principal_id) DO UPDATE SET role = excluded.role, granted_by_json = excluded.granted_by_json`,
+				`INSERT INTO permissions (item_id, principal_id, role, granted_by_json, created_at, resource) VALUES (?, ?, ?, ?, ?, 1)
+				ON CONFLICT (item_id, principal_id) DO UPDATE SET role = excluded.role, granted_by_json = excluded.granted_by_json,
+					resource = 1`,
 				itemId,
 				principalId,
 				role,
@@ -2625,7 +2673,7 @@ export class DriveSpaceDO extends DurableObject<Env> {
 			id: call.spaceId,
 			name: facts.name,
 			created_at: facts.created_at,
-			role: this.memberRole(call.actor.principal_id),
+			role: this.callerRole(call),
 			members: this.memberRows(),
 		};
 	}
@@ -2639,7 +2687,7 @@ export class DriveSpaceDO extends DurableObject<Env> {
 		const facts = isSharedDriveId(call.spaceId) ? this.facts() : null;
 		if (!facts || facts.deleted_at !== null) return refuse("not_found", NO_DRIVE);
 		if (call.admin === true) return facts;
-		const role = this.memberRole(call.actor.principal_id);
+		const role = this.callerRole(call);
 		if (role === null) return refuse("not_found", NO_DRIVE);
 		if (need === "admin") return refuse("forbidden", "Only owners and admins of the organization can do this.");
 		if (need === "manager" && role !== "manager") {
@@ -3287,7 +3335,7 @@ export class DriveSpaceDO extends DurableObject<Env> {
 				item.id,
 			),
 			grants: this.all<StagedItem["grants"][number] & Row>(
-				"SELECT principal_id, role, granted_by_json, created_at FROM permissions WHERE item_id = ?",
+				"SELECT principal_id, role, granted_by_json, created_at, resource FROM permissions WHERE item_id = ?",
 				item.id,
 			),
 		};
@@ -3630,12 +3678,14 @@ export class DriveSpaceDO extends DurableObject<Env> {
 			// The owner of a personal drive needs no grant.
 			if (grant.principal_id === spaceId) continue;
 			this.sql.exec(
-				"INSERT INTO permissions (item_id, principal_id, role, granted_by_json, created_at) VALUES (?, ?, ?, ?, ?)",
+				"INSERT INTO permissions (item_id, principal_id, role, granted_by_json, created_at, resource) VALUES (?, ?, ?, ?, ?, ?)",
 				item.id,
 				grant.principal_id,
 				grant.role,
 				grant.granted_by_json,
 				grant.created_at,
+				// A staged item from a Worker before the grants for single items has no `resource`: it stays as it was.
+				grant.resource ?? 0,
 			);
 			this.enqueue("share", grant.principal_id, { itemId: item.id, role: grant.role, sharedAt: grant.created_at });
 		}

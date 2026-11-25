@@ -1,5 +1,6 @@
 // MCP tools: one tool for each operation of the registry.
 import {
+	callableWithItemGrant,
 	holdsOperationScopes,
 	type Operation,
 	type OperationName,
@@ -60,6 +61,17 @@ const TOOLS = new Map<string, { operation: Operation; tool: Tool }>(
 
 /** A tool is listed only when this credential can call it, so an agent never sees tools that would refuse it. */
 export function canCall(caller: AuthContext, operation: Operation): boolean {
+	return (
+		operation.callers.includes(caller.kind) &&
+		(holdsOperationScopes(operation, caller.scopes) || callableWithItemGrant(operation, caller.kind))
+	);
+}
+
+/**
+ * True when the credential holds the scopes of the operation. A grant on a Drive item (`itemGrant`) does not
+ * count: a resource kind lists and watches the own data of the caller.
+ */
+export function holdsScopesFor(caller: AuthContext, operation: Operation): boolean {
 	return operation.callers.includes(caller.kind) && holdsOperationScopes(operation, caller.scopes);
 }
 

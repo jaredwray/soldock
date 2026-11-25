@@ -27,11 +27,22 @@ export function memberAccessText(
 	nameOf: (principalId: string) => string,
 	again: string,
 ): string {
-	const changed = result.agent_access_changes.map((change) => accessChangeText(nameOf(change.principal_id), [change]));
-	const pending = result.agent_access_pending.map(
-		(id) =>
-			` ${nameOf(id)} is a member, but did not get the scopes of its membership: the access of the account changed at the same time. ${again}`,
+	return agentAccessText(
+		result,
+		nameOf,
+		(name) =>
+			` ${name} is a member, but did not get the scopes of its membership: the access of the account changed at the same time. ${again}`,
 	);
+}
+
+/** The scopes that each agent got, then the text of `pendingText` for each agent that did not get its scopes. */
+function agentAccessText(
+	result: RoomAccessResult,
+	nameOf: (principalId: string) => string,
+	pendingText: (name: string) => string,
+): string {
+	const changed = result.agent_access_changes.map((change) => accessChangeText(nameOf(change.principal_id), [change]));
+	const pending = result.agent_access_pending.map((id) => pendingText(nameOf(id)));
 	return [...changed, ...pending].join("");
 }
 
@@ -45,10 +56,13 @@ export function driveAccessText(result: RoomAccessResult, nameOf: (principalId: 
 	return memberAccessText(result, nameOf, "Select Try again in its row.");
 }
 
+/** How to give the scopes after an approval of a request: the request is gone, so the page of the account. */
+const REQUEST_AGAIN = "Set its permissions on its page in Admin, Members.";
+
 /**
  * `memberAccessText` for a member request that a person approved. The request is gone after the approval,
  * so the person gives the scopes on the page of the account.
  */
 export function requestAccessText(result: RoomAccessResult, nameOf: (principalId: string) => string): string {
-	return memberAccessText(result, nameOf, "Set its permissions on its page in Admin, Members.");
+	return memberAccessText(result, nameOf, REQUEST_AGAIN);
 }

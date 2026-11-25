@@ -79,7 +79,10 @@ SDK. Protocol 2026-07-28 has no sessions, so a hand-written server stays small.
   `mail_send`).
 - `inputSchema` and `outputSchema` are the JSON Schemas of the Zod schemas. The annotations map
   to `readOnlyHint`, `destructiveHint`, `idempotentHint` and `openWorldHint`.
-- `tools/list` lists only the tools that the credential can call (caller kind and scopes). A call
+- `tools/list` lists only the tools that the credential can call (caller kind and scopes). An agent or a
+  service account also sees each Drive, Docs and Sheets tool with `itemGrant`, because a grant on an item
+  opens it without the drive scopes (see [drive](../drive/README.md)). A resource kind still needs the scopes
+  of its read and list operations (`holdsScopesFor`): its list starts at the own data of the caller. A call
   to another tool gets JSON-RPC error `-32602`. A token of a service account sees only the tools
   whose callers name `"service"`, and each of its calls goes into the activity log of the account,
   with the surface `mcp`. The server hides no tool and no resource kind because of where an agent can

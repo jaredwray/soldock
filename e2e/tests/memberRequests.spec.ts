@@ -1,38 +1,6 @@
-import { type APIRequestContext, type BrowserContext, expect, test } from "@playwright/test";
+import { expect, test } from "@playwright/test";
+import { type Agent, createAgent, deleteAgents } from "../support/agents.ts";
 import { signIn, unique } from "../support/chat.ts";
-import { BASE_URL } from "../support/server.ts";
-
-const JSON_HEADERS = { origin: BASE_URL, "content-type": "application/json" };
-
-interface Agent {
-	id: string;
-	/** Calls the REST API as the agent, with its first API key. */
-	get: (path: string) => ReturnType<APIRequestContext["get"]>;
-	post: (path: string, data: unknown) => ReturnType<APIRequestContext["post"]>;
-}
-
-/** A new agent of the admin, with scopes. The admin is its sponsor. */
-async function createAgent(
-	admin: BrowserContext,
-	request: APIRequestContext,
-	name: string,
-	scopes: string[],
-): Promise<Agent> {
-	const local = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
-	const response = await admin.request.post("/api/v1/directory/principals", {
-		headers: JSON_HEADERS,
-		data: { kind: "agent", display_name: name, address: `bot-${local}@example.com`, scopes },
-	});
-	expect(response.ok(), `the new agent ${name}: ${response.status()} ${await response.text()}`).toBe(true);
-	const created = (await response.json()) as { principal: { id: string }; api_key: { secret: string } };
-	// The calls of the agent have no session cookie: only the key.
-	const headers = { authorization: `Bearer ${created.api_key.secret}`, "content-type": "application/json" };
-	return {
-		id: created.principal.id,
-		get: (path) => request.get(path, { headers }),
-		post: (path, data) => request.post(path, { headers, data }),
-	};
-}
 
 /** A private room of the agent. Returns the id of the room. */
 async function privateRoom(agent: Agent, name: string): Promise<string> {
@@ -108,9 +76,7 @@ test("an agent asks to add an agent to a room, and its manager approves the requ
 		await expect(requests).toHaveCount(0);
 		expect(await roomsOf(helper)).toEqual([first]);
 	} finally {
-		for (const id of ids) {
-			await admin.request.delete(`/api/v1/directory/principals/${id}`, { headers: { origin: BASE_URL } });
-		}
+		await deleteAgents(admin, ids);
 		await admin.close();
 	}
 });

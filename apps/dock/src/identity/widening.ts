@@ -3,7 +3,7 @@ import { OperationError } from "../platform/index.ts";
 import { auditOk, canManageAgent, grantableScopes, isAdmin, recordServiceChange } from "./access.ts";
 import type { CallContext } from "./auth.ts";
 import { endEventSockets } from "./principal.ts";
-import { type AgentWidening, getPrincipals, type PrincipalRecord, widenAgentAccess } from "./store.ts";
+import { type AgentWidening, getPrincipal, getPrincipals, type PrincipalRecord, widenAgentAccess } from "./store.ts";
 
 // What a membership gives to an agent or a service account. A membership of a team mailbox, a room or a shared
 // drive says what the agent can do in that resource, and the agent reaches the resource because it is a
@@ -166,4 +166,27 @@ export async function giveMemberAccess(call: CallContext, members: readonly Memb
 		agents = lost.length === 0 ? [] : managedAgents(call, await getPrincipals(DIRECTORY, lost));
 	}
 	return { changes, pending: [...refused, ...agents.map((agent) => agent.id)] };
+}
+
+/**
+ * The person who gets a request for this account in the activity list of Chat: a request of an agent to add
+ * the account to a room, or to share an item with it. For an agent: its sponsor. Only an owner or an admin
+ * manages a service account, so its sponsor gets the request only with one of these roles. If not, the owner
+ * of the organization gets it. Each owner and admin also sees the request on the card of the account in Admin,
+ * Members.
+ */
+export async function deciderOf(db: D1Database, target: PrincipalRecord): Promise<string | null> {
+	if (target.sponsor_id !== null) {
+		if (!target.service) return target.sponsor_id;
+		const sponsor = await getPrincipal(db, target.sponsor_id);
+		if (sponsor?.archived_at === null && (sponsor.org_role === "owner" || sponsor.org_role === "admin")) {
+			return sponsor.id;
+		}
+	}
+	const owner = await db
+		.prepare(
+			"SELECT id FROM principals WHERE org_role = 'owner' AND deleted_at IS NULL AND archived_at IS NULL LIMIT 1",
+		)
+		.first<{ id: string }>();
+	return owner?.id ?? null;
 }
