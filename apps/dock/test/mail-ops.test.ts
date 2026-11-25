@@ -1,7 +1,7 @@
-import { evictDurableObject, runInDurableObject } from "cloudflare:test";
+import { evictDurableObject, runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import { ApiError } from "@asterra/contracts";
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { type Actor, callTool, inject, rawMessage, seedOrg } from "./helpers.ts";
 
 let ada: Actor;
@@ -171,54 +171,216 @@ describe("mail.modify_threads", () => {
 	});
 });
 
-describe("Reply later", () => {
-	it("moves a thread out of the inbox into Reply later, counts it, and Done takes it out", async () => {
-		const thread = await receive({ subject: "Answer me" });
-		await receive({ subject: "Other" });
-		const replyLater = async () =>
-			(await ada.call("mail.list_labels")).labels.find((label) => label.id === "REPLY_LATER");
-		expect(await replyLater()).toEqual({
-			id: "REPLY_LATER",
-			name: "REPLY_LATER",
+describe("Snooze", () => {
+	const HOUR = 3_600_000;
+	const mailbox = () => env.MAILBOX.get(env.MAILBOX.idFromName(ada.id));
+	const snoozedLabel = async () => (await ada.call("mail.list_labels")).labels.find((label) => label.id === "SNOOZED");
+	/** The subjects of the inbox in the order of the list. */
+	const inbox = async () => (await ada.call("mail.list_threads")).threads.map((thread) => thread.subject);
+
+	afterEach(() => {
+		vi.useRealTimers();
+	});
+
+	it("takes a thread out of the inbox until its time, then puts it at the top of the inbox", async () => {
+		vi.useFakeTimers({ toFake: ["Date"] });
+		const now = Date.now();
+		const old = await receive({ subject: "Old" }, new Date(now - 48 * HOUR));
+		await receive({ subject: "Newer" }, new Date(now - 24 * HOUR));
+		expect(await snoozedLabel()).toEqual({
+			id: "SNOOZED",
+			name: "SNOOZED",
 			type: "system",
 			threads_total: 0,
 			threads_unread: 0,
 		});
-		const modify = (add: string[], remove: string[]) =>
-			ada.call("mail.modify_threads", { thread_ids: [thread.id], add_label_ids: add, remove_label_ids: remove });
+		expect(old.snoozed_until).toBeNull();
 
-		await modify(["REPLY_LATER"], ["INBOX"]);
-		expect(await subjects("in:inbox")).toEqual(["Other"]);
-		expect(await subjects("in:reply_later")).toEqual(["Answer me"]);
-		expect(await subjects("label:reply_later")).toEqual(["Answer me"]);
-		expect(await replyLater()).toMatchObject({ threads_total: 1, threads_unread: 1 });
-
-		// Trash hides the thread from Reply later, as from each other view.
-		await modify(["TRASH"], []);
-		expect(await subjects("in:reply_later")).toEqual([]);
-		await modify([], ["TRASH"]);
-
-		// Done through MCP: the tool is the same operation, with the same labels.
-		const done = await callTool(ada.key, "mail_modify_threads", {
-			thread_ids: [thread.id],
-			remove_label_ids: ["REPLY_LATER"],
+		const first = new Date(now + 3 * HOUR).toISOString();
+		expect(await ada.call("mail.snooze_threads", { thread_ids: [old.id], until: first })).toEqual({
+			threads_changed: 1,
+			until: first,
 		});
-		expect(done.structuredContent).toEqual({ threads_changed: 1, messages_changed: 1, dry_run: false });
-		expect(await subjects("in:reply_later")).toEqual([]);
-		expect(await subjects("")).toEqual(["Answer me", "Other"]);
-		expect(await replyLater()).toMatchObject({ threads_total: 0 });
+		expect(await inbox()).toEqual(["Newer"]);
+		expect(await snoozedLabel()).toMatchObject({ threads_total: 1 });
+		// A second call changes the time. The MCP tool is the same operation.
+		const until = new Date(now + HOUR).toISOString();
+		const changed = await callTool(ada.key, "mail_snooze_threads", { thread_ids: [old.id], until });
+		expect(changed.structuredContent).toEqual({ threads_changed: 1, until });
+		const [waiting] = (await ada.call("mail.list_threads", { query: "in:snoozed" })).threads;
+		expect(waiting).toMatchObject({ id: old.id, snoozed_until: until });
+		expect((await ada.call("mail.get_thread", { thread_id: old.id })).snoozed_until).toBe(until);
+		// The alarm has the earlier time, or the thread comes back 2 hours late.
+		expect(await runInDurableObject(mailbox(), (_instance, state) => state.storage.getAlarm())).toBe(now + HOUR);
+
+		// Before the time, the alarm changes nothing.
+		vi.setSystemTime(now + HOUR - 1);
+		await runDurableObjectAlarm(mailbox());
+		expect(await inbox()).toEqual(["Newer"]);
+
+		vi.setSystemTime(now + HOUR);
+		await runDurableObjectAlarm(mailbox());
+		expect(await inbox()).toEqual(["Old", "Newer"]);
+		const [back] = (await ada.call("mail.list_threads")).threads;
+		expect(back).toMatchObject({ id: old.id, snoozed_until: null, last_message_at: until });
+		expect(back?.label_ids).not.toContain("SNOOZED");
+		expect(await subjects("in:snoozed")).toEqual([]);
+		expect(await snoozedLabel()).toMatchObject({ threads_total: 0 });
+		// The cursor of a page uses the same order, so the next page starts after the thread that came back.
+		const pageOne = await ada.call("mail.list_threads", { limit: 1 });
+		const pageTwo = await ada.call("mail.list_threads", { limit: 1, cursor: pageOne.next_cursor as string });
+		expect([...pageOne.threads, ...pageTwo.threads].map((thread) => thread.subject)).toEqual(["Old", "Newer"]);
+		expect(pageTwo.next_cursor).toBeNull();
+
+		// A new snooze removes that place: the thread has the time of its newest message again.
+		await ada.call("mail.snooze_threads", { thread_ids: [old.id], until: new Date(now + 5 * HOUR).toISOString() });
+		const [again] = (await ada.call("mail.list_threads", { query: "in:snoozed" })).threads;
+		expect(again?.last_message_at).toBe(new Date(now - 48 * HOUR).toISOString());
 	});
 
-	// A mailbox from before Reply later can have a user label with that name. Label names are unique, so the
-	// migration renames the user label. It keeps its id and its threads. The new name must be free too: a
-	// person could make the label "Reply_Later (1)", and a clash would stop the mailbox from starting.
-	it("renames a user label named reply_later to a free name when the mailbox gets the system label", async () => {
+	// snoozeThreads sets the alarm after its transaction. A stop between the two must not lose the snooze.
+	it("sets the alarm again when the mailbox starts with a snoozed thread and no alarm", async () => {
+		vi.useFakeTimers({ toFake: ["Date"] });
+		const now = Date.now();
+		const thread = await receive({ subject: "Wait" });
+		const until = new Date(now + HOUR).toISOString();
+		await ada.call("mail.snooze_threads", { thread_ids: [thread.id], until });
+		await runInDurableObject(mailbox(), (_instance, state) => state.storage.deleteAlarm());
+		await evictDurableObject(mailbox());
+
+		// The first call starts the object. Its alarm runs now, finds no work, and sets itself to the time.
+		expect(await subjects("in:snoozed")).toEqual(["Wait"]);
+		await runDurableObjectAlarm(mailbox());
+		expect(await runInDurableObject(mailbox(), (_instance, state) => state.storage.getAlarm())).toBe(now + HOUR);
+		vi.setSystemTime(now + HOUR);
+		await runDurableObjectAlarm(mailbox());
+		expect(await subjects("in:inbox")).toEqual(["Wait"]);
+	});
+
+	it("ends a snooze for new mail in the thread and for a removed label, and keeps it after a reply", async () => {
+		const until = new Date(Date.now() + HOUR).toISOString();
+		const question = await receive({ subject: "Question", messageId: "<q1@sender.example>" });
+		const other = await receive({ subject: "Other" });
+		await ada.call("mail.snooze_threads", { thread_ids: [question.id, other.id], until });
+		expect(await subjects("in:inbox")).toEqual([]);
+
+		// A reply of the mailbox does not end the snooze: the time decides.
+		const [message] = (await ada.call("mail.get_thread", { thread_id: question.id })).messages;
+		await ada.call("mail.send", {
+			to: ["bot@dock.test"],
+			text: "I answer next week.",
+			reply_to_message_id: message?.id as string,
+		});
+		expect(await subjects("in:snoozed")).toEqual(["Other", "Question"]);
+
+		// New mail in the thread goes to the inbox, so the thread is not snoozed after it.
+		await deliver({ subject: "Re: Question", inReplyTo: "<q1@sender.example>" });
+		expect(await subjects("in:inbox")).toEqual(["Question"]);
+		expect(await subjects("in:snoozed")).toEqual(["Other"]);
+		expect((await ada.call("mail.get_thread", { thread_id: question.id })).snoozed_until).toBeNull();
+
+		// A person ends the snooze of the other thread: the label and the time go together.
+		await ada.call("mail.modify_threads", {
+			thread_ids: [other.id],
+			add_label_ids: ["INBOX"],
+			remove_label_ids: ["SNOOZED"],
+		});
+		expect(await subjects("in:inbox")).toEqual(["Other", "Question"]);
+		expect((await ada.call("mail.get_thread", { thread_id: other.id })).snoozed_until).toBeNull();
+
+		// A message that the mailbox sends to itself is new mail in its inbox too.
+		await ada.call("mail.snooze_threads", { thread_ids: [other.id], until });
+		const [received] = (await ada.call("mail.get_thread", { thread_id: other.id })).messages;
+		await ada.call("mail.send", {
+			to: ["ada@dock.test"],
+			text: "A note to me.",
+			reply_to_message_id: received?.id as string,
+		});
+		expect(await subjects("in:snoozed")).toEqual([]);
+		expect(await subjects("in:inbox")).toEqual(["Other", "Question"]);
+	});
+
+	// A new message can link two threads, and they merge into the older one. The snooze of the newer thread
+	// must go with its messages, or they keep SNOOZED with no time and never come back.
+	it("ends the snooze of a thread that merges into a different thread with new mail", async () => {
+		await receive({ subject: "Plan", messageId: "<plan@sender.example>" });
+		const budget = await receive({ subject: "Budget", messageId: "<budget@sender.example>" });
+		await ada.call("mail.snooze_threads", {
+			thread_ids: [budget.id],
+			until: new Date(Date.now() + HOUR).toISOString(),
+		});
+		expect(await subjects("in:snoozed")).toEqual(["Budget"]);
+
+		await deliver({ subject: "Plan and budget", references: ["<plan@sender.example>", "<budget@sender.example>"] });
+		const { threads } = await ada.call("mail.list_threads", { query: "in:anywhere" });
+		expect(threads).toHaveLength(1);
+		expect(threads[0]).toMatchObject({ message_count: 3, snoozed_until: null });
+		expect(threads[0]?.label_ids).not.toContain("SNOOZED");
+		expect(await subjects("in:snoozed")).toEqual([]);
+	});
+
+	it("refuses a time that is not later than now, an unknown thread, and SNOOZED through mail.modify_threads", async () => {
+		const thread = await receive({ subject: "Stay" });
+		const until = new Date(Date.now() + HOUR).toISOString();
+		const past = new Date(Date.now() - 1000).toISOString();
+		expect(await code(ada.call("mail.snooze_threads", { thread_ids: [thread.id], until: past }))).toBe("invalid");
+		const missing = "thr_01JD0000000000000000000000";
+		expect(await code(ada.call("mail.snooze_threads", { thread_ids: [thread.id, missing], until }))).toBe("not_found");
+		// A snooze needs a time, so the label alone is refused.
+		expect(await code(ada.call("mail.modify_threads", { thread_ids: [thread.id], add_label_ids: ["SNOOZED"] }))).toBe(
+			"invalid",
+		);
+		expect(await subjects("in:inbox")).toEqual(["Stay"]);
+		expect(await subjects("in:snoozed")).toEqual([]);
+	});
+
+	/** Puts the database of the mailbox back to the schema before Snooze (migration 8). */
+	function beforeSnooze(sql: SqlStorage) {
+		sql.exec("DROP INDEX threads_snoozed");
+		sql.exec("ALTER TABLE threads DROP COLUMN snoozed_until");
+		sql.exec("ALTER TABLE threads DROP COLUMN woke_at");
+		sql.exec("DELETE FROM labels WHERE id = 'SNOOZED'");
+		sql.exec(
+			"INSERT INTO labels (id, name, name_folded, type, created_at) VALUES ('REPLY_LATER', 'REPLY_LATER', 'reply_later', 'system', 0)",
+		);
+		sql.exec("UPDATE meta SET value = '7' WHERE key = 'schema_version'");
+	}
+
+	// A thread of Reply later has no time. It must not stay out of the views when its label goes away, and the
+	// person must see it: it comes back at the top of the inbox, not at the place of its old mail.
+	it("puts the threads of Reply later back at the top of the inbox when the mailbox gets Snooze", async () => {
+		const thread = await receive({ subject: "Answer me" }, new Date(Date.now() - 48 * HOUR));
+		await receive({ subject: "Newer" }, new Date(Date.now() - 24 * HOUR));
+		const before = (await ada.call("mail.get_profile")).version;
+		await runInDurableObject(mailbox(), (_instance, state) => {
+			const sql = state.storage.sql;
+			beforeSnooze(sql);
+			sql.exec(
+				"UPDATE message_labels SET label_id = 'REPLY_LATER' WHERE label_id = 'INBOX' AND message_seq IN (SELECT seq FROM messages WHERE thread_id = ?)",
+				thread.id,
+			);
+		});
+		await evictDurableObject(mailbox());
+
+		expect(await inbox()).toEqual(["Answer me", "Newer"]);
+		// An open client compares the version, so it gets the lists again.
+		expect((await ada.call("mail.get_profile")).version).toBeGreaterThan(before);
+		const { labels } = await ada.call("mail.list_labels");
+		expect(labels.some((label) => label.id === "REPLY_LATER")).toBe(false);
+		expect(labels.find((label) => label.id === "SNOOZED")).toMatchObject({ type: "system", threads_total: 0 });
+	});
+
+	// A mailbox from before Reply later and Snooze can have user labels with those names. Label names are
+	// unique, so each migration renames the user label. It keeps its id and its threads. The new name must be
+	// free too: a person could make the label "Reply_Later (1)", and a clash would stop the mailbox from starting.
+	it("renames the user labels named reply_later and snoozed to free names when the mailbox gets the system labels", async () => {
 		const thread = await receive({ subject: "Old label" });
-		const mailbox = env.MAILBOX.get(env.MAILBOX.idFromName(ada.id));
 		const userLabel = "lbl_01JD0000000000000000000RL0";
-		await runInDurableObject(mailbox, (_instance, state) => {
+		const snoozeLabel = "lbl_01JD0000000000000000000SN0";
+		await runInDurableObject(mailbox(), (_instance, state) => {
 			// Back to schema 6: before the system label REPLY_LATER (migration 7).
 			const sql = state.storage.sql;
+			beforeSnooze(sql);
 			sql.exec("DELETE FROM labels WHERE id = 'REPLY_LATER'");
 			sql.exec(
 				"INSERT INTO labels (id, name, name_folded, type, created_at) VALUES (?, 'Reply_Later', 'reply_later', 'user', 1)",
@@ -228,20 +390,25 @@ describe("Reply later", () => {
 				"INSERT INTO labels (id, name, name_folded, type, created_at) VALUES ('lbl_01JD0000000000000000000RL1', 'REPLY_LATER (1)', 'reply_later (1)', 'user', 1)",
 			);
 			sql.exec(
+				"INSERT INTO labels (id, name, name_folded, type, created_at) VALUES (?, 'Snoozed', 'snoozed', 'user', 1)",
+				snoozeLabel,
+			);
+			sql.exec(
 				"INSERT INTO message_labels (message_seq, label_id) SELECT seq, ? FROM messages WHERE thread_id = ?",
 				userLabel,
 				thread.id,
 			);
 			sql.exec("UPDATE meta SET value = '6' WHERE key = 'schema_version'");
 		});
-		await evictDurableObject(mailbox);
+		await evictDurableObject(mailbox());
 
 		const { labels } = await ada.call("mail.list_labels");
 		const renamed = "Reply_Later (2)";
 		expect(labels.find((label) => label.id === userLabel)).toMatchObject({ name: renamed, threads_total: 1 });
-		expect(labels.find((label) => label.id === "REPLY_LATER")).toMatchObject({ type: "system", threads_total: 0 });
+		expect(labels.find((label) => label.id === snoozeLabel)).toMatchObject({ name: "Snoozed (1)" });
+		expect(labels.find((label) => label.id === "SNOOZED")).toMatchObject({ type: "system", threads_total: 0 });
 		expect(await subjects(`label:"${renamed}"`)).toEqual(["Old label"]);
-		expect(await code(ada.call("mail.create_label", { name: "reply_later" }))).toBe("conflict");
+		expect(await code(ada.call("mail.create_label", { name: "snoozed" }))).toBe("conflict");
 	});
 });
 

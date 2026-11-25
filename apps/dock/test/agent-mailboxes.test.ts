@@ -169,6 +169,12 @@ describe("the mailbox of an agent", () => {
 						add_label_ids: ["TRASH"],
 						dry_run: true,
 					}),
+				() =>
+					reader.call("mail.snooze_threads", {
+						...inBox,
+						thread_ids: [threadId],
+						until: new Date(Date.now() + 3_600_000).toISOString(),
+					}),
 				() => reader.call("mail.create_label", { ...inBox, name: "Reviewed" }),
 				() => reader.call("mail.delete_label", { ...inBox, label_id: botLabel.id }),
 				() => reader.call("mail.send", { ...inBox, to: ["ada@dock.test"], text: "As the bot" }),

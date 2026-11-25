@@ -80,7 +80,7 @@ interface ComposerProps {
 	signature: string | null;
 	/**
 	 * "dialog" (the default) shows the composer in a modal dialog. "inline" shows the same form in the page,
-	 * for example under a conversation in the focus view of Reply later.
+	 * for example under a conversation in Focus.
 	 */
 	frame?: "dialog" | "inline";
 	/** Tells the parent when the message gets text that a close discards, and when it has none again. */

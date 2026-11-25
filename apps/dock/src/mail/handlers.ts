@@ -68,6 +68,7 @@ type MailOperation =
 	| "mail.get_thread"
 	| "mail.get_message"
 	| "mail.modify_threads"
+	| "mail.snooze_threads"
 	| "mail.send"
 	| "mail.suggest_recipients"
 	| "mail.get_attachment"
@@ -584,6 +585,7 @@ export const mailHandlers: Pick<HandlerMap<CallContext>, MailOperation> = {
 				label_ids: thread.labels,
 				auto_label_ids: thread.autoLabels,
 				last_message_at: iso(thread.lastMessageAt),
+				snoozed_until: thread.snoozedUntil === null ? null : iso(thread.snoozedUntil),
 				untrusted: thread.untrusted,
 			})),
 			next_cursor: result.nextCursor,
@@ -605,6 +607,7 @@ export const mailHandlers: Pick<HandlerMap<CallContext>, MailOperation> = {
 			auto_label_ids: labelIds.filter((id) =>
 				messages.every((m) => !m.label_ids.includes(id) || m.auto_label_ids.includes(id)),
 			),
+			snoozed_until: thread.snoozedUntil === null ? null : iso(thread.snoozedUntil),
 			untrusted: messages.some((m) => m.untrusted),
 			messages,
 		};
@@ -632,6 +635,13 @@ export const mailHandlers: Pick<HandlerMap<CallContext>, MailOperation> = {
 		);
 		if (!input.dry_run) auditOk(call, record, "mail.modify_threads", input.thread_ids.join(","));
 		return result;
+	},
+
+	async "mail.snooze_threads"(call, input) {
+		const { record, box } = await openMailbox(call, input.mailbox_id, "mail.snooze_threads");
+		const result = accept(await box.snoozeThreads({ threadIds: input.thread_ids, until: Date.parse(input.until) }));
+		auditOk(call, record, "mail.snooze_threads", input.thread_ids.join(","));
+		return { threads_changed: result.threads_changed, until: iso(result.until) };
 	},
 
 	async "mail.send"(call, input) {

@@ -118,6 +118,10 @@ describe("mail.suggest_recipients", () => {
 			sql.exec("ALTER TABLE message_labels DROP COLUMN auto");
 			sql.exec("ALTER TABLE messages DROP COLUMN signals_json");
 			sql.exec("ALTER TABLE messages DROP COLUMN auto_labeled_at");
+			// Snooze (migration 8) adds columns, and a column cannot be added two times.
+			sql.exec("DROP INDEX threads_snoozed");
+			sql.exec("ALTER TABLE threads DROP COLUMN snoozed_until");
+			sql.exec("ALTER TABLE threads DROP COLUMN woke_at");
 			sql.exec("UPDATE meta SET value = '3' WHERE key = 'schema_version'");
 		});
 		await evictDurableObject(mailbox);

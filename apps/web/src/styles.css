@@ -1967,38 +1967,41 @@ fieldset {
 	font-size: 13px;
 }
 
-/* Reply later: the banner above its list, the pile at the end of the inbox, and Focus. */
+/* Snooze: the time of a snoozed conversation in a list row, and the times that the dialog offers. */
 
-.reply-later-banner,
-.reply-later-pile {
-	display: flex;
-	flex-wrap: wrap;
+.thread-snooze {
+	display: inline-flex;
+	flex: none;
 	align-items: center;
-	justify-content: space-between;
-	gap: 8px 16px;
-	margin: 12px 16px;
-	padding: 10px 12px;
-	border: 1px solid var(--border);
-	border-radius: var(--radius-md);
-	background: var(--surface);
-	font-size: 14px;
-}
-
-.reply-later-banner p {
-	margin: 0;
+	gap: 4px;
+	max-width: none;
 	color: var(--muted-foreground);
 }
 
-.reply-later-pile-link {
-	display: inline-flex;
-	align-items: center;
-	gap: 8px;
-	color: var(--foreground);
-	text-decoration: none;
+/* The Snooze button of Focus is a list control with the look of the other actions. */
+.focus-snooze .select-icon,
+.focus-snooze .select-placeholder {
+	color: inherit;
 }
 
-.reply-later-pile-link:hover {
-	text-decoration: underline;
+.snooze-presets {
+	display: grid;
+	gap: 8px;
+	margin: 0 0 16px;
+	padding: 0;
+	list-style: none;
+}
+
+.snooze-preset {
+	display: flex;
+	justify-content: space-between;
+	gap: 16px;
+	width: 100%;
+}
+
+.snooze-preset-time {
+	color: var(--muted-foreground);
+	font-weight: 400;
 }
 
 /* The way into Focus in the header row of a list. A narrow row shows the icon only. */
@@ -2311,7 +2314,9 @@ fieldset {
 		justify-content: center;
 	}
 
-	.focus-actions-bar .button-ghost .focus-action-text {
+	.focus-actions-bar .button-ghost .focus-action-text,
+	.focus-actions-bar .focus-snooze .select-value,
+	.focus-actions-bar .focus-snooze .select-chevron {
 		display: none;
 	}
 
@@ -4879,6 +4884,11 @@ fieldset {
 	}
 
 	.thread-label:nth-child(n + 3) {
+		display: none;
+	}
+
+	/* The clock alone shows that the conversation is snoozed. The title has the time. */
+	.thread-snooze-time {
 		display: none;
 	}
 
