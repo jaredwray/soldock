@@ -249,8 +249,14 @@ async function principalToManage(call: CallContext, principalId: string, action:
 /**
  * Nobody archives or deletes the owner or themselves, so the organization always keeps its owner and the
  * caller. Only a credential with every human scope can do it, so a narrow key cannot lock people out.
+ * Nobody makes an invite link for the owner or themselves either: a link is a bearer credential, and the owner
+ * from before migration 0004 can have no password.
  */
-function assertRemovable(call: CallContext, target: PrincipalRecord, action: "archive" | "delete"): void {
+function assertNotOwnerOrSelf(
+	call: CallContext,
+	target: PrincipalRecord,
+	action: "archive" | "delete" | "make an invite link for",
+): void {
 	if (target.org_role === "owner") throw new OperationError("forbidden", `Nobody can ${action} the owner.`);
 	if (target.id === call.caller.principal.id) throw new OperationError("forbidden", `You cannot ${action} yourself.`);
 	assertFullCredential(call.caller);
@@ -468,8 +474,8 @@ export const identityHandlers: Pick<HandlerMap<CallContext>, IdentityOperation |
 		if (!isAdmin(call.caller)) throw new OperationError("forbidden", "Only owners and admins can make an invite link.");
 		// An admin manages the sign-in of others, except the owner's.
 		const target = await credentialOwner(call, input.principal_id);
+		assertNotOwnerOrSelf(call, target, "make an invite link for");
 		if (target.kind !== "human") throw new OperationError("invalid", "Only a person signs in with a password.");
-		assertFullCredential(call.caller);
 		if (target.archived_at !== null) {
 			throw new OperationError("conflict", "This person is archived. Restore the person first.");
 		}
@@ -626,7 +632,7 @@ export const identityHandlers: Pick<HandlerMap<CallContext>, IdentityOperation |
 
 	async "directory.archive_principal"(call, input) {
 		const target = await principalToManage(call, input.principal_id, "archive");
-		assertRemovable(call, target, "archive");
+		assertNotOwnerOrSelf(call, target, "archive");
 		// An archived person could still act through the keys of an agent that they sponsor.
 		const agents = await countSponsoredAgents(call.env.DIRECTORY, target.id, { activeOnly: true });
 		if (agents > 0) throw new OperationError("conflict", sponsoredText(target.display_name, agents, "archive"));
@@ -660,7 +666,7 @@ export const identityHandlers: Pick<HandlerMap<CallContext>, IdentityOperation |
 
 	async "directory.delete_principal"(call, input) {
 		const target = await principalToManage(call, input.principal_id, "delete");
-		assertRemovable(call, target, "delete");
+		assertNotOwnerOrSelf(call, target, "delete");
 		const agents = await countSponsoredAgents(call.env.DIRECTORY, target.id);
 		if (agents > 0) throw new OperationError("conflict", sponsoredText(target.display_name, agents, "delete"));
 		if (!(await deletePrincipal(call.env.DIRECTORY, target.id)))

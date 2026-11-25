@@ -889,9 +889,20 @@ describe("invite links", () => {
 	});
 
 	// A person from before migration 0004 has no password and can keep a session. The link sets a password, so it
-	// ends the sessions from before, as each new password does.
+	// ends the sessions from before, as each new password does. The owner and the caller never get a link: a leaked
+	// link must not give the owner account.
 	it("gives a person without a password from before the upgrade a link, which ends the sessions from before", async () => {
 		const { owner, ada } = await seedOrg();
+		const admin = await createActor(owner, {
+			kind: "human",
+			display_name: "Ann",
+			address: "ann@dock.test",
+			org_role: "admin",
+		});
+		await env.DIRECTORY.prepare("UPDATE principals SET password_hash = NULL WHERE id = ?").bind(owner.id).run();
+		expect(await denied(owner.call("directory.create_invite", { principal_id: owner.id }))).toBe("forbidden");
+		expect(await denied(admin.call("directory.create_invite", { principal_id: owner.id }))).toBe("forbidden");
+		expect(await denied(admin.call("directory.create_invite", { principal_id: admin.id }))).toBe("forbidden");
 		const old = await signIn(ada.address);
 		await env.DIRECTORY.prepare("UPDATE principals SET password_hash = NULL WHERE id = ?").bind(ada.id).run();
 		const { invite } = await owner.call("directory.create_invite", { principal_id: ada.id });

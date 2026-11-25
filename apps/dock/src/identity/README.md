@@ -1026,7 +1026,8 @@ link, chooses a password, and is signed in. The code is in `invites.ts`.
   `password` gets `invite: null`.
 - `directory.create_invite` makes a new link for a person. The rules:
   - Owners and admins only, with a credential that holds every human scope, because the link gives a session
-    with every human scope. An admin cannot make a link for the owner (`credentialOwner`).
+    with every human scope. Nobody makes a link for the owner, also the owner from before migration `0004`, who
+    can have no password. Nobody makes a link for themselves: a signed-in person uses `account.set_password`.
   - The person must have no password and no two-step verification, and must not be archived. Each other
     person gets `conflict`. An agent gets `invalid`. So a link cannot replace the password of an account.
   - The `conflict` tells the caller if the person has a password. Only owners and admins get it, and they

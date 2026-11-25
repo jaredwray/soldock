@@ -109,6 +109,9 @@ export function App() {
 				<InvitePage
 					signedInAs={state.status === "signed-in" ? state.whoami.principal.address : null}
 					onSignedIn={() => {
+						// The cookie now names the person of the link. A person who was signed in before must not stay in
+						// the app: the page loads, with nobody signed in, until the new identity arrives.
+						show({ status: "loading" });
 						leaveInvite();
 						void load(false);
 					}}

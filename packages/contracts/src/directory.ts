@@ -347,7 +347,7 @@ export const createInvite = defineOperation({
 	name: "directory.create_invite",
 	summary: "Make a new invite link for a person who has no password yet",
 	description: [
-		"Owners and admins only, with a credential that holds every human scope, because the link gives a sign-in. Nobody makes a link for the owner.",
+		"Owners and admins only, with a credential that holds every human scope, because the link gives a sign-in. Nobody makes a link for the owner or for themselves.",
 		"The person must have no password and no two-step verification, and must not be archived. For a person with a password, use account.set_password.",
 		"A new link replaces the earlier link of the person: the earlier link stops.",
 		...INVITE_RULES,
