@@ -238,6 +238,11 @@ To find an address that you wrote to before, call `mail_suggest_recipients` with
 address, for example `{"query": "acme"}`. The result has only the addresses that your mailbox sent
 mail to, with the newest send first. Mail that arrives adds no address.
 
+To keep a thread for a later answer, add the label `REPLY_LATER` with `mail_modify_threads`. Call
+`mail_list_threads` with the query `label:REPLY_LATER` to get the queue. A reply with `mail_send` and
+`reply_to_message_id` removes the label from its thread. To take a thread out without a reply, remove the
+label. In a shared mailbox, the members share the queue.
+
 `resources/list` shows the inbox of each mailbox that you can use, with the URI
 `asterra://mail/<mailbox id>/inbox`. `resources/read` returns the newest threads of the inbox, as
 `mail_list_threads` with the query `in:inbox` returns them.

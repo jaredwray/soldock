@@ -7,6 +7,7 @@ import {
 	MAIL_LIMITS,
 	MailboxId,
 	type MailSettings,
+	SYSTEM_LABELS,
 	WEBHOOK_LIMITS,
 } from "@asterra/contracts";
 import { addressTag, getMailbox, getPrincipal } from "../identity/index.ts";
@@ -186,7 +187,10 @@ export interface LabelRecord {
 	threads_unread: number;
 }
 
-const SYSTEM_LABEL_ORDER = ["INBOX", "STARRED", "IMPORTANT", "SENT", "SPAM", "TRASH", "UNREAD"];
+/** The order of the system labels in a label list. */
+const SYSTEM_LABEL_ORDER: readonly string[] = SYSTEM_LABELS;
+/** The system labels that migration 0 inserts. Do not change it: a later migration adds a new system label. */
+const INITIAL_SYSTEM_LABELS = ["INBOX", "STARRED", "IMPORTANT", "SENT", "SPAM", "TRASH", "UNREAD"];
 
 /** The tag of the watch sockets of a mailbox. The MCP stream of a subscriber holds one. */
 const WATCH_TAG = "watch";
@@ -288,7 +292,7 @@ const MIGRATIONS: string[][] = [
 			result TEXT NOT NULL,
 			created_at INTEGER NOT NULL
 		)`,
-		...SYSTEM_LABEL_ORDER.map(
+		...INITIAL_SYSTEM_LABELS.map(
 			(id) =>
 				`INSERT INTO labels (id, name, name_folded, type, created_at) VALUES ('${id}', '${id}', '${id.toLowerCase()}', 'system', 0)`,
 		),
@@ -346,6 +350,12 @@ const MIGRATIONS: string[][] = [
 	],
 	// Auto labels: marks, signals, settings, corrections and the classifier outbox (autolabel/store.ts).
 	AUTOLABEL_MIGRATION,
+	// The system label REPLY_LATER. Label names are unique (labels_name), and a failed migration stops the
+	// mailbox. So a user label with the same folded name first gets its id in its name.
+	[
+		"UPDATE labels SET name = name || ' (' || id || ')', name_folded = name_folded || ' (' || lower(id) || ')' WHERE type = 'user' AND name_folded = 'reply_later'",
+		"INSERT INTO labels (id, name, name_folded, type, created_at) VALUES ('REPLY_LATER', 'REPLY_LATER', 'reply_later', 'system', 0)",
+	],
 ];
 
 /** The sends of one message to the classifier queue. A send that gets no result is repeated after `AUTOLABEL_RESEND_MS`. */
@@ -1496,10 +1506,14 @@ export class MailboxDO extends DurableObject<Env> {
 		const row = this.one<{ label_id: string }>(
 			"SELECT label_id FROM auto_labels WHERE key = 'needs_reply' AND enabled = 1",
 		);
-		if (!row) return;
+		if (row) this.removeThreadLabel(threadId, row.label_id);
+	}
+
+	/** Removes a label from each message of a thread. */
+	private removeThreadLabel(threadId: string, labelId: string): void {
 		this.sql.exec(
 			"DELETE FROM message_labels WHERE label_id = ? AND message_seq IN (SELECT seq FROM messages WHERE thread_id = ?)",
-			row.label_id,
+			labelId,
 			threadId,
 		);
 	}
@@ -2076,6 +2090,9 @@ export class MailboxDO extends DurableObject<Env> {
 			this.recordRecipients([...input.parsed.to, ...input.parsed.cc, ...input.bcc], input.internalDate);
 			// A reply answers the thread, so its Needs reply label goes.
 			if (this.autoLabelsOn()) this.clearNeedsReply(stored.threadId);
+			// A reply also takes the thread out of Reply later. A forward or a new message does not, also when
+			// it joins the thread by its subject. The merge can change the thread, so use the stored thread.
+			if (input.replyThreadId !== null) this.removeThreadLabel(stored.threadId, "REPLY_LATER");
 			const recipients: DeliveryRecord[] = [];
 			for (const recipient of input.recipients) {
 				const status = recipient.self ? "delivered" : "queued";

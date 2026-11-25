@@ -2,7 +2,7 @@ import type { Label } from "@asterra/contracts";
 import { describe, expect, it } from "vitest";
 // The real search parser of dock. It is pure TypeScript, so it runs here.
 import { parseQuery } from "../../dock/src/mail/search.ts";
-import { labelRows, viewQuery } from "../src/features/mail/views.ts";
+import { labelChipName, labelRows, viewQuery } from "../src/features/mail/views.ts";
 
 function label(id: string, name: string, type: Label["type"] = "user"): Label {
 	return { id, name, type, threads_total: 0, threads_unread: 0 };
@@ -16,6 +16,14 @@ describe("viewQuery", () => {
 			if (result.status !== "ready") throw new Error(`no query for ${name}`);
 			expect(parseQuery(result.query), name).toEqual([[{ negate: false, kind: "op", op: "label", value: name }]]);
 		}
+	});
+
+	it("finds the threads of Reply later by the id of the system label, and its chip has a name", () => {
+		const result = viewQuery({ kind: "system", view: "reply-later" }, null);
+		if (result.status !== "ready") throw new Error("no query for Reply later");
+		expect(parseQuery(result.query)).toEqual([[{ negate: false, kind: "op", op: "label", value: "REPLY_LATER" }]]);
+		const byId = new Map([["REPLY_LATER", label("REPLY_LATER", "REPLY_LATER", "system")]]);
+		expect(labelChipName("REPLY_LATER", byId)).toBe("Reply later");
 	});
 
 	it("waits for the labels, and reports a label that does not exist", () => {

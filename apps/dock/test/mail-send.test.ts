@@ -114,6 +114,54 @@ describe("mail.send to mailboxes of this deployment", () => {
 	});
 });
 
+describe("a reply and Reply later", () => {
+	/** The owner sends a message to the actor. Returns the thread and the message in the actor's mailbox. */
+	async function received(actor: Actor, subject: string) {
+		await owner.call("mail.send", { to: [actor.address], subject, text: "Can you check this?" });
+		await drainOutbox(owner.id);
+		const thread = (await actor.call("mail.list_threads")).threads.find((t) => t.subject === subject);
+		if (!thread) throw new Error(`thread ${subject} not found`);
+		const full = await actor.call("mail.get_thread", { thread_id: thread.id });
+		return { threadId: thread.id, messageId: full.messages[0]?.id as string };
+	}
+	const queue = async (actor: Actor) =>
+		(await actor.call("mail.list_threads", { query: "label:REPLY_LATER" })).threads.map((t) => t.id);
+
+	it("a reply removes REPLY_LATER from the thread, for a person over REST and an agent over MCP", async () => {
+		const forAda = await received(ada, "Budget");
+		await ada.call("mail.modify_threads", { thread_ids: [forAda.threadId], add_label_ids: ["REPLY_LATER"] });
+		expect(await queue(ada)).toEqual([forAda.threadId]);
+		await ada.call("mail.send", { to: ["owner@dock.test"], text: "Done.", reply_to_message_id: forAda.messageId });
+		expect(await queue(ada)).toEqual([]);
+		expect((await ada.call("mail.get_thread", { thread_id: forAda.threadId })).label_ids).not.toContain("REPLY_LATER");
+
+		const forBot = await received(bot, "Invoice");
+		const mark = await callTool(bot.key, "mail_modify_threads", {
+			thread_ids: [forBot.threadId],
+			add_label_ids: ["REPLY_LATER"],
+		});
+		expect(mark.isError).toBeFalsy();
+		expect(await queue(bot)).toEqual([forBot.threadId]);
+		const reply = await callTool(bot.key, "mail_send", {
+			to: ["owner@dock.test"],
+			text: "Paid.",
+			reply_to_message_id: forBot.messageId,
+		});
+		expect(reply.isError).toBeFalsy();
+		expect(await queue(bot)).toEqual([]);
+	});
+
+	it("a new message and a forward keep the thread in Reply later", async () => {
+		const { threadId } = await received(ada, "Plans");
+		await ada.call("mail.modify_threads", { thread_ids: [threadId], add_label_ids: ["REPLY_LATER"] });
+		await ada.call("mail.send", { to: ["owner@dock.test"], subject: "Other topic", text: "Hi." });
+		// A forward has no reply_to_message_id, but its subject puts it in the thread.
+		const forward = await ada.call("mail.send", { to: ["owner@dock.test"], subject: "Fwd: Plans", text: "FYI." });
+		expect(forward.thread_id).toBe(threadId);
+		expect(await queue(ada)).toEqual([threadId]);
+	});
+});
+
 describe("+tag labels on mail inside the deployment", () => {
 	// The recipient address keeps its +tag in the outbox, so local mail gets the same label as mail from the internet.
 	it("applies the +tag label of a local recipient, also in mail to yourself", async () => {

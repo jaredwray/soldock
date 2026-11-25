@@ -19,6 +19,8 @@ export type MailAction =
 	| "unread"
 	| "star"
 	| "unstar"
+	| "replyLater"
+	| "replyLaterOff"
 	| { label: string }
 	| { unlabel: string };
 
@@ -46,6 +48,10 @@ export function actionChange(action: MailAction): LabelChange {
 			return { add: ["STARRED"], remove: [] };
 		case "unstar":
 			return { add: [], remove: ["STARRED"] };
+		case "replyLater":
+			return { add: ["REPLY_LATER"], remove: [] };
+		case "replyLaterOff":
+			return { add: [], remove: ["REPLY_LATER"] };
 	}
 }
 
@@ -63,6 +69,8 @@ export function actionNotice(action: MailAction, count: number): string | null {
 			return `${what} removed from Spam.`;
 		case "restore":
 			return `${what} restored from Trash.`;
+		case "replyLaterOff":
+			return `${what} removed from Reply later.`;
 		default:
 			return null;
 	}
@@ -101,6 +109,8 @@ export function belongsInView(labelIds: readonly string[], view: MailView): bool
 			switch (view.view) {
 				case "inbox":
 					return !hidden && labelIds.includes("INBOX");
+				case "reply-later":
+					return !hidden && labelIds.includes("REPLY_LATER");
 				case "starred":
 					return !hidden && labelIds.includes("STARRED");
 				case "sent":

@@ -1,6 +1,6 @@
 import { MAIL_LIMITS, type OutputOf } from "@asterra/contracts";
 import type { Node } from "prosemirror-model";
-import { type ChangeEvent, type FormEvent, type ReactNode, useId, useMemo, useRef, useState } from "react";
+import { type ChangeEvent, type FormEvent, type ReactNode, useEffect, useId, useMemo, useRef, useState } from "react";
 import { api, errorMessage } from "../../lib/api.ts";
 import { fileToBase64 } from "../../lib/base64.ts";
 import { Dialog } from "../../lib/Dialog.tsx";
@@ -64,6 +64,11 @@ interface ComposerProps {
 	initialFrom: string | null;
 	/** The signature of `initialFrom`. The composer adds it to the draft. */
 	signature: string;
+	/**
+	 * "dialog" (the default) shows the composer in a modal dialog. "inline" shows the same form in the page,
+	 * for example under a conversation in the focus view of Reply later.
+	 */
+	frame?: "dialog" | "inline";
 	onClose: () => void;
 	onSent: (result: SendResult) => void;
 }
@@ -77,7 +82,16 @@ interface BodySeed {
 	edited: boolean;
 }
 
-export function Composer({ draft, mailDomains, fromOptions, initialFrom, signature, onClose, onSent }: ComposerProps) {
+export function Composer({
+	draft,
+	mailDomains,
+	fromOptions,
+	initialFrom,
+	signature,
+	frame = "dialog",
+	onClose,
+	onSent,
+}: ComposerProps) {
 	const [fields, setFields] = useState({ to: draft.to, cc: draft.cc, bcc: draft.bcc });
 	const [showCopies, setShowCopies] = useState(draft.cc !== "" || draft.bcc !== "");
 	const [subject, setSubject] = useState(draft.subject);
@@ -111,6 +125,7 @@ export function Composer({ draft, mailDomains, fromOptions, initialFrom, signatu
 	// One key for each composed message: a retry after a network error cannot send it twice.
 	const [idempotencyKey] = useState(() => crypto.randomUUID());
 	const nextAttachmentId = useRef(1);
+	const inlineRef = useRef<HTMLElement>(null);
 	const ids = {
 		to: useId(),
 		cc: useId(),
@@ -120,6 +135,12 @@ export function Composer({ draft, mailDomains, fromOptions, initialFrom, signatu
 		files: useId(),
 		size: useId(),
 	};
+
+	// The dialog gives the focus to its data-autofocus element. The inline frame does the same when it opens.
+	// The editor makes its view in a layout effect, so the element exists here.
+	useEffect(() => {
+		inlineRef.current?.querySelector<HTMLElement>("[data-autofocus]")?.focus();
+	}, []);
 
 	const dirty =
 		fields.to !== draft.to ||
@@ -330,159 +351,181 @@ export function Composer({ draft, mailDomains, fromOptions, initialFrom, signatu
 		</div>
 	);
 
-	return (
-		<Dialog title={draft.title} onClose={requestClose} className="composer">
-			<form className="compose-form" onSubmit={submit} noValidate>
-				<div className="compose-fields">
-					{fromLocked ? (
-						sender && (
-							<div className="compose-row">
-								<span className="compose-label">From:</span>
-								<span className="compose-from">
-									{sender.display_name} &lt;{sender.address}&gt;
-								</span>
-							</div>
-						)
-					) : (
+	const form = (
+		<form className="compose-form" onSubmit={submit} noValidate>
+			<div className="compose-fields">
+				{fromLocked ? (
+					sender && (
 						<div className="compose-row">
-							<label htmlFor={ids.from} className="compose-label">
-								From:
-							</label>
-							<Select
-								id={ids.from}
-								className="compose-select"
-								value={mailboxKey(from)}
-								options={fromOptions.map((option) => ({
-									value: mailboxKey(option.id),
-									label: option.display_name,
-									description: `<${option.address}>`,
-								}))}
-								onChange={(key) =>
-									void changeFrom(fromOptions.find((option) => mailboxKey(option.id) === key)?.id ?? null)
-								}
-								disabled={sending}
-							/>
+							<span className="compose-label">From:</span>
+							<span className="compose-from">
+								{sender.display_name} &lt;{sender.address}&gt;
+							</span>
 						</div>
-					)}
-					{addressInput(
-						"to",
-						"To:",
-						draft.to === "",
-						showCopies ? undefined : (
-							<button type="button" className="compose-copies" onClick={() => setShowCopies(true)}>
-								Add Cc and Bcc
-							</button>
-						),
-					)}
-					{showCopies && (
-						<>
-							{addressInput("cc", "Cc:", false)}
-							{addressInput("bcc", "Bcc:", false)}
-						</>
-					)}
+					)
+				) : (
 					<div className="compose-row">
-						<label htmlFor={ids.subject} className="compose-label">
-							Subject:
+						<label htmlFor={ids.from} className="compose-label">
+							From:
 						</label>
-						<input
-							id={ids.subject}
-							className="compose-input"
-							type="text"
-							maxLength={MAIL_LIMITS.subjectChars}
-							value={subject}
-							onChange={(event) => setSubject(event.target.value)}
+						<Select
+							id={ids.from}
+							className="compose-select"
+							value={mailboxKey(from)}
+							options={fromOptions.map((option) => ({
+								value: mailboxKey(option.id),
+								label: option.display_name,
+								description: `<${option.address}>`,
+							}))}
+							onChange={(key) =>
+								void changeFrom(fromOptions.find((option) => mailboxKey(option.id) === key)?.id ?? null)
+							}
 							disabled={sending}
 						/>
 					</div>
-				</div>
-				<RichTextEditor
-					key={seed.version}
-					initialDoc={seed.doc}
-					onChange={changeBody}
-					disabled={sending}
-					label="Message"
-					placeholder="Write your message"
-					// A new start after a change of the From keeps the focus on the From.
-					autofocus={seed.version === 0 && draft.to !== ""}
-				/>
-				{attachments.length > 0 && (
-					<ul className="file-cards compose-attachments" aria-label="Attachments">
-						{attachments.map((file) => (
-							<li key={file.id} className="file-card">
-								<span className="file-card-icon">
-									<Icon name={file.mime_type.startsWith("image/") ? "image" : "file"} size={20} />
-								</span>
-								<span className="file-card-text">
-									<span className="file-card-name" title={file.filename}>
-										{file.filename}
-									</span>
-									<span className="file-card-meta">{formatBytes(file.size)}</span>
-								</span>
-								<button
-									type="button"
-									className="icon-button icon-button-small file-card-action"
-									aria-label={`Remove ${file.filename}`}
-									title="Remove"
-									onClick={() => {
-										setAttachments((current) => current.filter((item) => item.id !== file.id));
-										setError(null);
-									}}
-									disabled={sending}
-								>
-									<Icon name="close" size={16} />
-								</button>
-							</li>
-						))}
-					</ul>
 				)}
-				<p
-					id={ids.size}
-					className={tooLarge || tooLargeForExternal ? "compose-size field-error" : "compose-size field-hint"}
-				>
-					{attachments.length > 0
-						? `${attachments.length} of ${MAIL_LIMITS.attachments} files, ${formatBytes(attachmentBytes)}. The message is about ${formatBytes(estimatedBytes)} of ${formatBytes(MAIL_LIMITS.messageBytes)}.`
-						: `Up to ${MAIL_LIMITS.attachments} files. A message can be at most ${formatBytes(MAIL_LIMITS.messageBytes)}.`}
-					{showExternalHint && ` Mail to addresses outside your organization can be at most ${externalLimit}.`}
-				</p>
-				<div aria-live="assertive">
-					{error && (
-						<p className="form-error" role="alert">
-							{error}
-						</p>
-					)}
-				</div>
-				<div className="compose-actions">
-					<input
-						id={ids.files}
-						type="file"
-						multiple
-						className="visually-hidden"
-						onChange={(event) => void addFiles(event)}
-						disabled={sending || reading}
-						aria-describedby={ids.size}
-					/>
-					<label htmlFor={ids.files} className={sending || reading ? "button button-disabled" : "button"}>
-						<Icon name="paperclip" size={16} />
-						{reading ? "Reading files…" : "Attach files"}
+				{addressInput(
+					"to",
+					"To:",
+					draft.to === "",
+					showCopies ? undefined : (
+						<button type="button" className="compose-copies" onClick={() => setShowCopies(true)}>
+							Add Cc and Bcc
+						</button>
+					),
+				)}
+				{showCopies && (
+					<>
+						{addressInput("cc", "Cc:", false)}
+						{addressInput("bcc", "Bcc:", false)}
+					</>
+				)}
+				<div className="compose-row">
+					<label htmlFor={ids.subject} className="compose-label">
+						Subject:
 					</label>
-					<span className="compose-status" aria-live="polite">
-						{(sending || loadingSignature) && (
-							<>
-								<span className="spinner spinner-small" aria-hidden="true" />
-								{sending ? "Sending the message…" : "Loading the signature…"}
-							</>
-						)}
-					</span>
-					<span className="toolbar-spacer" />
-					<button type="button" className="icon-button" aria-label="Discard" title="Discard" onClick={requestClose}>
-						<Icon name="trash" />
-					</button>
-					<button type="submit" className="button button-primary" disabled={sending || reading || loadingSignature}>
-						<Icon name="send" size={16} />
-						{sending ? "Sending…" : "Send"}
-					</button>
+					<input
+						id={ids.subject}
+						className="compose-input"
+						type="text"
+						maxLength={MAIL_LIMITS.subjectChars}
+						value={subject}
+						onChange={(event) => setSubject(event.target.value)}
+						disabled={sending}
+					/>
 				</div>
-			</form>
-		</Dialog>
+			</div>
+			<RichTextEditor
+				key={seed.version}
+				initialDoc={seed.doc}
+				onChange={changeBody}
+				disabled={sending}
+				label="Message"
+				placeholder="Write your message"
+				// A new start after a change of the From keeps the focus on the From.
+				autofocus={seed.version === 0 && draft.to !== ""}
+			/>
+			{attachments.length > 0 && (
+				<ul className="file-cards compose-attachments" aria-label="Attachments">
+					{attachments.map((file) => (
+						<li key={file.id} className="file-card">
+							<span className="file-card-icon">
+								<Icon name={file.mime_type.startsWith("image/") ? "image" : "file"} size={20} />
+							</span>
+							<span className="file-card-text">
+								<span className="file-card-name" title={file.filename}>
+									{file.filename}
+								</span>
+								<span className="file-card-meta">{formatBytes(file.size)}</span>
+							</span>
+							<button
+								type="button"
+								className="icon-button icon-button-small file-card-action"
+								aria-label={`Remove ${file.filename}`}
+								title="Remove"
+								onClick={() => {
+									setAttachments((current) => current.filter((item) => item.id !== file.id));
+									setError(null);
+								}}
+								disabled={sending}
+							>
+								<Icon name="close" size={16} />
+							</button>
+						</li>
+					))}
+				</ul>
+			)}
+			<p
+				id={ids.size}
+				className={tooLarge || tooLargeForExternal ? "compose-size field-error" : "compose-size field-hint"}
+			>
+				{attachments.length > 0
+					? `${attachments.length} of ${MAIL_LIMITS.attachments} files, ${formatBytes(attachmentBytes)}. The message is about ${formatBytes(estimatedBytes)} of ${formatBytes(MAIL_LIMITS.messageBytes)}.`
+					: `Up to ${MAIL_LIMITS.attachments} files. A message can be at most ${formatBytes(MAIL_LIMITS.messageBytes)}.`}
+				{showExternalHint && ` Mail to addresses outside your organization can be at most ${externalLimit}.`}
+			</p>
+			<div aria-live="assertive">
+				{error && (
+					<p className="form-error" role="alert">
+						{error}
+					</p>
+				)}
+			</div>
+			<div className="compose-actions">
+				<input
+					id={ids.files}
+					type="file"
+					multiple
+					className="visually-hidden"
+					onChange={(event) => void addFiles(event)}
+					disabled={sending || reading}
+					aria-describedby={ids.size}
+				/>
+				<label htmlFor={ids.files} className={sending || reading ? "button button-disabled" : "button"}>
+					<Icon name="paperclip" size={16} />
+					{reading ? "Reading files…" : "Attach files"}
+				</label>
+				<span className="compose-status" aria-live="polite">
+					{(sending || loadingSignature) && (
+						<>
+							<span className="spinner spinner-small" aria-hidden="true" />
+							{sending ? "Sending the message…" : "Loading the signature…"}
+						</>
+					)}
+				</span>
+				<span className="toolbar-spacer" />
+				<button type="button" className="icon-button" aria-label="Discard" title="Discard" onClick={requestClose}>
+					<Icon name="trash" />
+				</button>
+				<button type="submit" className="button button-primary" disabled={sending || reading || loadingSignature}>
+					<Icon name="send" size={16} />
+					{sending ? "Sending…" : "Send"}
+				</button>
+			</div>
+		</form>
+	);
+
+	if (frame === "dialog") {
+		return (
+			<Dialog title={draft.title} onClose={requestClose} className="composer">
+				{form}
+			</Dialog>
+		);
+	}
+	// Escape closes the inline composer as it closes the dialog. A menu in the form, for example the
+	// address suggestions, handles its own Escape first.
+	return (
+		<section
+			ref={inlineRef}
+			className="compose-inline"
+			aria-label={draft.title}
+			onKeyDown={(event) => {
+				if (event.key !== "Escape" || event.defaultPrevented) return;
+				event.preventDefault();
+				requestClose();
+			}}
+		>
+			{form}
+		</section>
 	);
 }

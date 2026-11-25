@@ -2,10 +2,10 @@ import type { Label, Message, ThreadSummary } from "@asterra/contracts";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { api, errorMessage } from "../../lib/api.ts";
 import { Icon } from "../../lib/icons.tsx";
-import { navigate } from "../../lib/router.tsx";
+import { Link, navigate } from "../../lib/router.tsx";
 import { useToast } from "../../lib/toast.tsx";
 import { useOnChange } from "../../lib/useOnChange.ts";
-import { isAgentMailbox, type MailView, mailSettingsPath, threadPath, viewPath } from "../../routes.ts";
+import { isAgentMailbox, type MailView, mailSettingsPath, replyFocusPath, threadPath, viewPath } from "../../routes.ts";
 import { SEARCH_INPUT_ID } from "../../shell/nav.ts";
 import { SearchBox } from "../../shell/SearchBox.tsx";
 import {
@@ -24,6 +24,7 @@ import { useThread, useThreadList } from "./data.ts";
 import type { ReplyMode } from "./MessageCard.tsx";
 import { mailboxInput, useMailboxId, useMailboxRights } from "./mailbox.tsx";
 import { rightsNotice } from "./mailboxNav.ts";
+import { isReplyLaterView, REPLY_LATER } from "./replyLater.ts";
 import { ThreadList } from "./ThreadList.tsx";
 import { ThreadView } from "./ThreadView.tsx";
 import { Toolbar } from "./Toolbar.tsx";
@@ -34,7 +35,7 @@ import { type ViewQuery, viewIcon } from "./views.ts";
 const LEAVE_THREAD: readonly MailAction[] = ["archive", "trash", "spam", "notSpam", "restore", "unread"];
 
 /** The shortcuts that change the mailbox, or select threads for a change. They need `mail.modify`. */
-const CHANGE_KEYS: ReadonlySet<string> = new Set(["e", "#", "s", "x"]);
+const CHANGE_KEYS: ReadonlySet<string> = new Set(["e", "#", "s", "b", "x"]);
 
 /** The shortcuts that start a message. They need `mail.send`. */
 const SEND_KEYS: ReadonlySet<string> = new Set(["c", "r"]);
@@ -219,7 +220,12 @@ export function MailPane(props: MailPaneProps) {
 	const allStarred = listMode
 		? targetSummaries.length > 0 && targetSummaries.every((item) => item.starred)
 		: (openThread?.label_ids.includes("STARRED") ?? false);
+	const allReplyLater = listMode
+		? targetSummaries.length > 0 && targetSummaries.every((item) => item.label_ids.includes(REPLY_LATER))
+		: (openThread?.label_ids.includes(REPLY_LATER) ?? false);
 	const inSpamOrTrash = view.kind === "system" && (view.view === "spam" || view.view === "trash");
+	// The count of the label, or the rows on screen while the labels load.
+	const queued = Math.max(props.labelsById.get(REPLY_LATER)?.threads_total ?? 0, threads.length);
 
 	useShortcuts((event) => {
 		if (readOnly && CHANGE_KEYS.has(event.key)) return;
@@ -265,6 +271,13 @@ export function MailPane(props: MailPaneProps) {
 				void run(starred ? "unstar" : "star", ids);
 				break;
 			}
+			case "b": {
+				if (inSpamOrTrash) break;
+				const queuedNow = listMode ? (current?.label_ids.includes(REPLY_LATER) ?? false) : allReplyLater;
+				const ids = listMode ? (current ? [current.id] : []) : targets;
+				void run(queuedNow ? "replyLaterOff" : "replyLater", ids);
+				break;
+			}
 			case "x":
 				if (listMode && current) toggleSelect(current.id);
 				break;
@@ -302,6 +315,7 @@ export function MailPane(props: MailPaneProps) {
 				selection={selection}
 				anyUnread={anyUnread}
 				allStarred={allStarred}
+				allReplyLater={allReplyLater}
 				userLabels={userLabels}
 				listEmpty={threads.length === 0}
 				readOnly={readOnly}
@@ -330,6 +344,15 @@ export function MailPane(props: MailPaneProps) {
 						<span>{notice} An owner or an admin sets what each member can do.</span>
 					</p>
 				)
+			)}
+			{listMode && isReplyLaterView(view) && rights.send && threads.length > 0 && (
+				<div className="reply-later-bar">
+					<p>{queued === 1 ? "1 conversation waits" : `${queued} conversations wait`} for a reply.</p>
+					<Link className="button button-primary button-small" to={replyFocusPath(mailboxId)}>
+						<Icon name="send" size={16} />
+						Reply in focus view
+					</Link>
+				</div>
 			)}
 			<div className="mail-scroll" ref={scrollRef}>
 				{query.status === "missing" ? (

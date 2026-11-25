@@ -89,8 +89,10 @@ bytes, and the mailbox drops it as a copy.
 
 - A team mailbox has its own address. Inbound mail and local mail for that address go to the team
   mailbox, and not to the own mailbox of a member.
-- The members share one state: threads, labels, the read state, stars and the Sent view. A change by
-  one member shows for each member.
+- The members share one state: threads, labels, the read state, stars, Reply later and the Sent view.
+  A change by one member shows for each member.
+- A reply by a member removes `REPLY_LATER` from the thread for each member. A member with `mail.send`
+  and no `mail.modify` can reply, so the reply also removes the label for that member.
 - A send from a team mailbox has the name and the address of the team mailbox in `From`. The sent
   copy is in the team mailbox, with the member in `sent_by` (the id, the kind and the name at that
   time). `sent_by` is in the stored message only. The mail that leaves has no header that names the member.
@@ -281,7 +283,7 @@ of the message that it answers.
 
 ## Labels
 
-- System labels: `INBOX`, `STARRED`, `IMPORTANT`, `SENT`, `SPAM`, `TRASH`, `UNREAD`.
+- System labels: `INBOX`, `STARRED`, `IMPORTANT`, `REPLY_LATER`, `SENT`, `SPAM`, `TRASH`, `UNREAD`.
 - User labels have `lbl_` ids. Their names are unique without regard to case, so a user label
   cannot be named `inbox`. The comparison uses the NFC form in lowercase, for all scripts:
   `Café` and `CAFÉ` are the same name. The `label:` operator uses the same comparison.
@@ -289,6 +291,27 @@ of the message that it answers.
 - Archive removes `INBOX`. Trash adds `TRASH` and keeps the other labels, so a restore (remove
   `TRASH`) brings the thread back to where it was.
 - Views and counts hide messages in `SPAM` or `TRASH`, except the spam and trash views.
+
+### Reply later
+
+Reply later is a queue of the threads that need an answer. The queue is the system label
+`REPLY_LATER`, so it uses the label operations and needs no new operation.
+
+- `mail.modify_threads` adds `REPLY_LATER` to put a thread in the queue, and removes it to take the
+  thread out. `INBOX` does not change, so a thread that leaves the queue is still in the inbox.
+- A reply removes `REPLY_LATER` from each message of its thread. A reply is a `mail.send` with
+  `reply_to_message_id`. `MailboxDO.send` removes the label in the transaction that stores the
+  message, so a person, an agent and a team member get the same rule.
+- A send without `reply_to_message_id` does not remove the label, also when it joins the thread by its
+  subject. A forward is not an answer.
+- A thread is in the queue while one of its messages has the label. New mail in the thread does not
+  get the label, and the thread stays in the queue.
+- A thread in `SPAM` or `TRASH` keeps the label but is not in the queue or its count. A restore puts it
+  back in the queue.
+- `label:REPLY_LATER` lists the queue, newest first. `mail.list_labels` gives its count in
+  `threads_total`.
+- Migration 5 adds the label to each mailbox. A user label with the folded name `reply_later` first
+  gets its id in its name, because label names are unique.
 
 ## Auto labels
 
@@ -704,7 +727,7 @@ A disabled endpoint stays disabled. Delete it and create a new one.
 
 | State | Where | Notes |
 | --- | --- | --- |
-| Messages, threads, references, labels, message labels | `MailboxDO` SQLite | One object for each principal and each team mailbox, keyed by the mailbox id (`prn_…` or `tmb_…`) |
+| Messages, threads, references, labels, message labels | `MailboxDO` SQLite | One object for each principal and each team mailbox, keyed by the mailbox id (`prn_…` or `tmb_…`). Reply later is the system label `REPLY_LATER` (a row in `labels` from migration 5) and its rows in `message_labels` |
 | Who sent a message from the mailbox | `MailboxDO` table `messages`, column `sent_by_json` | The principal id, the kind and the name at the time of the send. Null for mail that arrived, and for mail sent before this column |
 | Search index | `MailboxDO` SQLite, FTS5 table `messages_fts` | Rebuildable from the messages |
 | Delivery status of sent mail | `MailboxDO` table `delivery` | |
@@ -773,6 +796,8 @@ Backups: not built yet. mbox/EML export comes with Takeout.
 - A reply from a mailbox that is not the mailbox of its conversation
 - For signatures: a signature for each member of a team mailbox, a signature with formatting or
   pictures, and a signature that `mail.send` adds
+- For Reply later: the order of the time of the add, a reminder time, a queue for each member of a team
+  mailbox, and `in:reply_later`
 - For team mailboxes: a read state for each member, assignment of a thread to a member, unread
   counts for each mailbox in `mail.list_mailboxes`, and a change of address (with an alias for the
   old address) or removal of a team mailbox

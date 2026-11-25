@@ -17,6 +17,7 @@ import { DeleteLabelDialog, NewLabelDialog } from "./LabelDialogs.tsx";
 import { MailPane } from "./MailPane.tsx";
 import { MailboxProvider, MailboxRightsProvider } from "./mailbox.tsx";
 import { defaultFromId, fromOptions, mailboxRights } from "./mailboxNav.ts";
+import { ReplyFocus } from "./ReplyFocus.tsx";
 import { ShortcutHelp } from "./ShortcutHelp.tsx";
 import { Sidebar } from "./Sidebar.tsx";
 import { useShortcuts } from "./useShortcuts.ts";
@@ -40,8 +41,11 @@ interface Composing {
 const MailboxSettings = lazyPage(() => import("./MailboxSettings.tsx").then((module) => module.MailboxSettings));
 
 interface MailAppProps {
-	/** `view` is null for the settings view of the mailbox. */
-	route: { mailboxId: string | null; view: MailView | null; threadId: string | null };
+	/**
+	 * `view` is null for the settings view of the mailbox. `focus` is true for the focus view of Reply later.
+	 * Its view is the Reply later view, so the sidebar shows Reply later as the current view.
+	 */
+	route: { mailboxId: string | null; view: MailView | null; threadId: string | null; focus?: boolean };
 	/** The mailboxes that the person can use, from the shell: the list stays when the mailbox changes. */
 	mailboxes: readonly Mailbox[] | null;
 	/** Loads the mailboxes again, after a change of the members of a team mailbox in its settings view. */
@@ -205,7 +209,18 @@ export function MailApp({
 						onDeleteLabel={(label) => setDialog({ type: "delete-label", label })}
 						onClose={onCloseNav}
 					/>
-					{view ? (
+					{view && route.focus ? (
+						<ReplyFocus
+							mailboxName={mailboxName}
+							labelsById={labelsById}
+							myAddress={myAddress}
+							refreshKey={refreshKey}
+							onChanged={onChanged}
+							onCompose={compose}
+							onShowHelp={() => setDialog({ type: "help" })}
+							composer={{ mailDomains: profile?.mail_domains ?? null, fromOptions: senders, signature }}
+						/>
+					) : view ? (
 						<MailPane
 							key={viewPath(view)}
 							mailboxName={mailboxName}

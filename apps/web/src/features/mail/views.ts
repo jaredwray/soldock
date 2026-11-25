@@ -6,17 +6,20 @@ export interface SystemNavItem {
 	view: SystemView;
 	title: string;
 	icon: IconName;
-	/** The label whose unread count shows next to the view. */
+	/** The label whose count shows next to the view. */
 	countLabel: string | null;
+	/** The count that shows: the unread threads, or each thread (for a list of work, such as Reply later). */
+	count: "unread" | "total";
 }
 
 export const SYSTEM_NAV: readonly SystemNavItem[] = [
-	{ view: "inbox", title: "Inbox", icon: "inbox", countLabel: "INBOX" },
-	{ view: "starred", title: "Starred", icon: "star", countLabel: null },
-	{ view: "sent", title: "Sent", icon: "send", countLabel: null },
-	{ view: "all", title: "All mail", icon: "allMail", countLabel: null },
-	{ view: "spam", title: "Spam", icon: "spam", countLabel: "SPAM" },
-	{ view: "trash", title: "Trash", icon: "trash", countLabel: null },
+	{ view: "inbox", title: "Inbox", icon: "inbox", countLabel: "INBOX", count: "unread" },
+	{ view: "reply-later", title: "Reply later", icon: "clock", countLabel: "REPLY_LATER", count: "total" },
+	{ view: "starred", title: "Starred", icon: "star", countLabel: null, count: "unread" },
+	{ view: "sent", title: "Sent", icon: "send", countLabel: null, count: "unread" },
+	{ view: "all", title: "All mail", icon: "allMail", countLabel: null, count: "unread" },
+	{ view: "spam", title: "Spam", icon: "spam", countLabel: "SPAM", count: "unread" },
+	{ view: "trash", title: "Trash", icon: "trash", countLabel: null, count: "unread" },
 ];
 
 /** The icon of a view, for the header row of Mail. */
@@ -28,6 +31,7 @@ export function viewIcon(view: MailView): IconName {
 
 const SYSTEM_QUERIES: Record<SystemView, string> = {
 	inbox: "in:inbox",
+	"reply-later": "label:REPLY_LATER",
 	starred: "is:starred",
 	sent: "in:sent",
 	spam: "in:spam",
@@ -41,6 +45,7 @@ const SYSTEM_LABEL_NAMES: Record<string, string | null> = {
 	INBOX: "Inbox",
 	STARRED: "Starred",
 	IMPORTANT: "Important",
+	REPLY_LATER: "Reply later",
 	SENT: "Sent",
 	SPAM: "Spam",
 	TRASH: "Trash",

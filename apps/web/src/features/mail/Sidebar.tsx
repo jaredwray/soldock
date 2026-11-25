@@ -245,7 +245,8 @@ function MailboxContents({
 			<ul className="nav-list">
 				{SYSTEM_NAV.map((item) => {
 					const active = view?.kind === "system" && view.view === item.view;
-					const unread = item.countLabel ? (byId.get(item.countLabel)?.threads_unread ?? 0) : 0;
+					const label = item.countLabel ? byId.get(item.countLabel) : undefined;
+					const count = (item.count === "total" ? label?.threads_total : label?.threads_unread) ?? 0;
 					return (
 						<li key={item.view}>
 							<Link
@@ -255,10 +256,10 @@ function MailboxContents({
 							>
 								<Icon name={item.icon} />
 								<span className="nav-name">{item.title}</span>
-								{unread > 0 && (
+								{count > 0 && (
 									<span className="nav-count">
-										{unread}
-										<span className="visually-hidden"> unread</span>
+										{count}
+										<span className="visually-hidden">{item.count === "total" ? " conversations" : " unread"}</span>
 									</span>
 								)}
 							</Link>

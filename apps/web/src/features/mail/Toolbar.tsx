@@ -20,6 +20,8 @@ interface ToolbarProps {
 	selection: "none" | "some" | "all";
 	anyUnread: boolean;
 	allStarred: boolean;
+	/** True when each target is in Reply later. */
+	allReplyLater: boolean;
 	userLabels: readonly Label[];
 	listEmpty: boolean;
 	/** True in the mailbox of an agent: no selection and no actions. */
@@ -37,7 +39,7 @@ interface ToolbarProps {
  * the search box, Refresh and the settings of the mailbox.
  */
 export function Toolbar(props: ToolbarProps) {
-	const { view, mode, targetCount, anyUnread, allStarred, userLabels, onAction } = props;
+	const { view, mode, targetCount, anyUnread, allStarred, allReplyLater, userLabels, onAction } = props;
 	const inSpam = view.kind === "system" && view.view === "spam";
 	const inTrash = view.kind === "system" && view.view === "trash";
 	const hasTargets = !props.readOnly && targetCount > 0;
@@ -81,6 +83,15 @@ export function Toolbar(props: ToolbarProps) {
 							shortcut="s"
 							filled={allStarred}
 							onClick={() => onAction(allStarred ? "unstar" : "star")}
+						/>
+					)}
+					{!inSpam && !inTrash && (
+						<ToolButton
+							icon="clock"
+							label={allReplyLater ? "Remove from Reply later" : "Reply later"}
+							shortcut="b"
+							pressed={allReplyLater}
+							onClick={() => onAction(allReplyLater ? "replyLaterOff" : "replyLater")}
 						/>
 					)}
 					{!inSpam && !inTrash && userLabels.length > 0 && (
@@ -138,18 +149,26 @@ function ToolButton({
 	label,
 	shortcut,
 	filled,
+	pressed,
 	onClick,
 }: {
 	icon: IconName;
 	label: string;
 	shortcut?: string;
 	filled?: boolean;
+	/** A toggle that is on. The label tells the change, so a screen reader also hears the state. */
+	pressed?: boolean;
 	onClick: () => void;
 }) {
+	const className = filled
+		? "icon-button icon-button-star"
+		: pressed
+			? "icon-button icon-button-pressed"
+			: "icon-button";
 	return (
 		<button
 			type="button"
-			className={filled ? "icon-button icon-button-star" : "icon-button"}
+			className={className}
 			aria-label={label}
 			title={shortcut ? `${label} (${shortcut})` : label}
 			aria-keyshortcuts={shortcut === "#" ? "Shift+3" : shortcut}

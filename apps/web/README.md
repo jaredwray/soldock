@@ -145,7 +145,7 @@ MCP clients. The app has no UI-only path.
   - The loading, empty and error states of the list and of the thread view are in the center of the
     page. The empty state and the error state have an icon on a tile.
   - The toolbar acts on the selection or on the open thread: archive, report spam, trash, mark as
-    read or unread, star, apply a label and remove a label. The spam and trash views show "Not
+    read or unread, star, Reply later, apply a label and remove a label. The spam and trash views show "Not
     spam" and "Restore". An action that moves threads shows a toast with "Undo".
   - The thread view shows each message with its sender, recipients, date, labels, body,
     attachments and, for sent mail, the delivery status of each recipient. External mail gets an
@@ -166,7 +166,9 @@ MCP clients. The app has no UI-only path.
     brings a new unread message into the open thread, the app removes UNREAD again. The app keeps
     the set of unread message ids that it marked, so it does not send the same change twice.
   - The composer is a modal dialog. It does new mail, reply, reply all and forward, with
-    attachments. One idempotency key for each composed message makes a retry safe.
+    attachments. One idempotency key for each composed message makes a retry safe. The focus view of
+    Reply later shows the same composer in the page, under its conversation (`frame="inline"`). The
+    inline composer gives the focus to its first field, as the dialog does, and Escape closes it.
   - Each field label of the composer ends with a colon, for example `To:` and `Subject:`. Each row
     sizes its own label, so the text field starts right after the label.
   - The first row is **From:**. In a new message and a forward, it is a list
@@ -243,9 +245,39 @@ MCP clients. The app has no UI-only path.
     the line `Attachments (not included): …`. Inline images are not in this line.
   - The app polls `mail.get_profile` every 15 seconds while the tab is visible, and on window
     focus. When the version changes, it gets the labels, the list and the open thread again.
-  - Keyboard shortcuts: `j`, `k`, `o`, Enter, `u`, `e`, `#`, `s`, `x`, `c`, `r`, `/` and `?`. Press `?`
+  - Keyboard shortcuts: `j`, `k`, `o`, Enter, `u`, `e`, `#`, `s`, `b`, `x`, `c`, `r`, `/` and `?`. Press `?`
     to see the list, in four groups (`SHORTCUT_GROUPS` in
     [`ShortcutHelp.tsx`](src/features/mail/ShortcutHelp.tsx)). Shortcuts do not work while the focus is in a text field.
+- **Reply later** (`/mail/reply-later`, [`replyLater.ts`](src/features/mail/replyLater.ts)). A queue of the
+  conversations that need an answer. It is the system label `REPLY_LATER`, so the server keeps it, and an
+  agent uses it with the same operations ([mail README](../dock/src/mail/README.md#reply-later)).
+  - The **Reply later** button of the toolbar (a clock) and the `b` key put the selection, the row at the
+    cursor or the open thread in the queue. The same control takes them out, with a toast and **Undo**.
+    The button is pressed while each target is in the queue. A conversation stays in the inbox.
+  - The **Reply later** view is after Inbox in the sidebar. Its count is the number of conversations in the
+    queue, not the unread number. A row in a different view shows a clock when its conversation is in
+    the queue.
+  - Above the list of the view, a bar says how many conversations wait and links to the focus view. The
+    bar shows only to a person who can send from the mailbox.
+- **Focus view of Reply later** (`/mail/reply-later/focus`, also under the path of a shared or agent
+  mailbox, [`ReplyFocus.tsx`](src/features/mail/ReplyFocus.tsx)). Only the conversations in the queue, one
+  after the other, each in a card with its thread. The sidebar stays, with Reply later as the current view.
+  - The header has a link back to the Reply later view, the title and the number of conversations left.
+  - Reply, Reply all and Forward are under each open message, as in the thread view. Reply and Reply all
+    open the composer in the card. Forward opens the composer dialog: a forward does not answer.
+  - A sent reply takes the conversation out of the queue: the server removes the label. The card goes, the
+    next card becomes active, and its reply opens with the focus in the editor.
+  - **Done** takes a conversation out without a reply, with a toast and **Undo**. It shows while the card
+    has no open reply, so a click never discards text.
+  - The cards keep their order when the queue refreshes. A new conversation goes at the end. A card with
+    an open reply stays, also when the conversation left the queue, for example after a reply by a
+    different member (`mergeQueue`).
+  - The active card has a bar at its left and is marked as read, as an open thread is. `j` and `k` move
+    the active card, `r` opens its reply, `b` is Done (not while its reply is open), `c` composes, `u`
+    goes back to the Reply later view, and `?` shows the shortcuts.
+  - Each card gets its thread once, and again only when a new message arrives in it.
+  - The empty state says that no conversation waits, and links to the inbox.
+  - A person who cannot change the mailbox sees no Done, and a person who cannot send sees no reply.
 - **Mailbox tree.** When the person can use more than the own mailbox, the sidebar shows a row for
   each mailbox (`mail.list_mailboxes`, `mailboxNav.ts`). "My mailbox" is first, then the shared
   (team) mailboxes, then the agent mailboxes. The sidebar has no group headings.
@@ -322,7 +354,7 @@ MCP clients. The app has no UI-only path.
   - A notice above the list says that the mailbox is read only and that the audit log records the lists
     and the conversations that the person opens.
   - The views show no Compose button, no select boxes, no toolbar actions, no star control, no label
-    changes and no Reply or Forward. The shortcuts `e`, `#`, `s`, `x`, `c` and `r` do nothing.
+    changes and no Reply or Forward. The shortcuts `e`, `#`, `s`, `b`, `x`, `c` and `r` do nothing.
   - An open thread stays unread: the app does not mark it as read, so the agent still finds its new
     mail. The server refuses each change and each send in the mailbox of an agent.
   - **Admin › Members** has a **Read the mail of …** link on the page of each agent.

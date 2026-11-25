@@ -7,6 +7,7 @@ import { isAgentMailbox, type MailView, threadPath } from "../../routes.ts";
 import { AUTO_MARK_TEXT, AUTO_MARK_TITLE } from "./autoLabels.ts";
 import type { ListState } from "./data.ts";
 import { useMailboxId, useReadOnlyMailbox } from "./mailbox.tsx";
+import { isReplyLaterView, REPLY_LATER } from "./replyLater.ts";
 import { isUserLabelId } from "./views.ts";
 
 interface ThreadListProps {
@@ -233,6 +234,12 @@ function ThreadRow({
 									<span className="visually-hidden"> more</span>
 								</span>
 							)}
+						</span>
+					)}
+					{thread.label_ids.includes(REPLY_LATER) && !isReplyLaterView(view) && (
+						<span className="thread-attachment" title="Reply later">
+							<Icon name="clock" size={16} />
+							<span className="visually-hidden">Reply later, </span>
 						</span>
 					)}
 					{thread.has_attachments && (

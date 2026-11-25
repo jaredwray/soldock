@@ -568,6 +568,38 @@ describe("mail in a team mailbox", () => {
 		).toBe(false);
 	});
 
+	it("shares Reply later among the members, and a reply by a member without mail.modify clears it", async () => {
+		const support = await createSupport();
+		await owner.call("mail.send", { to: ["support@dock.test"], subject: "Order 42", text: "Where is it?" });
+		await drainOutbox(owner.id);
+		const [thread] = (await ada.call("mail.list_threads", { mailbox_id: support.id })).threads;
+		const threadId = thread?.id as string;
+		await ada.call("mail.modify_threads", {
+			mailbox_id: support.id,
+			thread_ids: [threadId],
+			add_label_ids: ["REPLY_LATER"],
+		});
+		expect(await subjects(bot, support.id, "label:REPLY_LATER")).toEqual(["Order 42"]);
+		expect(await subjects(ada, undefined, "label:REPLY_LATER")).toEqual([]);
+
+		// The bot can read and send, but not change labels. Its reply still takes the thread out of the queue.
+		await owner.call("directory.add_team_mailbox_member", {
+			mailbox_id: support.id,
+			principal_id: bot.id,
+			scopes: ["mail.read", "mail.send"],
+		});
+		const remove = { mailbox_id: support.id, thread_ids: [threadId], remove_label_ids: ["REPLY_LATER"] };
+		expect(await code(bot.call("mail.modify_threads", remove))).toBe("forbidden");
+		const [message] = (await bot.call("mail.get_thread", { mailbox_id: support.id, thread_id: threadId })).messages;
+		await bot.call("mail.send", {
+			mailbox_id: support.id,
+			to: ["owner@dock.test"],
+			text: "It ships today.",
+			reply_to_message_id: message?.id as string,
+		});
+		expect(await subjects(ada, support.id, "label:REPLY_LATER")).toEqual([]);
+	});
+
 	it("sends from the team address, records which member sent it, and threads the reply in the team mailbox", async () => {
 		const support = await createSupport();
 		const email = await fakeEmailService(support.id);

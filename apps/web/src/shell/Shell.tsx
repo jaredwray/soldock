@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useSession } from "../features/auth/session.tsx";
 import { useMailboxes } from "../features/mail/data.ts";
 import { MailApp } from "../features/mail/MailApp.tsx";
+import { REPLY_LATER_VIEW } from "../features/mail/replyLater.ts";
 import { Icon } from "../lib/icons.tsx";
 import { lazyPage } from "../lib/lazyPage.tsx";
 import { setPageTitle } from "../lib/pageTitle.ts";
@@ -117,6 +118,7 @@ export function Shell() {
 		switch (route.page) {
 			case "mail":
 			case "mail-settings":
+			case "mail-reply-focus":
 				// The effect above replaces the path. Until then, nothing shows.
 				if (ownPath) return null;
 				// The key gives each mailbox its own mail app, so the data of one never shows in a different one. The
@@ -124,7 +126,13 @@ export function Shell() {
 				return (
 					<MailApp
 						key={route.mailboxId ?? "own"}
-						route={route.page === "mail" ? route : { mailboxId: route.mailboxId, view: null, threadId: null }}
+						route={
+							route.page === "mail"
+								? route
+								: route.page === "mail-reply-focus"
+									? { mailboxId: route.mailboxId, view: REPLY_LATER_VIEW, threadId: null, focus: true }
+									: { mailboxId: route.mailboxId, view: null, threadId: null }
+						}
 						mailboxes={mailboxes}
 						onMailboxesChanged={reloadMailboxes}
 						expandedMailboxes={expandedMailboxes}

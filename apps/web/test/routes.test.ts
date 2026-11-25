@@ -18,6 +18,7 @@ import {
 	ownMailboxPath,
 	parseRoute,
 	profilePath,
+	replyFocusPath,
 	SETTINGS_SECTIONS,
 	settingsPath,
 	threadPath,
@@ -26,6 +27,7 @@ import {
 
 const VIEWS: readonly MailView[] = [
 	{ kind: "system", view: "inbox" },
+	{ kind: "system", view: "reply-later" },
 	{ kind: "system", view: "starred" },
 	{ kind: "system", view: "sent" },
 	{ kind: "system", view: "spam" },
@@ -99,6 +101,22 @@ describe("routes", () => {
 		expect(viewPath({ kind: "system", view: "inbox" }, AGENT)).toBe(`/mail/agent/${AGENT}/inbox`);
 		expect(parseRoute(`/mail/agent/${AGENT}`)).toEqual({ page: "redirect", to: `/mail/agent/${AGENT}/inbox` });
 		expect([AGENT, TEAM, null].map(isAgentMailbox)).toEqual([true, false, false]);
+	});
+
+	// The focus view of Reply later is a path under the Reply later view. A thread of that view keeps its path.
+	it("parses the focus path of each mailbox back to the focus view, and never reads focus as a thread", () => {
+		for (const mailboxId of [null, TEAM, AGENT]) {
+			expect(parseRoute(replyFocusPath(mailboxId))).toEqual({ page: "mail-reply-focus", mailboxId });
+		}
+		expect(replyFocusPath()).toBe("/mail/reply-later/focus");
+		expect(parseRoute(`/mail/reply-later/${THREAD}`)).toEqual({
+			page: "mail",
+			mailboxId: null,
+			view: { kind: "system", view: "reply-later" },
+			threadId: THREAD,
+		});
+		expect(parseRoute("/mail/reply-later/focus/more")).toEqual({ page: "not-found" });
+		expect(ownMailboxPath(parseRoute(replyFocusPath(AGENT)), AGENT)).toBe("/mail/reply-later/focus");
 	});
 
 	// The settings view of a mailbox has its own path under the mailbox, so a reload and a deep link stay on it.

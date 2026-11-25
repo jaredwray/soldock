@@ -22,6 +22,8 @@ const ACTIONS: readonly [action: MailAction, add: string[], remove: string[], be
 	["unread", ["UNREAD"], [], ["INBOX"]],
 	["star", ["STARRED"], [], ["INBOX"]],
 	["unstar", [], ["STARRED"], ["INBOX", "STARRED"]],
+	["replyLater", ["REPLY_LATER"], [], ["INBOX"]],
+	["replyLaterOff", [], ["REPLY_LATER"], ["INBOX", "REPLY_LATER"]],
 	[{ label: "lbl_1" }, ["lbl_1"], [], ["INBOX"]],
 	[{ unlabel: "lbl_1" }, [], ["lbl_1"], ["INBOX", "lbl_1"]],
 ];
@@ -72,6 +74,9 @@ describe("actions", () => {
 			[[], inbox, false],
 			[["INBOX", "TRASH"], inbox, false],
 			[["INBOX", "SPAM"], inbox, false],
+			[["REPLY_LATER"], { kind: "system", view: "reply-later" }, true],
+			[["INBOX"], { kind: "system", view: "reply-later" }, false],
+			[["REPLY_LATER", "TRASH"], { kind: "system", view: "reply-later" }, false],
 			[["STARRED"], { kind: "system", view: "starred" }, true],
 			[["STARRED", "TRASH"], { kind: "system", view: "starred" }, false],
 			[["SENT"], { kind: "system", view: "sent" }, true],
