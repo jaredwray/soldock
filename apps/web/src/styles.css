@@ -2433,7 +2433,6 @@ fieldset {
 	position: relative;
 	display: flex;
 	align-items: flex-start;
-	min-height: 50px;
 	padding: 14px 10px 0 58px;
 }
 
@@ -2552,7 +2551,9 @@ fieldset {
 	min-width: 0;
 }
 
+/* The sender can shrink, so a long name ends with an ellipsis and the address and the date keep their place. */
 .message-expanded .message-sender {
+	flex: 0 1 auto;
 	max-width: none;
 }
 
@@ -2601,16 +2602,15 @@ fieldset {
 	padding: 0 10px 20px 58px;
 }
 
-/* The recipients are under the name of the sender, next to the avatar. The header is 50px high, and
-   the name is 22px high, so the list moves up 14px. The list is positioned, so it is above the toggle,
-   which covers the header, and its text stays selectable. */
+/* The recipients are under the name and the address of the sender, next to the avatar. The avatar is out
+   of the flow, so the header is as high as its text, and the list starts on the next line. The minimum
+   height keeps the content below the avatar, which is 50px from the top. */
 .message-recipients {
-	position: relative;
 	display: flex;
 	flex-wrap: wrap;
 	gap: 0 14px;
 	min-height: 14px;
-	margin: -14px 0 12px;
+	margin: 0 0 12px;
 	color: var(--muted-foreground);
 	font-size: 13px;
 	line-height: 20px;
@@ -4993,6 +4993,11 @@ fieldset {
 	/* The body of a message uses the full width, under the avatar. */
 	.message-content {
 		padding-left: 10px;
+	}
+
+	/* The recipients use the full width, so the header is at least as high as the avatar. */
+	.message-expanded .message-header {
+		min-height: 50px;
 	}
 
 	.message-recipients {
