@@ -16,8 +16,8 @@ async function submit(page: Page, button: string): Promise<string> {
 // An admin creates a person and an agent in Admin › Members. A person gets no API key. An agent gets a first
 // key, which shows once. The form has no scopes: each mailbox, room and drive decides what the agent can do. The
 // page of the agent shows that access read only, with a link to the place where a person changes it, and a
-// membership works at once with the key from before.
-test("an admin creates a person with no API key, and an agent with a first key, and reads the access of the agent", async ({
+// membership works at once with the key from before. The page of the person shows the access of the person too.
+test("an admin creates a person with no API key, and an agent with a first key, and reads the access of each", async ({
 	browser,
 }) => {
 	const context = await signIn(browser, "tomasz");
@@ -105,6 +105,21 @@ test("an admin creates a person with no API key, and an agent with a first key, 
 		await expect(page).toHaveURL(/\/admin\/members$/);
 		await expect(page.getByRole("button", { name: /^Agents/ })).toHaveAttribute("aria-pressed", "true");
 		await expect(page.getByRole("link", { name: new RegExp(`^${agent}`) })).toBeFocused();
+
+		// An admin also reads the access of a person. A person has no account scopes and no key list there.
+		const personId = ids[0];
+		const shared = await context.request.post(`/api/v1/directory/team-mailboxes/${mailbox.id}/members`, {
+			headers: { origin: BASE_URL },
+			data: { principal_id: personId, scopes: ["mail.read"] },
+		});
+		expect(shared.ok(), await shared.text()).toBe(true);
+		await page.goto(`/admin/members/${personId}`);
+		const personAccess = page.getByRole("main").getByRole("region", { name: "Access" });
+		await expect(personAccess.getByRole("listitem").filter({ hasText: mailbox.display_name })).toContainText(
+			"Can read",
+		);
+		await expect(personAccess).toContainText("The person can do each thing in their own mailbox and drive.");
+		await expect(personAccess.getByText("Live API keys")).toHaveCount(0);
 	} finally {
 		if (mailboxId) {
 			for (const id of ids) {

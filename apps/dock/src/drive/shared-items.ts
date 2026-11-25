@@ -21,13 +21,13 @@ export interface SharedItemEntry {
  */
 export async function sharedItemsOfPrincipal(
 	env: Pick<Env, "DRIVE_SPACE" | "DIRECTORY">,
-	principal: { id: string; display_name: string },
+	principal: { id: string; kind: "human" | "agent"; display_name: string },
 	limit: number,
 ): Promise<{ items: SharedItemEntry[]; truncated: boolean }> {
 	const ctxOf = (spaceId: string): SpaceCall => ({
 		spaceId,
 		// A service account is an agent in the records of Drive.
-		actor: { principal_id: principal.id, kind: "agent", display_name: principal.display_name },
+		actor: { principal_id: principal.id, kind: principal.kind, display_name: principal.display_name },
 		admin: false,
 	});
 	const page = accept(
@@ -79,15 +79,16 @@ export async function sharedDriveRolesOf(
 }
 
 /**
- * The shared drives of `sharedDrivesOfPrincipal` for an agent or a service account, with each drive confirmed
- * when the account scopes of the agent do not have `drive.read` and `drive.write`. Only such an account can
- * have a membership that a drive did not narrow. Each other account gets the rows of the index.
+ * The shared drives of `sharedDrivesOfPrincipal` for a member, with each drive confirmed for an agent or a
+ * service account whose account scopes do not have `drive.read` and `drive.write`. Only such an account can have
+ * a membership that a drive did not narrow. A person and each other account get the rows of the index.
  */
-export async function confirmedSharedDrivesOfAgent(
+export async function confirmedSharedDrivesOf(
 	env: Pick<Env, "DRIVE_SPACE" | "DIRECTORY">,
-	agent: { id: string; display_name: string; agent_scopes: readonly string[] },
+	agent: { id: string; kind: "human" | "agent"; display_name: string; agent_scopes: readonly string[] },
 ): Promise<{ id: string; name: string; role: SharedDriveRole }[]> {
 	const listed = await sharedDrivesOfPrincipal(env.DIRECTORY, agent.id);
+	if (agent.kind !== "agent") return listed;
 	if (agent.agent_scopes.includes("drive.read") && agent.agent_scopes.includes("drive.write")) return listed;
 	const roles = await sharedDriveRolesOf(
 		env,

@@ -1089,6 +1089,7 @@ describe("the access of a service account", () => {
 		});
 		expect(access).toEqual({
 			principal_id: service.id,
+			kind: "service",
 			team_mailboxes: [
 				{
 					id: team_mailbox.id,

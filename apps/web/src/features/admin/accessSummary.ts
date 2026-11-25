@@ -3,11 +3,12 @@ import { adminPath, chatPath, itemPath, sharedDrivePath } from "../../routes.ts"
 import { memberScopes, scopesText } from "./mailboxScopes.ts";
 import { roomLabel } from "./roomLabel.ts";
 
-// The read-only Access summary of an agent or a service account on its page in Admin › Members. Each team
-// mailbox, room and shared drive decides what the account can do there, and the summary links to the place
-// where a person changes that access. The module has no DOM and no network, so apps/web/test checks it.
+// The read-only Access summary of a member (a person, an agent or a service account) on its page in Admin ›
+// Members. Each team mailbox, room and shared drive decides what the member can do there, and the summary links
+// to the place where a person changes that access. The module has no DOM and no network, so apps/web/test
+// checks it.
 
-type Access = OutputOf<"directory.get_agent_access">;
+type Access = OutputOf<"directory.get_member_access">;
 
 /** Who looks at the summary: the links depend on what the person can open. */
 export interface AccessViewer {
@@ -16,7 +17,7 @@ export interface AccessViewer {
 	admin: boolean;
 }
 
-/** One row of the summary: a name, what the account can do there, and the page that changes it, or null. */
+/** One row of the summary: a name, what the member can do there, and the page that changes it, or null. */
 export interface AccessRow {
 	key: string;
 	name: string;
@@ -91,7 +92,7 @@ export function roomRows(access: Access): AccessRow[] {
 }
 
 /**
- * The items that others shared directly with the account, with the role. The person who owns the drive of an
+ * The items that others shared directly with the member, with the role. The person who owns the drive of an
  * item opens it and changes its sharing there. Each other person gets no link.
  */
 export function sharedItemRows(access: Access, viewer: AccessViewer): AccessRow[] {

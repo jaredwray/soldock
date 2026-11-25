@@ -9,10 +9,11 @@ import {
 } from "../src/features/admin/accessSummary.ts";
 import { roomLabel } from "../src/features/admin/roomLabel.ts";
 
-type Access = OutputOf<"directory.get_agent_access">;
+type Access = OutputOf<"directory.get_member_access">;
 
 const access: Access = {
 	principal_id: "prn_agent",
+	kind: "agent",
 	team_mailboxes: [
 		{ id: "tmb_support", display_name: "Support", address: "support@dock.test", scopes: ["mail.read", "mail.send"] },
 		{ id: "tmb_billing", display_name: "Billing", address: "billing@dock.test", scopes: ["mail.read"] },

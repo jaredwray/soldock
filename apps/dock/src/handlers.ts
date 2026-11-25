@@ -1,17 +1,17 @@
 // The operation handlers and the resource change feeds of each domain, joined, and the subscriptions of
 // MCP Events. The composition root and the tests use these maps.
-import { AGENT_ACCESS_LIMITS } from "@asterra/contracts";
+import { AGENT_ACCESS_LIMITS, type OutputOf } from "@asterra/contracts";
 import { aiHandlers } from "./ai/index.ts";
 import {
 	chatHandlers,
 	chatWatchers,
-	confirmedRoomsOfAgent,
+	confirmedRoomsOf,
 	invokeSlashCommand,
 	removeDeletedPrincipalFromRooms,
 } from "./chat/index.ts";
 import { docsHandlers } from "./docs/index.ts";
 import {
-	confirmedSharedDrivesOfAgent,
+	confirmedSharedDrivesOf,
 	driveHandlers,
 	driveWatchers,
 	enableDriveEvents,
@@ -42,28 +42,12 @@ export const handlers: HandlerMap<CallContext> = {
 	},
 	// The identity handler checks the access and reads the team mailboxes and the keys. The shared drives
 	// and the rooms come from the indexes of Drive and Chat. The items shared directly come from the drive of
-	// the agent, and the drive of each item checks the access of the agent again.
-	//
-	// The indexes can have a membership from before migration 0031 that its room or its drive did not narrow.
-	// Only an account without both scopes of the product can have one. For such an account, each room and each
-	// drive of the answer confirms the membership, so the answer has the narrowed roles.
+	// the member, and the drive of each item checks the access of the member again.
+	async "directory.get_member_access"(call, input) {
+		return withResources(call, await identityHandlers["directory.get_member_access"](call, input));
+	},
 	async "directory.get_agent_access"(call, input) {
-		const result = await identityHandlers["directory.get_agent_access"](call, input);
-		const agent = await getPrincipal(call.env.DIRECTORY, result.principal_id);
-		if (!agent) throw new OperationError("not_found", "No agent has that id.");
-		const [drives, rooms, shared] = await Promise.all([
-			confirmedSharedDrivesOfAgent(call.env, agent),
-			confirmedRoomsOfAgent(call.env, agent, AGENT_ACCESS_LIMITS.rooms),
-			sharedItemsOfPrincipal(call.env, agent, AGENT_ACCESS_LIMITS.sharedItems),
-		]);
-		return {
-			...result,
-			shared_drives: drives,
-			chat_rooms: rooms.rooms,
-			chat_rooms_truncated: rooms.truncated,
-			drive_shared_items: shared.items,
-			drive_shared_items_truncated: shared.truncated,
-		};
+		return withResources(call, await identityHandlers["directory.get_agent_access"](call, input));
 	},
 	async "directory.delete_principal"(call, input) {
 		const result = await identityHandlers["directory.delete_principal"](call, input);
@@ -89,6 +73,31 @@ export const handlers: HandlerMap<CallContext> = {
 		return result;
 	},
 };
+
+/**
+ * The access of a member with its shared drives, its rooms and the items shared directly with it.
+ *
+ * The indexes can have a membership from before migration 0031 that its room or its drive did not narrow. Only
+ * an agent or a service account without both scopes of the product can have one. For such an account, each room
+ * and each drive of the answer confirms the membership, so the answer has the narrowed roles.
+ */
+async function withResources(call: CallContext, access: OutputOf<"directory.get_member_access">) {
+	const member = await getPrincipal(call.env.DIRECTORY, access.principal_id);
+	if (!member) throw new OperationError("not_found", "No member has that id.");
+	const [drives, rooms, shared] = await Promise.all([
+		confirmedSharedDrivesOf(call.env, member),
+		confirmedRoomsOf(call.env, member, AGENT_ACCESS_LIMITS.rooms),
+		sharedItemsOfPrincipal(call.env, member, AGENT_ACCESS_LIMITS.sharedItems),
+	]);
+	return {
+		...access,
+		shared_drives: drives,
+		chat_rooms: rooms.rooms,
+		chat_rooms_truncated: rooms.truncated,
+		drive_shared_items: shared.items,
+		drive_shared_items_truncated: shared.truncated,
+	};
+}
 
 /** The change feed of each resource kind, for `subscriptions/listen` on MCP. */
 export const watchers: WatcherMap<CallContext> = {

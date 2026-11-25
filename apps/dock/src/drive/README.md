@@ -277,7 +277,7 @@ This table is for a personal drive. A shared drive has no `owner`. Its roles are
 - The handler does not ask the drive of a deleted principal (`directory.delete_principal`). That
   drive stays in storage, but nobody can open it, so its items leave the lists.
 - `sharedItemsOfPrincipal` reads the `shared` pointers of a principal with the same rules, for the access
-  view of an agent or a service account (`directory.get_agent_access`). It acts as that principal, so each
+  view of a member (`directory.get_member_access`). It acts as that principal, so each
   drive checks the access of the principal, not of the person who asks. It checks no access of the caller:
   the identity handler does that first.
 - An agent or a service account gets these views as a person does. No list on its account names its
@@ -376,8 +376,8 @@ once, with each of its keys, and nothing changes on its account.
     throws, and the drive serves no call until the step succeeds.
   - For an agent without `drive.read` on its account, `drive.list_shared_drives` asks each drive of its
     page (`sharedDriveRolesOf`). So a drive that did not narrow never shows in the list.
-    `directory.get_agent_access` asks each shared drive of an agent without `drive.read` or `drive.write`
-    (`confirmedSharedDrivesOfAgent`).
+    `directory.get_member_access` asks each shared drive of an agent without `drive.read` or `drive.write`
+    (`confirmedSharedDrivesOf`).
 
 ### The index in D1
 

@@ -334,16 +334,17 @@ export async function roomRolesOf(
 }
 
 /**
- * The rooms of `roomsOfPrincipal` for an agent or a service account, with each room confirmed when the account
- * scopes of the agent do not have `chat.read` and `chat.write`. Only such an account can have a membership that
- * a room did not narrow. Each other account gets the rows of the index.
+ * The rooms of `roomsOfPrincipal` for a member, with each room confirmed for an agent or a service account whose
+ * account scopes do not have `chat.read` and `chat.write`. Only such an account can have a membership that a
+ * room did not narrow. A person and each other account get the rows of the index.
  */
-export async function confirmedRoomsOfAgent(
+export async function confirmedRoomsOf(
 	env: Pick<Env, "CHAT_ROOM" | "DIRECTORY">,
-	agent: { id: string; display_name: string; agent_scopes: readonly string[] },
+	agent: { id: string; kind: "human" | "agent"; display_name: string; agent_scopes: readonly string[] },
 	limit: number,
 ): Promise<{ rooms: PrincipalRoom[]; truncated: boolean }> {
 	const listed = await roomsOfPrincipal(env.DIRECTORY, agent.id, limit);
+	if (agent.kind !== "agent") return listed;
 	if (agent.agent_scopes.includes("chat.read") && agent.agent_scopes.includes("chat.write")) return listed;
 	const roles = await roomRolesOf(
 		env,

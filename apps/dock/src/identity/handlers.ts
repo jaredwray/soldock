@@ -107,6 +107,7 @@ type IdentityOperation =
 	| "directory.remove_team_mailbox_member"
 	| "directory.create_service_account"
 	| "directory.list_service_account_activity"
+	| "directory.get_member_access"
 	| "directory.get_agent_access";
 
 /**
@@ -126,6 +127,52 @@ async function agentToManage(call: CallContext, principalId: string, action: str
 		);
 	}
 	return target;
+}
+
+/**
+ * The member whose access the caller reads. A person: owners and admins only, because the memberships of a
+ * person say what the person reads. An agent or a service account: the rule of `agentToManage`. Throws
+ * `not_found` for a principal that is not in the directory, and `forbidden` for each other caller.
+ */
+async function memberToRead(call: CallContext, principalId: string): Promise<PrincipalRecord> {
+	const target = await getPrincipal(call.env.DIRECTORY, principalId);
+	if (!target) throw new OperationError("not_found", "No member has that id.");
+	if (target.kind === "agent") return agentToManage(call, principalId, "read the access");
+	if (!isAdmin(call.caller)) {
+		throw new OperationError("forbidden", "Only an owner or an admin can read the access of a person.");
+	}
+	return target;
+}
+
+/**
+ * The access of a member that the identity module holds: its team mailboxes, and for an agent or a service
+ * account its account scopes and its live API keys. A person has no account scopes, and each key of a person
+ * has its own scopes, so both lists are empty for a person. The composition root adds the shared drives, the
+ * rooms and the items shared directly (`src/handlers.ts`).
+ */
+async function accessOf(call: CallContext, target: PrincipalRecord) {
+	const agent = target.kind === "agent";
+	const [mailboxes, keys] = await Promise.all([
+		teamMailboxesOf(call.env.DIRECTORY, target.id),
+		agent ? liveApiKeys(call.env.DIRECTORY, target.id) : [],
+	]);
+	return {
+		principal_id: target.id,
+		kind: target.service ? ("service" as const) : target.kind,
+		team_mailboxes: mailboxes.map((mailbox) => ({
+			id: mailbox.id,
+			display_name: mailbox.display_name,
+			address: mailbox.address,
+			scopes: mailbox.scopes,
+		})),
+		shared_drives: [],
+		chat_rooms: [],
+		chat_rooms_truncated: false,
+		drive_shared_items: [],
+		drive_shared_items_truncated: false,
+		tokens: keys.map((key) => ({ key_id: key.id, label: key.label, expires_at: key.expires_at })),
+		scopes: agent ? target.agent_scopes : [],
+	};
 }
 
 /**
@@ -460,28 +507,12 @@ export const identityHandlers: Pick<HandlerMap<CallContext>, IdentityOperation |
 	},
 
 	// The composition root adds the shared drives and the rooms (`src/handlers.ts`).
+	async "directory.get_member_access"(call, input) {
+		return accessOf(call, await memberToRead(call, input.principal_id));
+	},
+
 	async "directory.get_agent_access"(call, input) {
-		const target = await agentToManage(call, input.principal_id, "read the access");
-		const [mailboxes, keys] = await Promise.all([
-			teamMailboxesOf(call.env.DIRECTORY, target.id),
-			liveApiKeys(call.env.DIRECTORY, target.id),
-		]);
-		return {
-			principal_id: target.id,
-			team_mailboxes: mailboxes.map((mailbox) => ({
-				id: mailbox.id,
-				display_name: mailbox.display_name,
-				address: mailbox.address,
-				scopes: mailbox.scopes,
-			})),
-			shared_drives: [],
-			chat_rooms: [],
-			chat_rooms_truncated: false,
-			drive_shared_items: [],
-			drive_shared_items_truncated: false,
-			tokens: keys.map((key) => ({ key_id: key.id, label: key.label, expires_at: key.expires_at })),
-			scopes: target.agent_scopes,
-		};
+		return accessOf(call, await agentToManage(call, input.principal_id, "read the access"));
 	},
 
 	async "directory.update_agent_policy"(call, input) {

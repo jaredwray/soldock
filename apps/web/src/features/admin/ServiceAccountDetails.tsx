@@ -3,11 +3,11 @@ import { useState } from "react";
 import { fullDate, shortDate } from "../../lib/format.ts";
 import { isOrgAdmin, useSession } from "../auth/session.tsx";
 import { ApiKeyManager } from "../settings/ApiKeys.tsx";
-import { AgentAccess } from "./AgentAccess.tsx";
 import { PolicyForm } from "./AgentDetails.tsx";
+import { MemberAccess } from "./MemberAccess.tsx";
 import { MemberRequests } from "./MemberRequests.tsx";
 import { ServiceAccountActivity } from "./ServiceAccountActivity.tsx";
-import { useAgentAccess } from "./useAgentAccess.ts";
+import { useMemberAccess } from "./useMemberAccess.ts";
 
 interface ServiceAccountDetailsProps {
 	account: Principal;
@@ -26,7 +26,7 @@ export function ServiceAccountDetails({ account, principals, onChanged }: Servic
 	const { whoami } = useSession();
 	// Each change of a token gives a new number, so the activity loads again.
 	const [version, setVersion] = useState(0);
-	const { access, error, reload } = useAgentAccess(account.id);
+	const { access, error, reload } = useMemberAccess(account.id);
 	const changed = () => {
 		setVersion((current) => current + 1);
 		reload();
@@ -65,8 +65,8 @@ export function ServiceAccountDetails({ account, principals, onChanged }: Servic
 				onChange={changed}
 			/>
 			<MemberRequests account={account} principals={principals} onApproved={changed} />
-			<AgentAccess
-				agent={account}
+			<MemberAccess
+				member={account}
 				access={access}
 				error={error}
 				viewer={{ id: whoami.principal.id, admin: isOrgAdmin(whoami.principal) }}

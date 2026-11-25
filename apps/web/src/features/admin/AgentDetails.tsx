@@ -9,7 +9,7 @@ import { isOrgAdmin, useSession } from "../auth/session.tsx";
 import { ApiKeyManager } from "../settings/ApiKeys.tsx";
 import { TargetWebhooks } from "../settings/TargetWebhooks.tsx";
 import { WEBHOOK_DOMAINS } from "../settings/webhookModel.ts";
-import { AgentAccess } from "./AgentAccess.tsx";
+import { MemberAccess } from "./MemberAccess.tsx";
 import { MemberRequests } from "./MemberRequests.tsx";
 import { OAuthGrants } from "./OAuthGrants.tsx";
 import {
@@ -21,7 +21,7 @@ import {
 	policyDraftFrom,
 	sameOutboundPolicy,
 } from "./policy.ts";
-import { useAgentAccess } from "./useAgentAccess.ts";
+import { useMemberAccess } from "./useMemberAccess.ts";
 
 interface AgentDetailsProps {
 	agent: Principal;
@@ -45,7 +45,7 @@ interface AgentDetailsProps {
 export function AgentDetails({ agent, sponsor, principals, canReadMail, showSponsor, onChanged }: AgentDetailsProps) {
 	const { whoami } = useSession();
 	const policy = agent.outbound_policy ?? { mode: "internal-only", allowlist: [] };
-	const { access, error, reload } = useAgentAccess(agent.id);
+	const { access, error, reload } = useMemberAccess(agent.id);
 	return (
 		<>
 			<div className="admin-card-meta">
@@ -81,8 +81,8 @@ export function AgentDetails({ agent, sponsor, principals, canReadMail, showSpon
 				onChange={reload}
 			/>
 			<MemberRequests account={agent} principals={principals} onApproved={reload} />
-			<AgentAccess
-				agent={agent}
+			<MemberAccess
+				member={agent}
 				access={access}
 				error={error}
 				viewer={{ id: whoami.principal.id, admin: isOrgAdmin(whoami.principal) }}

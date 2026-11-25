@@ -5,7 +5,7 @@ export { mountChatIncomingWebhooks, slackSignature } from "./incoming-webhooks.t
 export { CHAT_PREVIEW_QUEUE, handleLinkPreviewBatch } from "./previews.ts";
 export { CHAT_PUSH_QUEUE, handleChatPushBatch } from "./push.ts";
 export { ChatRoomDO } from "./room.ts";
-export { confirmedRoomsOfAgent, removeDeletedPrincipalFromRooms } from "./room-index.ts";
+export { confirmedRoomsOf, removeDeletedPrincipalFromRooms } from "./room-index.ts";
 export { ChatSearchDO } from "./search-index.ts";
 export { invokeSlashCommand } from "./slash-commands.ts";
 export { mountChatSocket } from "./socket.ts";

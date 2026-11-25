@@ -11,12 +11,12 @@ import {
 	roomRows,
 	sharedItemRows,
 } from "./accessSummary.ts";
-import type { AgentAccess as Access } from "./useAgentAccess.ts";
+import type { MemberAccessData as Access } from "./useMemberAccess.ts";
 
-interface AgentAccessProps {
-	/** An agent or a service account. */
-	agent: Principal;
-	/** The access of the agent. Null until its first read. */
+interface MemberAccessProps {
+	/** A person, an agent or a service account. */
+	member: Principal;
+	/** The access of the member. Null until its first read. */
 	access: Access | null;
 	/** Why the last read failed, or null. */
 	error: string | null;
@@ -40,18 +40,20 @@ function Rows({ rows, empty = "None" }: { rows: readonly AccessRow[]; empty?: st
 }
 
 /**
- * What an agent or a service account can reach and do (`directory.get_agent_access`), read only. Each team
- * mailbox, shared drive and room decides what the account can do there, and each item share decides it for
- * the item. The rows link to the place where a person changes that access. The account scopes apply to its
- * own mailbox, its own drive and the actions that have no mailbox, room or drive. Its keys only prove its
- * identity.
+ * What a person, an agent or a service account can reach and do (`directory.get_member_access`), read only.
+ * Each team mailbox, shared drive and room decides what the member can do there, and each item share decides
+ * it for the item. The rows link to the place where a person changes that access. The account scopes of an
+ * agent or a service account apply to its own mailbox, its own drive and the actions that have no mailbox,
+ * room or drive, and its keys only prove its identity. A person can do each thing in their own mailbox and
+ * drive, and each key of a person carries its own scopes.
  */
-export function AgentAccess({ agent, access, error, viewer, onRetry }: AgentAccessProps) {
+export function MemberAccess({ member, access, error, viewer, onRetry }: MemberAccessProps) {
 	const headingId = useId();
-	const service = agent.kind === "service";
-	// The word for the agent in the text: a service account is an "account".
-	const noun = service ? "account" : "agent";
-	const account = access ? accountScopes(access, service ? "service" : "agent") : null;
+	const person = member.kind === "human";
+	const service = member.kind === "service";
+	// The word for the member in the text: a service account is an "account".
+	const noun = person ? "person" : service ? "account" : "agent";
+	const account = access && !person ? accountScopes(access, service ? "service" : "agent") : null;
 
 	return (
 		<section aria-labelledby={headingId}>
@@ -60,7 +62,10 @@ export function AgentAccess({ agent, access, error, viewer, onRetry }: AgentAcce
 			</h2>
 			<p className="field-hint">
 				Each mailbox, room and drive decides what the {noun} can do there. Change it in the settings of that mailbox,
-				room or drive. {service ? "A token" : "An API key or an app connection"} only proves who the {noun} is.
+				room or drive.{" "}
+				{person
+					? "Each API key of the person can carry fewer scopes."
+					: `${service ? "A token" : "An API key or an app connection"} only proves who the ${noun} is.`}
 			</p>
 			{error && (
 				<div className="form-error" role="alert">
@@ -71,7 +76,7 @@ export function AgentAccess({ agent, access, error, viewer, onRetry }: AgentAcce
 				</div>
 			)}
 			{access === null && !error && <p className="panel-empty">Loading the access…</p>}
-			{access && account && (
+			{access && (
 				<dl className="access-list">
 					<dt>Team mailboxes</dt>
 					<dd>
@@ -97,8 +102,12 @@ export function AgentAccess({ agent, access, error, viewer, onRetry }: AgentAcce
 					</dd>
 					<dt>Own mailbox, own drive and organization</dt>
 					<dd>
-						<p>{agent.address}</p>
-						{account.held.length === 0 ? (
+						<p>{member.address}</p>
+						{account === null ? (
+							<span className="muted">
+								The person can do each thing in their own mailbox and drive. Their role decides the rest.
+							</span>
+						) : account.held.length === 0 ? (
 							<span className="muted">The {noun} can do nothing here.</span>
 						) : (
 							<ul>
@@ -109,31 +118,35 @@ export function AgentAccess({ agent, access, error, viewer, onRetry }: AgentAcce
 								))}
 							</ul>
 						)}
-						{account.missing.length > 0 && (
+						{account && account.missing.length > 0 && (
 							<p className="field-hint">
 								This {noun} is from before memberships decided its access, so it keeps its earlier limits here. They do
 								not apply in a team mailbox, a room or a shared drive.
 							</p>
 						)}
 					</dd>
-					<dt>{service ? "Live tokens" : "Live API keys"}</dt>
-					<dd>
-						{access.tokens.length === 0 ? (
-							<span className="muted">
-								{service
-									? "No live token. The account cannot call the API."
-									: "None. This list does not show the apps that connect with OAuth."}
-							</span>
-						) : (
-							<ul>
-								{access.tokens.map((token) => (
-									<li key={token.key_id}>
-										<strong>{token.label}</strong> <span className="muted">({expiryPhrase(token.expires_at)})</span>
-									</li>
-								))}
-							</ul>
-						)}
-					</dd>
+					{!person && (
+						<>
+							<dt>{service ? "Live tokens" : "Live API keys"}</dt>
+							<dd>
+								{access.tokens.length === 0 ? (
+									<span className="muted">
+										{service
+											? "No live token. The account cannot call the API."
+											: "None. This list does not show the apps that connect with OAuth."}
+									</span>
+								) : (
+									<ul>
+										{access.tokens.map((token) => (
+											<li key={token.key_id}>
+												<strong>{token.label}</strong> <span className="muted">({expiryPhrase(token.expires_at)})</span>
+											</li>
+										))}
+									</ul>
+								)}
+							</dd>
+						</>
+					)}
 				</dl>
 			)}
 		</section>

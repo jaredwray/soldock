@@ -1,6 +1,6 @@
 import type { OutputOf } from "@asterra/contracts";
 
-type Room = OutputOf<"directory.get_agent_access">["chat_rooms"][number];
+type Room = OutputOf<"directory.get_member_access">["chat_rooms"][number];
 
 /** The name of a room in the access of an agent: `#name`, or the other member of a direct message. */
 export function roomLabel(room: Pick<Room, "kind" | "name" | "peer_name">): string {

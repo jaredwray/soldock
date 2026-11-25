@@ -31,6 +31,7 @@ import {
 	request,
 	SETUP_TOKEN,
 	seedOrg,
+	sendMemberStates,
 	setLegacyScopes,
 	setupOwner,
 	signIn,
@@ -1340,6 +1341,64 @@ describe("directory authorization", () => {
 		expect(await denied(bot.call("account.list_api_keys"))).toBe("forbidden");
 		const tool = await callTool(owner.key, "account_list_api_keys", { principal_id: bot.id });
 		expect((tool.structuredContent?.api_keys ?? []) as unknown[]).toHaveLength(2);
+	});
+});
+
+describe("the access of a member", () => {
+	// Each membership decides what its member can do, for a person, an agent and a service account. So owners and
+	// admins read the access of a person as they read the access of an agent. The read changes nothing.
+	it("shows the memberships of a person to owners and admins only, and keeps directory.get_agent_access for agents", async () => {
+		const { owner, ada, bot } = await seedOrg();
+		const cy = await createActor(owner, {
+			kind: "human",
+			display_name: "Cy",
+			address: "cy@dock.test",
+			password: PASSWORD,
+		});
+		const { team_mailbox: support } = await owner.call("directory.create_team_mailbox", {
+			display_name: "Support",
+			address: "support@dock.test",
+		});
+		await owner.call("directory.add_team_mailbox_member", {
+			mailbox_id: support.id,
+			principal_id: ada.id,
+			scopes: ["mail.read"],
+		});
+		const { shared_drive: drive } = await owner.call("drive.create_shared_drive", {
+			name: "Plans",
+			members: [{ principal_id: ada.id, role: "manager" }],
+		});
+		const { room } = await owner.call("chat.create_room", { kind: "private", name: "Ops", member_ids: [ada.id] });
+		await sendMemberStates(owner.id, ada.id);
+		const access = await vi.waitFor(async () => {
+			const result = await owner.call("directory.get_member_access", { principal_id: ada.id });
+			expect(result.chat_rooms).toHaveLength(1);
+			expect(result.shared_drives).toHaveLength(1);
+			return result;
+		});
+		// A person has no account scopes, and each key of a person has its own scopes: both lists are empty.
+		expect(access).toMatchObject({
+			principal_id: ada.id,
+			kind: "human",
+			team_mailboxes: [{ id: support.id, scopes: ["mail.read"] }],
+			shared_drives: [{ id: drive.id, role: "manager" }],
+			chat_rooms: [{ id: room.id, role: "member" }],
+			tokens: [],
+			scopes: [],
+		});
+		// Parity: the MCP tool returns the same answer.
+		expect(
+			(await callTool(owner.key, "directory_get_member_access", { principal_id: ada.id })).structuredContent,
+		).toEqual(access);
+		// A person who is not an owner or an admin, and an agent, cannot read the access of a person.
+		expect(await denied(cy.call("directory.get_member_access", { principal_id: ada.id }))).toBe("forbidden");
+		expect(await denied(bot.call("directory.get_member_access", { principal_id: ada.id }))).toBe("forbidden");
+		// The old name stays for an agent and a service account only. The sponsor reads the same answer with both names.
+		expect(await denied(owner.call("directory.get_agent_access", { principal_id: ada.id }))).toBe("not_found");
+		const viaMember = await ada.call("directory.get_member_access", { principal_id: bot.id });
+		expect(viaMember).toEqual(await ada.call("directory.get_agent_access", { principal_id: bot.id }));
+		expect(viaMember.kind).toBe("agent");
+		expect(await denied(cy.call("directory.get_member_access", { principal_id: bot.id }))).toBe("forbidden");
 	});
 });
 

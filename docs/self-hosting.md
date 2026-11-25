@@ -602,6 +602,10 @@ What changes for a script that calls the API:
 - A credential of a person keeps its own scopes. In a team mailbox, a call of a person still needs the
   scope in the credential and in the membership.
 - `directory.get_agent_access` changes nothing, and its `scopes` are the account scopes.
+- `directory.get_member_access` (`GET /api/v1/directory/members/{principal_id}/access`) is new. It gives
+  the same answer for each member: a person, an agent or a service account. Only owners and admins read
+  the access of a person. The answer has `kind`, and for a person it has no `scopes` and no `tokens`.
+  `directory.get_agent_access` stays as its earlier name for an agent or a service account.
 - In the contracts, `AgentAccessChange` is gone. `RESOURCE_SCOPES`, `resourceDecidedScopes` and
   `canTargetSharedResource` are new.
 - A subscription of `subscriptions/listen` that watches a shared mailbox, a room or a drive of a

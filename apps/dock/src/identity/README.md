@@ -9,7 +9,7 @@
 | **Purpose** | Principals (humans, agents, service accounts, groups), directory, passkeys, sessions, API keys, OAuth authorization server, `client_credentials`, authorization (`authorize()`), agent policies, audit log, `PrincipalDO`. |
 | **Owns** | D1 `directory` tables, except `chat_rooms`, `chat_members`, `chat_custom_emoji`, `chat_incoming_webhooks`, `chat_slash_commands`, `chat_member_requests` (`chat`) and `webhooks` and `chat_webhooks` (`webhooks`). `PrincipalDO` owns the Chat state, personal Chat views (activity, sections, saved messages, drafts, scheduled messages, reminders), notification settings and events sockets of each principal. Later: R2 `audit`. |
 | **Depends on** | `platform`. |
-| **Operations** | `chat.get_presence`, `chat.set_status`, `account.whoami`, `account.list_api_keys`, `account.create_api_key`, `account.revoke_api_key`, `account.rotate_api_key`, `account.end_api_key_rotation`, `account.set_password`, `account.create_totp_secret`, `account.enable_totp`, `account.disable_totp`, `directory.list_principals`, `directory.get_principals`, `directory.create_principal`, `directory.update_agent_policy`, `directory.update_principal`, `directory.archive_principal`, `directory.restore_principal`, `directory.delete_principal`, `directory.list_mail_domains`, `directory.add_mail_domain`, `directory.remove_mail_domain`, `directory.list_team_mailboxes`, `directory.create_team_mailbox`, `directory.update_team_mailbox`, `directory.add_team_mailbox_member`, `directory.remove_team_mailbox_member`, `directory.create_service_account`, `directory.list_service_account_activity`, `directory.get_agent_access`, `oauth.get_authorization`, `oauth.approve_authorization`, `oauth.deny_authorization`, `oauth.list_grants`, `oauth.revoke_grant` |
+| **Operations** | `chat.get_presence`, `chat.set_status`, `account.whoami`, `account.list_api_keys`, `account.create_api_key`, `account.revoke_api_key`, `account.rotate_api_key`, `account.end_api_key_rotation`, `account.set_password`, `account.create_totp_secret`, `account.enable_totp`, `account.disable_totp`, `directory.list_principals`, `directory.get_principals`, `directory.create_principal`, `directory.update_agent_policy`, `directory.update_principal`, `directory.archive_principal`, `directory.restore_principal`, `directory.delete_principal`, `directory.list_mail_domains`, `directory.add_mail_domain`, `directory.remove_mail_domain`, `directory.list_team_mailboxes`, `directory.create_team_mailbox`, `directory.update_team_mailbox`, `directory.add_team_mailbox_member`, `directory.remove_team_mailbox_member`, `directory.create_service_account`, `directory.list_service_account_activity`, `directory.get_member_access`, `directory.get_agent_access`, `oauth.get_authorization`, `oauth.approve_authorization`, `oauth.deny_authorization`, `oauth.list_grants`, `oauth.revoke_grant` |
 | **Data inventory** | D1 `directory`: `principals` (with `password_hash`, `totp_secret`, `totp_pending_secret`, `totp_last_step`, `sign_in_failures`, `sign_in_locked_until`, `chat_online_until`, `chat_active_until`, `chat_status_json`, `archived_at`, `deleted_at`, and the name aliases of a Chat mention `alias_first`, `alias_full` and `aliases_set`, and the name in the form of a search `name_folded`, which come from the display name, and `service`, `description` and `created_by` of [service accounts](#service-accounts), and the `agent_scopes` of each agent and service account, which apply only to its own mailbox, its own drive and the actions without a resource, and which nothing writes after the creation of the account, and `access_version`, which nothing changes since migration `0031`, see [Access of an agent](#access-of-an-agent); `agent_resources` is not used: the Worker does not read it or write it, and no migration removes it (jaredwray/soldock#212 tracks the removal of `agent_resources`, `service_scopes` and `service_resources`); `service_scopes` and `service_resources` are not read since migration `0027` and stay for the Worker from before it), `addresses`, `api_keys` (with `expires_at`, `description` and `revoked_by`, and for a rotation `prev_key_hash`, `prev_expires_at`, `rotation`, `rotated_at` and `rotated_by`, `expiry_notice_at` for the notice before a token ends, `scopes`, which the Worker reads only for a key of a person since migration `0027`, and `resources`, which is not read since migration `0026`), `sessions`, `setup_lock`, `mail_domains`, `team_mailboxes` (name, address, creator), `team_mailbox_members` (mailbox, principal, who added the member, and `scopes`: what the member can do in the mailbox; migration `0031` narrowed the scopes of each agent member), `oauth_clients` (registered MCP clients: name, URI, redirect URIs), `oauth_requests` (authorization requests: client, redirect URI, state, PKCE challenge, requested scopes, approval, code hash, the grant that the code made, and `granted_scopes`, which is not read since migration `0027`), `oauth_grants` (approved connections: client, principal, approver, hashes of the access token and of the current, previous and consumed refresh tokens, and `scopes`, which is not read since migration `0027`) ([`migrations/`](../../migrations/)). The TOTP secrets are stored as plain base32 in D1, because a server must read them to check a code. Unused and empty since migration `0004`, kept for the Worker from before it: `principals.sign_in_email` and `sign_in_codes`. A later migration removes them. `PrincipalDO` (one for each principal, keyed by the principal id): tables `chat_rooms`, `chat_threads`, `chat_addressed`, `chat_activity` (with `subject_json`: the account to add, for an item of the kind `member_request`), `chat_sections`, `chat_section_rooms`, `chat_saved_messages`, `chat_drafts`, `chat_scheduled_messages`, `chat_reminders`, `chat_notification_levels`, `chat_push_devices`, and `chat_notification_sounds` (see [The object of a principal](#the-object-of-a-principal)), table `service_activity` (the activity log of a service account: at most 10,000 calls, at most 1,000 membership changes by members, its admin changes, and 90 days, see [Service accounts](#service-accounts)), table `meta` (schema version, the owner id in `presence_principal`, `chat_seeded` after the first fill, and `chat_threads_filled` after the first fill of the threads), and the hibernatable sockets of `/ws/events` (not in the database: each keeps the reference to its credential, the time of its open and of its last check, and its latest activity report; no backup). Backups: not built yet. |
 
 Public surface: `index.ts` only. Other domains must not import files from this folder directly.
@@ -427,7 +427,7 @@ the API, with tokens. Nobody signs in as it, and it never connects through OAuth
     one for the operation that it runs.
   - An event of an MCP subscription or of a socket adds no entry, by design. It gives no access beyond
     the open of its feed, which is in the log, and its count would push the real calls out of the log.
-- **Access.** `directory.get_agent_access` returns what the account can do and reach, and its live
+- **Access.** `directory.get_member_access` returns what the account can do and reach, and its live
   tokens. Only owners and admins read it for a service account. See [Access of an agent](#access-of-an-agent).
 - **Rollback.** A rollback to a Worker from before migration `0027` is not supported
   ([Access of an agent](#access-of-an-agent)).
@@ -511,7 +511,7 @@ in the membership.
 
 - **Why.** The settings of each resource are the one place that says what an agent can do there. A change
   applies at once to each key and each connection of the agent, and nothing on the agent changes. The page
-  of the agent shows this access read only (`directory.get_agent_access`).
+  of the agent shows this access read only (`directory.get_member_access`).
 - **The invoker.** For an agent caller, `authenticate` sets `resourceScopes` on the call context. It gives
   the scopes of a call that the resource decides (`resourceDecidedScopes` of
   [`contracts`](../../../../packages/contracts/README.md)):
@@ -556,10 +556,12 @@ in the membership.
   `drive.list_shared_drives` ask each room or drive of the page. So the list never shows a membership from
   before that the object did not narrow. `mail.list_mailboxes` reads D1, which migration `0031` narrowed,
   and shows the own mailbox with the account mail scopes.
-- **Read.** `directory.get_agent_access` (`GET /api/v1/directory/agents/{principal_id}/access`): for an
-  agent, its sponsor, an owner or an admin (`canManageAgent`). For a service account: owners and admins
-  only. An agent never reads its own access. It returns the account scopes and the live API keys of the
-  agent in `tokens` (id, label and end). It returns the team mailboxes with the scopes of the membership,
+- **Read.** `directory.get_member_access` (`GET /api/v1/directory/members/{principal_id}/access`): for an
+  agent, its sponsor, an owner or an admin (`canManageAgent`). For a service account or a person: owners and
+  admins only. An agent never reads its own access, and a person who is not an owner or an admin gets
+  `forbidden`. The answer has the `kind` of the member. For an agent or a service account, it returns the
+  account scopes and the live API keys in `tokens` (id, label and end). For a person, `scopes` and `tokens`
+  are empty: each key of a person has its own scopes, and `account.list_api_keys` lists them. It returns the team mailboxes with the scopes of the membership,
   and the shared drives and the rooms with the role. It also returns the Drive items that others shared
   directly with the agent, with the role. `tokens`
   does not list the OAuth connections: `oauth.list_grants` lists them. The memberships come from the index
@@ -572,9 +574,12 @@ in the membership.
   - An index can have a membership from before migration `0031` that its object did not narrow. Only an
     account without both scopes of the product can have one: `chat.read` and `chat.write`, or `drive.read`
     and `drive.write`. For such an account, each room and each shared drive of the answer confirms the
-    membership (`confirmedRoomsOfAgent` of [`chat`](../chat/README.md), `confirmedSharedDrivesOfAgent` of
+    membership (`confirmedRoomsOf` of [`chat`](../chat/README.md), `confirmedSharedDrivesOf` of
     [`drive`](../drive/README.md)). So the answer has the narrowed roles. This is one call for each room
-    of the answer, at most 200, and one call for each shared drive of the agent.
+    of the answer, at most 200, and one call for each shared drive of the agent. A person has no such
+    membership, so the index rows are the answer.
+  - `directory.get_agent_access` (`GET /api/v1/directory/agents/{principal_id}/access`) is the earlier name.
+    It gives the same answer for an agent or a service account, and `not_found` for a person.
 - **No escalation.** To create an agent or a service account, the credential must hold each scope of its
   kind (`grantableScopes`). A new key, a rotation, and the approval of a connection for an agent that exists
   have a similar check. The credential must hold each account scope of the agent. A membership needs no
@@ -697,7 +702,7 @@ an agent and a service account. A room has scopes for each member too
   migration has the three: each member could read the mailbox, change it and send from it. A stored value
   that is not a list of mail scopes gives no scope.
 - `members` of a team mailbox has each member with its scopes. `member_ids` stays, in the same order.
-  `mail.list_mailboxes` and `directory.get_agent_access` show the scopes of the membership.
+  `mail.list_mailboxes` and `directory.get_member_access` show the scopes of the membership.
 - **An agent or a service account uses the membership at once.** The membership alone decides what it can
   do in the mailbox. Nothing changes on the agent, and the result of the call has no change of an agent.
   A remove ends the access at the next call.

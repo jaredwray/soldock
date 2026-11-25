@@ -652,7 +652,7 @@ export const SERVICE_ACTIVITY_LIMITS = {
 } as const;
 
 export const AGENT_ACCESS_LIMITS = {
-	/** The chat rooms of `directory.get_agent_access`, at most. */
+	/** The chat rooms of `directory.get_member_access`, at most. */
 	rooms: 200,
 	/** The Drive items that others shared directly with the agent, at most. */
 	sharedItems: 200,
@@ -742,15 +742,77 @@ export const listServiceAccountActivity = defineOperation({
 	errors: ["not_found"],
 });
 
+/** What a member can reach and do: the answer of `directory.get_member_access` and `directory.get_agent_access`. */
+const MemberAccess = z.object({
+	principal_id: z.string(),
+	/** The kind of the member: `service` for a service account. */
+	kind: z.enum(["human", "agent", "service"]),
+	// `scopes` is what the member can do in the mailbox: of `MAILBOX_MEMBER_SCOPES`.
+	team_mailboxes: z.array(
+		z.object({ id: z.string(), display_name: z.string(), address: z.string(), scopes: z.array(z.string()) }),
+	),
+	shared_drives: z.array(z.object({ id: z.string(), name: z.string(), role: z.string() })),
+	// `peer_name` is the name of the other member of a direct message. It is null for each other kind.
+	chat_rooms: z.array(
+		z.object({
+			id: z.string(),
+			kind: z.string(),
+			name: z.string().nullable(),
+			peer_name: z.string().nullable(),
+			role: z.string(),
+		}),
+	),
+	chat_rooms_truncated: z.boolean(),
+	/** The items that others shared directly with the member in Drive, with its role, the newest share first. */
+	drive_shared_items: z.array(
+		z.object({ space_id: z.string(), item_id: z.string(), name: z.string(), kind: z.string(), role: z.string() }),
+	),
+	drive_shared_items_truncated: z.boolean(),
+	/**
+	 * The API keys of an agent or a service account that work now: not revoked and not expired. A key only proves
+	 * the identity of the account. Empty for a person: each key of a person has its own scopes.
+	 */
+	tokens: z.array(z.object({ key_id: z.string(), label: z.string(), expires_at: Timestamp.nullable() })),
+	/**
+	 * The account scopes of an agent or a service account: for its own mailbox, its own drive and the actions that
+	 * have no mailbox, room or drive. They never change after the account is created. Empty for a person: a
+	 * person can do each thing in their own mailbox and drive.
+	 */
+	scopes: z.array(z.string()),
+});
+
+/** The text of the access operations about the memberships, the limits and what the call changes. */
+const ACCESS_TEXT = [
+	"Returns the team mailboxes, the shared drives and the chat rooms that the member is a member of, with its role, and the Drive items that others shared directly with it, with its role.",
+	"Each membership and share decides what the member can do there. Change it in the settings of that mailbox, drive or room, or in the sharing of the item. This call changes nothing.",
+	"For an agent or a service account, scopes has its account scopes, and tokens has its live API keys. For a person, both are empty.",
+	`chat_rooms has at most ${AGENT_ACCESS_LIMITS.rooms} rooms, and drive_shared_items at most ${AGENT_ACCESS_LIMITS.sharedItems} items, the newest share first. The matching _truncated field is true when the member has more.`,
+];
+
+export const getMemberAccess = defineOperation({
+	name: "directory.get_member_access",
+	summary: "Show what a person, an agent or a service account can reach and do",
+	description: [
+		"For a person: owners and admins only. For an agent: its sponsor, an owner or an admin. For a service account: owners and admins only.",
+		...ACCESS_TEXT,
+	].join(" "),
+	http: { method: "GET", path: "/api/v1/directory/members/{principal_id}/access" },
+	scopes: ["directory.read"],
+	callers: ["human"],
+	auditDenied: true,
+	annotations: READ,
+	input: z.strictObject({ principal_id: PrincipalId }),
+	output: MemberAccess,
+	errors: ["not_found"],
+});
+
 export const getAgentAccess = defineOperation({
 	name: "directory.get_agent_access",
-	summary: "Show what an agent or a service account can do and reach",
+	summary: "Show what an agent or a service account can reach and do",
 	description: [
 		AGENT_ACCESS_RULES,
-		"Returns the team mailboxes, the shared drives and the chat rooms that the agent is a member of, with its role, the Drive items that others shared directly with it, with its role, and its live API keys.",
-		"Each membership and share decides what the agent can do there. Change it in the settings of that mailbox, drive or room, or in the sharing of the item. This call changes nothing.",
-		"scopes has the account scopes of the agent. They apply to its own mailbox, its own drive and the actions that have no mailbox, room or drive.",
-		`chat_rooms has at most ${AGENT_ACCESS_LIMITS.rooms} rooms, and drive_shared_items at most ${AGENT_ACCESS_LIMITS.sharedItems} items, the newest share first. The matching _truncated field is true when the agent has more.`,
+		"The same answer as directory.get_member_access, for an agent or a service account only: a person gets not_found.",
+		...ACCESS_TEXT,
 	].join(" "),
 	http: { method: "GET", path: "/api/v1/directory/agents/{principal_id}/access" },
 	scopes: ["directory.read"],
@@ -758,37 +820,7 @@ export const getAgentAccess = defineOperation({
 	auditDenied: true,
 	annotations: READ,
 	input: z.strictObject({ principal_id: PrincipalId }),
-	output: z.object({
-		principal_id: z.string(),
-		// `scopes` is what the agent can do in the mailbox: of `MAILBOX_MEMBER_SCOPES`.
-		team_mailboxes: z.array(
-			z.object({ id: z.string(), display_name: z.string(), address: z.string(), scopes: z.array(z.string()) }),
-		),
-		shared_drives: z.array(z.object({ id: z.string(), name: z.string(), role: z.string() })),
-		// `peer_name` is the name of the other member of a direct message. It is null for each other kind.
-		chat_rooms: z.array(
-			z.object({
-				id: z.string(),
-				kind: z.string(),
-				name: z.string().nullable(),
-				peer_name: z.string().nullable(),
-				role: z.string(),
-			}),
-		),
-		chat_rooms_truncated: z.boolean(),
-		/** The items that others shared directly with the agent in Drive, with its role, the newest share first. */
-		drive_shared_items: z.array(
-			z.object({ space_id: z.string(), item_id: z.string(), name: z.string(), kind: z.string(), role: z.string() }),
-		),
-		drive_shared_items_truncated: z.boolean(),
-		/** The API keys that work now: not revoked and not expired. A key only proves the identity of the agent. */
-		tokens: z.array(z.object({ key_id: z.string(), label: z.string(), expires_at: Timestamp.nullable() })),
-		/**
-		 * The account scopes of the agent: for its own mailbox, its own drive and the actions that have no mailbox,
-		 * room or drive. They never change after the agent is created.
-		 */
-		scopes: z.array(z.string()),
-	}),
+	output: MemberAccess,
 	errors: ["not_found"],
 });
 
@@ -813,5 +845,6 @@ export const directoryOperations = {
 	"directory.delete_principal": deletePrincipal,
 	"directory.create_service_account": createServiceAccount,
 	"directory.list_service_account_activity": listServiceAccountActivity,
+	"directory.get_member_access": getMemberAccess,
 	"directory.get_agent_access": getAgentAccess,
 } as const;

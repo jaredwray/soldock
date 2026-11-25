@@ -112,8 +112,8 @@ or for a key.
   person. A person who adds an agent to a room or a shared drive does not need to be its sponsor.
 - **Access summary.** Open the page of the agent in **Admin › Members**. **Access** shows each shared
   mailbox, room, shared drive and shared item of the agent, with what it can do there
-  (`directory.get_agent_access`). Each row has a link to the place that changes it. The page changes
-  nothing. **Apps connected as …** lists its
+  (`directory.get_member_access`). Each row has a link to the place that changes it. The page changes
+  nothing. An owner or an admin sees the same summary on the page of a person. **Apps connected as …** lists its
   OAuth connections.
 - **Account scopes.** The account scopes of an agent apply to its own mailbox, its own drive, and the
   actions that have no mailbox, room or drive. Examples are `directory.read`, a new room, a direct message,
@@ -153,7 +153,7 @@ Drive and Chat it acts as an agent, so its outbound policy applies.
 3. The script sends the token as a bearer token to REST or MCP. An expired or revoked token gets
    `401`.
 4. The card shows each token with its creator, its end and its last use. It also shows the access summary
-   of the account (`directory.get_agent_access`) and its activity log
+   of the account (`directory.get_member_access`) and its activity log
    (`directory.list_service_account_activity`). **Revoke** stops a token at once
    (`account.revoke_api_key`).
 

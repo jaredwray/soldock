@@ -168,7 +168,7 @@ person, an agent and a service account. This is the model of a
 - **With the credential.** `chat.add_members` is a scope of a membership only: no credential holds it. A
   call needs `chat.read` or `chat.write` in its credential, as before, and its scope in the membership.
 - The room object stores the scopes and makes each check, in the step of the read or the change. The
-  index of the directory has no copy of them yet, so `directory.get_agent_access` shows the role only.
+  index of the directory has no copy of them yet, so `directory.get_member_access` shows the role only.
 
 ### An agent as a new member
 
@@ -225,9 +225,9 @@ closes the sockets of the member in the same step.
   - A person who opens a direct message again gives it back to an agent that the step removed
     (`restorePeers`). An agent never gives it back to a different agent.
   - For an agent without `chat.read` on its account, `chat.list_rooms` asks each room of its page
-    (`roomRolesOf`). So a room that did not narrow never shows in the list. `directory.get_agent_access`
+    (`roomRolesOf`). So a room that did not narrow never shows in the list. `directory.get_member_access`
     asks each room of its answer for an agent without `chat.read` or `chat.write`
-    (`confirmedRoomsOfAgent`).
+    (`confirmedRoomsOf`).
 
 ### A request of an agent to add an agent
 
