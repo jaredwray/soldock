@@ -12,9 +12,10 @@ async function post<T>(context: BrowserContext, path: string, data: unknown): Pr
 }
 
 // Reply later: a conversation leaves the inbox and waits in its own list, with a count in the sidebar and a
-// pile at the end of the inbox. Focus & Reply shows each waiting conversation with its newest message. A reply
-// takes the conversation out of Reply later, and so does Done. The test uses a new shared mailbox, so no
-// other test sees its mail.
+// pile at the end of the inbox. Focus & Reply shows each waiting conversation with its newest message. One card
+// is active. Reply opens the composer in the card, a send takes the conversation out of Reply later, and the
+// reply of the next card opens. Done takes a conversation out without a reply. The last card leaves a finish
+// state with what the person cleared. The test uses a new shared mailbox, so no other test sees its mail.
 test("a member puts mail in Reply later and answers it in Focus & Reply", async ({ browser }) => {
 	const admin = await signIn(browser, "tomasz");
 	const member = await signIn(browser, "rafael");
@@ -30,18 +31,22 @@ test("a member puts mail in Reply later and answers it in Focus & Reply", async 
 		);
 		const first = unique("Contract terms");
 		const second = unique("Event venue");
+		const third = unique("Team lunch");
 		await post(admin, "/api/v1/mail/messages", { to: [address], subject: first, text: "Can you check clause 4?" });
 		await post(admin, "/api/v1/mail/messages", { to: [address], subject: second, text: "Which venue do you like?" });
+		await post(admin, "/api/v1/mail/messages", { to: [address], subject: third, text: "Pizza or sushi on Friday?" });
 
 		const page = await member.newPage();
 		const inbox = `/mail/team/${mailbox.id}/inbox`;
 		const firstRow = page.getByRole("listitem").filter({ hasText: first });
 		const secondRow = page.getByRole("listitem").filter({ hasText: second });
+		const thirdRow = page.getByRole("listitem").filter({ hasText: third });
 		// Local mail goes through the outbox of the sender, so it can come a little later.
 		await expect(async () => {
 			await page.goto(inbox);
 			await expect(firstRow).toBeVisible({ timeout: 1000 });
 			await expect(secondRow).toBeVisible({ timeout: 1000 });
+			await expect(thirdRow).toBeVisible({ timeout: 1000 });
 		}).toPass({ timeout: 20_000 });
 
 		// From an open conversation: Reply later sends it out of the inbox and back to the list.
@@ -58,8 +63,13 @@ test("a member puts mail in Reply later and answers it in Focus & Reply", async 
 		await page.keyboard.press("l");
 		await expect(secondRow).toHaveCount(0);
 		await expect(pile).toContainText("2 conversations wait for an answer");
+		// A row that has the focus has the cursor.
+		await thirdRow.getByRole("link").focus();
+		await page.keyboard.press("l");
+		await expect(thirdRow).toHaveCount(0);
+		await expect(pile).toContainText("3 conversations wait for an answer");
 		const nav = page.getByRole("navigation", { name: "Mailboxes, folders and labels" });
-		await expect(nav.getByRole("link", { name: /^Reply later\s*2 to answer$/ })).toBeVisible();
+		await expect(nav.getByRole("link", { name: /^Reply later\s*3 to answer$/ })).toBeVisible();
 
 		await pile.getByRole("link", { name: "Focus & Reply" }).click();
 		await expect(page).toHaveURL(new RegExp(`/mail/team/${mailbox.id}/reply-later/focus$`));
@@ -69,24 +79,53 @@ test("a member puts mail in Reply later and answers it in Focus & Reply", async 
 		const cards = main.getByRole("list", { name: "Conversations in Reply later" }).locator(":scope > li");
 		const firstCard = cards.filter({ has: page.getByRole("heading", { level: 2, name: first }) });
 		const secondCard = cards.filter({ has: page.getByRole("heading", { level: 2, name: second }) });
-		await expect(cards).toHaveCount(2);
-		// Each card shows the newest message of its conversation, with its body.
+		const thirdCard = cards.filter({ has: page.getByRole("heading", { level: 2, name: third }) });
+		await expect(cards).toHaveCount(3);
+		// Each card shows the newest message of its conversation, with its body. The newest conversation is first.
 		await expect(firstCard.getByText("Can you check clause 4?")).toBeVisible();
+		await expect(thirdCard).toHaveAttribute("aria-current", "true");
+		await expect(main.getByText("3 left", { exact: true })).toBeVisible();
 
-		// A reply takes the conversation out of Reply later.
-		await firstCard.getByRole("button", { name: "Reply", exact: true }).click();
-		const composer = page.getByRole("dialog", { name: "Reply" });
-		await composer.getByRole("textbox", { name: "Message" }).fill("Clause 4 is fine.");
-		await composer.getByRole("button", { name: "Send" }).click();
-		await expect(page.getByText("Message sent.")).toBeVisible();
+		// r opens the reply in the active card, not in a dialog, with the focus in the message.
+		await page.keyboard.press("r");
+		const thirdReply = thirdCard.getByRole("region", { name: "Reply" });
+		const thirdMessage = thirdReply.getByRole("textbox", { name: "Message" });
+		await expect(thirdMessage).toBeFocused();
+		await expect(page.getByRole("dialog")).toHaveCount(0);
+		await thirdMessage.pressSequentially("Pizza, please.");
+
+		// The app asks before it leaves the page while the reply has text. A No keeps the page and the text.
+		let question = "";
+		page.once("dialog", (dialog) => {
+			question = dialog.message();
+			void dialog.dismiss();
+		});
+		await page.getByRole("link", { name: "Back to Reply later" }).click();
+		expect(question).toBe("Discard your reply?");
+		await expect(page).toHaveURL(/\/reply-later\/focus$/);
+		await expect(thirdMessage).toContainText("Pizza, please.");
+
+		// Ctrl+Enter sends. The card leaves, and the reply of the next card opens with the focus in the message.
+		await thirdMessage.focus();
+		await page.keyboard.press("Control+Enter");
+		await expect(thirdCard).toHaveCount(0);
+		await expect(main.getByText("1 of 3 done · 2 left", { exact: true })).toBeVisible();
+		await expect(
+			secondCard.getByRole("region", { name: "Reply" }).getByRole("textbox", { name: "Message" }),
+		).toBeFocused();
+		await expect(page.getByText("Message sent.")).toHaveCount(0);
+
+		// Escape closes a reply with no text, with no question. j moves to the next card and removes nothing.
+		await page.keyboard.press("Escape");
+		await expect(secondCard.getByRole("region", { name: "Reply" })).toHaveCount(0);
+		await page.keyboard.press("j");
+		await expect(firstCard).toHaveAttribute("aria-current", "true");
+		await expect(cards).toHaveCount(2);
+
+		// Done takes a conversation out without a reply. Undo puts the card back at its old place.
+		await firstCard.getByRole("button", { name: /^Done/ }).click();
 		await expect(firstCard).toHaveCount(0);
-		await expect(cards).toHaveCount(1);
-		// The focus goes to the card in the place of the card that left, not to the start of the page.
-		await expect(secondCard.getByRole("link", { name: second })).toBeFocused();
-
-		// Done takes a conversation out without a reply, and Undo puts it back.
-		await secondCard.getByRole("button", { name: /^Done/ }).click();
-		await expect(main.getByText("No conversation waits for an answer.")).toBeVisible();
+		await expect(main.getByText("2 of 3 done · 1 left", { exact: true })).toBeVisible();
 		// An earlier toast can still show its own Undo, so the test takes the Undo of the Done toast.
 		await page
 			.locator(".toast")
@@ -94,12 +133,23 @@ test("a member puts mail in Reply later and answers it in Focus & Reply", async 
 			.getByRole("button", { name: "Undo" })
 			.click();
 		await expect(page.getByText("Action undone.")).toBeVisible();
-		await expect(secondCard).toHaveCount(1);
-		await secondCard.getByRole("button", { name: /^Done/ }).click();
-		await expect(main.getByText("No conversation waits for an answer.")).toBeVisible();
+		await expect(cards).toHaveCount(2);
+		await expect(cards.nth(1)).toContainText(first);
+		await expect(main.getByText("1 of 3 done · 2 left", { exact: true })).toBeVisible();
+
+		// l is Done for the active card. The last card leaves the finish state, with what the person cleared.
+		await expect(secondCard).toHaveAttribute("aria-current", "true");
+		await page.keyboard.press("l");
+		await expect(secondCard).toHaveCount(0);
+		await firstCard.getByRole("button", { name: /^Done/ }).click();
+		await expect(main.getByText("All caught up.")).toBeVisible();
+		await expect(main.getByText("You answered 1 conversation and marked 2 as done.")).toBeVisible();
+		const session = main.getByRole("region", { name: "In this session" });
+		await expect(session.getByRole("link", { name: third })).toBeVisible();
+		await expect(main.getByText("3 of 3 done", { exact: true })).toBeVisible();
 		await expect(main).toBeFocused();
 
-		// The server has no conversation in Reply later now, and neither one is back in the inbox.
+		// The server has no conversation in Reply later now, and none is back in the inbox.
 		const waiting = await member.request.get(
 			`/api/v1/mail/threads?mailbox_id=${mailbox.id}&query=${encodeURIComponent("in:reply_later")}`,
 		);

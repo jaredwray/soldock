@@ -89,6 +89,15 @@ interface ComposerProps {
 	onSent: (result: SendResult) => void;
 }
 
+/**
+ * True when a different handler used the key, for example a menu that closes on Escape. The editor
+ * (ProseMirror) marks each Enter and Escape as used, also when it does nothing with them, so its mark does not
+ * count.
+ */
+function keyUsed(event: KeyboardEvent<HTMLElement>): boolean {
+	return event.defaultPrevented && !(event.target instanceof Element && event.target.closest(".ProseMirror"));
+}
+
 /** The body of the composer: the editor starts from `doc`. A change of the From can give a new start. */
 interface BodySeed {
 	doc: Node;
@@ -155,9 +164,10 @@ export function Composer({
 	};
 
 	// The dialog gives the focus to its data-autofocus element. The inline frame does the same when it opens.
-	// The editor makes its view in a layout effect, so the element exists here.
+	// The editor makes its view in a layout effect, so the element exists here. The page that holds the inline
+	// frame decides the scroll position, so the focus does not scroll.
 	useEffect(() => {
-		inlineRef.current?.querySelector<HTMLElement>("[data-autofocus]")?.focus();
+		inlineRef.current?.querySelector<HTMLElement>("[data-autofocus]")?.focus({ preventScroll: true });
 	}, []);
 
 	const dirty =
@@ -255,12 +265,12 @@ export function Composer({
 	}
 
 	/**
-	 * Ctrl+Enter, or Cmd+Enter on a Mac, sends the message from each field, so a reply needs no mouse. A field that
-	 * used the key itself, for example the editor in a code block, keeps it.
+	 * Ctrl+Enter, or Cmd+Enter on a Mac, sends the message from each field, so a reply needs no mouse. A menu that
+	 * used the key, for example the address suggestions, keeps it (`keyUsed`).
 	 */
 	function sendOnModEnter(event: KeyboardEvent<HTMLFormElement>) {
-		if (event.defaultPrevented || event.key !== "Enter" || !(event.ctrlKey || event.metaKey)) return;
-		if (event.altKey || event.shiftKey) return;
+		if (event.key !== "Enter" || !(event.ctrlKey || event.metaKey) || event.altKey || event.shiftKey) return;
+		if (keyUsed(event)) return;
 		event.preventDefault();
 		if (!sending) event.currentTarget.requestSubmit();
 	}
@@ -572,7 +582,7 @@ export function Composer({
 			className="compose-inline"
 			aria-label={draft.title}
 			onKeyDown={(event) => {
-				if (event.key !== "Escape" || event.defaultPrevented) return;
+				if (event.key !== "Escape" || keyUsed(event)) return;
 				// The link dialog of the editor is a child in React, so its keys come here. Its Escape closes only it.
 				if (event.target instanceof Element && event.target.closest("dialog")) return;
 				event.preventDefault();
