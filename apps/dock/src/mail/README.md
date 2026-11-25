@@ -871,9 +871,10 @@ A disabled endpoint stays disabled. Delete it and create a new one.
   `allow-same-origin`, under a CSP that refuses each remote load.
 - Only the topmost `Authentication-Results` header from `MAIL_AUTHSERV_ID` counts. A sender cannot
   forge a pass with its own header.
-- A result counts only at the start of a part of that header (`method=result` after a `;`). The parser
-  removes comments and quoted strings first, because the receiving server can copy text of the sender
-  into them. With two SPF results, the result for the envelope sender (`smtp.mailfrom`) counts. A DKIM
+- A result counts only at the start of a part of that header (`method=result` after a `;`, after any
+  comment). The receiving server can copy text of the sender into a comment or a quoted string, so the
+  parser reads such text as no result. A quoted value counts only when it is one plain word, for
+  example `header.from="sender.example"`. With two SPF results, the result for the envelope sender (`smtp.mailfrom`) counts. A DKIM
   pass of one signature is a DKIM pass.
 - Each external message has a verdict, `sender_verification`. It answers one question: did the From
   domain send this message? The rule is `senderVerification()` in `mime/parse.ts`:

@@ -89,26 +89,36 @@ function flatten(addresses: PostalAddress[] | PostalAddress | undefined): MailAd
 }
 
 /**
- * Splits the value of an Authentication-Results header at each `;`. It removes each comment and the
- * text of each quoted string first. The receiving server can copy text of the sender into them, and
- * such text must never read as a result.
+ * Splits the value of an Authentication-Results header at each `;`. A comment becomes a space. A
+ * quoted string becomes its text when that text is one plain word, for example a domain. Each other
+ * quoted string becomes `"`, which is part of no domain. The receiving server can copy text of the
+ * sender into a comment or a quoted string, and such text must never read as a result.
  */
 function resultParts(value: string): string[] {
 	const parts = [""];
+	const add = (text: string) => {
+		parts[parts.length - 1] += text;
+	};
 	let depth = 0;
-	let quoted = false;
+	let quoted: string | null = null;
 	for (let index = 0; index < value.length; index++) {
 		const char = value[index] as string;
-		if (char === "\\" && (quoted || depth > 0)) index++;
-		else if (quoted) quoted = char !== '"';
-		else if (depth > 0) depth += char === "(" ? 1 : char === ")" ? -1 : 0;
+		if (quoted !== null) {
+			if (char === "\\") quoted += value[++index] ?? "";
+			else if (char !== '"') quoted += char;
+			else {
+				add(/^[A-Za-z0-9.@_+-]+$/.test(quoted) ? quoted : '"');
+				quoted = null;
+			}
+		} else if (depth > 0) {
+			if (char === "\\") index++;
+			else depth += char === "(" ? 1 : char === ")" ? -1 : 0;
+		} else if (char === "(") {
+			depth = 1;
+			add(" ");
+		} else if (char === '"') quoted = "";
 		else if (char === ";") parts.push("");
-		else if (char === '"' || char === "(") {
-			if (char === '"') quoted = true;
-			else depth = 1;
-			// Each one leaves a mark that is not part of a word, so the text around it does not join.
-			parts[parts.length - 1] += ' " ';
-		} else parts[parts.length - 1] += char;
+		else add(char);
 	}
 	return parts.map((part) => part.trim());
 }

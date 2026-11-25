@@ -145,6 +145,22 @@ describe("parseMail", () => {
 		});
 	});
 
+	// RFC 8601 allows a comment before a result and a quoted value. Neither may hide a result or a domain.
+	it("reads a result after a comment, and a quoted value of a property", async () => {
+		const results = async (value: string) =>
+			(await parse(raw(`Authentication-Results: mx.cloudflare.net; ${value}`))).authentication;
+		expect(await results('(policy=reject) dmarc=fail header.from="sender.example"')).toEqual({
+			spf: null,
+			dkim: null,
+			dmarc: "fail",
+			dmarcFrom: "sender.example",
+		});
+		expect(await results('dmarc=pass header.from="Sender.Example"(the From domain)')).toMatchObject({
+			dmarc: "pass",
+			dmarcFrom: "sender.example",
+		});
+	});
+
 	// One header can hold two SPF results and one DKIM result for each signature.
 	it("keeps the SPF result of the envelope sender, and a DKIM pass of any signature", async () => {
 		const parsed = await parse(
