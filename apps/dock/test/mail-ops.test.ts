@@ -288,7 +288,7 @@ describe("labels", () => {
 		const thread = await receive({ subject: "Tagged" });
 		const mailbox = env.MAILBOX.get(env.MAILBOX.idFromName(ada.id));
 		await runInDurableObject(mailbox, (_instance, state) => {
-			// Back to schema 5: before the system label REPLY_LATER (migration 5), with a user label of that name.
+			// Back to schema 5: before the system label REPLY_LATER, with a user label of that name.
 			const sql = state.storage.sql;
 			sql.exec("DELETE FROM labels WHERE id = 'REPLY_LATER'");
 			sql.exec(

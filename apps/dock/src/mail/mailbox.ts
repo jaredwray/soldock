@@ -189,7 +189,7 @@ export interface LabelRecord {
 
 /** The order of the system labels in a label list. */
 const SYSTEM_LABEL_ORDER: readonly string[] = SYSTEM_LABELS;
-/** The system labels that migration 0 inserts. Do not change it: a later migration adds a new system label. */
+/** The system labels that the first migration inserts. Do not change it: a later migration adds a new system label. */
 const INITIAL_SYSTEM_LABELS = ["INBOX", "STARRED", "IMPORTANT", "SENT", "SPAM", "TRASH", "UNREAD"];
 
 /** The tag of the watch sockets of a mailbox. The MCP stream of a subscriber holds one. */

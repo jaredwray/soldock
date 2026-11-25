@@ -310,8 +310,8 @@ Reply later is a queue of the threads that need an answer. The queue is the syst
   back in the queue.
 - `label:REPLY_LATER` lists the queue, newest first. `mail.list_labels` gives its count in
   `threads_total`.
-- Migration 5 adds the label to each mailbox. A user label with the folded name `reply_later` first
-  gets its id in its name, because label names are unique.
+- The migration to schema version 6 adds the label to each mailbox. A user label with the folded name
+  `reply_later` first gets its id in its name, because label names are unique.
 
 ## Auto labels
 
@@ -727,7 +727,7 @@ A disabled endpoint stays disabled. Delete it and create a new one.
 
 | State | Where | Notes |
 | --- | --- | --- |
-| Messages, threads, references, labels, message labels | `MailboxDO` SQLite | One object for each principal and each team mailbox, keyed by the mailbox id (`prn_…` or `tmb_…`). Reply later is the system label `REPLY_LATER` (a row in `labels` from migration 5) and its rows in `message_labels` |
+| Messages, threads, references, labels, message labels | `MailboxDO` SQLite | One object for each principal and each team mailbox, keyed by the mailbox id (`prn_…` or `tmb_…`). Reply later is the system label `REPLY_LATER` (a row in `labels` from the migration to schema version 6) and its rows in `message_labels` |
 | Who sent a message from the mailbox | `MailboxDO` table `messages`, column `sent_by_json` | The principal id, the kind and the name at the time of the send. Null for mail that arrived, and for mail sent before this column |
 | Search index | `MailboxDO` SQLite, FTS5 table `messages_fts` | Rebuildable from the messages |
 | Delivery status of sent mail | `MailboxDO` table `delivery` | |
