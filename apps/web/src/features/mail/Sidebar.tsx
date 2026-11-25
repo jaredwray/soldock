@@ -10,15 +10,15 @@ import { isExpanded, type MailboxEntry, mailboxNav } from "./mailboxNav.ts";
 import { labelRows, navCount, SYSTEM_NAV } from "./views.ts";
 
 interface SidebarProps {
-	/** The team mailbox or the agent mailbox of the views, or null for the own mailbox. */
+	/** The team mailbox, the delegated mailbox or the agent mailbox of the views, or null for the own mailbox. */
 	mailboxId: string | null;
 	/** The name of the open mailbox, for a row before the list of mailboxes loads. Null for the own mailbox. */
 	mailboxName: string | null;
 	/** The address of the open mailbox, for the line under the name of the sidebar. */
 	address: string;
 	/**
-	 * The mailboxes that the person can use. The sidebar shows a row for each mailbox when a team mailbox
-	 * or an agent mailbox is in the list. Only owners and admins get agent mailboxes.
+	 * The mailboxes that the person can use. The sidebar shows a row for each mailbox when a team mailbox,
+	 * a delegated mailbox or an agent mailbox is in the list. Only owners and admins get agent mailboxes.
 	 */
 	mailboxes: readonly Mailbox[] | null;
 	/** The mailboxes that the person expanded (true) or collapsed (false), by `mailboxKey`. */
@@ -41,8 +41,8 @@ interface SidebarProps {
 	open: boolean;
 	onCompose: () => void;
 	onNewLabel: () => void;
-	/** Opens the auto-label settings of the open mailbox. */
-	onAutoLabels: () => void;
+	/** Opens the auto-label settings of the open mailbox. Unset when the person cannot change them. */
+	onAutoLabels?: (() => void) | undefined;
 	onDeleteLabel: (label: Label) => void;
 	onClose: () => void;
 }
@@ -169,10 +169,22 @@ function MailboxNode({
 	children: ReactNode;
 }) {
 	const groupId = useId();
-	// An agent mailbox of a service account gets the settings icon, as in Admin › Members.
-	const icon = entry.kind === "personal" ? "mail" : entry.kind === "team" ? "team" : entry.service ? "settings" : "bot";
-	// A screen reader also reads the address, and "read only" for the mailbox of an agent.
-	const extra = [entry.address, entry.kind === "agent" ? "read only" : null].filter(Boolean).join(", ");
+	// An agent mailbox of a service account gets the settings icon, as in Admin › Members. The mailbox of a
+	// different person gets the icon of a person.
+	const icon =
+		entry.kind === "personal"
+			? "mail"
+			: entry.kind === "team"
+				? "team"
+				: entry.kind === "delegated"
+					? "user"
+					: entry.service
+						? "settings"
+						: "bot";
+	// A screen reader also reads the address, "read only" for the mailbox of an agent, and whose mailbox a
+	// delegated mailbox is.
+	const note = entry.kind === "agent" ? "read only" : entry.kind === "delegated" ? "the mailbox of a person" : null;
+	const extra = [entry.address, note].filter(Boolean).join(", ");
 	return (
 		<li className="nav-tree-node">
 			<div className="nav-mailbox-row">
@@ -244,7 +256,7 @@ function MailboxContents({
 	/** True when the person can add and delete labels here. */
 	editable: boolean;
 	onNewLabel?: () => void;
-	onAutoLabels?: () => void;
+	onAutoLabels?: (() => void) | undefined;
 	onDeleteLabel?: (label: Label) => void;
 }) {
 	const byId = new Map((labels ?? []).map((label) => [label.id, label]));

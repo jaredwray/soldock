@@ -2,6 +2,7 @@ import { AGENT_SCOPES, type OutputOf, SERVICE_SCOPES } from "@asterra/contracts"
 import { describe, expect, it } from "vitest";
 import {
 	accountScopes,
+	delegatedMailboxRows,
 	driveRows,
 	mailboxRows,
 	roomRows,
@@ -17,6 +18,9 @@ const access: Access = {
 	team_mailboxes: [
 		{ id: "tmb_support", display_name: "Support", address: "support@dock.test", scopes: ["mail.read", "mail.send"] },
 		{ id: "tmb_billing", display_name: "Billing", address: "billing@dock.test", scopes: ["mail.read"] },
+	],
+	delegated_mailboxes: [
+		{ id: "prn_ada", display_name: "Ada Lovelace", address: "ada@dock.test", scopes: ["mail.read", "mail.send"] },
 	],
 	shared_drives: [{ id: "drv_team", name: "Team", role: "viewer" }],
 	chat_rooms: [
@@ -61,6 +65,13 @@ describe("the Access part of an agent or a service account", () => {
 		expect(mailboxRows(access, sponsor).map((row) => row.href)).toEqual([null, null]);
 		const narrowed = { ...access, team_mailboxes: [{ ...access.team_mailboxes[1], scopes: [] }] } as Access;
 		expect(mailboxRows(narrowed, admin)[0]?.detail).toBe("Can do nothing");
+	});
+
+	// Only the owner of a mailbox changes its delegates, so no person who looks at the summary gets a link.
+	it("shows what the mailbox of each person allows, with no link", () => {
+		expect(delegatedMailboxRows(access)).toEqual([
+			{ key: "prn_ada", name: "Ada Lovelace (ada@dock.test)", detail: "Can read and send", href: null },
+		]);
 	});
 
 	it("links a shared drive to its admin section, or to the drive for a different person", () => {

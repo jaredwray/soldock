@@ -1,20 +1,10 @@
-import {
-	MAILBOX_MEMBER_SCOPES,
-	type MailboxMemberScope,
-	type Principal,
-	TEAM_MAILBOX_LIMITS,
-	type TeamMailbox,
-} from "@asterra/contracts";
+import { type Principal, TEAM_MAILBOX_LIMITS, type TeamMailbox } from "@asterra/contracts";
 import { type FormEvent, useId, useState } from "react";
 import { api, errorMessage } from "../../lib/api.ts";
-import { ConfirmDialog } from "../../lib/ConfirmDialog.tsx";
-import { actorKind, KIND_NAMES } from "../../lib/principalKind.ts";
-import { Select } from "../../lib/Select.tsx";
 import { useToast } from "../../lib/toast.tsx";
-import { principalOption } from "../../lib/usePrincipals.ts";
 import { TargetWebhooks } from "../settings/TargetWebhooks.tsx";
 import { AdminCard } from "./AdminCard.tsx";
-import { MAILBOX_SCOPE_NAMES, memberScopes, scopesText, toggleMemberScope } from "./mailboxScopes.ts";
+import { type AccessEditorText, byName, MailboxAccessEditor } from "./MailboxAccessEditor.tsx";
 
 // The UI says "shared mailbox". The operations and the mail paths keep the name "team mailbox".
 
@@ -52,10 +42,7 @@ export function SharedMailboxPanel({ mailbox, principals, onChanged }: SharedMai
 	);
 }
 
-/** Sorts people and agents by name. */
-export function byName(a: Principal, b: Principal): number {
-	return a.display_name.localeCompare(b.display_name);
-}
+export { byName };
 
 interface PartProps {
 	mailbox: TeamMailbox;
@@ -137,217 +124,47 @@ export function MembersPart({
 	/** The title of the part. The default is "Members of" and the name of the mailbox. */
 	heading?: string;
 }) {
-	const toast = useToast();
-	const [candidateId, setCandidateId] = useState("");
-	const [newScopes, setNewScopes] = useState<MailboxMemberScope[]>([...MAILBOX_MEMBER_SCOPES]);
-	const [busy, setBusy] = useState(false);
-	const [error, setError] = useState<string | null>(null);
-	const [removing, setRemoving] = useState<Principal | null>(null);
-	const ids = { heading: useId(), select: useId(), hint: useId(), scopes: useId() };
-	const members = mailbox.members.flatMap((member) =>
-		principals
-			.filter((principal) => principal.id === member.principal_id)
-			.map((principal) => ({ principal, scopes: memberScopes(member.scopes) })),
-	);
-
-	/** Sets what a member can do in the mailbox. The change applies at the next call of the member. */
-	async function setScopes(principal: Principal, scopes: MailboxMemberScope[]) {
-		setBusy(true);
-		setError(null);
-		try {
-			const result = await api.call("directory.add_team_mailbox_member", {
-				mailbox_id: mailbox.id,
-				principal_id: principal.id,
-				scopes,
-			});
-			onChanged(result.team_mailbox);
-			toast({ message: `${principal.display_name} can now ${scopesText(scopes)} in ${mailbox.display_name}.` });
-		} catch (caught) {
-			setError(errorMessage(caught));
-		} finally {
-			setBusy(false);
-		}
-	}
-	// An archived account cannot use a mailbox, so the list does not offer it.
-	const candidates = principals
-		.filter((principal) => !mailbox.member_ids.includes(principal.id) && principal.archived_at === null)
-		.sort(byName);
-	const full = mailbox.member_ids.length >= TEAM_MAILBOX_LIMITS.members;
-
-	async function add(event: FormEvent<HTMLFormElement>) {
-		event.preventDefault();
-		const principal = candidates.find((candidate) => candidate.id === candidateId);
-		if (!principal) return setError("Select a person or an agent.");
-		setBusy(true);
-		setError(null);
-		try {
-			const result = await api.call("directory.add_team_mailbox_member", {
-				mailbox_id: mailbox.id,
-				principal_id: principal.id,
-				scopes: newScopes,
-			});
-			setCandidateId("");
-			setNewScopes([...MAILBOX_MEMBER_SCOPES]);
-			onChanged(result.team_mailbox);
-			toast({ message: `${principal.display_name} can now ${scopesText(newScopes)} in ${mailbox.display_name}.` });
-		} catch (caught) {
-			setError(errorMessage(caught));
-		} finally {
-			setBusy(false);
-		}
-	}
-
-	async function remove(principal: Principal) {
-		const result = await api.call("directory.remove_team_mailbox_member", {
-			mailbox_id: mailbox.id,
-			principal_id: principal.id,
-		});
-		onChanged(result.team_mailbox);
-		toast({ message: `${principal.display_name} can no longer use ${mailbox.display_name}.` });
-	}
-
 	return (
-		<section className="panel" aria-labelledby={ids.heading}>
-			<h2 id={ids.heading} className="panel-title">
-				{heading ?? `Members of ${mailbox.display_name}`}
-			</h2>
-			<div className="panel-card panel-card-list">
-				{members.length === 0 ? (
-					<p className="panel-empty">Nobody can use this mailbox yet. Mail to its address still arrives.</p>
-				) : (
-					<div className="table-scroll">
-						<table className="table table-rows">
-							<caption className="visually-hidden">Members of {mailbox.display_name}</caption>
-							<thead>
-								<tr>
-									<th scope="col">Name</th>
-									<th scope="col">Kind</th>
-									<th scope="col">Can</th>
-									<th scope="col" className="cell-actions">
-										<span className="visually-hidden">Actions</span>
-									</th>
-								</tr>
-							</thead>
-							<tbody>
-								{members.map(({ principal: member, scopes }) => (
-									<tr key={member.id} className={member.archived_at !== null ? "row-muted" : undefined}>
-										<td>
-											<div className="member-name">
-												{member.display_name}
-												{member.archived_at !== null && <span className="chip chip-small">Archived</span>}
-											</div>
-											<div className="row-note">{member.address}</div>
-										</td>
-										<td>
-											<span className={`kind kind-${actorKind(member.kind)}`}>{KIND_NAMES[member.kind]}</span>
-										</td>
-										<td>
-											<fieldset className="scope-inline">
-												<legend className="visually-hidden">
-													What {member.display_name} can do in {mailbox.display_name}
-												</legend>
-												{MAILBOX_MEMBER_SCOPES.map((scope) => {
-													const next = toggleMemberScope(scopes, scope);
-													return (
-														<label key={scope} className="check-row check-row-inline">
-															<input
-																type="checkbox"
-																className="checkbox"
-																checked={scopes.includes(scope)}
-																onChange={() => next && void setScopes(member, next)}
-																// A member keeps one scope. Remove takes the access away.
-																disabled={busy || next === null}
-															/>
-															<span>{MAILBOX_SCOPE_NAMES[scope]}</span>
-														</label>
-													);
-												})}
-											</fieldset>
-										</td>
-										<td className="cell-actions">
-											<button
-												type="button"
-												className="button button-small"
-												aria-label={`Remove ${member.display_name} from ${mailbox.display_name}`}
-												onClick={() => setRemoving(member)}
-												disabled={busy}
-											>
-												Remove
-											</button>
-										</td>
-									</tr>
-								))}
-							</tbody>
-						</table>
-					</div>
-				)}
-				<form className="panel-form panel-form-divided" onSubmit={add} noValidate>
-					<div className="field">
-						<label htmlFor={ids.select} className="field-label">
-							Add a member
-						</label>
-						<Select
-							id={ids.select}
-							value={candidateId}
-							options={candidates.map(principalOption)}
-							placeholder="Select a person or an agent"
-							onChange={setCandidateId}
-							aria-describedby={ids.hint}
-							disabled={busy || full || candidates.length === 0}
-						/>
-						<p id={ids.hint} className="field-hint">
-							{full
-								? `A shared mailbox can have at most ${TEAM_MAILBOX_LIMITS.members} members.`
-								: "An agent sends from this mailbox only to the recipients that its own policy allows."}
-						</p>
-					</div>
-					<fieldset className="scope-inline" aria-describedby={ids.scopes}>
-						<legend className="field-label">The new member can</legend>
-						{MAILBOX_MEMBER_SCOPES.map((scope) => {
-							const next = toggleMemberScope(newScopes, scope);
-							return (
-								<label key={scope} className="check-row check-row-inline">
-									<input
-										type="checkbox"
-										className="checkbox"
-										checked={newScopes.includes(scope)}
-										onChange={() => next && setNewScopes(next)}
-										disabled={busy || full || next === null}
-									/>
-									<span>{MAILBOX_SCOPE_NAMES[scope]}</span>
-								</label>
-							);
-						})}
-						<p id={ids.scopes} className="field-hint">
-							Read shows the mail and the labels. Change sets labels, the read state, archive and trash. Send sends from
-							the address of the mailbox. For an agent or a service account, the membership alone decides, and it can
-							use the mailbox at once with its key.
-						</p>
-					</fieldset>
-					{error && (
-						<p className="form-error" role="alert">
-							{error}
-						</p>
-					)}
-					<button type="submit" className="button button-primary" disabled={busy || full || candidates.length === 0}>
-						{busy ? "Please wait…" : "Add member"}
-					</button>
-				</form>
-			</div>
-			{removing && (
-				<ConfirmDialog
-					title="Remove member?"
-					confirmLabel="Remove member"
-					danger
-					onClose={() => setRemoving(null)}
-					onConfirm={() => remove(removing)}
-				>
-					<p>
-						Remove {removing.display_name} from {mailbox.display_name}? The access ends at once. The mail stays in the
-						shared mailbox.
-					</p>
-				</ConfirmDialog>
-			)}
-		</section>
+		<MailboxAccessEditor
+			heading={heading ?? `Members of ${mailbox.display_name}`}
+			mailboxName={mailbox.display_name}
+			members={mailbox.members}
+			principals={principals}
+			limit={TEAM_MAILBOX_LIMITS.members}
+			text={MEMBER_TEXT}
+			onSet={async (principal, scopes) => {
+				const result = await api.call("directory.add_team_mailbox_member", {
+					mailbox_id: mailbox.id,
+					principal_id: principal.id,
+					scopes,
+				});
+				onChanged(result.team_mailbox);
+			}}
+			onRemove={async (principal) => {
+				const result = await api.call("directory.remove_team_mailbox_member", {
+					mailbox_id: mailbox.id,
+					principal_id: principal.id,
+				});
+				onChanged(result.team_mailbox);
+			}}
+		/>
 	);
 }
+
+/** The words of the member editor of a shared mailbox. */
+const MEMBER_TEXT: AccessEditorText = {
+	caption: (mailbox) => `Members of ${mailbox}`,
+	empty: "Nobody can use this mailbox yet. Mail to its address still arrives.",
+	addLabel: "Add a member",
+	addHint: "An agent sends from this mailbox only to the recipients that its own policy allows.",
+	full: `A shared mailbox can have at most ${TEAM_MAILBOX_LIMITS.members} members.`,
+	newLegend: "The new member can",
+	scopesHint:
+		"Read shows the mail and the labels. Change sets labels, the read state, archive and trash. Send sends from the address of the mailbox. For an agent or a service account, the membership alone decides, and it can use the mailbox at once with its key.",
+	addButton: "Add member",
+	removeLabel: (member, mailbox) => `Remove ${member} from ${mailbox}`,
+	removeTitle: "Remove member?",
+	removeConfirm: "Remove member",
+	removeBody: (member, mailbox) =>
+		`Remove ${member} from ${mailbox}? The access ends at once. The mail stays in the shared mailbox.`,
+};

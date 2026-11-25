@@ -1,5 +1,6 @@
 import {
 	MAIL_LIMITS,
+	MAILBOX_DELEGATE_LIMITS,
 	MAILBOX_MEMBER_SCOPES,
 	type MailboxMemberScope,
 	type Message,
@@ -12,13 +13,21 @@ import {
 	agentMailboxFor,
 	type CallContext,
 	canReadAgentMailboxes,
+	delegatedMailboxesOf,
+	delegatedMailboxFor,
 	domainOf,
+	getPrincipal,
 	holdsForResource,
 	isAdmin,
 	isTeamMailboxId,
+	listMailboxDelegates,
 	type MailboxRecord,
+	type MemberMailboxRecord,
 	mailDomains,
+	recordServiceMemberships,
+	removeMailboxDelegate,
 	resolveMailboxAddress,
+	setMailboxDelegate,
 	teamMailboxesOf,
 	teamMailboxFor,
 } from "../identity/index.ts";
@@ -47,6 +56,9 @@ import { webhookHandlers } from "./webhooks.ts";
 
 type MailOperation =
 	| "mail.list_mailboxes"
+	| "mail.list_delegates"
+	| "mail.set_delegate"
+	| "mail.remove_delegate"
 	| "mail.get_settings"
 	| "mail.update_settings"
 	| "mail.get_mailbox_settings"
@@ -86,14 +98,50 @@ function ownMailbox(call: CallContext): MailboxRecord {
 }
 
 /**
- * The mailbox of a call: the own mailbox of the caller by default, or a team mailbox that the caller
- * is a member of. An owner or an admin can also read the own mailbox of an agent, but cannot change it
- * or send from it. This is the resource check of each mail operation. The scopes of the credential
- * decide what the caller can do, and this decides in which mailbox.
+ * The mailbox of a person, for a delegate of that person. Null when the owner gave the caller no grant.
+ * Throws `forbidden` for a delegate without one of the scopes in `needed`.
+ */
+async function delegatedMailbox(
+	call: CallContext,
+	mailboxId: string,
+	needed: readonly MailboxMemberScope[],
+): Promise<MemberMailboxRecord | null> {
+	const record = await delegatedMailboxFor(call.env.DIRECTORY, mailboxId, call.caller.id);
+	if (!record) return null;
+	const missing = needed.filter((scope) => !record.scopes.includes(scope));
+	if (missing.length > 0) {
+		throw new OperationError(
+			"forbidden",
+			`Your access to this mailbox does not have ${missing.join(", ")}. The owner of the mailbox can add it.`,
+		);
+	}
+	return record;
+}
+
+/**
+ * A mailbox that is not the own mailbox of the caller, where a membership or a grant decides: a team mailbox
+ * that the caller is a member of, or the mailbox of a person who lets the caller use it. Null for the id of a
+ * principal who gave the caller no grant. Throws as `teamMailboxFor` and `delegatedMailbox` do.
+ */
+async function sharedMailbox(
+	call: CallContext,
+	mailboxId: string,
+	needed: readonly MailboxMemberScope[],
+): Promise<MemberMailboxRecord | null> {
+	if (isTeamMailboxId(mailboxId)) return teamMailboxFor(call.env.DIRECTORY, mailboxId, call.caller.id, needed);
+	return delegatedMailbox(call, mailboxId, needed);
+}
+
+/**
+ * The mailbox of a call: the own mailbox of the caller by default, a team mailbox that the caller is a
+ * member of, or the mailbox of a person who lets the caller use it. An owner or an admin can also read the
+ * own mailbox of an agent, but cannot change it or send from it. This is the resource check of each mail
+ * operation. The scopes of the credential decide what the caller can do, and this decides in which mailbox.
  *
- * In a team mailbox, the membership has scopes too. The call needs each mail scope of its operation in the
- * membership (`mailboxMemberScopes`). The contract of the operation names them, so a handler cannot ask for
- * a different scope than the invoker did. `also` names a scope that one input of the operation needs more.
+ * In a team mailbox, the membership has scopes too, and in the mailbox of a person, the grant has them. The
+ * call needs each mail scope of its operation there (`mailboxMemberScopes`). The contract of the operation
+ * names them, so a handler cannot ask for a different scope than the invoker did. `also` names a scope that
+ * one input of the operation needs more.
  */
 async function openMailbox(
 	call: CallContext,
@@ -102,27 +150,53 @@ async function openMailbox(
 	also: readonly MailboxMemberScope[] = [],
 ) {
 	const needed = [...new Set([...mailboxMemberScopes(operations[operation].scopes), ...also])];
-	let record: MailboxRecord;
-	if (mailboxId === undefined || mailboxId === call.caller.id) record = ownMailbox(call);
-	else if (isTeamMailboxId(mailboxId)) {
-		record = await teamMailboxFor(call.env.DIRECTORY, mailboxId, call.caller.id, needed);
-	} else if (canReadAgentMailboxes(call.caller)) {
-		record = await agentMailboxFor(call.env.DIRECTORY, mailboxId);
-		// An owner or an admin reads the mail of an agent. A change would change what the agent sees, for
-		// example the read state, and a send would come from the address of the agent.
-		if (needed.some((scope) => scope !== "mail.read")) {
-			throw new OperationError(
-				"forbidden",
-				"You can read the mailbox of an agent, but you cannot change it or send from it.",
-			);
-		}
-	} else {
+	const record: MailboxRecord =
+		mailboxId === undefined || mailboxId === call.caller.id
+			? ownMailbox(call)
+			: ((await sharedMailbox(call, mailboxId, needed)) ?? (await otherMailbox(call, mailboxId, needed)));
+	return { record, box: mailboxStub(call.env, record.id) };
+}
+
+/**
+ * The mailbox of a different principal who gave the caller no grant. An owner or an admin can read the own
+ * mailbox of an agent. Each other caller gets `forbidden`.
+ */
+async function otherMailbox(
+	call: CallContext,
+	mailboxId: string,
+	needed: readonly MailboxMemberScope[],
+): Promise<MailboxRecord> {
+	if (!canReadAgentMailboxes(call.caller)) {
 		throw new OperationError(
 			"forbidden",
-			"You can use only your own mailbox and the team mailboxes that you are a member of.",
+			"You can use only your own mailbox, the team mailboxes that you are a member of and the mailboxes that their owners let you use.",
 		);
 	}
-	return { record, box: mailboxStub(call.env, record.id) };
+	const record = await agentMailboxFor(call.env.DIRECTORY, mailboxId);
+	// An owner or an admin reads the mail of an agent. A change would change what the agent sees, for
+	// example the read state, and a send would come from the address of the agent.
+	if (needed.some((scope) => scope !== "mail.read")) {
+		throw new OperationError(
+			"forbidden",
+			"You can read the mailbox of an agent, but you cannot change it or send from it.",
+		);
+	}
+	return record;
+}
+
+/**
+ * Only the owner changes the settings of the own mailbox of a person: the signature, the Screener and the
+ * auto labels. A delegate changes the mail and the labels, and nothing more.
+ */
+function requireNotDelegate(record: MailboxRecord): void {
+	if (record.kind === "delegated") {
+		throw new OperationError("forbidden", "Only the owner of this mailbox can change its settings.");
+	}
+}
+
+/** The delegates of the own mailbox of the caller, as the delegate operations return them. */
+async function ownDelegates(call: CallContext) {
+	return { delegates: await listMailboxDelegates(call.env.DIRECTORY, call.caller.id) };
 }
 
 /** Turns a refusal from the mailbox into an OperationError, and returns any other result. */
@@ -161,10 +235,13 @@ function auditOk(
 /**
  * What the mailbox needs to know about the Screener: the default of the organization, and whether the
  * Screener can apply. It applies to the own mailbox of a person and to a team mailbox. It never applies to
- * the own mailbox of an agent or a service account.
+ * the own mailbox of an agent or a service account. A delegated mailbox is the own mailbox of a person.
  */
 async function screenerContext(call: CallContext, record: MailboxRecord): Promise<ScreenerContext> {
-	const eligible = record.kind === "team" || (record.kind === "personal" && call.caller.kind === "human");
+	const eligible =
+		record.kind === "team" ||
+		record.kind === "delegated" ||
+		(record.kind === "personal" && call.caller.kind === "human");
 	return { orgDefault: await screenerDefault(call.env.DIRECTORY), eligible };
 }
 
@@ -320,8 +397,9 @@ export const mailHandlers: Pick<HandlerMap<CallContext>, MailOperation> = {
 	...webhookHandlers,
 
 	async "mail.list_mailboxes"(call) {
-		const [teams, agents] = await Promise.all([
+		const [teams, delegated, agents] = await Promise.all([
 			teamMailboxesOf(call.env.DIRECTORY, call.caller.id),
+			delegatedMailboxesOf(call.env.DIRECTORY, call.caller.id),
 			canReadAgentMailboxes(call.caller) ? agentMailboxes(call.env.DIRECTORY) : [],
 		]);
 		// A person can do each thing in their own mailbox. An agent or a service account can do what its account
@@ -333,10 +411,62 @@ export const mailHandlers: Pick<HandlerMap<CallContext>, MailOperation> = {
 		const mailboxes = [
 			{ ...ownMailbox(call), service: call.caller.kind === "service", scopes: own },
 			...teams.map((mailbox) => ({ ...mailbox, service: false })),
+			// The mailbox of each person who lets the caller use it. The grant decides, as a membership does.
+			...delegated.map((mailbox) => ({ ...mailbox, service: false })),
 			// An owner or an admin can read the mailbox of an agent or a service account, and nothing more.
 			...agents.map((mailbox) => ({ ...mailbox, scopes: ["mail.read"] })),
 		];
 		return { mailboxes };
+	},
+
+	// The delegates of the own mailbox of a person. The operations take no mailbox_id: only the owner of a
+	// mailbox reads and changes its delegates, never an owner or an admin for a different person.
+	async "mail.list_delegates"(call) {
+		return ownDelegates(call);
+	},
+
+	async "mail.set_delegate"(call, input) {
+		const { DIRECTORY } = call.env;
+		const ownerId = call.caller.id;
+		if (input.principal_id === ownerId) {
+			throw new OperationError("invalid", "You use your own mailbox without a grant.");
+		}
+		// A credential cannot give a scope that it does not hold, so a narrow key cannot give more than it can do.
+		const notHeld = input.scopes.filter((scope) => !call.caller.scopes.has(scope));
+		if (notHeld.length > 0) {
+			throw new OperationError(
+				"forbidden",
+				`Your credential does not hold ${notHeld.join(", ")}, so it cannot give it.`,
+			);
+		}
+		const target = await getPrincipal(DIRECTORY, input.principal_id);
+		if (!target) throw new OperationError("not_found", "No principal has that id.");
+		const before = (await listMailboxDelegates(DIRECTORY, ownerId)).find(
+			(delegate) => delegate.principal_id === target.id,
+		);
+		if (!(await setMailboxDelegate(DIRECTORY, ownerId, target.id, input.scopes))) {
+			// A delegate always has a row, so only a new delegate can find the list full, or be deleted during the call.
+			if (!(await getPrincipal(DIRECTORY, target.id))) {
+				throw new OperationError("not_found", "No principal has that id.");
+			}
+			throw new OperationError("invalid", `A mailbox can have at most ${MAILBOX_DELEGATE_LIMITS.delegates} delegates.`);
+		}
+		const result = await ownDelegates(call);
+		const stored = result.delegates.find((delegate) => delegate.principal_id === target.id)?.scopes ?? [];
+		// A call that changes nothing writes no line, so a script can send the wanted delegates again.
+		if (!before || before.scopes.join(",") !== stored.join(",")) {
+			auditOk(call, ownMailbox(call), "mail.set_delegate", `${target.id}:${stored.join(",")}`);
+			recordServiceMemberships(call, [target.id], "mail.set_delegate", ownerId);
+		}
+		return result;
+	},
+
+	async "mail.remove_delegate"(call, input) {
+		if (await removeMailboxDelegate(call.env.DIRECTORY, call.caller.id, input.principal_id)) {
+			auditOk(call, ownMailbox(call), "mail.remove_delegate", input.principal_id);
+			recordServiceMemberships(call, [input.principal_id], "mail.remove_delegate", call.caller.id);
+		}
+		return ownDelegates(call);
 	},
 
 	// The settings of a person live in their own mailbox. These operations take no mailbox_id, so a member
@@ -350,26 +480,24 @@ export const mailHandlers: Pick<HandlerMap<CallContext>, MailOperation> = {
 		if (input.default_from) {
 			const { mailbox_id: mailboxId } = input.default_from;
 			const own = (id: string) => id === call.caller.id;
-			// The web app composes in the own mailbox or in a team mailbox. Nobody writes from the mailbox of an
-			// agent, and the mailbox of a different person is private.
-			if (!own(mailboxId) && !isTeamMailboxId(mailboxId)) {
-				throw new OperationError(
-					"invalid",
-					"The mailbox in default_from must be your own mailbox or a team mailbox that you are a member of.",
-				);
-			}
 			// The same id means the address of the mailbox itself, which is the default.
 			const fromId = input.default_from.from_mailbox_id === mailboxId ? null : input.default_from.from_mailbox_id;
-			if (fromId !== null && !own(fromId) && !isTeamMailboxId(fromId)) {
-				throw new OperationError(
-					"invalid",
-					"You can send only from your own address and from the address of a team mailbox that you are a member of.",
-				);
-			}
-			// A removal needs no membership, so a person can remove a setting after a membership ended.
+			// A removal needs no membership and no grant, so a person can remove a setting after the access ended.
+			// The web app composes in the own mailbox, in a team mailbox or in a delegated mailbox. Nobody writes
+			// from the mailbox of an agent, and the mailbox of a person who gave no grant is private.
 			if (fromId !== null) {
-				if (!own(mailboxId)) await teamMailboxFor(call.env.DIRECTORY, mailboxId, call.caller.id, ["mail.read"]);
-				if (!own(fromId)) await teamMailboxFor(call.env.DIRECTORY, fromId, call.caller.id, ["mail.send"]);
+				if (!own(mailboxId) && !(await sharedMailbox(call, mailboxId, ["mail.read"]))) {
+					throw new OperationError(
+						"invalid",
+						"The mailbox in default_from must be your own mailbox, a team mailbox that you are a member of or a mailbox that its owner lets you use.",
+					);
+				}
+				if (!own(fromId) && !(await sharedMailbox(call, fromId, ["mail.send"]))) {
+					throw new OperationError(
+						"invalid",
+						"You can send only from your own address, from the address of a team mailbox that you are a member of and from the address of a mailbox that its owner lets you send from.",
+					);
+				}
 			}
 			defaultFrom = { mailbox_id: mailboxId, from_mailbox_id: fromId };
 		}
@@ -390,6 +518,7 @@ export const mailHandlers: Pick<HandlerMap<CallContext>, MailOperation> = {
 
 	async "mail.update_mailbox_settings"(call, input) {
 		const { record, box } = await openMailbox(call, input.mailbox_id, "mail.update_mailbox_settings");
+		requireNotDelegate(record);
 		// The members of a team mailbox share its signature, and the web composer adds it to the mail of each
 		// person. An agent that a message tricks could put text into that mail, so only people change it there.
 		if (call.caller.kind !== "human" && record.kind !== "personal") {
@@ -478,6 +607,7 @@ export const mailHandlers: Pick<HandlerMap<CallContext>, MailOperation> = {
 
 	async "mail.update_auto_labels"(call, input) {
 		const { record, box } = await openMailbox(call, input.mailbox_id, "mail.update_auto_labels");
+		requireNotDelegate(record);
 		const settings = accept(await box.updateAutoLabels(record.id, { enabled: input.enabled, labels: input.labels }));
 		auditOk(call, record, "mail.update_auto_labels", record.id);
 		const reason = await autoLabelUnavailableReason(call.env);
@@ -486,6 +616,7 @@ export const mailHandlers: Pick<HandlerMap<CallContext>, MailOperation> = {
 
 	async "mail.create_auto_label"(call, input) {
 		const { record, box } = await openMailbox(call, input.mailbox_id, "mail.create_auto_label");
+		requireNotDelegate(record);
 		const settings = accept(
 			await box.createAutoLabel(record.id, {
 				name: input.name,
@@ -500,6 +631,7 @@ export const mailHandlers: Pick<HandlerMap<CallContext>, MailOperation> = {
 
 	async "mail.delete_auto_label"(call, input) {
 		const { record, box } = await openMailbox(call, input.mailbox_id, "mail.delete_auto_label");
+		requireNotDelegate(record);
 		const result = accept(await box.deleteAutoLabel(record.id, input.auto_label_id));
 		auditOk(call, record, "mail.delete_auto_label", input.auto_label_id);
 		return result;
@@ -637,11 +769,12 @@ export const mailHandlers: Pick<HandlerMap<CallContext>, MailOperation> = {
 	async "mail.send"(call, input) {
 		// A reply reads the message that it answers: its subject and its references go into the new message.
 		// So a reply needs mail.read too, or a send would show mail that the caller cannot read. A member of a
-		// team mailbox needs it in the membership. The credential needs it too, except for an agent in a team
-		// mailbox, where the membership alone decides.
+		// team mailbox needs it in the membership, and a delegate needs it in the grant. The credential needs it
+		// too, except for an agent in a team mailbox or in the mailbox of a person, where the membership or the
+		// grant alone decides.
 		const replyScopes: MailboxMemberScope[] = input.reply_to_message_id ? ["mail.read"] : [];
-		const team = input.mailbox_id !== undefined && isTeamMailboxId(input.mailbox_id);
-		const missing = replyScopes.filter((scope) => !holdsForResource(call.caller, scope, team));
+		const shared = input.mailbox_id !== undefined && input.mailbox_id !== call.caller.id;
+		const missing = replyScopes.filter((scope) => !holdsForResource(call.caller, scope, shared));
 		if (missing.length > 0) {
 			throw new OperationError(
 				"forbidden",
@@ -652,14 +785,15 @@ export const mailHandlers: Pick<HandlerMap<CallContext>, MailOperation> = {
 		// The idempotency key is bound to the request, so a reused key with another message is a conflict.
 		const { idempotency_key: _key, ...request } = input;
 		const requestHash = await sha256Hex(JSON.stringify(request));
-		// The members of a team mailbox share its key store. Each key belongs to its caller there, so the
-		// key of one member can never return or block the send of a different member.
+		// The members of a team mailbox share its key store, and a delegate shares the key store of the owner.
+		// Each key belongs to its caller there, so the key of one caller can never return or block the send of
+		// a different caller. The owner of a mailbox keeps the plain key in the own mailbox.
 		const idempotencyKey =
 			input.idempotency_key === undefined
 				? null
-				: record.kind === "team"
-					? `${call.caller.id}:${input.idempotency_key}`
-					: input.idempotency_key;
+				: record.kind === "personal"
+					? input.idempotency_key
+					: `${call.caller.id}:${input.idempotency_key}`;
 		if (idempotencyKey) {
 			const earlier = await box.idempotentResult(idempotencyKey, requestHash);
 			if (earlier) return accept(earlier);
@@ -745,19 +879,19 @@ export const mailHandlers: Pick<HandlerMap<CallContext>, MailOperation> = {
 			recipients,
 			sentBy: { principal_id: principal.id, kind: principal.kind, display_name: principal.display_name },
 			// A send that screens a sender in is a decision, so it needs what mail.screen_sender needs: a person
-			// with mail.modify in the credential. The check of the membership of a team mailbox is below.
+			// with mail.modify in the credential. The check of the membership or the grant is below.
 			mayScreen: call.caller.kind === "human" && call.caller.scopes.has("mail.modify"),
 		};
 		// A send has slow steps: it resolves the recipients, composes the message and writes it to R2. An
-		// admin can remove the member in that time. So the handler checks the membership again, just before
-		// the mailbox stores the message. This check and the store are not one transaction: a removal
-		// between them is too late to stop this send.
-		if (record.kind === "team") {
+		// admin can remove the member in that time, and the owner of a mailbox can remove the delegate. So the
+		// handler checks the membership or the grant again, just before the mailbox stores the message. This
+		// check and the store are not one transaction: a removal between them is too late to stop this send.
+		if (record.kind === "team" || record.kind === "delegated") {
 			try {
-				const member = await teamMailboxFor(call.env.DIRECTORY, record.id, call.caller.id, [
-					"mail.send",
-					...replyScopes,
-				]);
+				const member = await sharedMailbox(call, record.id, ["mail.send", ...replyScopes]);
+				if (!member) {
+					throw new OperationError("forbidden", "The owner of this mailbox removed your access to it.");
+				}
 				sendInput.mayScreen = sendInput.mayScreen === true && member.scopes.includes("mail.modify");
 			} catch (error) {
 				// No message references this attempt's object.

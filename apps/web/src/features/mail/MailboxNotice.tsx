@@ -1,16 +1,17 @@
 import { Icon } from "../../lib/icons.tsx";
-import { isAgentMailbox } from "../../routes.ts";
+import { isAgentMailbox, isDelegatedMailbox } from "../../routes.ts";
 import { useMailboxId, useMailboxRights } from "./mailbox.tsx";
 import { rightsNotice } from "./mailboxNav.ts";
 
 /**
  * The notice above the conversations of a mailbox that the person cannot fully use: the mailbox of an agent,
- * which an owner or an admin can only read, or a shared mailbox whose membership lacks a scope. Nothing in a
- * mailbox that the person can fully use.
+ * which an owner or an admin can only read, a shared mailbox whose membership lacks a scope, or the mailbox of
+ * a different person whose grant lacks a scope. Nothing in a mailbox that the person can fully use.
  */
 export function MailboxNotice() {
 	const mailboxId = useMailboxId();
-	const notice = rightsNotice(useMailboxRights());
+	const delegated = isDelegatedMailbox(mailboxId);
+	const notice = rightsNotice(useMailboxRights(), delegated ? "this mailbox" : undefined);
 	if (isAgentMailbox(mailboxId)) {
 		return (
 			<p className="notice read-only-notice">
@@ -27,7 +28,12 @@ export function MailboxNotice() {
 	return (
 		<p className="notice read-only-notice">
 			<Icon name="eye" size={18} />
-			<span>{notice} An owner or an admin sets what each member can do.</span>
+			<span>
+				{notice}{" "}
+				{delegated
+					? "The owner of the mailbox sets what you can do in it."
+					: "An owner or an admin sets what each member can do."}
+			</span>
 		</p>
 	);
 }

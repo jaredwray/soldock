@@ -751,6 +751,14 @@ const MemberAccess = z.object({
 	team_mailboxes: z.array(
 		z.object({ id: z.string(), display_name: z.string(), address: z.string(), scopes: z.array(z.string()) }),
 	),
+	/**
+	 * The mailboxes of people who let an agent or a service account use them (`mail.set_delegate`), with the
+	 * scopes of each grant. `id` is the id of the person. Empty for a person: a grant between two people is
+	 * private.
+	 */
+	delegated_mailboxes: z.array(
+		z.object({ id: z.string(), display_name: z.string(), address: z.string(), scopes: z.array(z.string()) }),
+	),
 	shared_drives: z.array(z.object({ id: z.string(), name: z.string(), role: z.string() })),
 	// `peer_name` is the name of the other member of a direct message. It is null for each other kind. For a
 	// person, the list has the public rooms only.
@@ -789,7 +797,7 @@ const MemberAccess = z.object({
 const ACCESS_TEXT = [
 	"Returns the team mailboxes, the shared drives and the chat rooms that the member is a member of, with its role, and the Drive items that others shared directly with it, with its role.",
 	"Each membership and share decides what the member can do there. Change it in the settings of that mailbox, drive or room, or in the sharing of the item. This call changes nothing.",
-	"For an agent or a service account, scopes has its account scopes, and tokens has its live API keys. For a person, both are empty.",
+	"For an agent or a service account, scopes has its account scopes, tokens has its live API keys, and delegated_mailboxes has the mailboxes of the people who let it use them. Only the owner of such a mailbox changes that grant, with mail.set_delegate. For a person, the three are empty.",
 	"For a person, the answer shows only what an owner or an admin can see in a different place: the team mailboxes, the shared drives and the public rooms. It does not show the private rooms, the direct messages or the items that others shared directly with the person.",
 	`chat_rooms has at most ${AGENT_ACCESS_LIMITS.rooms} rooms, and drive_shared_items at most ${AGENT_ACCESS_LIMITS.sharedItems} items, the newest share first. The matching _truncated field is true when the member has more.`,
 ];

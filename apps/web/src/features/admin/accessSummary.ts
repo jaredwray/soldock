@@ -65,6 +65,22 @@ export function mailboxRows(access: Access, viewer: AccessViewer): AccessRow[] {
 }
 
 /**
+ * The mailboxes of the people who let an agent or a service account use them, with what each grant allows.
+ * Only the owner of such a mailbox changes the grant, in the settings of that mailbox, so a row has no link.
+ */
+export function delegatedMailboxRows(access: Access): AccessRow[] {
+	return access.delegated_mailboxes.map((mailbox) => {
+		const scopes = memberScopes(mailbox.scopes);
+		return {
+			key: mailbox.id,
+			name: `${mailbox.display_name} (${mailbox.address})`,
+			detail: scopes.length === 0 ? "Can do nothing" : `Can ${scopesText(scopes)}`,
+			href: null,
+		};
+	});
+}
+
+/**
  * The shared drives, with the role. An owner or an admin changes the members in Admin › Shared drives. A
  * different person opens the drive, where a manager changes the members.
  */

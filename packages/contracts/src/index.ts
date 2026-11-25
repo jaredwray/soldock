@@ -193,6 +193,7 @@ export {
 	ThreadSummary,
 	WEBHOOK_EVENT_TYPE,
 } from "./mail.ts";
+export { MAILBOX_DELEGATE_LIMITS, MailboxDelegate } from "./mailbox-delegates.ts";
 export { docToMarkdown, markdownToDoc } from "./markdown.ts";
 export { MCP_EVENT_LIMITS, type McpEventDefinition, mcpEventList, mcpEvents } from "./mcp-events.ts";
 export {

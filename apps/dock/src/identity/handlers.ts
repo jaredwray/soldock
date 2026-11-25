@@ -25,6 +25,7 @@ import {
 	recordServiceChange,
 } from "./access.ts";
 import type { AuthContext, CallContext } from "./auth.ts";
+import { delegatedMailboxesOf } from "./mailbox-delegates.ts";
 import { oauthHandlers } from "./oauth-handlers.ts";
 import { toApiKeyOutput, toPrincipalOutput } from "./output.ts";
 import { hashPassword } from "./password.ts";
@@ -147,20 +148,28 @@ async function memberToRead(call: CallContext, principalId: string): Promise<Pri
 
 /**
  * The access of a member that the identity module holds: its team mailboxes, and for an agent or a service
- * account its account scopes and its live API keys. A person has no account scopes, and each key of a person
+ * account the mailboxes of the people who let it use them, its account scopes and its live API keys. A person has no account scopes, and each key of a person
  * has its own scopes, so both lists are empty for a person. The composition root adds the shared drives, the
  * rooms and the items shared directly (`src/handlers.ts`).
  */
 async function accessOf(call: CallContext, target: PrincipalRecord) {
 	const agent = target.kind === "agent";
-	const [mailboxes, keys] = await Promise.all([
+	const [mailboxes, delegated, keys] = await Promise.all([
 		teamMailboxesOf(call.env.DIRECTORY, target.id),
+		// A grant between two people is private. A grant to an agent says where the agent can act.
+		agent ? delegatedMailboxesOf(call.env.DIRECTORY, target.id) : [],
 		agent ? liveApiKeys(call.env.DIRECTORY, target.id) : [],
 	]);
 	return {
 		principal_id: target.id,
 		kind: target.service ? ("service" as const) : target.kind,
 		team_mailboxes: mailboxes.map((mailbox) => ({
+			id: mailbox.id,
+			display_name: mailbox.display_name,
+			address: mailbox.address,
+			scopes: mailbox.scopes,
+		})),
+		delegated_mailboxes: delegated.map((mailbox) => ({
 			id: mailbox.id,
 			display_name: mailbox.display_name,
 			address: mailbox.address,

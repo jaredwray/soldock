@@ -135,8 +135,8 @@ If both schemes identify one subscription, the server uses the first URI in the 
 - A credential sees a resource kind only when it can call the read operation and the list
   operation. A key without `mail.read` sees no inbox.
 - `resources/list` gives one resource for each mailbox of `mail.list_mailboxes`: the own mailbox, each
-  team mailbox that the caller is a member of with `mail.read` and, for an owner or an admin, the mailbox
-  of each agent.
+  team mailbox that the caller is a member of with `mail.read`, each mailbox of a person who lets the
+  caller read it and, for an owner or an admin, the mailbox of each agent.
   An owner or an admin can read the inbox of an agent, but cannot subscribe to it.
 - `resources/list` gives one `chat.room` resource for each room and each direct message that the
   caller is a member of. A key without `chat.read` sees no room.

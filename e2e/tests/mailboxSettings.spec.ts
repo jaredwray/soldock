@@ -154,3 +154,76 @@ test("a member without the change right sees the settings of a shared mailbox re
 		await member.close();
 	}
 });
+
+// The own mailbox of a person is private until the person gives access in its settings. The delegate then sees
+// the mailbox in Mail, with only the actions of the grant. Only the owner changes the settings and the access.
+test("a person lets a member use their mailbox, and the mail views of the member follow the grant", async ({
+	browser,
+}) => {
+	const rafael = await signIn(browser, "rafael");
+	const ingrid = await signIn(browser, "ingrid");
+	const owner = (await (await rafael.request.get("/api/v1/account")).json()).principal as { id: string };
+	const delegate = (await (await ingrid.request.get("/api/v1/account")).json()).principal as { id: string };
+	const delegatedOf = async () => {
+		const { mailboxes } = (await (await ingrid.request.get("/api/v1/mail/mailboxes")).json()) as {
+			mailboxes: { id: string; kind: string; scopes: string[] }[];
+		};
+		return mailboxes.filter((mailbox) => mailbox.kind === "delegated");
+	};
+	try {
+		const page = await rafael.newPage();
+		await page.goto("/mail/settings");
+		const access = page.getByRole("main").getByRole("region", { name: "Access" });
+		await expect(access.getByText("Only you can use this mailbox.")).toBeVisible();
+		expect(await delegatedOf()).toEqual([]);
+
+		// The person gives Ingrid the rights to read and change, without the right to send.
+		await access.getByRole("combobox", { name: "Give access to" }).click();
+		await page.getByRole("option", { name: /^Ingrid/ }).click();
+		await access.getByRole("group", { name: "The person or the agent can" }).getByLabel("Send").uncheck();
+		await access.getByRole("button", { name: "Give access" }).click();
+		await expect(page.getByText("can now read and change in your mailbox.")).toBeVisible();
+		const ingridCan = access.getByRole("group", { name: /^What Ingrid .* can do in your mailbox$/ });
+		await expect(ingridCan.getByLabel("Read")).toBeChecked();
+		await expect(ingridCan.getByLabel("Send")).not.toBeChecked();
+		expect(await delegatedOf()).toEqual([
+			expect.objectContaining({ id: owner.id, scopes: ["mail.read", "mail.modify"] }),
+		]);
+
+		// Ingrid opens the mailbox from the sidebar. It has its own path, no Compose button, and a notice says why.
+		const mail = await ingrid.newPage();
+		await mail.goto("/mail/inbox");
+		await mail
+			.getByRole("navigation", { name: "Mailboxes, folders and labels" })
+			.getByRole("link", { name: /^Rafael Ortega/ })
+			.click();
+		await expect(mail).toHaveURL(new RegExp(`/mail/person/${owner.id}/inbox$`));
+		await expect(mail.getByText("You can read and change this mailbox. You cannot send from it.")).toBeVisible();
+		await expect(mail.getByRole("button", { name: "Compose" })).toHaveCount(0);
+
+		// The settings view tells whose mailbox it is. Only the owner changes its settings.
+		await mail.getByRole("link", { name: "Mailbox settings" }).click();
+		await expect(mail).toHaveURL(new RegExp(`/mail/person/${owner.id}/settings$`));
+		const view = mail.getByRole("main");
+		await expect(view.getByRole("region", { name: "Access" })).toContainText(
+			"This is the mailbox of Rafael Ortega, who lets you use it. You can read and change in it.",
+		);
+		await expect(view.getByRole("checkbox", { name: /Use AI in this mailbox/ })).toBeDisabled();
+		await expect(view.getByRole("textbox", { name: "Signature" })).toHaveAttribute("readonly", "");
+		await expect(view.getByRole("button", { name: "Add member" })).toHaveCount(0);
+		await expect(view.getByRole("button", { name: "Give access" })).toHaveCount(0);
+
+		// The person removes the access. It ends at once for Ingrid.
+		await access.getByRole("button", { name: /^Remove the access of Ingrid/ }).click();
+		await page.getByRole("dialog", { name: "Remove access?" }).getByRole("button", { name: "Remove access" }).click();
+		await expect(page.getByText("can no longer use your mailbox.")).toBeVisible();
+		await expect(access.getByText("Only you can use this mailbox.")).toBeVisible();
+		expect(await delegatedOf()).toEqual([]);
+		const refused = await ingrid.request.get(`/api/v1/mail/threads?mailbox_id=${owner.id}`);
+		expect(refused.status()).toBe(403);
+	} finally {
+		await rafael.request.delete(`/api/v1/mail/delegates/${delegate.id}`, { headers: JSON_HEADERS });
+		await rafael.close();
+		await ingrid.close();
+	}
+});

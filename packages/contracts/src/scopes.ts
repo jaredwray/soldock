@@ -3,7 +3,7 @@
  * they only limit what the key can do: the role of the person and the resource still decide the rest. An
  * agent and a service account have account scopes for their own mailbox, their own drive and the actions
  * that have no mailbox, room or drive. In a team mailbox, a room and a shared drive, the membership decides
- * (`resource-access.ts`).
+ * (`resource-access.ts`). In the mailbox of a person, the grant of that person decides.
  */
 export const SCOPES = {
 	"chat.webhooks": "Create a webhook endpoint and choose which chat message events Asterra sends to it",
@@ -15,10 +15,12 @@ export const SCOPES = {
 	"directory.write":
 		"Create accounts and change agent policies; owners and admins can also manage mail domains, team mailboxes, the mail settings of the organization and AI settings",
 	"mail.read":
-		"Read your mail, labels and Screener, and those of your team mailboxes; owners and admins can also read the mailboxes of agents",
+		"Read your mail, labels and Screener, and those of your team mailboxes and of the mailboxes that their owners let you use; owners and admins can also read the mailboxes of agents",
 	"mail.modify":
-		"Change labels, archive, trash, star and mark your mail and the mail of your team mailboxes, and screen senders in or out",
-	"mail.send": "Send mail from your address and from the addresses of your team mailboxes",
+		"Change labels, archive, trash, star and mark your mail, the mail of your team mailboxes and the mail of the mailboxes that their owners let you use, and screen senders in or out",
+	"mail.send":
+		"Send mail from your address, from the addresses of your team mailboxes and from the addresses of the mailboxes that their owners let you use",
+	"mail.share": "Give and remove the access of other people and agents to your own mailbox",
 	"mail.webhooks": "Create a webhook endpoint and choose which mailboxes send new mail to it",
 	"drive.webhooks": "Create a webhook endpoint and choose which drives send item events to it",
 	"drive.read":

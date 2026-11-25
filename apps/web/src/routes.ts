@@ -54,7 +54,8 @@ export type ChatView = (typeof CHAT_VIEWS)[number];
 export type Route =
 	/**
 	 * `mailboxId` is the id of a team mailbox (`tmb_`), the id of an agent (`prn_`) whose mailbox an owner
-	 * or an admin reads, or null for the own mailbox of the person.
+	 * or an admin reads, the id of a person (`prn_`) who lets the person use their mailbox, or null for the
+	 * own mailbox of the person.
 	 */
 	/**
 	 * `focus` is true for Focus & Reply: the conversations of the view, one after the other, each with its
@@ -107,20 +108,51 @@ export const ADMIN_PATH = "/admin";
 export const SETTINGS_PATH = "/settings";
 
 /**
- * True for the mailbox of an agent, which an owner or an admin can only read. In the routes, a mailbox
- * id is the id of a team mailbox (`tmb_`) or the id of an agent (`prn_`). The own mailbox has no id.
+ * The ids of the people whose mailbox the person can use as a delegate. A person and an agent both have a
+ * `prn_` id, so the id alone does not tell the mailbox of a person from the mailbox of an agent. The id of a
+ * principal never changes its kind, so an id stays here. The list of the mailboxes adds the ids
+ * (`markPersonMailboxes`), and so does a path of such a mailbox (`parseRoute`).
  */
-export function isAgentMailbox(mailboxId: string | null): boolean {
-	return mailboxId?.startsWith("prn_") === true;
+const personMailboxes = new Set<string>();
+
+/** Records the ids of people whose mailbox the person can use: the `delegated` mailboxes of `mail.list_mailboxes`. */
+export function markPersonMailboxes(ids: Iterable<string>): void {
+	for (const id of ids) personMailboxes.add(id);
+}
+
+/** True for the mailbox of a different person, which that person lets the person use (the kind `delegated`). */
+export function isDelegatedMailbox(mailboxId: string | null): boolean {
+	return mailboxId !== null && personMailboxes.has(mailboxId);
 }
 
 /**
- * The path part before the view. A team mailbox has its own paths (`/mail/team/<id>/inbox`), and so
- * does the mailbox of an agent (`/mail/agent/<id>/inbox`).
+ * True for the mailbox of an agent, which an owner or an admin can only read. In the routes, a mailbox
+ * id is the id of a team mailbox (`tmb_`), the id of an agent (`prn_`) or the id of a person whose mailbox
+ * the person can use (`prn_`, `isDelegatedMailbox`). The own mailbox has no id.
+ */
+export function isAgentMailbox(mailboxId: string | null): boolean {
+	return mailboxId?.startsWith("prn_") === true && !isDelegatedMailbox(mailboxId);
+}
+
+/** The kind of the mailbox of the mail views, from its id. Null is the own mailbox of the person. */
+export function mailboxKindOf(mailboxId: string | null): "personal" | "team" | "delegated" | "agent" {
+	if (mailboxId === null) return "personal";
+	if (isDelegatedMailbox(mailboxId)) return "delegated";
+	return isAgentMailbox(mailboxId) ? "agent" : "team";
+}
+
+/** The path part that names the kind of a mailbox with an id. */
+const MAILBOX_SEGMENTS = { team: "team", delegated: "person", agent: "agent" } as const;
+
+/**
+ * The path part before the view. A team mailbox has its own paths (`/mail/team/<id>/inbox`), and so do
+ * the mailbox of an agent (`/mail/agent/<id>/inbox`) and the mailbox of a person who lets the person use
+ * it (`/mail/person/<id>/inbox`).
  */
 function mailBase(mailboxId: string | null): string {
-	if (!mailboxId) return "/mail";
-	return `/mail/${isAgentMailbox(mailboxId) ? "agent" : "team"}/${encodeURIComponent(mailboxId)}`;
+	const kind = mailboxKindOf(mailboxId);
+	if (mailboxId === null || kind === "personal") return "/mail";
+	return `/mail/${MAILBOX_SEGMENTS[kind]}/${encodeURIComponent(mailboxId)}`;
 }
 
 function isSystemView(value: string | undefined): value is SystemView {
@@ -188,8 +220,10 @@ export function parseRoute(location: string): Route {
 	}
 	if (first !== "mail") return { page: "not-found" };
 	if (second === undefined) return { page: "redirect", to: INBOX_PATH };
-	if (second !== "team" && second !== "agent") return parseMailView(null, parts.slice(1), url);
+	if (second !== "team" && second !== "agent" && second !== "person") return parseMailView(null, parts.slice(1), url);
 	if (third === undefined || !third.startsWith(second === "team" ? "tmb_" : "prn_")) return { page: "not-found" };
+	// A path of the mailbox of a person tells the kind of its id, so the links of the page keep that path.
+	if (second === "person" && isPrincipalId(third)) markPersonMailboxes([third]);
 	if (fourth === undefined) return { page: "redirect", to: viewPath({ kind: "system", view: "inbox" }, third) };
 	return parseMailView(third, parts.slice(3), url);
 }

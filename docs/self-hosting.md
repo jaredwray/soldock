@@ -734,6 +734,21 @@ What changes:
 - A rollback to a Worker from after jaredwray/soldock#193 works, because that Worker does not use the
   columns. A rollback to a Worker from before it is not supported. Fix a problem with a new deploy.
 
+### Delegates of the mailbox of a person
+
+Migration `0035_mailbox_delegates.sql` adds the table `mailbox_delegates`. A person can let other people
+and agents use the own mailbox, in the settings of the mailbox in Mail (`mail.set_delegate`).
+
+- The migration only adds a table, and the table is empty. So no access changes at the upgrade: the
+  mailbox of each person stays private until that person adds a delegate.
+- The old Worker keeps working between the migration and the deploy. It does not read the table.
+- The scope `mail.share` is new. `mail.set_delegate` and `mail.remove_delegate` need it. A browser
+  session has it. An API key of a person from before the upgrade does not have it: create a new key with
+  the scope. An agent and a service account cannot hold it.
+- A rollback to a Worker from before this change works. That Worker does not read the table, so no
+  delegate can use a mailbox, and the rows stay for the next upgrade.
+- [Agents](agents.md#the-mailbox-of-a-person) has the rules for an agent.
+
 ### Recover a sign-in
 
 - A person who forgot the password, or lost the phone with the authenticator app, asks an owner or an

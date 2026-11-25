@@ -12,9 +12,11 @@ import {
 	drivePath,
 	focusPath,
 	isAgentMailbox,
+	isDelegatedMailbox,
 	itemPath,
 	type MailView,
 	mailSettingsPath,
+	markPersonMailboxes,
 	memberPath,
 	ownMailboxPath,
 	parseRoute,
@@ -102,6 +104,38 @@ describe("routes", () => {
 		expect(viewPath({ kind: "system", view: "inbox" }, AGENT)).toBe(`/mail/agent/${AGENT}/inbox`);
 		expect(parseRoute(`/mail/agent/${AGENT}`)).toEqual({ page: "redirect", to: `/mail/agent/${AGENT}/inbox` });
 		expect([AGENT, TEAM, null].map(isAgentMailbox)).toEqual([true, false, false]);
+	});
+
+	// A person and an agent both have a `prn_` id. The path, or the list of the mailboxes, tells which one the
+	// id names. The mailbox of a person must not show as the read-only mailbox of an agent.
+	it("keeps the mailbox of a person on its own paths, after its path or the list of the mailboxes named it", () => {
+		const inbox: MailView = { kind: "system", view: "inbox" };
+		const fromPath = "prn_01JD00000000000000000PERS0N";
+		const fromList = "prn_01JD00000000000000000PERS1N";
+		// An id that nothing named yet is the id of an agent.
+		expect(viewPath(inbox, fromPath)).toBe(`/mail/agent/${fromPath}/inbox`);
+		expect(parseRoute(`/mail/person/${fromPath}/inbox/${THREAD}`)).toEqual({
+			page: "mail",
+			mailboxId: fromPath,
+			view: inbox,
+			threadId: THREAD,
+		});
+		markPersonMailboxes([fromList]);
+		for (const id of [fromPath, fromList]) {
+			expect(viewPath(inbox, id)).toBe(`/mail/person/${id}/inbox`);
+			expect(mailSettingsPath(id)).toBe(`/mail/person/${id}/settings`);
+			expect(parseRoute(mailSettingsPath(id))).toEqual({ page: "mail-settings", mailboxId: id });
+			expect([isDelegatedMailbox(id), isAgentMailbox(id)]).toEqual([true, false]);
+		}
+		expect(parseRoute(`/mail/person/${fromList}`)).toEqual({ page: "redirect", to: `/mail/person/${fromList}/inbox` });
+		// The id of an agent and the id of a team mailbox keep their paths.
+		expect(viewPath(inbox, AGENT)).toBe(`/mail/agent/${AGENT}/inbox`);
+		expect([isDelegatedMailbox(AGENT), isDelegatedMailbox(TEAM), isDelegatedMailbox(null)]).toEqual([
+			false,
+			false,
+			false,
+		]);
+		expect(parseRoute(`/mail/person/${TEAM}/inbox`)).toEqual({ page: "not-found" });
 	});
 
 	// The settings view of a mailbox has its own path under the mailbox, so a reload and a deep link stay on it.

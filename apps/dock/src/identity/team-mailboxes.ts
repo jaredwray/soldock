@@ -24,16 +24,17 @@ export interface TeamMailboxRecord {
 /**
  * A mailbox that receives mail: the own mailbox of a principal, or a team mailbox. Its id names its
  * `MailboxDO` and the owner part of its R2 keys. `agent` is the own mailbox of an agent, as an owner or
- * an admin opens it: they can read it, and nothing more.
+ * an admin opens it: they can read it, and nothing more. `delegated` is the own mailbox of a person, as a
+ * delegate of that person opens it (`mailbox-delegates.ts`).
  */
 export interface MailboxRecord {
 	id: string;
-	kind: "personal" | "team" | "agent";
+	kind: "personal" | "team" | "delegated" | "agent";
 	address: string;
 	display_name: string;
 }
 
-/** A team mailbox for one of its members, with the scopes of that membership. */
+/** A team mailbox for one of its members, or a delegated mailbox for a delegate, with the scopes of the caller in it. */
 export interface MemberMailboxRecord extends MailboxRecord {
 	scopes: MailboxMemberScope[];
 }
@@ -44,7 +45,7 @@ type TeamMailboxRow = Omit<TeamMailboxRecord, "member_ids" | "members">;
  * The scopes of a membership, from the stored JSON list. A value that is not a list of mail scopes gives
  * no scope for the unknown parts, so a bad row never gives access.
  */
-function parseMemberScopes(stored: string): MailboxMemberScope[] {
+export function parseMemberScopes(stored: string): MailboxMemberScope[] {
 	let value: unknown;
 	try {
 		value = JSON.parse(stored);
@@ -55,7 +56,7 @@ function parseMemberScopes(stored: string): MailboxMemberScope[] {
 }
 
 /** The stored form of the scopes of a membership: in the order of `MAILBOX_MEMBER_SCOPES`, each one time. */
-function storedMemberScopes(scopes: readonly MailboxMemberScope[]): string {
+export function storedMemberScopes(scopes: readonly MailboxMemberScope[]): string {
 	return JSON.stringify(MAILBOX_MEMBER_SCOPES.filter((scope) => scopes.includes(scope)));
 }
 
