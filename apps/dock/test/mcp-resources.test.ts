@@ -152,7 +152,7 @@ describe("MCP resources", () => {
 			code: -32002,
 		});
 
-		// An agent from before migration 0032 without mail.read on its account cannot read its own inbox. A
+		// An agent from before migration 0033 without mail.read on its account cannot read its own inbox. A
 		// membership of a team mailbox can still give it an inbox, so the template stays.
 		await setLegacyScopes(bot.id, ["drive.read"]);
 		await owner.call("directory.remove_team_mailbox_member", { mailbox_id: support.id, principal_id: bot.id });
@@ -175,7 +175,7 @@ describe("MCP resources", () => {
 	});
 
 	// The list of the Drive items names the own drive, where the account scopes decide. An agent from before
-	// migration 0032 without drive.read has no such list. Each other kind still shows.
+	// migration 0033 without drive.read has no such list. Each other kind still shows.
 	it("lists the other resources of an agent whose account cannot read its own drive", async () => {
 		const { bot } = await seedOrg();
 		await setLegacyScopes(bot.id, ["account.read", "mail.read", "chat.read"]);

@@ -100,6 +100,11 @@ export function ShareDialog({ item, onClose, onChanged }: ShareDialogProps) {
 		}
 	}
 
+	/** Gives a principal a role on the item. The grant is for this item only: an agent gets no scope with it. */
+	async function share(targetId: string, newRole: GrantRole) {
+		await api.call("drive.share_item", { ...space, item_id: item.id, principal_id: targetId, role: newRole });
+	}
+
 	function add(event: FormEvent<HTMLFormElement>) {
 		event.preventDefault();
 		if (!principalId) {
@@ -107,7 +112,7 @@ export function ShareDialog({ item, onClose, onChanged }: ShareDialogProps) {
 			return;
 		}
 		void change(async () => {
-			await api.call("drive.share_item", { ...space, item_id: item.id, principal_id: principalId, role });
+			await share(principalId, role);
 			setPrincipalId("");
 		});
 	}
@@ -227,16 +232,7 @@ export function ShareDialog({ item, onClose, onChanged }: ShareDialogProps) {
 												value={permission.role}
 												options={ROLE_OPTIONS}
 												disabled={busy}
-												onChange={(role) =>
-													void change(() =>
-														api.call("drive.share_item", {
-															...space,
-															item_id: item.id,
-															principal_id: permission.principal_id,
-															role,
-														}),
-													)
-												}
+												onChange={(role) => void change(() => share(permission.principal_id, role))}
 											/>
 											<button
 												type="button"

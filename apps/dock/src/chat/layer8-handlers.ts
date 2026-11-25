@@ -11,6 +11,7 @@ import {
 	type ChatSection,
 	type OperationName,
 } from "@asterra/contracts";
+import { liveShareRequestIds } from "../drive/index.ts";
 import {
 	type ActivityRecord,
 	type CallContext,
@@ -172,6 +173,7 @@ function toActivity(record: ActivityRecord): ChatActivityItem {
 		emoji: record.emoji,
 		untrusted: record.untrusted,
 		subject: record.subject,
+		item: record.item,
 		read_at: record.read_at === null ? null : iso(record.read_at),
 		created_at: iso(record.created_at),
 	};
@@ -325,15 +327,22 @@ export const chatLayer8Handlers: Pick<HandlerMap<CallContext>, Layer8ChatOperati
 		// so previews from left rooms or deleted/retention-pruned messages are never exposed.
 		// An item of a member request is not about a message: it is live while the request waits for an answer
 		// that this person can still give.
+		const person = { id: call.caller.id, admin: call.caller.kind === "human" && isAdmin(call.caller) };
 		const requests = shown.filter((item) => item.kind === "member_request");
 		const liveRequests = await liveMemberRequestIds(
 			call.env.DIRECTORY,
 			requests.map((item) => item.message_id),
-			{ id: call.caller.id, admin: call.caller.kind === "human" && isAdmin(call.caller) },
+			person,
+		);
+		const shares = shown.filter((item) => item.kind === "share_request");
+		const liveShares = await liveShareRequestIds(
+			call.env.DIRECTORY,
+			shares.map((item) => item.message_id),
+			person,
 		);
 		const byRoom = new Map<string, string[]>();
 		for (const item of shown) {
-			if (item.kind === "member_request") continue;
+			if (item.kind === "member_request" || item.kind === "share_request") continue;
 			const list = byRoom.get(item.room_id);
 			if (list) list.push(item.message_id);
 			else byRoom.set(item.room_id, [item.message_id]);
@@ -351,7 +360,12 @@ export const chatLayer8Handlers: Pick<HandlerMap<CallContext>, Layer8ChatOperati
 		const liveItems: ActivityRecord[] = [];
 		const staleIds: string[] = [];
 		for (const item of shown) {
-			const live = item.kind === "member_request" ? liveRequests : liveByRoom.get(item.room_id);
+			const live =
+				item.kind === "member_request"
+					? liveRequests
+					: item.kind === "share_request"
+						? liveShares
+						: liveByRoom.get(item.room_id);
 			if (live?.has(item.message_id)) {
 				liveItems.push(item);
 			} else {

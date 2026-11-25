@@ -144,7 +144,7 @@ export async function setupOwner(address = "owner@dock.test"): Promise<Actor> {
 
 /**
  * Sets the account scopes of an agent or a service account in the directory, as an account from before
- * migration 0032 can have them: nothing in Asterra writes them after the creation of an account. They limit its
+ * migration 0033 can have them: nothing in Asterra writes them after the creation of an account. They limit its
  * own mailbox, its own drive and the actions without a resource.
  */
 export async function setLegacyScopes(principalId: string, scopes: readonly string[]): Promise<void> {
@@ -157,7 +157,7 @@ export async function setLegacyScopes(principalId: string, scopes: readonly stri
 /**
  * Creates a principal as `admin` and returns it with a key. An agent gets its first key and each scope of its
  * kind, as each new agent does. `legacyScopes` then gives it the narrower account scopes of an agent from before
- * migration 0032 (`setLegacyScopes`). A person gets no key at creation, so `admin` then creates a key with every
+ * migration 0033 (`setLegacyScopes`). A person gets no key at creation, so `admin` then creates a key with every
  * human scope for the person.
  */
 export async function createActor(
@@ -795,7 +795,12 @@ export async function connectRoomSocket(roomId: string, headers: Record<string, 
 
 /** Sends a request to the Worker with these bindings in place of the ones in vitest.config.ts. */
 export function withEnv(
-	overrides: { SETUP_TOKEN?: string | undefined; AI_GATEWAY_TOKEN?: string | undefined; DIRECTORY?: D1Database },
+	overrides: {
+		SETUP_TOKEN?: string | undefined;
+		AI_GATEWAY_TOKEN?: string | undefined;
+		DIRECTORY?: D1Database;
+		DRIVE_SPACE?: Env["DRIVE_SPACE"];
+	},
 	path: string,
 	init: { method?: string; headers?: Record<string, string>; body?: string } = {},
 ) {

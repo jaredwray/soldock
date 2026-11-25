@@ -9,14 +9,14 @@ runtime-agnostic (no Workers, DOM or Node APIs).
 
 | File | What |
 | --- | --- |
-| `src/operation.ts` | `defineOperation()`: name, summary, description, REST route, scopes, `anyOfScopes`, callers, annotations, input and output schemas, errors |
+| `src/operation.ts` | `defineOperation()`: name, summary, description, REST route, scopes, `anyOfScopes`, callers, `itemGrant`, annotations, input and output schemas, errors. `itemGrant: true` marks an operation on one Drive item that a grant on that item opens: an agent or a service account without `scopes` can call it, and reaches only the items that a person shared with it (`callableWithItemGrant`). A call that names the drive of a different principal or a shared drive is decided by the membership or the share first (`resourceDecidedScopes`) |
 | `src/registry.ts` | `operations`, every operation by name, and the `InputOf` / `OutputOf` types |
 | `src/resources.ts` | `defineResource()` and `resources`, the resource kinds of MCP. Each kind has a URI template, a read operation, a list operation and the changes that send a notification. The kinds are `mail.inbox`, `chat.room`, `chat.rooms`, `chat.addressed`, `drive.item` and `drive.space` |
 | `src/webhooks.ts` | The endpoint operations, the event list, `WEBHOOK_LIMITS` and `anyOfScopes` for the endpoint operations. Also the filters of a chat subscription (`CHAT_WEBHOOK_FILTERS`, `defaultChatWebhookFilter`) and the reasons of a chat event (`CHAT_EVENT_REASONS`) |
 | `src/mcp-events.ts` | The events of MCP Events: `mcpEventList` has, for each webhook event, its description, the schema of its arguments and the schema of its `data`. Also `MCP_EVENT_LIMITS`. `events/subscribe` is a method of the MCP protocol, so it is not an operation |
 | `src/mail.ts`, `src/directory.ts` | The operations of each domain, with their schemas and limits (`MAIL_LIMITS`). `mail.ts` also has the mail subscription operations |
 | `src/team-mailboxes.ts` | The team mailbox operations, and the scopes of a member in a team mailbox (`MAILBOX_MEMBER_SCOPES`, `mailboxMemberScopes`) |
-| `src/drive.ts` | The Drive operations, also for shared drives; the item, permission, version, shared drive and member schemas; the roles; `DRIVE_LIMITS` and `SHARED_DRIVE_LIMITS` |
+| `src/drive.ts` | The Drive operations, also for shared drives; the item, permission, version, shared drive and member schemas; the roles; the request of an agent to share an item with an agent or a service account (`DriveShareRequest`); `DRIVE_LIMITS` and `SHARED_DRIVE_LIMITS` |
 | `src/docs.ts` | The Docs operations, and `DocContent`: the block tree of a doc, with its limits (`DOC_LIMITS`) |
 | `src/markdown.ts` | `markdownToDoc` and `docToMarkdown`: the Markdown form of `DocContent`. The server reads and writes Markdown with it for Docs and Chat, and the web app reads pasted Markdown with it. [`docs`](../../apps/dock/src/docs/README.md#markdown) describes the Markdown, and has the tests |
 | `src/sheets.ts` | The Sheets operations, the cell, format and tab schemas, the rules for a format patch and the text of a formatted number, the error values and `SHEET_LIMITS` |

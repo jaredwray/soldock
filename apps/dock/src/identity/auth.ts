@@ -42,6 +42,11 @@ export interface CallContext {
 	waitUntil(promise: Promise<unknown>): void;
 	/** Set for a service account: the invoker reports each call to its activity log. */
 	record?: ((outcome: InvokeOutcome) => void) | undefined;
+	/**
+	 * True when the invoker let an agent call an item operation without its scopes (`itemGrant`). The drive then
+	 * counts only the grants that a person gave on single items.
+	 */
+	grantOnly?: boolean;
 }
 
 export function readCookie(request: Request, name: string): string | null {

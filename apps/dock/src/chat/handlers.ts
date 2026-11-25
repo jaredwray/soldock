@@ -16,6 +16,7 @@ import {
 	type CallContext,
 	canManageAgent,
 	chatPresenceHandlers,
+	deciderOf,
 	getPrincipal,
 	getPrincipals,
 	isAdmin,
@@ -182,29 +183,6 @@ function toActor(principal: PrincipalRecord): ActorRecord {
 }
 
 const NO_REQUEST = "No request has that id, or you cannot decide it.";
-
-/**
- * The person who gets a request for this account in the activity list of Chat. For an agent: its sponsor.
- * Only an owner or an admin manages a service account, so its sponsor gets the request only with one of
- * these roles. If not, the owner of the organization gets it. Each owner and admin also sees the request on
- * the page of the account in Admin, Members.
- */
-async function deciderOf(call: CallContext, target: PrincipalRecord): Promise<string | null> {
-	const db = call.env.DIRECTORY;
-	if (target.sponsor_id !== null) {
-		if (!target.service) return target.sponsor_id;
-		const sponsor = await getPrincipal(db, target.sponsor_id);
-		if (sponsor?.archived_at === null && (sponsor.org_role === "owner" || sponsor.org_role === "admin")) {
-			return sponsor.id;
-		}
-	}
-	const owner = await db
-		.prepare(
-			"SELECT id FROM principals WHERE org_role = 'owner' AND deleted_at IS NULL AND archived_at IS NULL LIMIT 1",
-		)
-		.first<{ id: string }>();
-	return owner?.id ?? null;
-}
 
 /** Puts a request into the activity list of the person who decides it. A second call changes nothing. */
 async function notifyDecider(call: CallContext, request: MemberRequestRow, target: PrincipalRecord): Promise<void> {
@@ -795,7 +773,7 @@ export const chatHandlers: Pick<HandlerMap<CallContext>, ChatOperation> = {
 		}
 		if (target.archived_at !== null) throw new OperationError("invalid", "That account is archived.");
 		const checked = accept(await opened.room.checkMemberRequest(opened.ctx, target.id, scopes));
-		const decider = await deciderOf(call, target);
+		const decider = await deciderOf(call.env.DIRECTORY, target);
 		const stored = await createMemberRequest(
 			call.env.DIRECTORY,
 			{

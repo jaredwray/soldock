@@ -247,6 +247,7 @@ export function MailApp({
 							onChanged={onChanged}
 							onCompose={compose}
 							onShowHelp={() => setDialog({ type: "help" })}
+							composer={{ mailDomains: profile?.mail_domains ?? null, fromOptions: senders, signature }}
 						/>
 					) : view ? (
 						<MailPane

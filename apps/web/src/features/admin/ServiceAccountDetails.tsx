@@ -3,9 +3,9 @@ import { useState } from "react";
 import { fullDate, shortDate } from "../../lib/format.ts";
 import { isOrgAdmin, useSession } from "../auth/session.tsx";
 import { ApiKeyManager } from "../settings/ApiKeys.tsx";
+import { AccountRequests } from "./AccountRequests.tsx";
 import { PolicyForm } from "./AgentDetails.tsx";
 import { MemberAccess } from "./MemberAccess.tsx";
-import { MemberRequests } from "./MemberRequests.tsx";
 import { ServiceAccountActivity } from "./ServiceAccountActivity.tsx";
 import { useMemberAccess } from "./useMemberAccess.ts";
 
@@ -64,7 +64,7 @@ export function ServiceAccountDetails({ account, principals, onChanged }: Servic
 				people={principals}
 				onChange={changed}
 			/>
-			<MemberRequests account={account} principals={principals} onApproved={changed} />
+			<AccountRequests account={account} principals={principals} onApproved={changed} />
 			<MemberAccess
 				member={account}
 				access={access}

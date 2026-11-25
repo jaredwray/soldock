@@ -356,7 +356,7 @@ describe("OAuth approval", () => {
 	// A connection reads the people of the directory only with the scope that the person approved.
 	it("lets a connection get principals by id and by handle only with directory.read on its agent", async () => {
 		const owner = await setupOwner();
-		// An agent from before migration 0032 can lack directory.read. The read has no resource, so its account decides.
+		// An agent from before migration 0033 can lack directory.read. The read has no resource, so its account decides.
 		const { tokens: without, agent: legacy } = await connectNewAgent(owner);
 		await setLegacyScopes(legacy.id, ["account.read", "mail.read", "chat.read"]);
 		expect(await codeOf(api(without.access_token)("directory.get_principals", { ids: owner.id }))).toBe("forbidden");
@@ -440,7 +440,7 @@ describe("OAuth approval", () => {
 		const notSponsored = ada.call("oauth.approve_authorization", { request_id: requestId, agent_id: other.id });
 		expect(await codeOf(notSponsored)).toBe("forbidden");
 
-		// An agent from before migration 0032 with narrow account scopes.
+		// An agent from before migration 0033 with narrow account scopes.
 		await setLegacyScopes(bot.id, ["account.read", "mail.read"]);
 		const cookie = await signIn(ada.address, PASSWORD);
 		const res = await request(`/api/v1/oauth/authorizations/${requestId}/approve`, {
@@ -858,9 +858,9 @@ describe("OAuth connections follow their agent", () => {
 		expect(refreshed.scope).toBe(AGENT_SCOPES.join(" "));
 	});
 
-	// An agent from before migration 0032 can have narrow account scopes. The agent learns which tools it cannot
+	// An agent from before migration 0033 can have narrow account scopes. The agent learns which tools it cannot
 	// call, and that a person changes a membership, not its account or its connection.
-	it("tells an agent from before migration 0032 which tools its account scopes leave out", async () => {
+	it("tells an agent from before migration 0033 which tools its account scopes leave out", async () => {
 		const owner = await setupOwner();
 		const { agent, tokens } = await connectNewAgent(owner);
 		await setLegacyScopes(agent.id, ["account.read", "mail.read", "chat.read"]);
@@ -989,10 +989,10 @@ describe("OAuth and webhooks", () => {
 		expect(listed).toMatchObject([{ endpoint: { status: "disabled", disabled_reason: "credential_revoked" } }]);
 	});
 
-	// Before migration 0032, a person could take the webhook scopes away from an agent after it made a
+	// Before migration 0033, a person could take the webhook scopes away from an agent after it made a
 	// subscription. The subscription stops at its next delivery, also when that delivery comes after the deploy:
 	// a delivery needs the scope that a new subscription needs.
-	it("stops the webhook of an agent whose account lost the webhook scope before migration 0032", async () => {
+	it("stops the webhook of an agent whose account lost the webhook scope before migration 0033", async () => {
 		const owner = await setupOwner();
 		const { tokens, agent } = await connectNewAgent(owner);
 		await owner.call("directory.update_agent_policy", { principal_id: agent.id, mode: "any" });

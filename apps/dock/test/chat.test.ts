@@ -252,7 +252,7 @@ describe("the owner of a room", () => {
 	});
 
 	// An owner has each scope. An agent that can only read in the room must not get each scope with the role.
-	// This holds for an agent from before migration 0032 that the room narrowed to read only, too.
+	// This holds for an agent from before migration 0033 that the room narrowed to read only, too.
 	it("hands the room to an agent only when its membership can post", async () => {
 		const reader = await createActor(owner, {
 			kind: "agent",
@@ -1031,7 +1031,7 @@ describe("the scopes of a member of a room", () => {
 describe("an agent in a room", () => {
 	/**
 	 * A new agent of Ada with its key. `legacy` gives it the narrow account scopes that an agent from before
-	 * migration 0032 can have.
+	 * migration 0033 can have.
 	 */
 	async function newAgent(name = "helper", legacy?: readonly string[]) {
 		return createActor(owner, {
@@ -1048,10 +1048,10 @@ describe("an agent in a room", () => {
 
 	// The membership of a room decides what an agent can do in it, as for a person. Each member that can add
 	// members gives an agent the room, and the agent uses it at once with its key. Nothing changes on the agent:
-	// an agent from before migration 0032 without a chat scope on its account uses the room the same way.
+	// an agent from before migration 0033 without a chat scope on its account uses the room the same way.
 	it.each([
 		["a new agent", undefined],
-		["an agent from before migration 0032", ["account.read"]],
+		["an agent from before migration 0033", ["account.read"]],
 	] as const)("lets %s use a room as its membership says, at once, with its key", async (_name, legacy) => {
 		const agent = await newAgent("helper", legacy);
 		const before = await scopesOf(agent.id);
@@ -1126,7 +1126,7 @@ describe("an agent in a room", () => {
 	});
 });
 
-describe("a room from before migration 0032", () => {
+describe("a room from before migration 0033", () => {
 	/** Makes the room a room from before the deploy, and starts its object again: it narrows its members first. */
 	async function wakeAsLegacy(roomId: string) {
 		const stub = roomStub(roomId);
@@ -1330,7 +1330,7 @@ describe("a request of an agent to add an agent", () => {
 	const UNKNOWN_PRINCIPAL = "prn_01JD0000000000000000000000";
 	const UNKNOWN_REQUEST = "mrq_01JD0000000000000000000000";
 
-	/** A new agent that Ada sponsors. `legacy` gives it the account scopes of an agent from before migration 0032. */
+	/** A new agent that Ada sponsors. `legacy` gives it the account scopes of an agent from before migration 0033. */
 	const newAgent = (name: string, legacy?: readonly string[]) =>
 		createActor(owner, {
 			kind: "agent",

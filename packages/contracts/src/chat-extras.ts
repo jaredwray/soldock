@@ -43,6 +43,7 @@ export const CHAT_ACTIVITY_KINDS = [
 	"reminder",
 	"card_action",
 	"member_request",
+	"share_request",
 ] as const;
 export type ChatActivityKind = (typeof CHAT_ACTIVITY_KINDS)[number];
 
@@ -65,6 +66,15 @@ export const ChatActivityItem = z.object({
 	 * each other kind.
 	 */
 	subject: Actor.nullable().default(null),
+	/**
+	 * For `share_request`: the Drive item that the actor wants to share with `subject`. The id of the request is
+	 * in `message_id`, for drive.approve_share_request and drive.deny_share_request. `room_id` is empty and
+	 * `room_name` is null for this kind. Null for each other kind.
+	 */
+	item: z
+		.object({ space_id: z.string(), item_id: z.string(), name: z.string(), role: z.enum(["editor", "viewer"]) })
+		.nullable()
+		.default(null),
 	created_at: Timestamp,
 	read_at: Timestamp.nullable(),
 });

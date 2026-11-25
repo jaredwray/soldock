@@ -24,6 +24,7 @@ export { type AuthContext, authenticate, type CallContext, isSameOrigin, SESSION
 export type {
 	ActivityActor,
 	ActivityInsert,
+	ActivityItemRef,
 	ActivityRecord,
 	DraftRecord,
 	ReminderRecord,
@@ -31,6 +32,7 @@ export type {
 	ScheduledRecord,
 	SectionRecord,
 } from "./chat-personal.ts";
+export { deciderOf } from "./decider.ts";
 export { mountEventsSocket, openEventsSocket } from "./events-socket.ts";
 export {
 	type DueNotice,

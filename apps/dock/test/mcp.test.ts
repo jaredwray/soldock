@@ -54,7 +54,7 @@ describe("the MCP endpoint", () => {
 		const unknown = await mcp(bot.key, "initialize", { protocolVersion: "1999-01-01" });
 		expect(((unknown.body?.result ?? {}) as { protocolVersion?: string }).protocolVersion).toBe("2025-11-25");
 
-		// An agent from before migration 0032 can have narrow account scopes. It learns which tools it cannot call.
+		// An agent from before migration 0033 can have narrow account scopes. It learns which tools it cannot call.
 		// A membership can give a tool that names a team mailbox, a room or a shared drive, so such a tool is not
 		// in the text. The text tells that its account scopes do not change, and not that it needs a new key.
 		await setLegacyScopes(bot.id, ["account.read", "mail.read"]);
@@ -71,7 +71,7 @@ describe("the MCP endpoint", () => {
 
 	// A token of a service account only proves who the account is. A new token cannot do more, so the text must
 	// not tell the account to ask for a new token.
-	it("tells a service token from before migration 0032 that its account scopes do not change", async () => {
+	it("tells a service token from before migration 0033 that its account scopes do not change", async () => {
 		const { owner } = await seedOrg();
 		const { principal } = await owner.call("directory.create_service_account", {
 			display_name: "CI",
@@ -95,14 +95,18 @@ describe("the MCP endpoint", () => {
 		const { owner, bot } = await seedOrg();
 		const all = names((await mcp(owner.key, "tools/list")).body);
 		expect(all).toContain("directory_update_agent_policy");
-		expect(all).toHaveLength(211);
-		// Only a person decides a member request, and only an agent or a service account makes one.
+		expect(all).toHaveLength(214);
+		// Only a person decides a member request or a share request, and only an agent or a service account makes one.
 		expect(all).not.toContain("chat_request_member");
+		expect(all).not.toContain("drive_request_share");
 		expect(all).toEqual(
 			expect.arrayContaining([
 				"chat_list_member_requests",
 				"chat_approve_member_request",
 				"chat_deny_member_request",
+				"drive_list_share_requests",
+				"drive_approve_share_request",
+				"drive_deny_share_request",
 				"chat_subscribe_push",
 				"chat_unsubscribe_push",
 				"chat_admin_list_rooms",
@@ -216,12 +220,14 @@ describe("the MCP endpoint", () => {
 			"drive_get_upload",
 			"drive_list_items",
 			"drive_list_permissions",
+			"drive_list_share_requests",
 			"drive_list_shared_drives",
 			"drive_list_versions",
 			"drive_list_webhook_subscriptions",
 			"drive_move_items",
 			"drive_move_to_drive",
 			"drive_rename_item",
+			"drive_request_share",
 			"drive_restore_items",
 			"drive_restore_version",
 			"drive_set_preview",

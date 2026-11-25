@@ -79,7 +79,11 @@ SDK. Protocol 2026-07-28 has no sessions, so a hand-written server stays small.
   `mail_send`).
 - `inputSchema` and `outputSchema` are the JSON Schemas of the Zod schemas. The annotations map
   to `readOnlyHint`, `destructiveHint`, `idempotentHint` and `openWorldHint`.
-- `tools/list` lists only the tools that the credential can call (caller kind and scopes). A call
+- `tools/list` lists only the tools that the credential can call (caller kind and scopes). An agent or a
+  service account also sees each Drive, Docs and Sheets tool with `itemGrant`, because a grant on an item
+  opens it without the drive scopes (see [drive](../drive/README.md)). A resource kind still needs the scopes
+  of its read and list operations, or a membership that can give them to an agent (`holdsScopesFor`): a grant
+  on an item does not count, because the list of a kind starts at the own data of the caller. A call
   to another tool gets JSON-RPC error `-32602`. A token of a service account sees only the tools
   whose callers name `"service"`, and each of its calls goes into the activity log of the account,
   with the surface `mcp`. For an agent, a tool that can name a team mailbox, a room or a shared drive is in
@@ -87,12 +91,12 @@ SDK. Protocol 2026-07-28 has no sessions, so a hand-written server stays small.
   (`canTargetSharedResource`). The call checks the scopes with its input, and the handler of each operation
   checks the membership of the agent ([identity](../identity/README.md#access-of-an-agent)).
 - A resource URI resolves only when the read with the input of the URI passes the scope check of the
-  invoker (`canCallWith`). So an agent from before migration `0032` without `mail.read` on its account
+  invoker (`canCallWith`). So an agent from before migration `0033` without `mail.read` on its account
   cannot watch its own inbox, and it can watch the inbox of a team mailbox where its membership has
   `mail.read`.
 - `resources/list` leaves out a resource kind when the list operation of the kind does not pass that check
   with its input. The list of the Drive items names the own drive. So an agent from before migration
-  `0032` without `drive.read` on its account gets no Drive items in the list, and it still gets each other
+  `0033` without `drive.read` on its account gets no Drive items in the list, and it still gets each other
   kind.
 - The instructions name each scope that the credential does not hold, with the number of its
   tools (`missingScopes` of `identity`). For an agent, a tool that a membership can give is not counted.

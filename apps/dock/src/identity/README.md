@@ -7,10 +7,10 @@
 | | |
 | --- | --- |
 | **Purpose** | Principals (humans, agents, service accounts, groups), directory, passkeys, sessions, API keys, OAuth authorization server, `client_credentials`, authorization (`authorize()`), agent policies, audit log, `PrincipalDO`. |
-| **Owns** | D1 `directory` tables, except `chat_rooms`, `chat_members`, `chat_custom_emoji`, `chat_incoming_webhooks`, `chat_slash_commands`, `chat_member_requests` (`chat`) and `webhooks` and `chat_webhooks` (`webhooks`). `PrincipalDO` owns the Chat state, personal Chat views (activity, sections, saved messages, drafts, scheduled messages, reminders), notification settings and events sockets of each principal. Later: R2 `audit`. |
+| **Owns** | D1 `directory` tables, except `chat_rooms`, `chat_members`, `chat_custom_emoji`, `chat_incoming_webhooks`, `chat_slash_commands`, `chat_member_requests` (`chat`), `drive_share_requests` (`drive`) and `webhooks` and `chat_webhooks` (`webhooks`). `PrincipalDO` owns the Chat state, personal Chat views (activity, sections, saved messages, drafts, scheduled messages, reminders), notification settings and events sockets of each principal. Later: R2 `audit`. |
 | **Depends on** | `platform`. |
 | **Operations** | `chat.get_presence`, `chat.set_status`, `account.whoami`, `account.list_api_keys`, `account.create_api_key`, `account.revoke_api_key`, `account.rotate_api_key`, `account.end_api_key_rotation`, `account.set_password`, `account.create_totp_secret`, `account.enable_totp`, `account.disable_totp`, `directory.list_principals`, `directory.get_principals`, `directory.create_principal`, `directory.update_agent_policy`, `directory.update_principal`, `directory.archive_principal`, `directory.restore_principal`, `directory.delete_principal`, `directory.list_mail_domains`, `directory.add_mail_domain`, `directory.remove_mail_domain`, `directory.list_team_mailboxes`, `directory.create_team_mailbox`, `directory.update_team_mailbox`, `directory.add_team_mailbox_member`, `directory.remove_team_mailbox_member`, `directory.create_service_account`, `directory.list_service_account_activity`, `directory.get_member_access`, `directory.get_agent_access`, `oauth.get_authorization`, `oauth.approve_authorization`, `oauth.deny_authorization`, `oauth.list_grants`, `oauth.revoke_grant` |
-| **Data inventory** | D1 `directory`: `principals` (with `password_hash`, `totp_secret`, `totp_pending_secret`, `totp_last_step`, `sign_in_failures`, `sign_in_locked_until`, `chat_online_until`, `chat_active_until`, `chat_status_json`, `archived_at`, `deleted_at`, and the name aliases of a Chat mention `alias_first`, `alias_full` and `aliases_set`, and the name in the form of a search `name_folded`, which come from the display name, and `service`, `description` and `created_by` of [service accounts](#service-accounts), and the `agent_scopes` of each agent and service account, which apply only to its own mailbox, its own drive and the actions without a resource, and which nothing writes after the creation of the account, and `access_version`, which nothing changes since migration `0032`, see [Access of an agent](#access-of-an-agent); `agent_resources` is not used: the Worker does not read it or write it, and no migration removes it (jaredwray/soldock#212 tracks the removal of `agent_resources`, `service_scopes` and `service_resources`); `service_scopes` and `service_resources` are not read since migration `0027` and stay for the Worker from before it), `addresses`, `api_keys` (with `expires_at`, `description` and `revoked_by`, and for a rotation `prev_key_hash`, `prev_expires_at`, `rotation`, `rotated_at` and `rotated_by`, `expiry_notice_at` for the notice before a token ends, `scopes`, which the Worker reads only for a key of a person since migration `0027`, and `resources`, which is not read since migration `0026`), `sessions`, `setup_lock`, `mail_domains`, `team_mailboxes` (name, address, creator), `team_mailbox_members` (mailbox, principal, who added the member, and `scopes`: what the member can do in the mailbox; migration `0032` narrowed the scopes of each agent member), `oauth_clients` (registered MCP clients: name, URI, redirect URIs), `oauth_requests` (authorization requests: client, redirect URI, state, PKCE challenge, requested scopes, approval, code hash, the grant that the code made, and `granted_scopes`, which is not read since migration `0027`), `oauth_grants` (approved connections: client, principal, approver, hashes of the access token and of the current, previous and consumed refresh tokens, and `scopes`, which is not read since migration `0027`) ([`migrations/`](../../migrations/)). The TOTP secrets are stored as plain base32 in D1, because a server must read them to check a code. Unused and empty since migration `0004`, kept for the Worker from before it: `principals.sign_in_email` and `sign_in_codes`. A later migration removes them. `PrincipalDO` (one for each principal, keyed by the principal id): tables `chat_rooms`, `chat_threads`, `chat_addressed`, `chat_activity` (with `subject_json`: the account to add, for an item of the kind `member_request`), `chat_sections`, `chat_section_rooms`, `chat_saved_messages`, `chat_drafts`, `chat_scheduled_messages`, `chat_reminders`, `chat_notification_levels`, `chat_push_devices`, and `chat_notification_sounds` (see [The object of a principal](#the-object-of-a-principal)), table `service_activity` (the activity log of a service account: at most 10,000 calls, at most 1,000 membership changes by members, its admin changes, and 90 days, see [Service accounts](#service-accounts)), table `meta` (schema version, the owner id in `presence_principal`, `chat_seeded` after the first fill, and `chat_threads_filled` after the first fill of the threads), and the hibernatable sockets of `/ws/events` (not in the database: each keeps the reference to its credential, the time of its open and of its last check, and its latest activity report; no backup). Backups: not built yet. |
+| **Data inventory** | D1 `directory`: `principals` (with `password_hash`, `totp_secret`, `totp_pending_secret`, `totp_last_step`, `sign_in_failures`, `sign_in_locked_until`, `chat_online_until`, `chat_active_until`, `chat_status_json`, `archived_at`, `deleted_at`, and the name aliases of a Chat mention `alias_first`, `alias_full` and `aliases_set`, and the name in the form of a search `name_folded`, which come from the display name, and `service`, `description` and `created_by` of [service accounts](#service-accounts), and the `agent_scopes` of each agent and service account, which apply only to its own mailbox, its own drive and the actions without a resource, and which nothing writes after the creation of the account, and `access_version`, which nothing changes since migration `0033`, see [Access of an agent](#access-of-an-agent); `agent_resources` is not used: the Worker does not read it or write it, and no migration removes it (jaredwray/soldock#212 tracks the removal of `agent_resources`, `service_scopes` and `service_resources`); `service_scopes` and `service_resources` are not read since migration `0027` and stay for the Worker from before it), `addresses`, `api_keys` (with `expires_at`, `description` and `revoked_by`, and for a rotation `prev_key_hash`, `prev_expires_at`, `rotation`, `rotated_at` and `rotated_by`, `expiry_notice_at` for the notice before a token ends, `scopes`, which the Worker reads only for a key of a person since migration `0027`, and `resources`, which is not read since migration `0026`), `sessions`, `setup_lock`, `mail_domains`, `team_mailboxes` (name, address, creator), `team_mailbox_members` (mailbox, principal, who added the member, and `scopes`: what the member can do in the mailbox; migration `0033` narrowed the scopes of each agent member), `oauth_clients` (registered MCP clients: name, URI, redirect URIs), `oauth_requests` (authorization requests: client, redirect URI, state, PKCE challenge, requested scopes, approval, code hash, the grant that the code made, and `granted_scopes`, which is not read since migration `0027`), `oauth_grants` (approved connections: client, principal, approver, hashes of the access token and of the current, previous and consumed refresh tokens, and `scopes`, which is not read since migration `0027`) ([`migrations/`](../../migrations/)). The TOTP secrets are stored as plain base32 in D1, because a server must read them to check a code. Unused and empty since migration `0004`, kept for the Worker from before it: `principals.sign_in_email` and `sign_in_codes`. A later migration removes them. `PrincipalDO` (one for each principal, keyed by the principal id): tables `chat_rooms`, `chat_threads`, `chat_addressed`, `chat_activity` (with `subject_json`: the account to add or to share with, for an item of the kind `member_request` or `share_request`, and `item_json`: the Drive item, for an item of the kind `share_request`), `chat_sections`, `chat_section_rooms`, `chat_saved_messages`, `chat_drafts`, `chat_scheduled_messages`, `chat_reminders`, `chat_notification_levels`, `chat_push_devices`, and `chat_notification_sounds` (see [The object of a principal](#the-object-of-a-principal)), table `service_activity` (the activity log of a service account: at most 10,000 calls, at most 1,000 membership changes by members, its admin changes, and 90 days, see [Service accounts](#service-accounts)), table `meta` (schema version, the owner id in `presence_principal`, `chat_seeded` after the first fill, and `chat_threads_filled` after the first fill of the threads), and the hibernatable sockets of `/ws/events` (not in the database: each keeps the reference to its credential, the time of its open and of its last check, and its latest activity report; no backup). Backups: not built yet. |
 
 Public surface: `index.ts` only. Other domains must not import files from this folder directly.
 
@@ -19,7 +19,9 @@ The D1 database also holds `chat_rooms` and `chat_members`. They belong to the
 The same applies to `chat_member_requests` (migration `0030`): see
 [Where an agent can act](#where-an-agent-can-act). The table `mail_settings` (migration `0031`) belongs to
 the [`mail`](../mail/README.md#the-screener) module. It holds the default of the Screener. A fresh start
-of the directory drops it and replays `0031`, so the default is off again.
+of the directory drops it and replays `0031`, so the default is off again. The same applies to
+`drive_share_requests` (migration `0032`), which belongs to the [`drive`](../drive/README.md#data-inventory)
+module.
 `mailboxOwnerKind` (`team-mailboxes.ts`) tells the `mail` module who owns a mailbox: a team, a person
 or an agent. The Screener never applies to the mailbox of an agent.
 
@@ -58,6 +60,13 @@ to it, so a list of that state reads one object and not the directory.
   person who decides a [request of an agent](../chat/README.md#a-request-of-an-agent-to-add-an-agent) is
   usually not a member of the room. The column `subject_json` has the account to add, and null for each
   other kind.
+- An item of the kind `share_request` gets no such check either. It is a
+  [request of an agent to share a Drive item](../drive/README.md#a-request-of-an-agent-to-share-an-item),
+  and it has no room: its `room_id` is empty. `subject_json` has the account to share with. The column
+  `item_json` has the item: the space id, the item id, the name and the role. It is null for each other
+  kind.
+- `CHAT_ACTIVITY_ITEM_MIGRATION` (`chat-personal.ts`) adds the column `item_json` with
+  `ALTER TABLE … ADD COLUMN`. The rows stay, and each row from before gets null.
 - `CHAT_ACTIVITY_SUBJECT_MIGRATION` (`chat-personal.ts`) makes the table `chat_activity` again with the
   column `subject_json`, and copies each row. The new table has no `CHECK` of the kind: SQLite cannot
   change a `CHECK`, and the contracts name the kinds.
@@ -397,7 +406,8 @@ the API, with tokens. Nobody signs in as it, and it never connects through OAuth
     (`recordServiceMemberships`), with that principal as the actor: a room (create, add, remove, a new
     direct message or group message, delete, an owner that an admin assigns, an approved request of an
     agent to add the account), a shared drive (create,
-    add, remove, delete), and the share of a Drive item (share, unshare). The room, the drive or the item
+    add, remove, delete), and the share of a Drive item (share, unshare, an approved request of an agent to share an item with
+    the account). The room, the drive or the item
     is the resource. The surface is `admin` for an owner or an admin, and `member` for each other
     principal, for example a member who adds the account to a room. A delete reads the service accounts
     of the room or the drive from the index before the delete. A change that the account makes itself is
@@ -549,7 +559,7 @@ in the membership. The **Read** item below also gives the rule for the access su
   views of Chat, the custom emoji, webhooks and MCP Events. `directory.create_principal`,
   `directory.create_service_account` and `oauth.approve_authorization` with `new_agent` give a new account
   each scope of its kind (`AGENT_SCOPES` or `SERVICE_SCOPES`), and take no `scopes`. Nothing writes the
-  account scopes after that. An account from before migration `0032` keeps its narrower list.
+  account scopes after that. An account from before migration `0033` keeps its narrower list.
   `authenticate` reads them on each call, and the ceiling of the kind applies again.
 - **Direct checks.** A handler that checks a scope itself uses `holdsForResource`: an agent in a shared
   resource passes, because the object of the resource checks the membership. This applies to the room socket and the typing of a room socket. It also applies to the folder of a room
@@ -558,7 +568,7 @@ in the membership. The **Read** item below also gives the rule for the access su
   scheduled messages.
 - **Lists.** For an agent from before without the read scope, `chat.list_rooms` and
   `drive.list_shared_drives` ask each room or drive of the page. So the list never shows a membership from
-  before that the object did not narrow. `mail.list_mailboxes` reads D1, which migration `0032` narrowed,
+  before that the object did not narrow. `mail.list_mailboxes` reads D1, which migration `0033` narrowed,
   and shows the own mailbox with the account mail scopes.
 - **Read.** `directory.get_member_access` (`GET /api/v1/directory/members/{principal_id}/access`) gives the
   access of each member: a person, an agent or a service account.
@@ -581,7 +591,7 @@ in the membership. The **Read** item below also gives the rule for the access su
     (`sharedItemsOfPrincipal` of [`drive`](../drive/README.md)), the newest share first, at most 200,
     with `drive_shared_items_truncated`. The drive of each item checks the access of the member again.
     So a removed share and an item in the trash are not in the list.
-  - An index can have a membership from before migration `0032` that its object did not narrow. Only an
+  - An index can have a membership from before migration `0033` that its object did not narrow. Only an
     account without both scopes of the product can have one: `chat.read` and `chat.write`, or `drive.read`
     and `drive.write`. For such an account, each room and each shared drive of the answer confirms the
     membership (`confirmedRoomsOf` of [`chat`](../chat/README.md), `confirmedSharedDrivesOf` of
@@ -610,12 +620,12 @@ in the membership. The **Read** item below also gives the rule for the access su
   message fails.
 - **Webhooks.** Before each POST, the delivery check (`checkDelivery` of
   [`webhooks`](../webhooks/README.md#delivery)) reads the agent that created it again. The agent must hold
-  the webhook scope of the product on its account. An agent from before migration `0032` possibly lost it
+  the webhook scope of the product on its account. An agent from before migration `0033` possibly lost it
   before the deploy, and its subscription then stops with `access_lost`. The check of the target is the
   check of a membership.
-- **Migration `0032`.** Before it, a call of an agent in a shared resource needed the scope on its account
+- **Migration `0033`.** Before it, a call of an agent in a shared resource needed the scope on its account
   and in its membership. So each membership keeps only what both allowed, and no agent gets more:
-  - D1: `0032_resource_access.sql` gives each membership of an agent in a team mailbox the mail scopes
+  - D1: `0033_resource_access.sql` gives each membership of an agent in a team mailbox the mail scopes
     that the membership and the account both hold. A list that is not valid JSON, or is not a JSON array,
     gives nothing.
   - Each room narrows its agent members before its first call after the deploy (`narrowAgentMembers` of
@@ -642,7 +652,7 @@ in the membership. The **Read** item below also gives the rule for the access su
 - **Log.** The audit target of `directory.create_principal` and of `directory.create_service_account` is
   the id of the new principal. A membership change for a service account adds an entry to its activity log
   (`recordServiceMemberships`).
-- **Rollback.** A rollback to a Worker from before migration `0032` makes the account scopes limit each
+- **Rollback.** A rollback to a Worker from before migration `0033` makes the account scopes limit each
   membership again. The narrowed memberships stay narrow. A rollback to a Worker from before migration
   `0027` is not supported. A fresh start of the directory replays each bundled migration (`setup.ts`).
 
@@ -659,6 +669,10 @@ that a person shares with it. No list on the account names its resources.
   a member. For a team mailbox, this is an owner or an admin. For a room, this is a member with
   `chat.add_members`. For a shared drive, this is a manager. The agent uses the resource at once, with each
   key and each connection.
+- **A grant on a Drive item decides for the item.** `drive.share_item` and `drive.approve_share_request` give
+  the role on the item only. They change no scope of the account. The grant decides what the account can do
+  with the item, as for a person ([`drive`](../drive/README.md#a-grant-for-a-single-item)). Each person who
+  can share the item can give an agent this access: its owner, or a manager of its shared drive.
 - **An agent does not join a room.** `chat.join_room` accepts people only (`callers: ["human"]`). A
   person who is a member of the room adds an agent or a service account with `chat.add_members`.
 - **An agent does not add an agent.** An agent or a service account cannot make a different agent or
@@ -671,7 +685,29 @@ that a person shares with it. No list on the account names its resources.
   a different agent or service account with `chat.set_member_scopes`. An owner that is a person can.
 - **The requests are in the directory.** The table `chat_member_requests` has one row for each request
   that waits for a person (migration `0030`). It belongs to the [`chat`](../chat/README.md#data-inventory)
-  module. A fresh start of the directory drops the table and replays `0030` (`setup.ts`).
+  module. The migration only adds the table, and the Worker from before does not read it. A fresh start
+  of the directory drops the table and replays `0030` (`setup.ts`).
+- **Rollback after `0030`.** A Worker from before this change finds no message for an item of the kind
+  `member_request`, so its `chat.list_activity` removes the item as old. The table of the migration stays
+  and that Worker does not use it
+  ([Self-hosting](../../../../docs/self-hosting.md#an-agent-asks-before-it-adds-an-agent)).
+- **An agent does not share with an agent.** An agent or a service account cannot give a grant on a Drive
+  item to a different agent or service account. `drive.share_item` gets `forbidden`. It shares with a
+  person as before.
+- **An agent asks before it shares.** The agent calls `drive.request_share`, and a person who manages the
+  account of the request decides (`deciderOf`, as for a room). An approval gives the account the role of
+  the request on the item only. The account gets no scope
+  ([`drive`](../drive/README.md#a-request-of-an-agent-to-share-an-item)).
+- **The requests to share are in the directory.** The table `drive_share_requests` has one row for each
+  request that waits for a person (migration `0032`). It belongs to the
+  [`drive`](../drive/README.md#data-inventory) module. The migration only adds the table, and the Worker
+  from before does not read it. A fresh start of the directory drops the table and replays `0032`
+  (`setup.ts`).
+- **Rollback after `0032`.** A Worker from before this change does not know the activity kind
+  `share_request`. Its `chat.list_activity` looks for the item in the room with the empty id. No such room
+  exists, so it removes the item as old. The table of the migration and the column `item_json` stay, and
+  that Worker does not use them
+  ([Self-hosting](../../../../docs/self-hosting.md#an-agent-asks-before-it-shares-an-item-with-an-agent)).
 - **A remove ends the access.** After a remove from a room, a shared drive or a team mailbox, the next call
   of the agent fails. Nothing on the account changes.
 - **Actions without a resource.** The account scopes decide `chat.create_room`, `chat.open_dm` and
@@ -684,6 +720,10 @@ that a person shares with it. No list on the account names its resources.
   give them (`canTargetSharedResource`). The call itself checks the scopes with its input. A resource URI
   resolves only when the read with its input passes the same check (`canCallWith`). `resources/list` leaves
   out a kind whose list does not pass that check.
+  - An agent or a service account can also call an operation with `itemGrant` without its scopes, in a call
+    that no membership or share decides. The handler then gets `grantOnly`, and the drive counts only the
+    grants on single items ([`drive`](../drive/README.md#a-grant-for-a-single-item)). `canCall` lists such a
+    tool. A grant on an item does not make a resource kind visible.
 
 ## Team mailboxes
 

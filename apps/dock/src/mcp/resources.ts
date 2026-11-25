@@ -9,7 +9,7 @@ import {
 } from "@asterra/contracts";
 import type { AuthContext, CallContext } from "../identity/index.ts";
 import { type HandlerMap, invokeOperation, OperationError } from "../platform/index.ts";
-import { canCall, canCallWith, hasUntrusted } from "./tools.ts";
+import { canCallWith, hasUntrusted, holdsScopesFor } from "./tools.ts";
 
 /** A URI longer than this names no resource. Each resource URI of the registry is much shorter. */
 const MAX_URI_CHARS = 2048;
@@ -21,9 +21,16 @@ export interface ResolvedResource {
 	vars: Record<string, string>;
 }
 
-/** A resource kind is visible only when the credential can call its read and its list operations. */
+/**
+ * A resource kind is visible only when the credential holds the scopes of its read and its list operations, or a
+ * membership can give them to an agent (`holdsScopesFor`). A grant on a Drive item does not count: the list of a
+ * resource kind starts at the own data of the caller.
+ */
 export function canRead(caller: AuthContext, resource: ResourceDefinition): boolean {
-	return canCall(caller, operations[resource.read.operation]) && canCall(caller, operations[resource.list.operation]);
+	return (
+		holdsScopesFor(caller, operations[resource.read.operation]) &&
+		holdsScopesFor(caller, operations[resource.list.operation])
+	);
 }
 
 function describe(resource: ResourceDefinition): string {

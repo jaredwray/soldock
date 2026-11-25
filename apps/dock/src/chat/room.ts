@@ -1876,7 +1876,7 @@ export class ChatRoomDO extends DurableObject<Env> {
 
 	/**
 	 * A step that runs one time in each room, before its first call after the deploy that made the memberships
-	 * decide the access of agents (D1 migration 0032). Before that deploy, a call of an agent or a service
+	 * decide the access of agents (D1 migration 0033). Before that deploy, a call of an agent or a service
 	 * account needed the scope in its account too. So each agent member keeps only what it could do before:
 	 * - Without `chat.read` on its account, it could not read the room. The room removes it, because each
 	 *   member reads.

@@ -9,8 +9,9 @@ import { useToast } from "../../lib/toast.tsx";
 import { chatPath } from "../../routes.ts";
 import { PageHeader } from "../../shell/PageHeader.tsx";
 import { EmojiGlyph } from "./customEmoji.tsx";
-import { MemberRequestActions } from "./MemberRequestActions.tsx";
 import { requestOfActivity, requestRoomText } from "./memberRequests.ts";
+import { MemberRequestActions, ShareRequestActions } from "./RequestActions.tsx";
+import { shareRequestOfActivity, shareRoleVerb } from "./shareRequests.ts";
 
 type ActivityFilter = "all" | "unread" | ChatActivityKind;
 
@@ -23,6 +24,7 @@ const FILTERS: { value: ActivityFilter; label: string }[] = [
 	{ value: "reminder", label: "Reminders" },
 	{ value: "card_action", label: "Card actions" },
 	{ value: "member_request", label: "Member requests" },
+	{ value: "share_request", label: "Share requests" },
 ];
 
 function describeKind(item: ChatActivityItem): string {
@@ -39,6 +41,8 @@ function describeKind(item: ChatActivityItem): string {
 			return "clicked a card button";
 		case "member_request":
 			return "asks to add";
+		case "share_request":
+			return "asks to share";
 	}
 }
 
@@ -174,6 +178,10 @@ export function ActivityView({ tick, onReadChange }: { tick: number; onReadChang
 									</p>
 									<MemberRequestActions request={requestOfActivity(item)} onGone={() => removeRequest(item)} />
 								</div>
+							) : item.kind === "share_request" ? (
+								// The person can have no access to the item, so the item is not a link to the file. It has
+								// only the two buttons, as a member request.
+								<ShareRequestItem item={item} onGone={() => removeRequest(item)} />
 							) : (
 								<button type="button" className="chat-feed-button" onClick={() => void openItem(item)}>
 									<div className="chat-feed-head">
@@ -201,6 +209,28 @@ export function ActivityView({ tick, onReadChange }: { tick: number; onReadChang
 					</p>
 				)}
 			</div>
+		</div>
+	);
+}
+
+/** An item of the kind `share_request`: an agent asks to share a Drive item with an account that the person manages. */
+function ShareRequestItem({ item, onGone }: { item: ChatActivityItem; onGone: () => void }) {
+	const request = shareRequestOfActivity(item);
+	return (
+		<div className="chat-feed-card">
+			<div className="chat-feed-head">
+				<span className="chat-feed-actor">{item.actor.display_name}</span>{" "}
+				<span className="chat-feed-action">{describeKind(item)}</span>{" "}
+				<span className="chat-feed-actor">“{request.itemName}”</span> <span className="chat-feed-action">with</span>{" "}
+				<span className="chat-feed-actor">{request.subjectName}</span>
+				{item.subject?.kind === "agent" && <span className="kind kind-agent">agent</span>}
+				<span className="chat-feed-time">{shortDate(item.created_at)}</span>
+			</div>
+			<p className="chat-feed-preview">
+				You manage this account. The agent cannot share the item with it without your approval. After an approval, the
+				account can {shareRoleVerb(request.role)} the item. A grant on a folder also covers what the folder holds later.
+			</p>
+			<ShareRequestActions request={request} onGone={onGone} />
 		</div>
 	);
 }

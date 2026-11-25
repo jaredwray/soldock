@@ -81,7 +81,7 @@ export const handlers: HandlerMap<CallContext> = {
  * the shared drives and the public rooms. The private rooms, the direct messages and the items that others
  * shared directly with the person stay private.
  *
- * The indexes can have a membership from before migration 0032 that its room or its drive did not narrow. Only
+ * The indexes can have a membership from before migration 0033 that its room or its drive did not narrow. Only
  * an agent or a service account without both scopes of the product can have one. For such an account, each room
  * and each drive of the answer confirms the membership, so the answer has the narrowed roles.
  */

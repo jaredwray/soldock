@@ -75,6 +75,7 @@ const RESOURCE_DECIDED: string[] = [
 	"drive.move_items",
 	"drive.move_to_drive",
 	"drive.rename_item",
+	"drive.request_share",
 	"drive.restore_items",
 	"drive.restore_version",
 	"drive.set_preview",

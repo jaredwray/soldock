@@ -1,5 +1,6 @@
 // MCP tools: one tool for each operation of the registry.
 import {
+	callableWithItemGrant,
 	canTargetSharedResource,
 	holdsOperationScopes,
 	type Operation,
@@ -63,10 +64,19 @@ const TOOLS = new Map<string, { operation: Operation; tool: Tool }>(
 /**
  * A tool is listed only when this credential can call it, so an agent never sees tools that would refuse it.
  * For an agent or a service account, a scope that a membership can give counts for a tool that can name a team
- * mailbox, a room or a shared drive: the membership decides the call (`canTargetSharedResource`). The call
- * itself still checks the scopes with its input.
+ * mailbox, a room or a shared drive: the membership decides the call (`canTargetSharedResource`). A grant on a
+ * Drive item opens an item operation (`itemGrant`). The call itself still checks the scopes with its input.
  */
 export function canCall(caller: AuthContext, operation: Operation): boolean {
+	return holdsScopesFor(caller, operation) || callableWithItemGrant(operation, caller.kind);
+}
+
+/**
+ * True when the credential holds the scopes of the operation, or when a membership can give them to an agent
+ * (`canTargetSharedResource`). A grant on a Drive item (`itemGrant`) does not count: a resource kind lists and
+ * watches the own data of the caller, and the resources of its memberships.
+ */
+export function holdsScopesFor(caller: AuthContext, operation: Operation): boolean {
 	if (!operation.callers.includes(caller.kind)) return false;
 	if (holdsOperationScopes(operation, caller.scopes)) return true;
 	if (caller.principal.kind !== "agent" || !canTargetSharedResource(operation)) return false;
@@ -77,7 +87,8 @@ export function canCall(caller: AuthContext, operation: Operation): boolean {
 
 /**
  * True when this credential can call the operation with this input: the same scope check as the invoker. For
- * an agent, the input says if a membership decides the call or its account scopes do.
+ * an agent, the input says if a membership decides the call or its account scopes do. A grant on a Drive item
+ * does not count here: MCP uses this check for a resource URI.
  */
 export function canCallWith(caller: AuthContext, operation: Operation, rawInput: unknown): boolean {
 	if (!operation.callers.includes(caller.kind)) return false;

@@ -2,7 +2,7 @@ import { createExecutionContext, runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import { ApiError, TEAM_MAILBOX_LIMITS } from "@asterra/contracts";
 import { beforeEach, describe, expect, it } from "vitest";
-import resourceAccessMigration from "../migrations/0032_resource_access.sql?raw";
+import resourceAccessMigration from "../migrations/0033_resource_access.sql?raw";
 import worker from "../src/index.ts";
 import {
 	type Actor,
@@ -354,9 +354,9 @@ describe("the scopes of a member of a team mailbox", () => {
 		expect(await code(ada.call("mail.list_threads", { mailbox_id: support.id }))).toBe("forbidden");
 	});
 
-	// Before 0032, a call of an agent in a team mailbox needed the scope on its account and in its membership.
+	// Before 0033, a call of an agent in a team mailbox needed the scope on its account and in its membership.
 	// The migration keeps for each membership of an agent what the agent could do, so no agent gets more.
-	it("keeps for each agent membership only the scopes that its account also held, in migration 0032", async () => {
+	it("keeps for each agent membership only the scopes that its account also held, in migration 0033", async () => {
 		const { principal: service } = await owner.call("directory.create_service_account", {
 			display_name: "CI",
 			address: "ci@dock.test",
@@ -419,7 +419,7 @@ describe("the scopes of a member of a team mailbox", () => {
 describe("an agent or a service account in a team mailbox", () => {
 	/**
 	 * A new agent of Ada with its first key, or a new service account with a token. It is a member of no team
-	 * mailbox. `legacy` gives it the narrow account scopes that an account from before migration 0032 can have.
+	 * mailbox. `legacy` gives it the narrow account scopes that an account from before migration 0033 can have.
 	 */
 	async function newAccount(kind: "agent" | "service", legacy?: readonly string[]) {
 		const address = "helper@dock.test";
@@ -452,13 +452,13 @@ describe("an agent or a service account in a team mailbox", () => {
 	// The resource permissions are the source of truth. An admin grants Read and send on Support and Read on
 	// Billing. The key that the agent had before acts at once, as the memberships say, and the end of a
 	// membership ends that access at once. No member setting and no credential changes. An agent from before
-	// migration 0032 with narrow account scopes gets the same: its account scopes limit only its own mailbox.
+	// migration 0033 with narrow account scopes gets the same: its account scopes limit only its own mailbox.
 	// A service account and its token get the same as an agent and its key.
 	it.each([
 		["a new agent", "agent", undefined],
-		["an agent from before migration 0032", "agent", ["account.read", "chat.read"]],
+		["an agent from before migration 0033", "agent", ["account.read", "chat.read"]],
 		["a new service account", "service", undefined],
-		["a service account from before migration 0032", "service", ["chat.read"]],
+		["a service account from before migration 0033", "service", ["chat.read"]],
 	] as const)(
 		"lets %s use each team mailbox as its membership says, at once, with its key",
 		async (_name, kind, legacy) => {
