@@ -2001,27 +2001,140 @@ fieldset {
 	text-decoration: underline;
 }
 
-.focus-intro {
-	margin: 0;
-	padding: 16px 22px 0;
+/* Focus & Reply. The status strip stays above the list: the progress of this visit, and the keys. */
+.focus-status {
+	position: relative;
+	display: flex;
+	flex: none;
+	align-items: center;
+	justify-content: space-between;
+	gap: 12px;
+	padding: 8px 22px;
+	border-bottom: 1px solid var(--border);
 	color: var(--muted-foreground);
-	font-size: 14px;
+	font-size: 13px;
 }
 
+.focus-status p {
+	margin: 0;
+}
+
+.focus-status-count {
+	color: var(--foreground);
+	font-weight: 600;
+	font-variant-numeric: tabular-nums;
+}
+
+.focus-hints {
+	display: flex;
+	flex-wrap: wrap;
+	justify-content: flex-end;
+	gap: 4px 14px;
+}
+
+.focus-hints[hidden] {
+	display: none;
+}
+
+.focus-hints kbd {
+	font-size: 11px;
+}
+
+/* The bar is on the bottom border of the strip. Its text form is the count. */
+.focus-progress {
+	position: absolute;
+	bottom: -1px;
+	left: 0;
+	height: 2px;
+	background: var(--foreground);
+	transition: width 300ms ease;
+}
+
+/* One reading column. The space between the cards is the padding of each card, so it can close in the exit motion. */
 .focus-list {
 	display: flex;
 	flex-direction: column;
-	gap: 16px;
-	max-width: 1000px;
-	margin: 0;
-	padding: 16px 22px 32px;
+	max-width: 760px;
+	margin: 0 auto;
+	padding: 20px 22px 32px;
+	/* An answered card moves to the right when it leaves. In a narrow window, that must not make the page scroll. */
+	overflow-x: clip;
 	list-style: none;
 }
 
 .focus-card {
+	display: grid;
+	grid-template-rows: 1fr;
+	padding-bottom: 16px;
+	scroll-margin-top: 12px;
+}
+
+.focus-card-body {
+	position: relative;
+	min-height: 0;
 	padding: 12px 16px 4px;
 	border: 1px solid var(--border);
-	border-radius: var(--radius-md);
+	border-radius: var(--radius);
+	background: var(--surface);
+	transition:
+		box-shadow 160ms ease,
+		border-color 160ms ease,
+		background-color 160ms ease;
+}
+
+/* The active card comes forward: the color of a card, a shadow and a bar at its left. The others stay flat. */
+.focus-card-active .focus-card-body {
+	border-color: var(--input);
+	background: var(--card);
+	box-shadow: var(--shadow-menu);
+}
+
+.focus-card-active .focus-card-body::before {
+	content: "";
+	position: absolute;
+	top: 14px;
+	bottom: 14px;
+	left: -1px;
+	width: 3px;
+	border-radius: 2px;
+	background: var(--foreground);
+}
+
+/* The exit motion: an answered card moves to the right, a card that is done gets smaller. Then the place closes. */
+.focus-card-sent,
+.focus-card-done {
+	pointer-events: none;
+}
+
+.focus-card-sent .focus-card-body,
+.focus-card-done .focus-card-body {
+	overflow: hidden;
+}
+
+.focus-card-sent {
+	animation: focus-leave-sent 220ms ease forwards;
+}
+
+.focus-card-done {
+	animation: focus-leave-done 220ms ease forwards;
+}
+
+@keyframes focus-leave-sent {
+	to {
+		grid-template-rows: 0fr;
+		padding-bottom: 0;
+		opacity: 0;
+		transform: translateX(24px);
+	}
+}
+
+@keyframes focus-leave-done {
+	to {
+		grid-template-rows: 0fr;
+		padding-bottom: 0;
+		opacity: 0;
+		transform: scale(0.98);
+	}
 }
 
 .focus-card-header {
@@ -2033,6 +2146,12 @@ fieldset {
 
 .focus-card-title {
 	min-width: 0;
+}
+
+.focus-card-actions {
+	display: flex;
+	flex: none;
+	gap: 4px;
 }
 
 .focus-card-subject {
@@ -2058,6 +2177,100 @@ fieldset {
 
 .focus-card-state {
 	margin: 8px 0 12px;
+}
+
+.focus-card-note {
+	margin: 4px 0 8px;
+	color: var(--muted-foreground);
+	font-size: 13px;
+}
+
+/* The finish state: one check that comes in, what the person cleared, and the way back. */
+.focus-finish-mark {
+	width: 56px;
+	height: 56px;
+	color: var(--foreground);
+	animation: focus-finish 240ms ease-out;
+}
+
+@keyframes focus-finish {
+	from {
+		opacity: 0;
+		transform: scale(0.8);
+	}
+}
+
+.focus-finish-session {
+	width: min(420px, 100%);
+	margin-top: 8px;
+	text-align: left;
+}
+
+.focus-finish-heading {
+	margin: 0 0 6px;
+	color: var(--muted-foreground);
+	font-size: 12px;
+	font-weight: 600;
+	text-transform: uppercase;
+	letter-spacing: 0.04em;
+}
+
+.focus-finish-list {
+	margin: 0;
+	padding: 0;
+	border-top: 1px solid var(--border);
+	list-style: none;
+	font-size: 14px;
+}
+
+.focus-finish-list li {
+	display: flex;
+	justify-content: space-between;
+	gap: 12px;
+	padding: 8px 0;
+	border-bottom: 1px solid var(--border);
+}
+
+.focus-finish-list a {
+	min-width: 0;
+	overflow: hidden;
+	color: inherit;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.focus-finish-how,
+.focus-finish-more {
+	flex: none;
+	color: var(--muted-foreground);
+}
+
+.focus-finish-actions {
+	display: flex;
+	flex-wrap: wrap;
+	justify-content: center;
+	gap: 8px;
+	margin-top: 12px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.focus-card-sent,
+	.focus-card-done,
+	.focus-finish-mark {
+		animation: none;
+	}
+
+	.focus-progress,
+	.focus-card-body {
+		transition: none;
+	}
+}
+
+/* A touch screen has no keys, and a narrow screen has no room for the hints. */
+@media (hover: none), (max-width: 900px) {
+	.focus-hints {
+		display: none;
+	}
 }
 
 /* Thread view */
@@ -3010,6 +3223,24 @@ fieldset {
 	gap: 8px;
 	padding-bottom: 24px;
 	color: var(--muted-foreground);
+}
+
+/* The composer in the page, for example in a card of Focus & Reply. */
+.compose-inline {
+	border-top: 1px solid var(--border);
+}
+
+.compose-inline .compose-fields {
+	padding-top: 4px;
+}
+
+.compose-inline .composer-loading {
+	padding: 16px 24px;
+}
+
+/* The reply in a card of Focus & Reply spans the full width of the card. */
+.focus-card .compose-inline {
+	margin: 8px -16px 0;
 }
 
 .link-fields {
@@ -4461,16 +4692,20 @@ fieldset {
 		padding: 12px 16px 24px;
 	}
 
-	.focus-intro {
-		padding: 12px 16px 0;
+	.focus-status {
+		padding: 8px 16px;
 	}
 
 	.focus-list {
 		padding: 12px 16px 24px;
 	}
 
-	.focus-card {
+	.focus-card-body {
 		padding: 10px 12px 4px;
+	}
+
+	.focus-card .compose-inline {
+		margin: 8px -12px 0;
 	}
 
 	.thread-header {

@@ -35,6 +35,18 @@ export const SHORTCUT_GROUPS: readonly { name: string; shortcuts: readonly Short
 		],
 	},
 	{
+		name: "Focus & Reply",
+		shortcuts: [
+			{ keys: ["j", "k"], action: "Next or previous conversation" },
+			{ keys: ["r"], action: "Reply in the page" },
+			{ keys: ["a"], action: "Reply all in the page" },
+			{ keys: ["f"], action: "Forward the conversation" },
+			{ keys: ["l"], action: "Done: remove from Reply later" },
+			{ keys: ["Ctrl+Enter"], action: "Send the message (Cmd+Enter on a Mac)" },
+			{ keys: ["Esc"], action: "Close the reply" },
+		],
+	},
+	{
 		name: "Help",
 		shortcuts: [{ keys: ["?"], action: "Show this help" }],
 	},

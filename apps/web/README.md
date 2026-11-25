@@ -168,7 +168,11 @@ MCP clients. The app has no UI-only path.
     brings a new unread message into the open thread, the app removes UNREAD again. The app keeps
     the set of unread message ids that it marked, so it does not send the same change twice.
   - The composer is a modal dialog. It does new mail, reply, reply all and forward, with
-    attachments. One idempotency key for each composed message makes a retry safe.
+    attachments. One idempotency key for each composed message makes a retry safe. Focus & Reply shows the
+    same composer in the page, in a card (`frame="inline"`). The inline composer gives the focus to the same
+    field as the dialog does, and Escape closes it.
+  - Ctrl+Enter, or Cmd+Enter on a Mac, sends the message from each field of the composer. The keys do not
+    send from the link dialog of the editor.
   - Each field label of the composer ends with a colon, for example `To:` and `Subject:`. Each row
     sizes its own label, so the text field starts right after the label.
   - The first row is **From:**. In a new message and a forward, it is a list
@@ -252,7 +256,7 @@ MCP clients. The app has no UI-only path.
   - The app polls `mail.get_profile` every 15 seconds while the tab is visible, and on window
     focus. When the version changes, it gets the labels, the list and the open thread again.
   - Keyboard shortcuts: `j`, `k`, `o`, Enter, `u`, `e`, `#`, `s`, `l`, `x`, `c`, `r`, `/` and `?`. Press `?`
-    to see the list, in four groups (`SHORTCUT_GROUPS` in
+    to see the list, in five groups (`SHORTCUT_GROUPS` in
     [`ShortcutHelp.tsx`](src/features/mail/ShortcutHelp.tsx)). Shortcuts do not work while the focus is in a text field.
 - **Reply later** (`/mail/reply-later`, [`FocusReply.tsx`](src/features/mail/FocusReply.tsx)). A place for
   the conversations that the person answers later.
@@ -266,8 +270,28 @@ MCP clients. The app has no UI-only path.
   - At the end of the inbox list, a pile tells how many conversations wait for an answer. It has links to the
     list and to Focus & Reply. The pile shows only when the count is more than 0.
   - The Reply later list has a banner with **Focus & Reply** above its rows.
-  - **Focus & Reply** (`/mail/reply-later/focus`) shows a card for each conversation of Reply later. The
-    cards are in the order of the list, newest first.
+  - **Focus & Reply** (`/mail/reply-later/focus`, [`FocusReply.tsx`](src/features/mail/FocusReply.tsx), with
+    the rules in [`focusReply.ts`](src/features/mail/focusReply.ts)) shows a card for each conversation of Reply
+    later. The cards are in one column of 760px, in the order of the list, newest first.
+  - One card is active: the first card at the start. It has the color of a card, a shadow and a bar at its left.
+    The other cards are flat. A click or the focus in a card makes it active. `j` and `k` move to the next or the
+    previous card, give it the focus and bring it to the top of the view. **Skip** on the active card does the
+    same as `j`. It removes nothing.
+  - Reply and Reply all open the composer in the card, under the message. The other cards stay visible. Forward
+    opens the composer dialog, because a forward does not answer the conversation. `r`, `a` and `f` do the same
+    for the active card. In a very large thread, the server can leave out the body of the message. The keys and
+    the step after a send then wait until the card has the body, as the buttons do (`replySource`).
+  - After a send, the card leaves the page, the next card becomes active, and its reply opens with the focus in
+    the message. So the person answers one conversation after the other with no click. No toast shows for a
+    send. A live region says "Reply sent." and the progress. A toast shows when the delivery to a recipient
+    failed.
+  - A strip above the cards shows the progress of this visit, for example "2 of 5 done · 3 left", and a bar of
+    2px on its border. "Done" counts the replies and the Done of this visit. "Left" counts the waiting
+    conversations. On a large screen, the strip also shows the keys. While the focus is in a reply, it shows
+    Ctrl+Enter and Esc.
+  - A card that leaves plays a short motion: an answered card moves to the right, and a card that is done gets
+    smaller. Then its place closes. The card is inert during the motion. With `prefers-reduced-motion`, the
+    card goes at once.
   - A card has the subject, the people, the number of other messages and **Done**. The subject is a link to
     the conversation.
   - A card shows the newest message that the mailbox got, with Reply, Reply all and Forward. A forward can
@@ -278,11 +302,25 @@ MCP clients. The app has no UI-only path.
   - The page shows the first 50 conversations, and **Older** gets more. The count at the top comes from the
     label, so it counts each waiting conversation.
   - A reply from the composer removes `REPLY_LATER` on the server. After the send, the card leaves the page.
-  - **Done** removes the label without a reply, with a toast and **Undo**.
-  - When the card with the focus leaves, the focus goes to the subject of the card in its place. When no card
-    stays, the focus goes to the page.
+  - **Done** removes the label without a reply, with a toast and **Undo**. `l` is Done for the active card, but
+    not while its reply is open, so a key never discards text. The **Done** button asks "Discard your reply?"
+    when the reply of its card has text. **Undo** puts the card back at its old place, with its reply closed.
+    A refresh that started before the server made a Done does not bring the card back.
+  - When the active card leaves, the focus goes to the subject of the next card. When no card stays, the focus
+    goes to the page.
+  - When the last card leaves, the page shows **All caught up.**, what the person answered and marked as done in
+    this visit, and a list of those conversations (at most 8, then a count). Each is a link to the conversation.
+    **Go to the inbox** and **Reply later list** follow. A page that opens with no conversation shows the empty
+    state.
+  - While a reply in a card has text, the app asks "Discard your reply?" before it leaves the page
+    ([`navigationGuard.ts`](src/lib/navigationGuard.ts), which `navigate()` asks). The browser asks before it
+    closes or reloads the tab. The Back button of the browser does not ask: a `popstate` event cannot stop.
+  - A refresh does not move a card. A card with an open reply stays, also when its conversation left Reply
+    later, for example after a reply by a different member. The card then says so. A card from **Older** stays
+    until the server shows that it left (`mergeQueue`).
   - Focus & Reply does not mark a conversation as read.
-  - The shortcuts `c`, `/` and `?` work in Focus & Reply, and `u` goes back to the Reply later list.
+  - The shortcuts `j`, `k`, `r`, `a`, `f`, `l`, `o`, `c`, `/` and `?` work in Focus & Reply, and `u` goes back to
+    the Reply later list. The shortcut help has a Focus & Reply group.
   - Without `mail.modify`, Focus & Reply has no **Done**. Without `mail.send`, it has no Reply. The notice of
     the list says why. The mailbox of an agent shows the notice of a read-only mailbox, because each card
     opens a conversation, and the audit log records it.
