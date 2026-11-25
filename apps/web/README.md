@@ -222,7 +222,9 @@ MCP clients. The app has no UI-only path.
     person did not change starts again with the new signature. In a changed body, the lines of the old
     signature change (`replaceLines` in [`richText.ts`](src/features/mail/richText.ts)). When the person
     changed those lines, the body stays as it is. A membership without `mail.read` cannot read the
-    signature of its mailbox, so the body then gets no signature. The focus stays on the From.
+    signature of its mailbox, so the body then gets no signature. The focus stays on the From. While the
+    signature of the new mailbox loads, **Send** waits, so a message never goes from the new address with
+    the signature of the old one.
   - A reply or forward starts with the draft text from [`compose.ts`](src/features/mail/compose.ts).
     Each line becomes a paragraph, and a run of `> ` lines becomes a quote block. A line that starts
     with `>` and no space stays text, so an unchanged draft sends the same text. Quotes nest to a

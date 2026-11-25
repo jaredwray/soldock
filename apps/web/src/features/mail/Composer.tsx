@@ -98,6 +98,9 @@ export function Composer({ draft, mailDomains, fromOptions, initialFrom, signatu
 	const bodyRef = useRef({ doc: seed.doc, seed, signature });
 	const signatures = useRef(new Map<string | null, string>([[initialFrom, signature]]));
 	const fromChanges = useRef(0);
+	// True while a change of the From loads the signature of the new mailbox. Send waits for it, so a message
+	// never goes from the new address with the signature of the old one.
+	const [loadingSignature, setLoadingSignature] = useState(false);
 	// Each send has both forms: HTML for the formatting, and plain text for mail apps without HTML.
 	const body = useMemo(() => ({ text: docToText(doc), html: docToHtml(doc) }), [doc]);
 	const [attachments, setAttachments] = useState<PendingAttachment[]>([]);
@@ -162,6 +165,7 @@ export function Composer({ draft, mailDomains, fromOptions, initialFrom, signatu
 		const change = ++fromChanges.current;
 		let nextSignature = signatures.current.get(next);
 		if (nextSignature === undefined) {
+			setLoadingSignature(true);
 			try {
 				nextSignature = (await api.call("mail.get_mailbox_settings", mailboxInput(next))).signature;
 				signatures.current.set(next, nextSignature);
@@ -172,6 +176,7 @@ export function Composer({ draft, mailDomains, fromOptions, initialFrom, signatu
 		}
 		// A newer change of the From decides the body.
 		if (change !== fromChanges.current) return;
+		setLoadingSignature(false);
 		const current = bodyRef.current;
 		if (nextSignature === current.signature) return;
 		const untouched = !current.seed.edited && current.doc.eq(current.seed.doc);
@@ -231,7 +236,7 @@ export function Composer({ draft, mailDomains, fromOptions, initialFrom, signatu
 
 	async function submit(event: FormEvent<HTMLFormElement>) {
 		event.preventDefault();
-		if (sending || reading) return;
+		if (sending || reading || loadingSignature) return;
 		const parsed = {
 			to: parseAddressList(fields.to),
 			cc: parseAddressList(fields.cc),
@@ -461,10 +466,10 @@ export function Composer({ draft, mailDomains, fromOptions, initialFrom, signatu
 						{reading ? "Reading files…" : "Attach files"}
 					</label>
 					<span className="compose-status" aria-live="polite">
-						{sending && (
+						{(sending || loadingSignature) && (
 							<>
 								<span className="spinner spinner-small" aria-hidden="true" />
-								Sending the message…
+								{sending ? "Sending the message…" : "Loading the signature…"}
 							</>
 						)}
 					</span>
@@ -472,7 +477,7 @@ export function Composer({ draft, mailDomains, fromOptions, initialFrom, signatu
 					<button type="button" className="icon-button" aria-label="Discard" title="Discard" onClick={requestClose}>
 						<Icon name="trash" />
 					</button>
-					<button type="submit" className="button button-primary" disabled={sending || reading}>
+					<button type="submit" className="button button-primary" disabled={sending || reading || loadingSignature}>
 						<Icon name="send" size={16} />
 						{sending ? "Sending…" : "Send"}
 					</button>
