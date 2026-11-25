@@ -232,6 +232,7 @@ export const getSheet = defineOperation({
 	http: { method: "GET", path: "/api/v1/sheets/{item_id}" },
 	scopes: ["drive.read"],
 	callers: ["human", "agent", "service"],
+	itemGrant: true,
 	annotations: { readOnly: true, destructive: false, idempotent: true, openWorld: false },
 	input: z.strictObject({
 		space_id: SpaceParam,
@@ -266,6 +267,7 @@ export const updateCells = defineOperation({
 	http: { method: "POST", path: "/api/v1/sheets/{item_id}/cells" },
 	scopes: ["drive.write"],
 	callers: ["human", "agent", "service"],
+	itemGrant: true,
 	annotations: { readOnly: false, destructive: true, idempotent: true, openWorld: false },
 	input: z.strictObject({
 		space_id: SpaceParam,
@@ -302,6 +304,7 @@ export const formatCells = defineOperation({
 	http: { method: "POST", path: "/api/v1/sheets/{item_id}/formats" },
 	scopes: ["drive.write"],
 	callers: ["human", "agent", "service"],
+	itemGrant: true,
 	annotations: { readOnly: false, destructive: false, idempotent: true, openWorld: false },
 	input: z.strictObject({
 		space_id: SpaceParam,
@@ -341,6 +344,7 @@ export const addTab = defineOperation({
 	http: { method: "POST", path: "/api/v1/sheets/{item_id}/tabs" },
 	scopes: ["drive.write"],
 	callers: ["human", "agent", "service"],
+	itemGrant: true,
 	annotations: { readOnly: false, destructive: false, idempotent: false, openWorld: false },
 	input: z.strictObject({
 		space_id: SpaceParam,
@@ -365,6 +369,7 @@ export const renameTab = defineOperation({
 	http: { method: "POST", path: "/api/v1/sheets/{item_id}/tabs/{tab_id}/rename" },
 	scopes: ["drive.write"],
 	callers: ["human", "agent", "service"],
+	itemGrant: true,
 	annotations: { readOnly: false, destructive: false, idempotent: true, openWorld: false },
 	input: z.strictObject({
 		space_id: SpaceParam,
@@ -384,6 +389,7 @@ export const moveTab = defineOperation({
 	http: { method: "POST", path: "/api/v1/sheets/{item_id}/tabs/{tab_id}/move" },
 	scopes: ["drive.write"],
 	callers: ["human", "agent", "service"],
+	itemGrant: true,
 	annotations: { readOnly: false, destructive: false, idempotent: true, openWorld: false },
 	input: z.strictObject({
 		space_id: SpaceParam,
@@ -408,6 +414,7 @@ export const duplicateTab = defineOperation({
 	http: { method: "POST", path: "/api/v1/sheets/{item_id}/tabs/{tab_id}/duplicate" },
 	scopes: ["drive.write"],
 	callers: ["human", "agent", "service"],
+	itemGrant: true,
 	annotations: { readOnly: false, destructive: false, idempotent: false, openWorld: false },
 	input: z.strictObject({
 		space_id: SpaceParam,
@@ -433,6 +440,7 @@ export const deleteTab = defineOperation({
 	http: { method: "DELETE", path: "/api/v1/sheets/{item_id}/tabs/{tab_id}" },
 	scopes: ["drive.write"],
 	callers: ["human", "agent", "service"],
+	itemGrant: true,
 	annotations: { readOnly: false, destructive: true, idempotent: false, openWorld: false },
 	input: z.strictObject({
 		space_id: SpaceParam,

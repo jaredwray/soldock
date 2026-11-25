@@ -240,6 +240,7 @@ export const getDoc = defineOperation({
 	http: { method: "GET", path: "/api/v1/docs/{item_id}" },
 	scopes: ["drive.read"],
 	callers: ["human", "agent", "service"],
+	itemGrant: true,
 	annotations: { readOnly: true, destructive: false, idempotent: true, openWorld: false },
 	input: z.strictObject({ space_id: SpaceParam, item_id: ItemId }),
 	output: z.object({
@@ -267,6 +268,7 @@ export const updateDoc = defineOperation({
 	http: { method: "POST", path: "/api/v1/docs/{item_id}" },
 	scopes: ["drive.write"],
 	callers: ["human", "agent", "service"],
+	itemGrant: true,
 	annotations: { readOnly: false, destructive: true, idempotent: true, openWorld: false },
 	input: z
 		.strictObject({
@@ -360,6 +362,7 @@ export const getDocImage = defineOperation({
 	http: { method: "GET", path: "/api/v1/docs/{item_id}/images/{image_id}" },
 	scopes: ["drive.read"],
 	callers: ["human", "agent", "service"],
+	itemGrant: true,
 	annotations: { readOnly: true, destructive: false, idempotent: true, openWorld: false },
 	input: z.strictObject({ space_id: SpaceParam, item_id: ItemId, image_id: DocImageId }),
 	output: z.object({ image: DocImage, content_base64: z.string() }),

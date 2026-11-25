@@ -144,8 +144,9 @@ size, of 5 MiB or more, and the base64 of 8 MiB fits in one JSON call.
   without `length`. `offset` and `length` give one range of bytes. `variant: preview` gives the small
   picture of the version.
 - `GET /dl/drive/{space_id}/{item_id}` (`?version_id=`, `?variant=preview`) streams the bytes. It runs
-  through the invoker with the callers and the scopes of `drive.download_file` (`drive.read`), and each
-  request makes the access check of the drive. The credential is a bearer token or the session cookie.
+  through the invoker with the callers, the scopes and the `itemGrant` mark of `drive.download_file`
+  (`drive.read`), and each request makes the access check of the drive. The credential is a bearer token
+  or the session cookie.
   No address works without one: there is no signed address. With the session cookie, a request that
   `Sec-Fetch-Site` shows from a different site gets `forbidden`.
 - `HEAD` gives the length. One range (`bytes=a-b`, `a-`, `-n`) gives `206`, and a range after the end
@@ -264,7 +265,8 @@ This table is for a personal drive. A shared drive has no `owner`. Its roles are
   of the shared folder itself is null in the output, and the grants above it do not show.
 - `drive.unshare_item`: the owner removes each grant. A principal removes its own grant.
 - The scopes of the credential apply first: `drive.read`, `drive.write` and `drive.share`. An agent
-  key can hold all three. A copy needs `drive.read` and `drive.write`.
+  key can hold all three. A copy needs `drive.read` and `drive.write`. An agent without the drive scopes
+  can still use an item that a person shared with it: see [A grant for a single item](#a-grant-for-a-single-item).
 - Known limit: a call for a doc or a sheet checks the role in the drive, then reads or writes the
   content in the `DocumentDO`. A grant that the owner removes between the two steps does not stop
   that one call. For a read or a copy, the caller gets only what the role allowed at the time of
@@ -291,31 +293,66 @@ This table is for a personal drive. A shared drive has no `owner`. Its roles are
 
 ### A grant for an agent
 
-`drive.share_item` gives a grant to a person, an agent or a service account. Two more rules apply when
-the grant is for an agent or a service account (`share-request-handlers.ts`).
+`drive.share_item` gives a grant to a person, an agent or a service account. These rules apply when the
+grant is for an agent or a service account (`share-request-handlers.ts`).
 
 - **An agent does not share with an agent.** The caller is an agent or a service account, and the grant
   is for a different agent or service account (`agentToAgent`). Then the call gets `forbidden`, and the
   drive writes no grant. The agent asks with `drive.request_share`: see
   [A request of an agent to share an item](#a-request-of-an-agent-to-share-an-item). An agent shares with
   a person as before. A grant from before this rule stays.
-- **A manager of the agent gives the scopes.** A person who manages the agent gives it the drive scopes of
-  the role that it does not hold (`giveMemberAccess`). A viewer needs `drive.read`. An editor also needs
-  `drive.write` (`SHARED_DRIVE_ROLE_SCOPES` of the contracts). The rules of
-  [an agent as a member](#an-agent-as-a-member) apply:
-  - The caller is the sponsor of the agent, an owner or an admin (`canManageAgent`). Only an owner or an
-    admin manages a service account. The credential must hold `directory.write`.
-  - The credential must hold each scope that the agent gets (`assertMemberGrants`). If it does not, the
-    call gets `forbidden` before the drive writes the grant.
-  - The result has each change in `agent_access_changes`, and `agent_access_pending` names an agent that
-    did not get its scopes. A second call with the same role completes the scopes.
-- **A person who does not manage the agent** can give it a grant too. The agent gets no new scope. It
-  uses the item with the scopes that it holds.
+- **The grant is for the item only.** The grant gives the role on the item, and on all that a folder
+  holds. It changes no scope of the account. `directory.write` has no part in it. The result has
+  `permission` only, with no `agent_access_changes`.
+- **The account uses the item without the drive scopes.** The role of the grant is enough for the marked
+  item operations: see [A grant for a single item](#a-grant-for-a-single-item).
+- **Each person who can share decides.** The owner of the item, or a manager of its shared drive, can
+  give an agent access to the item in this way. The manager of the agent does not take part. The rules
+  of who can share an item, and of who decides a request, stay the same.
 - **The order.** The handler finds the drive first (`openSpace`), and then the principal. An unknown
-  principal gets `not_found`. Then come the rule for an agent and the check of the scopes. The drive
-  writes the grant, and then the directory writes the scopes. The two writes are not one transaction.
+  principal gets `not_found`. Then comes the rule for an agent. Then the drive writes the grant.
 - **A lower role, and a remove.** The owner changes a grant from editor to viewer, or removes it with
-  `drive.unshare_item`. The account of the agent does not change in the two cases: it keeps its scopes.
+  `drive.unshare_item`. The account of the agent does not change in the two cases. The access through
+  the grant follows the new role, or stops.
+
+### A grant for a single item
+
+An agent or a service account can use an item that a person shared with it, also when its credential
+does not hold `drive.read` or `drive.write`. The grant on the item is the decision of a person.
+
+- **The marked operations.** These operations have `itemGrant: true` in the contracts:
+  - Drive: `drive.get_item`, `drive.list_items`, `drive.download_file` (also the raw
+    `GET /dl/drive/…`), `drive.list_versions`, `drive.upload_version`, `drive.rename_item` and
+    `drive.restore_version`.
+  - Docs: `docs.get`, `docs.get_image` and `docs.update`.
+  - Sheets: `sheets.get`, `sheets.update_cells`, `sheets.format_cells`, `sheets.add_tab`,
+    `sheets.rename_tab`, `sheets.move_tab`, `sheets.duplicate_tab` and `sheets.delete_tab`.
+- **The invoker.** An agent or a service account can call a marked operation without its scopes
+  (`callableWithItemGrant`). The handler then gets `grantOnly: true` in the call context. A person always
+  needs the scopes. An operation without the mark always needs its scopes.
+- **MCP.** `canCall` lists a marked tool for an agent or a service account without its scopes.
+- **The drive object.** `spaceCall` gives `grantOnly` to the drive object (`SpaceCall.grantOnly`). In such
+  a call:
+  - The caller is not the owner of a drive (`isOwner`), also not of its own drive.
+  - The caller has no member role in a shared drive (`callerRole`).
+  - `access()` counts only the grants with `permissions.resource = 1`.
+- **What the call reaches.** The call reaches only the items that a person shared with the account, and
+  all that a shared folder holds. The role of that grant applies. The call does not reach the own drive of
+  the account or its shared drives.
+- **The views.** The views of a drive refuse: the root list, search, the trash, and the `shared`,
+  `starred` and `recent` views. The folder view of a shared folder works. `toItems` does not read the
+  stars of the own drive.
+- **No new items.** `drive.create_folder`, `drive.upload_file`, the uploads in parts and `drive.copy_item`
+  have no mark. So an editor grant on a folder adds no item in such a call.
+- **A grant from before.** The column `resource` has the default 0, so each grant from before the column
+  has 0. A grant that did not work for an agent without the drive scopes does not start to work. A
+  caller that holds the drive scopes uses each grant, as before: the normal path counts all grants.
+- **A new grant.** Each `share` writes `resource = 1`: a direct share and an approval. The upsert also sets
+  it on a grant that exists. So a person shares the item again to make an old grant work in such a call.
+- **A move.** A move to a different drive keeps `resource` with each grant. A staged item from an older
+  Worker has no `resource`, so its grant gets 0.
+- **Rollback.** An older Worker does not read the column. Its inserts name their columns, and the column
+  has a default. Under an older Worker, an agent again needs the drive scopes to use a shared item.
 
 ### A request of an agent to share an item
 
@@ -363,16 +400,15 @@ grant.
   to share the item. If not, the call gets `conflict`, and the request is gone. For example, the item is
   in the trash. Each such `conflict` writes an audit line with `result: "error"`, so the log keeps the
   person who removed the request.
-- **The access of the account.** After the grant, `giveMemberAccess` gives the account the drive scopes of
-  the role that it does not hold, as for `drive.share_item`. The credential must hold `directory.write` for
-  that. The result has `agent_access_changes` and `agent_access_pending`. `assertMemberGrants` refuses
-  the call before the delete when the credential cannot give a scope.
+- **The access of the account.** The grant is for the item only, as for `drive.share_item`. The approval
+  changes no scope of the account, and `directory.write` has no part in it. The result has `request` and
+  `permission` only. The account uses the item with the role of the request, also without the drive scopes
+  ([A grant for a single item](#a-grant-for-a-single-item)).
 - **A failed write.** The drive can fail after the delete. Then the request is gone, and an audit line with
   `result: "error"` and `code: "internal"` keeps the person who removed it. The request does not come
   back: the drive can have written the grant before the error, and a denial could not remove that grant.
-  The agent asks again, and `drive.list_permissions` tells if the account has the grant. The directory can
-  also fail after the grant. Then the account can be without its scopes, and a person who manages it sets
-  them.
+  The call gets `conflict`, so the web app removes the row of the request. The account checks with
+  `drive.get_item`, because its grant opens the item. Else the agent asks again.
 - **A denial.** `drive.deny_share_request` deletes the request. The account gets no grant.
 - **The activity item.** One person gets an item of the kind `share_request` in `chat.list_activity`
   (`deciderOf` of `identity`). For an agent, that person is its sponsor. For a service account, that
@@ -767,7 +803,7 @@ See the [webhook module](../webhooks/README.md).
 | Uploads in parts | `DriveSpaceDO` tables `uploads` and `upload_parts` | The principal, the R2 multipart upload, the ids of the item and the version, the folder, the name, the type, the size, the size of a part, the SHA-256 of the start, the state, the idempotency key, and the etag of each part. Removed 24 hours after the start |
 | Parts of an upload that is not complete | R2 `blobs`, a multipart upload to the key of the version | Stopped by `drive.abort_upload`, by the alarm after 24 hours, or by R2 after 7 days |
 | Small pictures of versions | R2 `blobs`, key `drive/<space id>/<item id>/<version id>.thumb-<id>` | One owner: the version, whose `preview_json` names the key |
-| Grants | `DriveSpaceDO` table `permissions` | The principal, the role and who gave it |
+| Grants | `DriveSpaceDO` table `permissions` | The principal, the role and who gave it. The column `resource` is 1 for a grant that a share or an approval wrote after the column, and 0 for a grant from before it. Only a grant with 1 opens the item in a call with `grantOnly` ([A grant for a single item](#a-grant-for-a-single-item)). A migration step of the object adds the column with the default 0. A move keeps it |
 | Search index | `DriveSpaceDO` FTS5 table `items_fts` | Rebuildable from the items and the content of each doc and sheet |
 | Stars of the owner | `DriveSpaceDO` table `stars` | Pointers to items of this drive and of other drives |
 | Shared-with-me index of the owner | `DriveSpaceDO` table `shared_with_me` | Rebuildable from the grants of the other drives |

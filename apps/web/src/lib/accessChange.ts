@@ -35,23 +35,6 @@ export function memberAccessText(
 	);
 }
 
-/**
- * The text for what a grant on a Drive item changed on the agents that the person manages, for a toast. The
- * account is not a member of a drive: it has a role on one item. `again` tells how to try again.
- */
-export function shareAccessText(
-	result: RoomAccessResult,
-	nameOf: (principalId: string) => string,
-	again: string,
-): string {
-	return agentAccessText(
-		result,
-		nameOf,
-		(name) =>
-			` ${name} has access to the item, but did not get the scopes of its role: the access of the account changed at the same time. ${again}`,
-	);
-}
-
 /** The scopes that each agent got, then the text of `pendingText` for each agent that did not get its scopes. */
 function agentAccessText(
 	result: RoomAccessResult,
@@ -82,9 +65,4 @@ const REQUEST_AGAIN = "Set its permissions on its page in Admin, Members.";
  */
 export function requestAccessText(result: RoomAccessResult, nameOf: (principalId: string) => string): string {
 	return memberAccessText(result, nameOf, REQUEST_AGAIN);
-}
-
-/** `shareAccessText` for a share request that a person approved. As for a member request, the request is gone. */
-export function shareRequestAccessText(result: RoomAccessResult, nameOf: (principalId: string) => string): string {
-	return shareAccessText(result, nameOf, REQUEST_AGAIN);
 }

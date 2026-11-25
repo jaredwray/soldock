@@ -400,6 +400,7 @@ export const listItems = defineOperation({
 		"The other views are for your own drive and what others shared with you. starred: the items with your star. recent: your files, docs and sheets, by the time of the last change.",
 		"shared: the items that others shared with you, newest first. trash: the items that you put in the trash. search: the items of your own drive whose name or text has each word of query.",
 		"The folder, search and trash views also take the space_id of a shared drive that you are a member of. The trash view of a shared drive needs the editor role.",
+		"An agent without drive.read can list only a folder that a person shared with it: the folder view with space_id and parent_id. Each other view needs drive.read.",
 		"The folder view has folders first, then names in order. Set order to modified for the newest change first.",
 		"Set kind to get one kind of item only. Pass next_cursor as cursor to get the next page.",
 		`${IN_SPACE} Each item has its space_id and your role for it.`,
@@ -407,6 +408,7 @@ export const listItems = defineOperation({
 	http: { method: "GET", path: "/api/v1/drive/items" },
 	scopes: ["drive.read"],
 	callers: ["human", "agent", "service"],
+	itemGrant: true,
 	annotations: READ,
 	input: z
 		.strictObject({
@@ -442,6 +444,7 @@ export const getItem = defineOperation({
 	http: { method: "GET", path: "/api/v1/drive/items/{item_id}" },
 	scopes: ["drive.read"],
 	callers: ["human", "agent", "service"],
+	itemGrant: true,
 	annotations: READ,
 	input: z.strictObject({ space_id: SpaceParam, item_id: ItemId }),
 	output: z.object({ item: DriveItem, path: z.array(PathEntry) }),
@@ -502,6 +505,7 @@ export const uploadVersion = defineOperation({
 	http: { method: "POST", path: "/api/v1/drive/items/{item_id}/versions" },
 	scopes: ["drive.write"],
 	callers: ["human", "agent", "service"],
+	itemGrant: true,
 	// At the limit of versions, the call deletes the oldest version.
 	annotations: { readOnly: false, destructive: true, idempotent: false, openWorld: false },
 	input: z.strictObject({
@@ -526,6 +530,7 @@ export const downloadFile = defineOperation({
 	http: { method: "GET", path: "/api/v1/drive/items/{item_id}/content" },
 	scopes: ["drive.read"],
 	callers: ["human", "agent", "service"],
+	itemGrant: true,
 	annotations: READ,
 	input: z.strictObject({
 		space_id: SpaceParam,
@@ -711,6 +716,7 @@ export const listVersions = defineOperation({
 	http: { method: "GET", path: "/api/v1/drive/items/{item_id}/versions" },
 	scopes: ["drive.read"],
 	callers: ["human", "agent", "service"],
+	itemGrant: true,
 	annotations: READ,
 	input: z.strictObject({ space_id: SpaceParam, item_id: ItemId }),
 	output: z.object({ versions: z.array(FileVersion) }),
@@ -724,6 +730,7 @@ export const restoreVersion = defineOperation({
 	http: { method: "POST", path: "/api/v1/drive/items/{item_id}/versions/{version_id}/restore" },
 	scopes: ["drive.write"],
 	callers: ["human", "agent", "service"],
+	itemGrant: true,
 	annotations: CHANGE,
 	input: z.strictObject({ space_id: SpaceParam, item_id: ItemId, version_id: VersionId }),
 	output: z.object({ item: DriveItem, version: FileVersion }),
@@ -737,6 +744,7 @@ export const renameItem = defineOperation({
 	http: { method: "POST", path: "/api/v1/drive/items/{item_id}/rename" },
 	scopes: ["drive.write"],
 	callers: ["human", "agent", "service"],
+	itemGrant: true,
 	annotations: CHANGE,
 	input: z.strictObject({ space_id: SpaceParam, item_id: ItemId, name: ItemName }),
 	output: z.object({ item: DriveItem }),
@@ -883,8 +891,8 @@ const AGENT_ACCESS = {
 
 /** What a grant changes on an agent or a service account, and the rule for an agent that shares. */
 const SHARE_AGENT = [
-	"When you manage the agent or the service account of principal_id, it also gets the drive scopes of the role that it does not hold: drive.read for a viewer, and also drive.write for an editor. You manage an agent when you are its sponsor, an owner or an admin, and your credential holds directory.write. Only an owner or an admin manages a service account. Your credential must hold each scope that the agent gets.",
-	"agent_access_changes has these changes. A grant gives no new scope to an agent that you do not manage: it uses the item with the scopes that it holds.",
+	"A grant to an agent or a service account is for this item only, and for what a folder holds. It changes no scope of the account.",
+	"The account uses the item with the role of the grant, also when it does not hold drive.read or drive.write. A viewer can then get, list, download and read the versions of the item, and read a doc or a sheet. An editor can also upload a version, rename, restore a version, and change a doc or a sheet. The other operations, and the own drive of the account, still need the scopes.",
 	"An agent or a service account cannot share an item with a different agent or service account: the call gets forbidden. It asks with drive.request_share, and a person who manages that account decides.",
 ].join(" ");
 
@@ -909,7 +917,7 @@ export const shareItem = defineOperation({
 		principal_id: PrincipalId,
 		role: z.enum(["editor", "viewer"]),
 	}),
-	output: z.object({ permission: Permission, ...AGENT_ACCESS }),
+	output: z.object({ permission: Permission }),
 	errors: ["not_found", "invalid", "forbidden"],
 });
 
@@ -990,7 +998,7 @@ export const approveShareRequest = defineOperation({
 	description: [
 		SHARE_DECIDER,
 		"Gives the account the role of the request for the item. The agent that asked must still be able to share the item and hold drive.share: if not, the call gets conflict and the request goes away.",
-		"When your credential holds directory.write, the account also gets the drive scopes of the role that it does not hold: agent_access_changes has them. Your credential must hold each scope that the account gets.",
+		"The grant is for this item only. It changes no scope of the account.",
 		"Only one answer to a request succeeds: a call after a different answer gets not_found.",
 	].join(" "),
 	http: { method: "POST", path: "/api/v1/drive/share-requests/{request_id}/approve" },
@@ -998,7 +1006,7 @@ export const approveShareRequest = defineOperation({
 	callers: ["human"],
 	annotations: CHANGE,
 	input: z.strictObject({ request_id: ShareRequestId }),
-	output: z.object({ request: DriveShareRequest, permission: Permission, ...AGENT_ACCESS }),
+	output: z.object({ request: DriveShareRequest, permission: Permission }),
 	errors: ["not_found", "conflict", "forbidden"],
 });
 

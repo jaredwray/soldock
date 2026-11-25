@@ -92,8 +92,8 @@ export function MemberRequestActions({
 
 /**
  * The two buttons of a share request (`drive.approve_share_request`, `drive.deny_share_request`). The activity
- * list of Chat and the page of the account in Admin, Members use it. After an approval, the toast also tells
- * the scopes that the account got.
+ * list of Chat and the page of the account in Admin, Members use it. The grant is for the item only, so the toast
+ * names no scope.
  */
 export function ShareRequestActions({
 	request,
@@ -105,9 +105,10 @@ export function ShareRequestActions({
 	return (
 		<RequestActions
 			labels={{ approve: shareDecisionLabel("approve", request), deny: shareDecisionLabel("deny", request) }}
-			approve={async () =>
-				shareApprovedText(request, await api.call("drive.approve_share_request", { request_id: request.id }))
-			}
+			approve={async () => {
+				await api.call("drive.approve_share_request", { request_id: request.id });
+				return shareApprovedText(request);
+			}}
 			deny={async () => {
 				await api.call("drive.deny_share_request", { request_id: request.id });
 				return shareDeniedText(request);

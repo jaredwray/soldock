@@ -401,7 +401,7 @@ MCP clients. The app has no UI-only path.
       A row of a share request has the text "<the agent that asked> asks to share “<item>” with this account", what the account can do with the item after an approval (view or edit), and the time.
       The rows of member requests come first. If one of the two lists does not load, the part shows the error.
       Each row has **Approve** and **Deny**, with the buttons, the toasts and the rules of the Activity view of Chat (`chat/RequestActions.tsx`).
-      An approval loads the access again, so **Access** shows the new room or the new item, and **Permissions** shows the new scopes.
+      An approval loads the access again, so **Access** shows the new room or the new item. After a member request, **Permissions** shows the new scopes. A share request gives no scope.
       The part shows nothing when the account has no request. It shows a line while the requests load, and an error with **Try again**.
     - The page of a service account has these parts, for an owner or an admin only:
       **Name, description and sponsor** (`directory.update_principal`, with `description`).
@@ -654,10 +654,8 @@ MCP clients. The app has no UI-only path.
     person or an agent as a viewer or an editor, changes a role and removes a grant. A grant from a
     folder above shows as text. "Copy link" copies the address of the item, or of the folder of a
     file. Each other person sees the list only.
-    - When the person manages the agent of a new grant or a changed role, the agent also gets the Drive
-      scopes of the role (`agent_access_changes` of `drive.share_item`). A toast then says what the agent can
-      do with the item, and names the new scopes. When the agent did not get them (`agent_access_pending`),
-      the toast says to share it again. A share without a change to an agent shows no toast: the list shows it.
+    - A grant for an agent or a service account is for the item only (`drive.share_item`). It changes no
+      scope of the account, so the dialog shows no toast for it: the list shows the grant.
   - In Shared with me, "Remove from my list" removes the own grant of the person, after a confirmation.
   - The versions dialog lists the versions of a file. Each person with access can download one. An
     owner or an editor can upload a new version and make an older version the current version.
@@ -1166,9 +1164,10 @@ MCP clients. The app has no UI-only path.
       The person can have no access to the item, so the item is not a link to the file and opens nothing.
       It has the buttons **Approve** (`drive.approve_share_request`) and **Deny** (`drive.deny_share_request`).
       The id of the request is `message_id` of the item. The accessible name of each button has the item and the account.
-    - After an approval of a share request, a toast says what the account can now do with the item, and the
-      scopes that it got, or that it did not get them. After a denial, a toast says that the account does not
-      get access. The rules for `not_found`, `conflict` and the other errors are the same as for a member request.
+    - After an approval of a share request, a toast says what the account can now do with the item:
+      "<account> can now view|edit “<item>”." The grant is for the item only, so the toast names no scope
+      (`shareApprovedText`). After a denial, a toast says that the account does not get access.
+      The rules for `not_found`, `conflict` and the other errors are the same as for a member request.
     - The buttons (`RequestActions.tsx`) and the texts (`memberRequests.ts`, `shareRequests.ts`) are the same on
       the page of the account in **Admin › Members**.
   - While the events socket is connected, the page reads the list each minute only, as a net for

@@ -546,6 +546,8 @@ connection is only a credential: it has no scopes of its own. A key of a person 
     (`sharedItemsOfPrincipal` of [`drive`](../drive/README.md)), the newest share first, at most 200,
     with `drive_shared_items_truncated`. The drive of each item checks the access of the agent again.
     So a removed share and an item in the trash are not in the list.
+  - The list counts each grant, also a grant from before `permissions.resource` (0). An agent without the
+    drive scopes cannot use such an item ([`drive`](../drive/README.md#a-grant-for-a-single-item)).
   - The names of these items tell a manager nothing new: a manager can give the agent `drive.read`,
     create a key for it, and read them.
 - **First scopes.** `directory.create_principal` takes the `scopes` of a new agent.
@@ -651,9 +653,6 @@ account names its resources.
   - A room or a shared drive: `assertMemberGrants` checks the call before the write of the membership.
     `giveMemberAccess` writes the scopes after it
     ([`chat`](../chat/README.md#an-agent-as-a-new-member), [`drive`](../drive/README.md#an-agent-as-a-member)).
-  - A grant on a Drive item (`drive.share_item`): the same two steps, before and after the write of the
-    grant. A viewer gets `drive.read`, and an editor also gets `drive.write`
-    ([`drive`](../drive/README.md#a-grant-for-an-agent)).
   - A team mailbox: only an owner or an admin adds a member. One transaction writes the membership and
     the scopes (`agentWidening`, [Team mailboxes](#team-mailboxes)).
   - The credential must hold each scope that the agent gets (`grantableScopes`). For a team mailbox, it
@@ -665,6 +664,12 @@ account names its resources.
     completes the scopes.
 - **A person who does not manage the agent can still add it.** The agent then uses the resource with the
   scopes that it holds. It gets no new scope: only a manager of the agent gives one.
+- **A grant on a Drive item gives no scope.** `drive.share_item` and `drive.approve_share_request` give the
+  role on the item only. They change no scope of the account, and the result has no `agent_access_changes`.
+  The account uses the item with the role of the grant, also without `drive.read` or `drive.write`
+  ([`drive`](../drive/README.md#a-grant-for-a-single-item)).
+  - Each person who can share the item can give an agent this access: its owner, or a manager of its
+    shared drive. The manager of the agent does not take part.
 - **An agent does not join a room.** `chat.join_room` accepts people only (`callers: ["human"]`). A
   person who is a member of the room adds an agent or a service account with `chat.add_members`.
 - **An agent does not add an agent.** An agent or a service account cannot make a different agent or
@@ -689,8 +694,8 @@ account names its resources.
   item to a different agent or service account. `drive.share_item` gets `forbidden`. It shares with a
   person as before.
 - **An agent asks before it shares.** The agent calls `drive.request_share`, and a person who manages the
-  account of the request decides (`deciderOf`, as for a room). An approval is the decision of a manager:
-  the account gets the drive scopes of the role that it does not hold
+  account of the request decides (`deciderOf`, as for a room). An approval gives the account the role of
+  the request on the item only. The account gets no scope
   ([`drive`](../drive/README.md#a-request-of-an-agent-to-share-an-item)).
 - **The requests to share are in the directory.** The table `drive_share_requests` has one row for each
   request that waits for a person (migration `0031`). It belongs to the
@@ -714,6 +719,9 @@ account names its resources.
 - **No resource check.** The invoker (`platform/operations/invoke.ts`) checks the caller kind, the scopes
   and the input. The handler of each operation checks the membership, as it does for a person. `canCall`
   and the lists of MCP hide a tool or a resource kind only for the caller kind and the scopes.
+  - An exception: an agent or a service account can call an operation with `itemGrant` without its scopes.
+    The handler then gets `grantOnly`, and the drive counts only the grants on single items
+    ([`drive`](../drive/README.md#a-grant-for-a-single-item)). `canCall` lists such a tool.
 
 ## Team mailboxes
 

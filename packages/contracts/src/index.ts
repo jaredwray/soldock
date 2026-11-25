@@ -212,6 +212,7 @@ export { OAUTH_LIMITS, OAuthAuthorization, OAuthGrant } from "./oauth.ts";
 export {
 	type ActorKind,
 	COMMON_ERRORS,
+	callableWithItemGrant,
 	defineOperation,
 	type HttpMethod,
 	holdsOperationScopes,

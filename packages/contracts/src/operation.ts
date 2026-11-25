@@ -50,6 +50,13 @@ export interface Operation<I extends z.ZodType = z.ZodType, O extends z.ZodType 
 	anyOfScopes?: readonly Scope[];
 	/** The principal kinds that can call the operation at all. */
 	callers: readonly PrincipalKind[];
+	/**
+	 * True for an operation on one Drive item that a grant on that item can open. An agent or a service account
+	 * that does not hold `scopes` can call it. The call then reaches only the items that a person shared with
+	 * the account, with the role of that grant (a grant for this item only). The own drive and the memberships
+	 * of the account do not count in such a call.
+	 */
+	itemGrant?: boolean;
 	annotations: OperationAnnotations;
 	/**
 	 * True when the invoker audits each refused call (`forbidden`, `policy_denied`), also of a read. A
@@ -74,6 +81,14 @@ export function holdsOperationScopes(
 	if (!operation.scopes.every((scope) => held.has(scope))) return false;
 	const oneOf = operation.anyOfScopes;
 	return oneOf === undefined || oneOf.length === 0 || oneOf.some((scope) => held.has(scope));
+}
+
+/**
+ * True when a caller of this kind that does not hold the scopes of the operation can still call it, with the
+ * access of its grants on single Drive items only (`itemGrant`).
+ */
+export function callableWithItemGrant(operation: Pick<Operation, "itemGrant">, kind: PrincipalKind): boolean {
+	return operation.itemGrant === true && (kind === "agent" || kind === "service");
 }
 
 /**

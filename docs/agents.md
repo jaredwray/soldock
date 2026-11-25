@@ -140,10 +140,11 @@ scopes say what the agent can do there.
 - **Rooms.** An agent cannot join a public room: `chat.join_room` is for people only. A person who is a
   member adds it with `chat.add_members`. An agent that is a member asks a person first: see
   [An agent asks before it adds an agent](#an-agent-asks-before-it-adds-an-agent).
-- **Items of Drive.** A person who manages the agent can share an item with it. The agent then gets the
-  drive scopes of the role, as for a shared drive. An agent cannot share an item with a different agent or
-  service account. It asks a person first: see
-  [An agent asks before it shares an item](#an-agent-asks-before-it-shares-an-item).
+- **Items of Drive.** A person who can share an item can share it with an agent: the owner of the item,
+  or a manager of its shared drive. The agent gets the role on that item only, and no scope. It uses the
+  item with that role, also without `drive.read` or `drive.write`. So the manager of the agent does not
+  take part. An agent cannot share an item with a different agent or service account. It asks a person
+  first: see [An agent asks before it shares an item](#an-agent-asks-before-it-shares-an-item).
 - An agent with the scopes can create a room and start a direct message with a person. It cannot start a
   direct message with a different agent or service account. It can use the personal views
   of Chat and its notification settings. It can create a chat webhook and open `/ws/events`.
@@ -234,7 +235,9 @@ revokes it.
 - Protocol versions: `2026-07-28`, and `2025-11-25`, `2025-06-18` and `2025-03-26` with an
   `initialize` handshake. Only `2026-07-28` has subscriptions.
 
-`tools/list` shows only the tools that the key can call. Each tool is one operation, named
+`tools/list` shows only the tools that the key can call. An agent without the drive scopes still sees
+the item tools that accept a grant on a shared item (see
+[Drive, Docs and Sheets](#drive-docs-and-sheets)). Each tool is one operation, named
 `<domain>_<verb>`: `mail_list_threads`, `mail_get_thread`, `mail_send`, `mail_modify_threads` and
 others. A REST client calls the same operations under `/api/v1`.
 
@@ -576,6 +579,19 @@ operations that the web app uses.
 - **Items of other principals.** A person or an agent shares an item with `drive_share_item`, as a
   viewer or an editor. `drive_list_items` with `view: "shared"` lists what others shared with you.
   Each item has a `space_id`: pass it, with the id of the item, to the other tools.
+- **A shared item without the drive scopes.** A grant lets you use that item also when you do not hold
+  `drive.read` or `drive.write`. The role of the grant applies. These tools accept the grant:
+  - `drive_get_item`, `drive_list_items` (the folder view of a shared folder), `drive_download_file` and
+    `GET /dl/drive/…`, `drive_list_versions`, `drive_upload_version`, `drive_rename_item` and
+    `drive_restore_version`
+  - `docs_get`, `docs_get_image` and `docs_update`
+  - `sheets_get`, `sheets_update_cells`, `sheets_format_cells`, `sheets_add_tab`, `sheets_rename_tab`,
+    `sheets_move_tab`, `sheets_duplicate_tab` and `sheets_delete_tab`
+
+  In such a call, you do not reach your own drive or your shared drives. The views of a drive refuse:
+  the root, search, trash, `shared`, `starred` and `recent`. So get the `space_id` and the id of the
+  item from the person who shared it. Each other tool still needs its scopes. A grant from an older
+  version of Asterra works only with the drive scopes: the person shares the item again.
 - **Share with an agent.** You cannot share an item with a different agent or service account:
   `drive_share_item` gets `forbidden` and changes nothing. Ask a person:
   1. Call `drive_request_share` with `item_id`, `principal_id` and `role`. You must be able to share the
@@ -636,19 +652,19 @@ So a person who manages that account must agree.
     person, the owner of the organization gets it.
   - **Admin › Members.** The page of the account shows its requests to each person who can answer.
 - **Approve** (`drive.approve_share_request`). The account gets the role of the request for the item:
-  viewer or editor. The account also gets the drive scopes of the role that it does not hold:
-  `drive.read`, and also `drive.write` for an editor.
+  viewer or editor. The grant is for that item only, and for all that a folder holds. The account gets
+  no scope. It uses the item with the role, also without `drive.read` or `drive.write`.
 - **Deny** (`drive.deny_share_request`). The request goes away, and the account gets no grant.
 - **A request that cannot complete.** The agent that asked must still hold `drive.share` and be able to
   share the item at the time of the approval. If not, the approval gets `conflict`, and the request goes away. For example, the
   item is in the trash.
 - **With an API key.** The two calls are for people only, and the key needs `drive.share`.
-  `drive.list_share_requests` returns the requests that you can answer. The key needs `directory.write`
-  to change the scopes of the account, and it must hold each scope that the account gets.
+  `drive.list_share_requests` returns the requests that you can answer. The key does not need
+  `directory.write`, because the approval changes no scope.
 - **The activity item.** The item has `untrusted: true`, because an agent chose the name of the item.
   `message_id` has the id of the request, and `item` has the item and the role.
-- **Share it yourself.** When you share an item with an agent that you manage, it gets the same drive
-  scopes. The result of `drive.share_item` shows each change in `agent_access_changes`.
+- **Share it yourself.** When you share an item with an agent, it gets the same access to that item. You
+  do not need to manage the agent. The result of `drive.share_item` has the grant only.
 - A request stays until a person answers it. An item has at most 20 requests at the same time, and one
   agent has at most 100.
 - **What a person decides.** A person decides one grant, not each item that the grant reaches later.

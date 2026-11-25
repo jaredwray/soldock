@@ -161,57 +161,105 @@ describe("drive.share_item with an agent", () => {
 			expect(await grantsOf(caller, item.id)).toEqual([]);
 			// The same caller shares the item with a person.
 			const shared = await caller.call("drive.share_item", { item_id: item.id, principal_id: ada.id, role: "viewer" });
-			expect(shared).toMatchObject({ agent_access_changes: [], agent_access_pending: [] });
+			expect(shared).toEqual({ permission: expect.objectContaining({ principal_id: ada.id, role: "viewer" }) });
 			expect(await grantsOf(caller, item.id)).toEqual([[ada.id, "viewer"]]);
 		}
 	});
 
-	// A person who manages the agent and shares an item with it decided that the agent can use the item. The
-	// agent must not need a second change of its scopes. A credential gives only what it holds.
-	it("gives the agent the drive scopes of its role only when the person manages it and the credential can give them", async () => {
+	// A grant is for one item. A person who shares an item with an agent decides about that item only: the agent
+	// uses it with the same credential, and no scope of the account changes.
+	it("gives an agent the role for the shared item only, with the same credential before the share, after it, and after the revoke", async () => {
 		const helper = await newAgent("Helper");
-		const share = (call: ReturnType<typeof api>, item_id: string, account: Actor, role: "viewer" | "editor") =>
-			call("drive.share_item", { item_id, principal_id: account.id, role });
+		const plan = (await ada.call("docs.create", { name: "Plan", markdown: "First text" })).item;
+		const notes = (await ada.call("docs.create", { name: "Notes", markdown: "Other text" })).item;
+		const file = await upload(ada, "budget.txt");
+		const at = (item_id: string) => ({ space_id: ada.id, item_id });
+		const edit = (item_id: string) => codeOf(helper.call("docs.update", { ...at(item_id), markdown: "Changed" }));
+		const read = (item_id: string) => codeOf(helper.call("drive.get_item", at(item_id)));
 
-		// Cy does not manage the agent. The grant gives it no scope.
-		const cy = await newPerson("Cy");
-		const ofCy = await upload(cy, "notes.txt");
-		expect(await share(cy.call, ofCy.id, helper, "editor")).toMatchObject({
-			permission: { principal_id: helper.id, role: "editor", item_id: ofCy.id },
-			agent_access_changes: [],
-			agent_access_pending: [],
+		// Before the share, the credential of the agent reaches no item of Ada.
+		for (const item of [plan, notes, file]) expect(await read(item.id)).toBe("not_found");
+		expect(await edit(plan.id)).toBe("not_found");
+
+		// A viewer reads the item and its content, and cannot change it.
+		for (const item of [plan, file]) {
+			const shared = await ada.call("drive.share_item", { item_id: item.id, principal_id: helper.id, role: "viewer" });
+			expect(shared).toEqual({ permission: expect.objectContaining({ principal_id: helper.id, role: "viewer" }) });
+		}
+		expect((await helper.call("drive.get_item", at(plan.id))).item).toMatchObject({ name: "Plan", role: "viewer" });
+		expect((await helper.call("docs.get", at(plan.id))).markdown).toContain("First text");
+		expect(fromBase64((await helper.call("drive.download_file", at(file.id))).content_base64)).toBe("v1");
+		expect(await edit(plan.id)).toBe("forbidden");
+		expect(await codeOf(helper.call("drive.rename_item", { ...at(plan.id), name: "Mine" }))).toBe("forbidden");
+		const version = { ...at(file.id), content_base64: base64("v2") };
+		expect(await codeOf(helper.call("drive.upload_version", version))).toBe("forbidden");
+		expect(await read(notes.id)).toBe("not_found");
+		expect(await scopesOf(helper.id)).toEqual(["account.read"]);
+
+		// An editor changes the shared item, and only that item.
+		await ada.call("drive.share_item", { item_id: plan.id, principal_id: helper.id, role: "editor" });
+		await helper.call("docs.update", { ...at(plan.id), markdown: "Changed by the agent" });
+		expect((await ada.call("docs.get", { item_id: plan.id })).markdown).toContain("Changed by the agent");
+		await helper.call("drive.rename_item", { ...at(plan.id), name: "Plan 2" });
+		expect(await edit(notes.id)).toBe("not_found");
+		expect(await codeOf(helper.call("drive.upload_version", version))).toBe("forbidden");
+		// The grant opens no other part of Drive: the own drive of the agent still needs the scopes.
+		expect(await codeOf(helper.call("drive.create_folder", { name: "Mine" }))).toBe("forbidden");
+		expect(await codeOf(helper.call("drive.list_items", { view: "folder" }))).toBe("forbidden");
+		expect(await scopesOf(helper.id)).toEqual(["account.read"]);
+
+		// After the revoke, the same credential reaches the item no more, and no scope changed.
+		await ada.call("drive.unshare_item", { item_id: plan.id, principal_id: helper.id });
+		expect(await read(plan.id)).toBe("not_found");
+		expect(await edit(plan.id)).toBe("not_found");
+		expect(await scopesOf(helper.id)).toEqual(["account.read"]);
+	});
+
+	// A grant from before the grants for single items worked only for an agent that held the drive scopes. The
+	// change must not open such a grant for an agent without them. A grant that worked must keep working.
+	it("keeps a grant from before the grants for single items as it was, until a person shares the item again", async () => {
+		const helper = await newAgent("Helper");
+		const worker = await newAgent("Worker", ["account.read", "drive.read", "drive.write"]);
+		const file = await upload(ada, "budget.txt");
+		for (const account of [helper, worker]) {
+			await ada.call("drive.share_item", { item_id: file.id, principal_id: account.id, role: "editor" });
+		}
+		// Back to the schema before the column: the migration then gives each grant `resource = 0`, as at the deploy.
+		const drive = env.DRIVE_SPACE.get(env.DRIVE_SPACE.idFromName(ada.id));
+		await runInDurableObject(drive, (_instance, state) => {
+			const version = state.storage.sql
+				.exec<{ value: string }>("SELECT value FROM meta WHERE key = 'schema_version'")
+				.one();
+			state.storage.sql.exec("ALTER TABLE permissions DROP COLUMN resource");
+			state.storage.sql.exec(
+				"UPDATE meta SET value = ? WHERE key = 'schema_version'",
+				String(Number(version.value) - 1),
+			);
 		});
-		expect(await scopesOf(helper.id)).toEqual(["account.read"]);
+		await evictDurableObject(drive);
+		const at = { space_id: ada.id, item_id: file.id };
+		const write = (account: Actor, text: string) =>
+			account.call("drive.upload_version", { ...at, content_base64: base64(text) });
 
-		// A key of the sponsor without directory.write gives no scope.
-		const item = await upload(ada, "plan.txt");
-		const driveOnly = await keyOf(ada, ["drive.read", "drive.write", "drive.share"]);
-		expect((await share(driveOnly, item.id, helper, "viewer")).agent_access_changes).toEqual([]);
-		expect(await scopesOf(helper.id)).toEqual(["account.read"]);
+		// The agent without drive scopes cannot use the old grant. The grant stays, and its role stays.
+		expect(await codeOf(helper.call("drive.get_item", at))).toBe("not_found");
+		expect(await codeOf(write(helper, "v2"))).toBe("not_found");
+		expect(new Set(await grantsOf(ada, file.id))).toEqual(
+			new Set([
+				[helper.id, "editor"],
+				[worker.id, "editor"],
+			]),
+		);
+		// The agent with the drive scopes uses its old grant as before.
+		expect((await worker.call("drive.get_item", at)).item).toMatchObject({ role: "editor" });
+		await write(worker, "v2");
 
-		// A key with directory.write cannot give drive.write that it does not hold. The role stays.
-		const noWrite = await keyOf(ada, ["directory.write", "drive.read", "drive.share"]);
-		expect(await codeOf(share(noWrite, item.id, helper, "editor"))).toBe("forbidden");
-		expect(await grantsOf(ada, item.id)).toEqual([[helper.id, "viewer"]]);
+		// A person shares the item again: the grant is now for this item, and it opens the item.
+		await ada.call("drive.share_item", { item_id: file.id, principal_id: helper.id, role: "editor" });
+		await write(helper, "v3");
+		expect(fromBase64((await ada.call("drive.download_file", { item_id: file.id })).content_base64)).toBe("v3");
 		expect(await scopesOf(helper.id)).toEqual(["account.read"]);
-		// The same key gives drive.read, the only scope of a viewer.
-		expect((await share(noWrite, item.id, helper, "viewer")).agent_access_changes).toEqual([
-			{ principal_id: helper.id, scopes_added: ["drive.read"] },
-		]);
-		// The full credential of the sponsor gives drive.write with the editor role, and the agent writes at once.
-		expect((await share(ada.call, item.id, helper, "editor")).agent_access_changes).toEqual([
-			{ principal_id: helper.id, scopes_added: ["drive.write"] },
-		]);
-		await helper.call("drive.upload_version", { space_id: ada.id, item_id: item.id, content_base64: base64("v2") });
-		expect(fromBase64((await ada.call("drive.download_file", { item_id: item.id })).content_base64)).toBe("v2");
-
-		// Only an owner or an admin manages a service account. Its sponsor gives it no scope.
-		const service = await newService("CI", ada, ["account.read"]);
-		expect((await share(ada.call, item.id, service, "viewer")).agent_access_changes).toEqual([]);
-		const ofOwner = await upload(owner, "budget.txt");
-		expect((await share(owner.call, ofOwner.id, service, "viewer")).agent_access_changes).toEqual([
-			{ principal_id: service.id, scopes_added: ["drive.read"] },
-		]);
+		expect(await scopesOf(worker.id)).toEqual(["account.read", "drive.read", "drive.write"]);
 	});
 });
 
@@ -276,7 +324,7 @@ describe("a request of an agent to share an item with an agent", () => {
 			// The account has no grant before the approval.
 			expect(await grantsOf(bot, item.id)).toEqual([]);
 
-			// The approval writes the grant as the agent that asked, and gives the account drive.read.
+			// The approval writes the grant as the agent that asked. It changes no scope of the account.
 			const approved = await send(ada, "drive.approve_share_request", { request_id: request.id });
 			expect(approved).toEqual({
 				request,
@@ -288,13 +336,13 @@ describe("a request of an agent to share an item with an agent", () => {
 					granted_by: { principal_id: bot.id, kind: "agent", display_name: "Billing Bot" },
 					created_at: expect.any(String),
 				},
-				agent_access_changes: [{ principal_id: helper.id, scopes_added: ["drive.read"] }],
-				agent_access_pending: [],
 			});
+			expect(await scopesOf(helper.id)).toEqual(["account.read"]);
 			expect(await grantsOf(bot, item.id)).toEqual([[helper.id, "viewer"]]);
+			// The account holds no drive scope, and the grant opens the item.
 			const space = { space_id: bot.id, item_id: item.id };
-			expect((await helper.call("drive.get_item", space)).item).toMatchObject({ name: "plan.txt", role: "viewer" });
-			expect(fromBase64((await helper.call("drive.download_file", space)).content_base64)).toBe("v1");
+			expect((await send(helper, "drive.get_item", space)).item).toMatchObject({ name: "plan.txt", role: "viewer" });
+			expect(fromBase64((await send(helper, "drive.download_file", space)).content_base64)).toBe("v1");
 			// The request is gone for the two, and the activity item with it.
 			for (const actor of [ada, bot])
 				expect(await send(actor, "drive.list_share_requests", {})).toEqual({ requests: [] });
@@ -367,36 +415,39 @@ describe("a request of an agent to share an item with an agent", () => {
 		expect(await requestItems(owner)).toEqual([]);
 	});
 
-	// The approval gives the account the drive scopes of its role, as drive.share_item does for a person who
-	// manages the agent. A credential gives only what it holds, and a refused approval keeps the request.
-	it("gives the account the scopes of its role only when the credential of the approval can give them", async () => {
+	// An approval decides about one item. The agent uses the item with the same credential, with the role of the
+	// request, and the approval and the revoke change no scope of the account.
+	it("gives the account the role of the request for the item only, with the same credential before the approval, after it, and after the revoke", async () => {
 		const helper = await newAgent("Helper");
-		const second = await newAgent("Second");
-		const item = await upload(bot, "plan.txt");
-		const forHelper = await ask(bot, item.id, helper, "editor");
-		const forSecond = await ask(bot, item.id, second, "editor");
+		const plan = (await bot.call("docs.create", { name: "Plan", markdown: "First text" })).item;
+		const notes = (await bot.call("docs.create", { name: "Notes", markdown: "Other text" })).item;
+		const at = (item_id: string) => ({ space_id: bot.id, item_id });
+		const edit = (item_id: string) => codeOf(helper.call("docs.update", { ...at(item_id), markdown: "Changed" }));
 
-		// A key of the sponsor without directory.write approves. The account has the grant, and no new scope.
-		const driveOnly = await keyOf(ada, ["drive.read", "drive.write", "drive.share"]);
-		expect(await driveOnly("drive.approve_share_request", { request_id: forHelper.id })).toMatchObject({
-			request: forHelper,
-			agent_access_changes: [],
-			agent_access_pending: [],
-		});
-		expect(await grantsOf(bot, item.id)).toEqual([[helper.id, "editor"]]);
+		expect(await codeOf(helper.call("docs.get", at(plan.id)))).toBe("not_found");
+		expect(await edit(plan.id)).toBe("not_found");
+
+		// A key of the sponsor without directory.write or drive.write approves: the approval gives no scope.
+		const shareOnly = await keyOf(ada, ["drive.read", "drive.share"]);
+		await shareOnly("drive.approve_share_request", { request_id: (await ask(bot, plan.id, helper)).id });
+		expect((await helper.call("docs.get", at(plan.id))).markdown).toContain("First text");
+		expect(await edit(plan.id)).toBe("forbidden");
+		expect(await codeOf(helper.call("docs.get", at(notes.id)))).toBe("not_found");
 		expect(await scopesOf(helper.id)).toEqual(["account.read"]);
 
-		// A key with directory.write that cannot give drive.write writes no grant, and the request stays.
-		const noWrite = await keyOf(ada, ["directory.write", "drive.read", "drive.share"]);
-		expect(await codeOf(noWrite("drive.approve_share_request", { request_id: forSecond.id }))).toBe("forbidden");
-		expect(await grantsOf(bot, item.id)).toEqual([[helper.id, "editor"]]);
-		expect(await scopesOf(second.id)).toEqual(["account.read"]);
-		expect(await requestsOf(ada)).toEqual([forSecond]);
-		// A credential that holds each scope completes the request.
-		const approved = await ada.call("drive.approve_share_request", { request_id: forSecond.id });
-		expect(approved.agent_access_changes).toEqual([
-			{ principal_id: second.id, scopes_added: ["drive.read", "drive.write"] },
-		]);
+		// A second request asks for the editor role. After the approval, the account changes this item only.
+		await ada.call("drive.approve_share_request", { request_id: (await ask(bot, plan.id, helper, "editor")).id });
+		expect(await grantsOf(bot, plan.id)).toEqual([[helper.id, "editor"]]);
+		await helper.call("docs.update", { ...at(plan.id), markdown: "Changed by the helper" });
+		expect((await bot.call("docs.get", { item_id: plan.id })).markdown).toContain("Changed by the helper");
+		expect(await edit(notes.id)).toBe("not_found");
+		expect(await scopesOf(helper.id)).toEqual(["account.read"]);
+
+		// The agent that asked removes the grant. The same credential reaches the item no more.
+		await bot.call("drive.unshare_item", { item_id: plan.id, principal_id: helper.id });
+		expect(await codeOf(helper.call("docs.get", at(plan.id)))).toBe("not_found");
+		expect(await edit(plan.id)).toBe("not_found");
+		expect(await scopesOf(helper.id)).toEqual(["account.read"]);
 	});
 
 	it("refuses a request from a caller that cannot share the item, and a request for an account that cannot get it", async () => {
@@ -675,7 +726,8 @@ describe("a request of an agent to share an item with an agent", () => {
 			headers: { authorization: `Bearer ${ada.key}`, "content-type": "application/json" },
 			body: "{}",
 		});
-		expect(approved.status).toBeGreaterThanOrEqual(500);
+		// The answer is conflict, so the web app removes the row of the request.
+		expect(approved.status).toBe(409);
 		expect(await grantsOf(bot, item.id)).toEqual([]);
 		expect(await scopesOf(helper.id)).toEqual(["account.read"]);
 		// The request is gone for the person and for the agent, and the audit log has the person who removed it.

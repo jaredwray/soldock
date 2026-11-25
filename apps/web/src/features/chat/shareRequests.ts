@@ -1,5 +1,4 @@
 import type { ChatActivityItem, DriveShareRequest } from "@asterra/contracts";
-import { type RoomAccessResult, shareRequestAccessText } from "../../lib/accessChange.ts";
 
 // The texts of a share request: an agent asks to share a Drive item with an agent or a service account, and a
 // person who manages that account approves or denies it. The activity list of Chat and the page of the
@@ -49,13 +48,9 @@ export function shareDecisionLabel(decision: "approve" | "deny", request: ShareR
 	return `${verb} the request to share “${request.itemName}” with ${request.subjectName}`;
 }
 
-/**
- * The toast after an approval. It also tells the scopes that the account got with the role: the scopes apply
- * to the account, not only to this item.
- */
-export function shareApprovedText(request: ShareRequestSummary, result: RoomAccessResult): string {
-	const access = shareRequestAccessText(result, () => request.subjectName);
-	return `${request.subjectName} can now ${shareRoleVerb(request.role)} “${request.itemName}”.${access}`;
+/** The toast after an approval. The grant is for this item only: the account gets no scope. */
+export function shareApprovedText(request: ShareRequestSummary): string {
+	return `${request.subjectName} can now ${shareRoleVerb(request.role)} “${request.itemName}”.`;
 }
 
 /** The toast after a denial. */

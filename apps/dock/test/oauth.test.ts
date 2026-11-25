@@ -336,7 +336,9 @@ describe("OAuth approval", () => {
 		expect(tools).toContain("mail_list_threads");
 		expect(tools).toContain("chat_list_rooms");
 		expect(tools).not.toContain("mail_send");
-		expect(tools).not.toContain("drive_list_items");
+		// A Drive item tool is in the list: a grant on an item opens it without the drive scopes. The own drive is not.
+		expect(tools).toContain("drive_get_item");
+		expect(tools).not.toContain("drive_create_folder");
 		const whoami = await callTool(tokens.access_token, "account_whoami");
 		expect(whoami.structuredContent).toMatchObject({
 			principal: { id: approved.principal.id, kind: "agent" },

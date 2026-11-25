@@ -62,10 +62,8 @@ test("an agent asks to share an item with an agent, and its manager approves the
 		await expect(item).toContainText("the account can view the item");
 		await expect(item.getByRole("button")).toHaveCount(2);
 		await item.getByRole("button", { name: `Approve the request to share “${firstItem}” with ${helperName}` }).click();
-		// The agent had no drive scope. The approval gives it the scope of the viewer role, and the toast says so.
-		await expect(
-			page.getByText(`${helperName} can now view “${firstItem}”. ${helperName} now also holds drive.read.`),
-		).toBeVisible();
+		// The grant is for this item only. The agent gets no scope, and it reads the item with the same key.
+		await expect(page.getByText(`${helperName} can now view “${firstItem}”.`, { exact: true })).toBeVisible();
 		await expect(item).toHaveCount(0);
 		expect(await readStatus(helper, asker, first)).toBe(200);
 

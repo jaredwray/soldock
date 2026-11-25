@@ -1,12 +1,9 @@
-import { DRIVE_LIMITS, SHARED_DRIVE_ROLE_SCOPES } from "@asterra/contracts";
+import { DRIVE_LIMITS } from "@asterra/contracts";
 import {
-	accessOutput,
-	assertMemberGrants,
 	type CallContext,
 	canManageAgent,
 	deciderOf,
 	getPrincipal,
-	giveMemberAccess,
 	isAdmin,
 	type PrincipalRecord,
 	recordServiceMemberships,
@@ -150,17 +147,11 @@ export const driveShareRequestHandlers: Pick<HandlerMap<CallContext>, ShareReque
 				"An agent or a service account cannot share an item with a different agent or service account. Ask with drive.request_share.",
 			);
 		}
-		// The grant can give an agent the drive scopes of its role. Refuse what the credential cannot give before
-		// the drive writes the grant.
-		assertMemberGrants(call, [target], () => SHARED_DRIVE_ROLE_SCOPES[input.role]);
+		// The grant is for this item only: it changes no scope of the account (`permissions.resource`).
 		const permission = accept(await own.space.share(own.ctx, input.item_id, target.id, input.role));
 		auditOk(call, own, "drive.share_item", `${input.item_id}:${target.id}:${input.role}`);
 		recordServiceMemberships(call, [target.id], "drive.share_item", input.item_id);
-		// The write of the scopes is idempotent, as for a membership of a shared drive.
-		const access = await giveMemberAccess(call, [
-			{ principal_id: target.id, scopes: SHARED_DRIVE_ROLE_SCOPES[input.role] },
-		]);
-		return { permission: toPermission(permission), ...accessOutput(access) };
+		return { permission: toPermission(permission) };
 	},
 
 	async "drive.request_share"(call, input) {
@@ -228,9 +219,6 @@ export const driveShareRequestHandlers: Pick<HandlerMap<CallContext>, ShareReque
 
 	async "drive.approve_share_request"(call, input) {
 		const { request, target } = await requestToDecide(call, input.request_id);
-		// The approval can give the account the drive scopes of the role. Refuse what the credential cannot give
-		// before the drive writes the grant.
-		assertMemberGrants(call, [target], () => SHARED_DRIVE_ROLE_SCOPES[request.role]);
 		// The delete of the request is the decision. Only one answer deletes it, so a denial and an approval at
 		// the same time cannot both succeed. The drive writes the grant only after the approval won.
 		if (!(await removeShareRequest(call, request))) throw new OperationError("not_found", NO_REQUEST);
@@ -256,19 +244,21 @@ export const driveShareRequestHandlers: Pick<HandlerMap<CallContext>, ShareReque
 			);
 		} catch (error) {
 			// The drive did not answer. It can have written the grant before the error, so the request does not come
-			// back: a denial of it could not remove such a grant. The log keeps the person who removed the request.
-			// The agent asks again, and drive.list_permissions tells if the account has the grant.
+			// back: a denial of it could not remove such a grant. The log keeps the person who removed the request, and
+			// the error of the drive. The answer is `conflict`, so the web app removes the row of the request. The
+			// account can check with drive.get_item: its grant opens the item. Else the agent asks again.
 			auditFailed(call, opened, "drive.approve_share_request", line, "internal");
-			throw error;
+			log("warn", "drive: the drive failed during the approval of a share request", {
+				error: error instanceof Error ? error.message : String(error),
+			});
+			throw new OperationError("conflict", "The drive did not answer. The request is gone.");
 		}
 		// The item is gone or in the trash, or the agent that asked cannot share it now.
 		if ("error" in shared) throw gone(shared.error.message);
 		auditOk(call, opened, "drive.approve_share_request", line);
 		recordServiceMemberships(call, [target.id], "drive.approve_share_request", request.item_id);
-		const access = await giveMemberAccess(call, [
-			{ principal_id: target.id, scopes: SHARED_DRIVE_ROLE_SCOPES[request.role] },
-		]);
-		return { request: toShareRequest(request), permission: toPermission(shared), ...accessOutput(access) };
+		// The grant is for this item only: the approval changes no scope of the account.
+		return { request: toShareRequest(request), permission: toPermission(shared) };
 	},
 
 	async "drive.deny_share_request"(call, input) {

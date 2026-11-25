@@ -9,7 +9,7 @@ runtime-agnostic (no Workers, DOM or Node APIs).
 
 | File | What |
 | --- | --- |
-| `src/operation.ts` | `defineOperation()`: name, summary, description, REST route, scopes, `anyOfScopes`, callers, annotations, input and output schemas, errors |
+| `src/operation.ts` | `defineOperation()`: name, summary, description, REST route, scopes, `anyOfScopes`, callers, `itemGrant`, annotations, input and output schemas, errors. `itemGrant: true` marks an operation on one Drive item that a grant on that item opens: an agent or a service account without `scopes` can call it, and reaches only the items that a person shared with it (`callableWithItemGrant`) |
 | `src/registry.ts` | `operations`, every operation by name, and the `InputOf` / `OutputOf` types |
 | `src/resources.ts` | `defineResource()` and `resources`, the resource kinds of MCP. Each kind has a URI template, a read operation, a list operation and the changes that send a notification. The kinds are `mail.inbox`, `chat.room`, `chat.rooms`, `chat.addressed`, `drive.item` and `drive.space` |
 | `src/webhooks.ts` | The endpoint operations, the event list, `WEBHOOK_LIMITS` and `anyOfScopes` for the endpoint operations. Also the filters of a chat subscription (`CHAT_WEBHOOK_FILTERS`, `defaultChatWebhookFilter`) and the reasons of a chat event (`CHAT_EVENT_REASONS`) |
@@ -25,7 +25,7 @@ runtime-agnostic (no Workers, DOM or Node APIs).
 | `src/oauth.ts` | The OAuth approval and connection operations, `OAuthAuthorization`, `OAuthGrant` and `OAUTH_LIMITS`. The `/oauth/*` routes create credentials for a client without one, so they are not operations |
 | `src/errors.ts` | The error catalogue: code → HTTP status and title |
 | `src/scopes.ts` | The scope catalogue, and `AGENT_SCOPES`, the most that an agent can hold. Each API key and each OAuth connection of an agent has the scopes of the agent |
-| `src/agent-access.ts` | `AgentAccessChange`: the scopes that a membership or a grant on a Drive item gave to an agent or a service account (`principal_id`, `scopes_added`) |
+| `src/agent-access.ts` | `AgentAccessChange`: the scopes that a membership gave to an agent or a service account (`principal_id`, `scopes_added`). A grant on a Drive item gives no scope |
 | `src/domains.ts` | The domain schema and admin operations to list, add, and remove mail domains |
 | `src/setup.ts` | The schemas of setup (`/auth/setup`), including the first `mail_domain`. Token verification (`POST /auth/setup/verify`) returns `SetupVerifyResult`, the directory state. Setup creates a credential, so it is not an operation |
 | `src/signin.ts` | The schemas and limits of sign-in with a password and an optional TOTP code (`/auth/session`): `Password`, `TotpCode`, `SignInInput`, `SignInResult`. Sign-in creates a credential, so it is not an operation |

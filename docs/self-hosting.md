@@ -575,23 +575,40 @@ What changes for a script that calls the API with a key of an agent or a token o
 
 What changes for a script with a key of a person:
 
-- `drive.share_item` with an agent that the person manages also gives the agent the drive scopes of the
-  role that it does not hold: `drive.read` for a viewer, and also `drive.write` for an editor. The result
-  has each change in `agent_access_changes`. The key needs `directory.write` for this change.
-- With `directory.write`, the key must also hold each scope that the agent gets. If it does not, the call
-  gets `forbidden` and writes no grant. Before, such a call wrote the grant.
-- A share with an agent that the person does not manage changes no scope, as before.
+- `drive.share_item` and `drive.approve_share_request` give the role on the item only. They change no
+  scope of the account, and `directory.write` has no part in them. The results have no
+  `agent_access_changes`.
+- An agent or a service account uses the item with the role of the grant, also without `drive.read` or
+  `drive.write`. These operations accept the grant: `drive.get_item`, `drive.list_items`,
+  `drive.download_file` (also `GET /dl/drive/…`), `drive.list_versions`, `drive.upload_version`,
+  `drive.rename_item`, `drive.restore_version`, `docs.get`, `docs.get_image`, `docs.update`, and the
+  `sheets.*` operations that read the cells or change the cells, the formats or the tabs.
+- So each person who can share an item can give an agent access to it: the owner of the item, or a
+  manager of its shared drive. The manager of the agent does not take part. Before, an agent without the
+  drive scopes could not use a grant.
 
 A person answers a request in **Chat › Activity**, or on the page of the account in **Admin › Members**.
 With the API, the person calls `drive.approve_share_request` or `drive.deny_share_request`.
 [Agents](agents.md#an-agent-asks-before-it-shares-an-item) has the rules.
+
+The drive object of each principal and of each shared drive adds the column `resource` to its grants
+(`permissions`) at its next start. Each grant from before has the value 0, and it stays as it was:
+
+- An agent that holds the drive scopes uses an old grant as before.
+- An agent without the drive scopes does not use an old grant. A grant that did not work before does not
+  start to work.
+- To make an old grant work for such an agent, share the item with it again, or approve a new request.
+  The share writes the value 1, also on a grant that exists.
+- A change of the role of a grant is also a share (`drive.share_item`). So it writes the value 1 too.
 
 A rollback to the Worker from before this change works. That Worker does not know the activity kind
 `share_request`. Its `chat.list_activity` looks for such an item in the room with the empty id. No such
 room exists, so it removes the item as old. The requests that wait stay in the table of the migration,
 and that Worker does not use them. It does not use the column `item_json` either. An agent can then
 share an item with an agent again, until the next deploy of this change. After that deploy, the next
-call of `drive.request_share` for a request sends its activity item again.
+call of `drive.request_share` for a request sends its activity item again. That Worker also does not
+read the column `resource`. Its inserts name their columns, and the column has a default. Under that
+Worker, an agent again needs the drive scopes to use a shared item.
 
 ### Recover a sign-in
 

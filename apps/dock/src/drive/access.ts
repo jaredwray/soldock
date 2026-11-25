@@ -58,7 +58,12 @@ export async function unknownSpaceIds(db: D1Database, ids: readonly string[]): P
  * of the organization. The object uses it for the members and the name of a shared drive only.
  */
 export function spaceCall(call: CallContext, spaceId: string): SpaceCall {
-	return { spaceId, actor: actorOf(call), admin: call.caller.kind === "human" && isAdmin(call.caller) };
+	return {
+		spaceId,
+		actor: actorOf(call),
+		admin: call.caller.kind === "human" && isAdmin(call.caller),
+		...(call.grantOnly ? { grantOnly: true } : {}),
+	};
 }
 
 /** A drive by its id, without a check that the id is a drive. Use `openSpace` for an id from a caller. */
@@ -116,7 +121,8 @@ export async function toItems(call: CallContext, records: ItemRecord[]): Promise
 	const foreign: ItemRef[] = records
 		.filter((record) => record.space_id !== call.caller.id)
 		.map((record) => ({ spaceId: record.space_id, itemId: record.id }));
-	if (foreign.length === 0) return records.map(toItem);
+	// The stars of the caller are in its own drive. A call with `grantOnly` does not reach that drive.
+	if (foreign.length === 0 || call.grantOnly) return records.map(toItem);
 	const own = await openSpace(call, undefined);
 	const starred = new Set(
 		accept(await own.space.starredAmong(own.ctx, foreign)).map((ref) => `${ref.spaceId}/${ref.itemId}`),
