@@ -117,14 +117,21 @@ export function Shell() {
 		switch (route.page) {
 			case "mail":
 			case "mail-settings":
+			case "mail-screener":
 				// The effect above replaces the path. Until then, nothing shows.
 				if (ownPath) return null;
 				// The key gives each mailbox its own mail app, so the data of one never shows in a different one. The
-				// settings view of a mailbox has the same key, so its labels and its poll stay when it opens.
+				// settings view and the Screener view of a mailbox have the same key, so its labels and its poll stay.
 				return (
 					<MailApp
 						key={route.mailboxId ?? "own"}
-						route={route.page === "mail" ? route : { mailboxId: route.mailboxId, view: null, threadId: null }}
+						route={
+							route.page === "mail"
+								? route
+								: route.page === "mail-screener"
+									? { mailboxId: route.mailboxId, view: null, threadId: null, screener: route.tab }
+									: { mailboxId: route.mailboxId, view: null, threadId: null }
+						}
 						mailboxes={mailboxes}
 						onMailboxesChanged={reloadMailboxes}
 						expandedMailboxes={expandedMailboxes}

@@ -102,6 +102,7 @@ export async function handleInboundBatch(batch: MessageBatch<unknown>, env: Env)
 				mailboxId: job.principalId,
 				status: result.status,
 				messageId: result.messageId,
+				screened: result.screened,
 			});
 			message.ack();
 		} catch (error) {

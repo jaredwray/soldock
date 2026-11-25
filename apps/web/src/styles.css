@@ -5609,6 +5609,104 @@ fieldset {
 	max-width: 100%;
 }
 
+/* The Screener view of a mailbox: the senders that wait, and the decisions. */
+.screener {
+	display: flex;
+	flex-direction: column;
+	gap: 16px;
+}
+
+.screener > .panel-intro,
+.screener > .notice,
+.screener > .field-hint {
+	margin: 0;
+}
+
+.screener-tabs,
+.screener-links {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px 16px;
+}
+
+.screener-tabs .segment {
+	color: inherit;
+	text-decoration: none;
+}
+
+.screener-list {
+	margin: 0;
+	padding: 0;
+	list-style: none;
+}
+
+.screener-row {
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+	padding: 12px 0;
+	border-bottom: 1px solid var(--border);
+}
+
+.screener-row:first-child {
+	padding-top: 0;
+}
+
+.screener-row:last-child {
+	padding-bottom: 0;
+	border-bottom: 0;
+}
+
+.screener-row > p {
+	margin: 0;
+}
+
+.screener-sender {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: baseline;
+	gap: 0 8px;
+	min-width: 0;
+	overflow-wrap: anywhere;
+}
+
+.screener-name,
+.screener-subject {
+	font-weight: 600;
+}
+
+.screener-preview {
+	overflow-wrap: anywhere;
+}
+
+.screener-actions {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
+	margin-top: 4px;
+}
+
+.screener-form {
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+}
+
+.screener-form > p {
+	margin: 0;
+}
+
+.screener-form-row {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
+}
+
+.screener-form-row > .input {
+	flex: 1 1 220px;
+	min-width: 0;
+}
+
 .signature-form {
 	display: flex;
 	flex-direction: column;

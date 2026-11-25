@@ -1,8 +1,9 @@
 import { autoLabelActive } from "../ai/index.ts";
-import { addressTag, getMailbox } from "../identity/index.ts";
+import { addressTag, getMailbox, mailboxOwnerKind } from "../identity/index.ts";
 import { sha256Hex } from "../platform/index.ts";
 import { composeMessage } from "./mime/compose.ts";
 import { parseMail } from "./mime/parse.ts";
+import { screenerDefault } from "./org-settings.ts";
 
 /**
  * The R2 key of a raw message in one mailbox. The key comes from the owner and the content, so a
@@ -57,6 +58,16 @@ export async function deliverStoredRaw(
 	const spam = input.origin === "external" && parsed.authentication?.dmarc === "fail";
 	// One read of the AI settings. The mailbox applies auto labels only when its own setting is on too.
 	const owner = !spam && (await autoLabelActive(env)) ? await getMailbox(env.DIRECTORY, input.mailboxId) : null;
+	// The Screener applies only to mail from outside that is not spam, and never in the mailbox of an agent.
+	// The mailbox reads the default of the organization at each delivery, so a change of it needs no fan-out.
+	let screener: { orgDefault: boolean; eligible: boolean } | null = null;
+	if (input.origin === "external" && !spam) {
+		const [orgDefault, kind] = await Promise.all([
+			screenerDefault(env.DIRECTORY),
+			mailboxOwnerKind(env.DIRECTORY, input.mailboxId),
+		]);
+		screener = { orgDefault, eligible: kind === "human" || kind === "team" };
+	}
 	return mailboxStub(env, input.mailboxId).deliver({
 		contentHash: input.contentHash,
 		rawKey: input.rawKey,
@@ -67,6 +78,7 @@ export async function deliverStoredRaw(
 		spam,
 		tag: input.tag,
 		autoLabel: owner ? { ownerAddress: owner.address } : null,
+		screener,
 	});
 }
 

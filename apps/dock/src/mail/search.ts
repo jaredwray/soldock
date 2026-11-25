@@ -213,8 +213,13 @@ function compileTerm(term: Term, options: CompileOptions): { sql: string; params
 			};
 		case "in":
 			if (lower === "anywhere" || lower === "all") return { sql: "1", params: [] };
+			// The mail that the Screener holds: of senders that wait, or of senders that a person screened out.
+			if (lower === "screener") return { sql: "coalesce(m.screen, '') = 'pending'", params: [] };
+			if (lower === "screened_out") return { sql: "coalesce(m.screen, '') = 'out'", params: [] };
 			if (!SYSTEM_IN.has(lower))
-				throw new QueryError(`in:${value} is not a folder. Use inbox, sent, starred, spam, trash or anywhere.`);
+				throw new QueryError(
+					`in:${value} is not a folder. Use inbox, sent, starred, spam, trash, screener, screened_out or anywhere.`,
+				);
 			return hasLabel(lower.toUpperCase());
 		case "is":
 			if (lower === "unread") return hasLabel("UNREAD");
@@ -257,6 +262,22 @@ function namesSpamOrTrash(clauses: Clause[]): boolean {
 	);
 }
 
+/**
+ * True when a term that is not negated names the mail that the Screener holds. Only then does the query
+ * see held mail. in:anywhere does not: held mail waits for a decision, and is not mail of the views.
+ */
+function namesScreener(clauses: Clause[]): boolean {
+	return clauses.some((clause) =>
+		clause.some(
+			(term) =>
+				term.kind === "op" &&
+				term.op === "in" &&
+				!term.negate &&
+				["screener", "screened_out"].includes(term.value.toLowerCase()),
+		),
+	);
+}
+
 export function compileQuery(clauses: Clause[], options: CompileOptions): CompiledQuery {
 	const parts: string[] = [];
 	const params: (string | number)[] = [];
@@ -269,6 +290,7 @@ export function compileQuery(clauses: Clause[], options: CompileOptions): Compil
 		parts.push(terms.length === 1 ? (terms[0] as string) : `(${terms.join(" OR ")})`);
 	}
 	if (params.length > MAX_QUERY_PARAMS) throw new QueryError("The query has too many terms. Use fewer terms.");
+	if (!namesScreener(clauses)) parts.push("m.screen IS NULL");
 	if (!namesSpamOrTrash(clauses)) {
 		parts.push(
 			"NOT EXISTS (SELECT 1 FROM message_labels ml WHERE ml.message_seq = m.seq AND ml.label_id IN ('SPAM', 'TRASH'))",

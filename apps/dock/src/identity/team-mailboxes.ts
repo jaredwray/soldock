@@ -349,6 +349,16 @@ export async function getMailbox(db: D1Database, id: string): Promise<MailboxRec
 		.first<MailboxRecord>();
 }
 
+/**
+ * Who owns a mailbox: `team` for a team mailbox, `human` for the own mailbox of a person, and `agent` for
+ * the own mailbox of an agent or a service account. Null for an id that the directory does not know.
+ */
+export async function mailboxOwnerKind(db: D1Database, id: string): Promise<"team" | "human" | "agent" | null> {
+	if (isTeamMailboxId(id)) return "team";
+	const kind = await db.prepare("SELECT kind FROM principals WHERE id = ?").bind(id).first<string>("kind");
+	return kind === "human" || kind === "agent" ? kind : null;
+}
+
 /** The ids of every mailbox object: each principal and each team mailbox. A directory reset pauses them. */
 export async function allMailboxIds(db: D1Database): Promise<string[]> {
 	const { results } = await db.prepare("SELECT id FROM principals").all<{ id: string }>();

@@ -102,7 +102,7 @@ test("a member sets the signature and the default address of a shared mailbox in
 
 		// The settings are on the server: another member reads the same signature, and the default is the person's.
 		const settings = await (await member.request.get(`/api/v1/mail/mailbox-settings?mailbox_id=${mailbox.id}`)).json();
-		expect(settings).toEqual({ mailbox_id: mailbox.id, signature: `The ${name} team\nexample.com/orders` });
+		expect(settings).toMatchObject({ mailbox_id: mailbox.id, signature: `The ${name} team\nexample.com/orders` });
 		const mine = await (await member.request.get("/api/v1/mail/settings")).json();
 		expect(mine.default_from[mailbox.id]).toBe(me.principal.id);
 	} finally {

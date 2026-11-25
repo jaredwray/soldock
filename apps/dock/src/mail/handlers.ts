@@ -13,6 +13,7 @@ import {
 	type CallContext,
 	canReadAgentMailboxes,
 	domainOf,
+	isAdmin,
 	isTeamMailboxId,
 	type MailboxRecord,
 	mailDomains,
@@ -34,8 +35,11 @@ import { mailboxStub, storeRaw } from "./delivery.ts";
 import type { Refusal, SendInput, SettingsPatch, StoredMessage } from "./mailbox.ts";
 import { composeMessage } from "./mime/compose.ts";
 import { parseMail, readAttachment } from "./mime/parse.ts";
+import { readOrgSettings, screenerDefault, updateOrgSettings } from "./org-settings.ts";
 import { deniedOutboundAddresses, outboundMode, outboundPolicyDenial } from "./outbound.ts";
 import { sanitizeHtml } from "./sanitize.ts";
+import type { ScreenerContext, ScreenerSenderRecord } from "./screener/store.ts";
+import { screenerEnabled } from "./screener/store.ts";
 import { compileQuery, parseQuery, QueryError } from "./search.ts";
 import { htmlToText, replySubject } from "./threading.ts";
 import { webhookHandlers } from "./webhooks.ts";
@@ -46,6 +50,10 @@ type MailOperation =
 	| "mail.update_settings"
 	| "mail.get_mailbox_settings"
 	| "mail.update_mailbox_settings"
+	| "mail.get_org_settings"
+	| "mail.update_org_settings"
+	| "mail.list_screener"
+	| "mail.screen_sender"
 	| "mail.get_auto_labels"
 	| "mail.update_auto_labels"
 	| "mail.create_auto_label"
@@ -134,7 +142,7 @@ function auditOk(
 	mailbox: MailboxRecord,
 	op: string,
 	target: string,
-	extra?: { outboundMode: string; externalRecipients: number },
+	extra?: { outboundMode?: string; externalRecipients?: number; code?: string },
 ): void {
 	audit({
 		op,
@@ -147,6 +155,49 @@ function auditOk(
 		requestId: call.requestId,
 		...extra,
 	});
+}
+
+/**
+ * What the mailbox needs to know about the Screener: the default of the organization, and whether the
+ * Screener can apply. It applies to the own mailbox of a person and to a team mailbox. It never applies to
+ * the own mailbox of an agent or a service account.
+ */
+async function screenerContext(call: CallContext, record: MailboxRecord): Promise<ScreenerContext> {
+	const eligible = record.kind === "team" || (record.kind === "personal" && call.caller.kind === "human");
+	return { orgDefault: await screenerDefault(call.env.DIRECTORY), eligible };
+}
+
+/** The Screener part of the settings of a mailbox. */
+function screenerSettings(mode: "inherit" | "on" | "off", context: ScreenerContext) {
+	return { mode, org_default: context.orgDefault, enabled: screenerEnabled(mode, context) };
+}
+
+/** Only an owner or an admin reads or changes the mail settings of the organization. Never an agent. */
+function requireAdmin(call: CallContext, action: string): void {
+	if (!isAdmin(call.caller)) throw new OperationError("forbidden", `Only owners and admins can ${action}.`);
+}
+
+function toScreenerSender(record: ScreenerSenderRecord) {
+	return {
+		address: record.address,
+		name: record.name,
+		status: record.status,
+		messages_held: record.messagesHeld,
+		first_seen_at: iso(record.firstSeenAt),
+		latest: record.latest
+			? {
+					thread_id: record.latest.threadId,
+					message_id: record.latest.messageId,
+					subject: record.latest.subject,
+					snippet: record.latest.snippet,
+					received_at: iso(record.latest.receivedAt),
+					has_attachments: record.latest.hasAttachments,
+				}
+			: null,
+		decided_at: record.decidedAt === null ? null : iso(record.decidedAt),
+		decided_by: record.decidedBy,
+		untrusted: true as const,
+	};
 }
 
 /**
@@ -322,7 +373,12 @@ export const mailHandlers: Pick<HandlerMap<CallContext>, MailOperation> = {
 	async "mail.get_mailbox_settings"(call, input) {
 		const { record, box } = await openMailbox(call, input.mailbox_id, "mail.get_mailbox_settings");
 		// No audit line, as for mail.get_profile: the settings hold no mail content.
-		return { mailbox_id: record.id, ...(await box.mailboxSettings()) };
+		const [settings, context] = await Promise.all([box.mailboxSettings(), screenerContext(call, record)]);
+		return {
+			mailbox_id: record.id,
+			signature: settings.signature,
+			screener: screenerSettings(settings.screener, context),
+		};
 	},
 
 	async "mail.update_mailbox_settings"(call, input) {
@@ -335,10 +391,75 @@ export const mailHandlers: Pick<HandlerMap<CallContext>, MailOperation> = {
 				"An agent or a service account can change only the settings of its own mailbox.",
 			);
 		}
-		const settings = await box.updateMailboxSettings({ signature: input.signature });
+		const context = await screenerContext(call, record);
+		// The mailbox of an agent has no Screener: nobody but the agent could decide there, from untrusted mail.
+		if (input.screener !== undefined && !context.eligible) {
+			throw new OperationError("forbidden", "The Screener is for the mailboxes of people and for team mailboxes.");
+		}
+		const settings = await box.updateMailboxSettings({ signature: input.signature, screener: input.screener }, context);
 		// The line names the mailbox only. It never holds the signature.
-		auditOk(call, record, "mail.update_mailbox_settings", record.id);
-		return { mailbox_id: record.id, ...settings };
+		auditOk(
+			call,
+			record,
+			"mail.update_mailbox_settings",
+			record.id,
+			input.screener === undefined ? undefined : { code: `screener_${input.screener}` },
+		);
+		return {
+			mailbox_id: record.id,
+			signature: settings.signature,
+			screener: screenerSettings(settings.screener, context),
+		};
+	},
+
+	async "mail.get_org_settings"(call) {
+		requireAdmin(call, "read the mail settings of the organization");
+		return readOrgSettings(call.env.DIRECTORY);
+	},
+
+	async "mail.update_org_settings"(call, input) {
+		requireAdmin(call, "change the mail settings of the organization");
+		const settings = await updateOrgSettings(call.env.DIRECTORY, input.screener.default_enabled, Date.now());
+		audit({
+			op: "mail.update_org_settings",
+			actor: call.caller.id,
+			actorKind: call.caller.kind,
+			credential: call.caller.credential,
+			target: "screener",
+			code: settings.screener.default_enabled ? "on" : "off",
+			result: "ok",
+			requestId: call.requestId,
+		});
+		return settings;
+	},
+
+	async "mail.list_screener"(call, input) {
+		const { record, box } = await openMailbox(call, input.mailbox_id, "mail.list_screener");
+		const page = accept(
+			await box.listScreener({
+				status: input.status,
+				cursor: input.cursor ?? null,
+				limit: input.limit ?? DEFAULT_PAGE,
+			}),
+		);
+		auditAgentRead(call, record, "mail.list_screener", record.id);
+		return { senders: page.senders.map(toScreenerSender), next_cursor: page.nextCursor };
+	},
+
+	async "mail.screen_sender"(call, input) {
+		// The contract lets only people call it. In the mailbox of an agent, openMailbox refuses a change.
+		const { record, box } = await openMailbox(call, input.mailbox_id, "mail.screen_sender");
+		const { principal } = call.caller;
+		const result = await box.screenSender({
+			address: input.address,
+			decision: input.decision,
+			by: { principal_id: principal.id, kind: "human", display_name: principal.display_name },
+			dryRun: input.dry_run,
+			now: Date.now(),
+		});
+		// The line names the mailbox and the decision. The address of the sender stays out of the log.
+		if (!input.dry_run) auditOk(call, record, "mail.screen_sender", record.id, { code: input.decision });
+		return result;
 	},
 
 	async "mail.get_auto_labels"(call, input) {

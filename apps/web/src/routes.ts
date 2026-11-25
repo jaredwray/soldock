@@ -30,12 +30,23 @@ export type DriveView =
  * The sections of the admin page. Each has one path under `/admin`. People and agents share `members`.
  * The old `/admin/agents` path redirects there. Each member has its own page under `/admin/members`.
  */
-export const ADMIN_SECTIONS = ["members", "shared-mailboxes", "shared-drives", "chat", "domains", "ai"] as const;
+export const ADMIN_SECTIONS = [
+	"members",
+	"shared-mailboxes",
+	"shared-drives",
+	"chat",
+	"mail",
+	"domains",
+	"ai",
+] as const;
 export type AdminSection = (typeof ADMIN_SECTIONS)[number];
 
 /** The sections of the settings page. Each has one path under `/settings`. */
 export const SETTINGS_SECTIONS = ["account", "notifications", "security", "api-keys"] as const;
 export type SettingsSection = (typeof SETTINGS_SECTIONS)[number];
+
+/** The tabs of the Screener view of a mailbox: the senders that wait, and the decisions. */
+export type ScreenerTab = "waiting" | "history";
 
 export const CHAT_VIEWS = ["activity", "saved", "drafts"] as const;
 export type ChatView = (typeof CHAT_VIEWS)[number];
@@ -48,6 +59,8 @@ export type Route =
 	| { page: "mail"; mailboxId: string | null; view: MailView; threadId: string | null }
 	/** The settings view of a mailbox, in the main pane of Mail. `mailboxId` is as for `mail`. */
 	| { page: "mail-settings"; mailboxId: string | null }
+	/** The Screener view of a mailbox, in the main pane of Mail. `mailboxId` is as for `mail`. */
+	| { page: "mail-screener"; mailboxId: string | null; tab: ScreenerTab }
 	| { page: "drive"; view: DriveView }
 	/** A doc or a sheet in its editor. `spaceId` is the drive that holds the item. */
 	| { page: "doc"; spaceId: string; itemId: string }
@@ -181,6 +194,10 @@ export function parseRoute(location: string): Route {
 function parseMailView(mailboxId: string | null, parts: string[], url: URL): Route {
 	const [first, second, third] = parts;
 	if (first === "settings" && parts.length === 1) return { page: "mail-settings", mailboxId };
+	if (first === "screener" && parts.length === 1) return { page: "mail-screener", mailboxId, tab: "waiting" };
+	if (first === "screener" && second === "history" && parts.length === 2) {
+		return { page: "mail-screener", mailboxId, tab: "history" };
+	}
 	if (isSystemView(first) && parts.length <= 2) {
 		return { page: "mail", mailboxId, view: { kind: "system", view: first }, threadId: second ?? null };
 	}
@@ -395,6 +412,7 @@ export function viewPath(view: MailView, mailboxId: string | null = null): strin
  */
 export function ownMailboxPath(route: Route, selfId: string): string | null {
 	if (route.page === "mail-settings" && route.mailboxId === selfId) return mailSettingsPath(null);
+	if (route.page === "mail-screener" && route.mailboxId === selfId) return screenerPath(null, route.tab);
 	if (route.page !== "mail" || route.mailboxId !== selfId) return null;
 	return route.threadId ? threadPath(route.view, route.threadId) : viewPath(route.view);
 }
@@ -402,6 +420,11 @@ export function ownMailboxPath(route: Route, selfId: string): string | null {
 /** The path of the settings view of a mailbox: `/mail/settings`, or under the path of a team or agent mailbox. */
 export function mailSettingsPath(mailboxId: string | null = null): string {
 	return `${mailBase(mailboxId)}/settings`;
+}
+
+/** The path of the Screener view of a mailbox: `/mail/screener`, or `/mail/screener/history` for the decisions. */
+export function screenerPath(mailboxId: string | null = null, tab: ScreenerTab = "waiting"): string {
+	return `${mailBase(mailboxId)}/screener${tab === "history" ? "/history" : ""}`;
 }
 
 /** The path of one thread, opened from a view. */

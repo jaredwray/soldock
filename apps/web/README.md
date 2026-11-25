@@ -263,6 +263,22 @@ MCP clients. The app has no UI-only path.
   - The web app uses `mail.get_settings` and `mail.update_settings` only for the default From address of
     each mailbox (`default_from`). Their sidebar settings are for the mailbox sections that the sidebar no
     longer has.
+- **The Screener** (`/mail/screener`, `/mail/screener/history`, and the same paths under a team or agent
+  mailbox, [`Screener.tsx`](src/features/mail/Screener.tsx), [`screener.ts`](src/features/mail/screener.ts)).
+  The sidebar shows **Screener** after the inbox of the open mailbox, with the number of senders that wait
+  (`screener_pending` of `mail.get_profile`). It shows while the Screener is on, and while senders wait after
+  it went off. The view replaces the list in the main pane, as the settings view does, and is a separate
+  chunk. **Waiting** lists the senders that wait (`mail.list_screener`): the name and address, the subject
+  and snippet of the newest message as plain text, the number of messages, a link that opens the newest
+  message in the search `in:screener`, and **Screen in** and **Screen out** (`mail.screen_sender`). The
+  buttons name the sender for a screen reader. After a decision, the row goes, a toast tells the result,
+  the focus goes to the next row, and the counts load again. **History** lists the senders that a person
+  screened out or in, with who decided and when, a button for the other decision, and a form that screens
+  out an address that did not write yet. Without `mail.modify`, the view has no buttons and says why. When
+  the Screener is off, a notice says so. Each list has loading, empty and error states, and **Load more**.
+- **Admin › Mail** (`/admin/mail`, [`MailSettingsCard.tsx`](src/features/admin/MailSettingsCard.tsx)). An
+  owner or an admin turns the default of the Screener on or off for each mailbox of a person and each team
+  mailbox that follows the default (`mail.update_org_settings`).
 - **Mailbox settings** (`/mail/settings`, `/mail/team/<tmb_id>/settings`, `/mail/agent/<prn_id>/settings`,
   [`MailboxSettings.tsx`](src/features/mail/MailboxSettings.tsx)). The gear after Refresh in the header of
   Mail is a link to the settings view of the open mailbox. The view replaces the list in the main pane,
@@ -274,6 +290,10 @@ MCP clients. The app has no UI-only path.
     They are the only AI feature of Mail. When the organization has AI or the feature off, a notice says
     so, with a link to Admin › AI for an owner or an admin. **Choose the auto labels** opens the dialog
     of the auto labels. Without `mail.modify`, the person cannot change the switch.
+  - **Screener.** A list with three choices (`screener` of `mail.update_mailbox_settings`): follow the
+    default of the organization (the choice tells whether it is on now), **On** or **Off**. A choice saves
+    at once, with a toast. Links open the Screener and its history. The mailbox of an agent shows text:
+    it has no Screener. Without `mail.modify`, the list is disabled.
   - **Access.** In a shared mailbox, an owner or an admin changes the members with the member editor of
     Admin › Shared mailboxes (`MembersPart`). A member sees the members and what each one can do. The
     own mailbox and the mailbox of an agent show text: nobody else can use the own mailbox, and owners
@@ -1840,11 +1860,12 @@ dock Worker serves `index.html` for each app path, so a deep link works on reloa
 | `/mail/label/<lbl_id>` | The thread list of a user label |
 | `/mail/search?q=<query>` | The search results |
 | `/mail/<view>/<thr_id>`, `/mail/label/<lbl_id>/<thr_id>`, `/mail/search/<thr_id>?q=<query>` | One thread, opened from that view |
-| `/mail/settings` | The settings view of the own mailbox: AI, access, the default address and the signature |
-| `/mail/team/<tmb_id>/…` | The same views, threads and settings, in a team mailbox. `/mail/team/<tmb_id>` goes to its inbox |
+| `/mail/settings` | The settings view of the own mailbox: AI, the Screener, access, the default address and the signature |
+| `/mail/screener`, `/mail/screener/history` | The Screener view of the own mailbox: the senders that wait, and the decisions |
+| `/mail/team/<tmb_id>/…` | The same views, threads, settings and Screener, in a team mailbox. `/mail/team/<tmb_id>` goes to its inbox |
 | `/mail/agent/<prn_id>/…` | The same views, threads and settings, read only, in the mailbox of an agent, for an owner or an admin. `/mail/agent/<prn_id>` goes to its inbox |
 | `/admin` | Goes to the first section of Admin that the person can use |
-| `/admin/<section>` | One section of Admin: `members`, `shared-mailboxes`, `shared-drives`, `chat` or `domains` |
+| `/admin/<section>` | One section of Admin: `members`, `shared-mailboxes`, `shared-drives`, `chat`, `mail`, `domains` or `ai` |
 | `/admin/members/<prn_id>` | The page of one person, agent or service account in Admin › Members |
 | `/connect/<oar_id>` | The approval page of an OAuth request from an MCP client |
 | `/drive` | The root of the own drive |
