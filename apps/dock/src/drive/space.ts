@@ -873,7 +873,7 @@ export class DriveSpaceDO extends DurableObject<Env> {
 
 	/**
 	 * A step that runs one time in each drive, before its first call after the deploy that made the memberships
-	 * and the shares decide the access of agents (D1 migration 0031). Before that deploy, a call of an agent or a
+	 * and the shares decide the access of agents (D1 migration 0032). Before that deploy, a call of an agent or a
 	 * service account needed the drive scope in its account too. So each agent keeps only what it could do
 	 * before, in the members of a shared drive and in the grants of items:
 	 * - Without `drive.read` on its account, it could not read the drive. Its membership and its grants go,

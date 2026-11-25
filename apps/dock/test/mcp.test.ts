@@ -54,7 +54,7 @@ describe("the MCP endpoint", () => {
 		const unknown = await mcp(bot.key, "initialize", { protocolVersion: "1999-01-01" });
 		expect(((unknown.body?.result ?? {}) as { protocolVersion?: string }).protocolVersion).toBe("2025-11-25");
 
-		// An agent from before migration 0031 can have narrow account scopes. It learns which tools it cannot call.
+		// An agent from before migration 0032 can have narrow account scopes. It learns which tools it cannot call.
 		// A membership can give a tool that names a team mailbox, a room or a shared drive, so such a tool is not
 		// in the text. The text tells that its account scopes do not change, and not that it needs a new key.
 		await setLegacyScopes(bot.id, ["account.read", "mail.read"]);
@@ -71,7 +71,7 @@ describe("the MCP endpoint", () => {
 
 	// A token of a service account only proves who the account is. A new token cannot do more, so the text must
 	// not tell the account to ask for a new token.
-	it("tells a service token from before migration 0031 that its account scopes do not change", async () => {
+	it("tells a service token from before migration 0032 that its account scopes do not change", async () => {
 		const { owner } = await seedOrg();
 		const { principal } = await owner.call("directory.create_service_account", {
 			display_name: "CI",

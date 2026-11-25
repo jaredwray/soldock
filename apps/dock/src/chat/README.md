@@ -210,7 +210,7 @@ closes the sockets of the member in the same step.
 
   `chat.schedule_message` stays with the room. The handler refuses a member that cannot post, and the room
   checks `chat.write` again when the message is due.
-- **Rooms from before.** Before migration `0031`, a call of an agent in a room needed the chat scope on its
+- **Rooms from before.** Before migration `0032`, a call of an agent in a room needed the chat scope on its
   account too. Each room narrows its agent members one time, before its first call after the deploy
   (`narrowAgentMembers`, in `blockConcurrencyWhile` of the constructor). It reads the account scopes of the
   agent members from the directory:
@@ -1343,7 +1343,7 @@ Known limits:
 | Webhook event outbox | `ChatRoomDO` table `webhook_outbox` | Message ids, member ids, membership ids, the subscription sequence, event times and queue retry state. No message text. Removed after queue acceptance |
 | Chat webhook subscriptions | D1 `webhook_subscriptions`, owned by `webhooks`. The old table `chat_webhooks` stays | See the [shared data inventory](../webhooks/README.md#data-inventory) |
 | Schema version, the stamp of the states | `ChatRoomDO` table `meta` | `search_stamp` grows with each batch that the room sends to the search index. `principal_stamp` grows with each state that the room sends. A restore of a room object must not make the stamp lower: a `PrincipalDO` ignores each state with a lower stamp. Set it above the stamps from before, or clear the rows of the room in the `PrincipalDO`s |
-| The one-time narrow of agents | `ChatRoomDO` table `meta`, key `agent_access_narrowed` | Set when the room narrowed its agent members after migration `0031`, or at the first migration of a new room. A restore keeps it |
+| The one-time narrow of agents | `ChatRoomDO` table `meta`, key `agent_access_narrowed` | Set when the room narrowed its agent members after migration `0032`, or at the first migration of a new room. A restore keeps it |
 | The joined rooms of a principal | `PrincipalDO` table `chat_rooms` | One object for each principal. Room fields, role, read marker, unread count, the star, the other member of a `dm` room, and the stamp. A room that the principal left keeps a row with `joined = 0` and no fields. Rebuildable from the room objects |
 | The changes for a principal | `PrincipalDO` table `chat_addressed` | One row for each joined room that has a change for the principal: the time, the version and the facts of the change (`addressed_json` of the member row). No message text. Rebuildable from the room objects |
 | Notification settings and unread total | `PrincipalDO` metadata and `chat_notification_levels` | One default, quiet hours, a sound setting, room overrides and the aggregate unread count |

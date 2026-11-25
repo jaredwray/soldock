@@ -26,7 +26,7 @@ import agentAccessSchema from "../../migrations/0027_agent_access.sql";
 import aiSchema from "../../migrations/0028_ai.sql";
 import mailboxMemberScopesSchema from "../../migrations/0029_mailbox_member_scopes.sql";
 import chatMemberRequestsSchema from "../../migrations/0030_chat_member_requests.sql";
-import resourceAccessSchema from "../../migrations/0031_resource_access.sql";
+import resourceAccessSchema from "../../migrations/0032_resource_access.sql";
 import { log, OperationError, randomToken } from "../platform/index.ts";
 import { allMailboxIds } from "./team-mailboxes.ts";
 
@@ -198,5 +198,5 @@ const BUNDLED_MIGRATIONS = [
 	"0028_ai.sql",
 	"0029_mailbox_member_scopes.sql",
 	"0030_chat_member_requests.sql",
-	"0031_resource_access.sql",
+	"0032_resource_access.sql",
 ] as const;

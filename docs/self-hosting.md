@@ -561,7 +561,7 @@ The upgrade gives no account more access than it had. Before it, a call of an ag
 needed the scope in its account and in its membership. So each membership of an agent keeps only what both
 allowed:
 
-- Migration `0031_resource_access.sql` changes each membership of an agent in a team mailbox to the mail
+- Migration `0032_resource_access.sql` changes each membership of an agent in a team mailbox to the mail
   scopes that the membership and the account both hold. A membership can then have no scope. A membership
   of a person does not change. Do not change the access of an agent with the old Worker
   between the migration and the deploy of the new Worker. The new Worker does not apply that change to a

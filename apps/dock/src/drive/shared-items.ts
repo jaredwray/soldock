@@ -59,7 +59,7 @@ export async function sharedItemsOfPrincipal(
 
 /**
  * The role that each shared drive gives the principal now, for the drives of the list where it is a member.
- * The index can have a membership from before migration 0031 that the drive did not narrow
+ * The index can have a membership from before migration 0032 that the drive did not narrow
  * (`narrowAgentAccess`): a drive narrows it when it wakes. This call wakes each drive, so the answer has the
  * narrowed roles. A drive that refuses the principal, or does not have it as a member, is not in the answer.
  */

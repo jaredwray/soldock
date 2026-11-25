@@ -46,7 +46,7 @@ afterEach(() => {
 /**
  * The owner, an admin, a member (Ada), the agent of Ada, and a service account that Ada sponsors. The
  * account has each service scope, as each new account does. `legacy` gives it the narrower account scopes that
- * an account from before migration 0031 can have.
+ * an account from before migration 0032 can have.
  */
 async function seedService(legacy?: Scope[]) {
 	const { owner, ada, bot } = await seedOrg();
@@ -267,7 +267,7 @@ describe("tokens of a service account", () => {
 
 	// A token acts with the account scopes of its account in its own mailbox and for the actions without a
 	// resource. A stored list that is not valid gives no scope, never each scope.
-	it("act with the account scopes of an account from before migration 0031, and with none for a list that is not valid", async () => {
+	it("act with the account scopes of an account from before migration 0032, and with none for a list that is not valid", async () => {
 		const { admin, service } = await seedService(["account.read", "mail.read"]);
 		const token = await serviceToken(admin, service.id);
 		expect((await token.call("mail.list_threads", {})).threads).toEqual([]);
@@ -533,7 +533,7 @@ describe("calls of a service account", () => {
 		const whoami = await token.call("account.whoami");
 		expect(whoami).toMatchObject({ principal: { kind: "service" }, credential: "api_key", sign_in: null });
 		expect(whoami.missing_scopes).toEqual([]);
-		// A token of a narrow account from before migration 0031 learns what the account misses, with the text of a
+		// A token of a narrow account from before migration 0032 learns what the account misses, with the text of a
 		// service account, not of a person.
 		const small = await admin.call("directory.create_service_account", {
 			display_name: "Small",
@@ -707,7 +707,7 @@ describe("the activity log of a service account", () => {
 		// A secret of no token names no account, so it adds nothing.
 		expect((await request("/api/v1/account", { headers: bearer(`sdk_${"x".repeat(43)}`) })).status).toBe(401);
 		// The events socket also carries the personal Chat state of the account, which has no room. So an account
-		// from before migration 0031 without chat.read cannot open it. A room socket of a room of which the account
+		// from before migration 0032 without chat.read cannot open it. A room socket of a room of which the account
 		// is not a member is refused too: the room decides.
 		const events = await request(EVENTS_SOCKET_PATH, { headers: { upgrade: "websocket", ...bearer(narrow.key) } });
 		expect(events.status).toBe(403);
@@ -1110,7 +1110,7 @@ describe("the access of a service account", () => {
 			// A token only proves the identity of the account.
 			tokens: [{ key_id: live.keyId, label: "deploy", expires_at: null }],
 			// The memberships decide in the team mailbox, the shared drive and the rooms. They change nothing on the
-			// account: an account from before migration 0031 keeps its account scopes.
+			// account: an account from before migration 0032 keeps its account scopes.
 			scopes: ["mail.read", "chat.read"],
 		});
 		const viaMcp = await callTool(admin.key, "directory_get_agent_access", { principal_id: service.id });

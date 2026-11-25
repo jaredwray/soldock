@@ -455,7 +455,7 @@ describe("the members of a shared drive", () => {
 describe("an agent in a shared drive", () => {
 	/**
 	 * A new agent of Ada with its key. It is a member of no shared drive. `legacy` gives it the narrow account
-	 * scopes that an agent from before migration 0031 can have.
+	 * scopes that an agent from before migration 0032 can have.
 	 */
 	async function newAgent(name = "Helper", legacy?: readonly string[]) {
 		const created = await owner.call("directory.create_principal", {
@@ -474,10 +474,10 @@ describe("an agent in a shared drive", () => {
 
 	// The role decides what an agent can do in the drive, as for a person. Each manager of the drive gives an
 	// agent a role, and the agent uses the drive at once with its key. Nothing changes on the agent: an agent from
-	// before migration 0031 without a drive scope on its account uses the drive the same way.
+	// before migration 0032 without a drive scope on its account uses the drive the same way.
 	it.each([
 		["a new agent", undefined],
-		["an agent from before migration 0031", ["account.read"]],
+		["an agent from before migration 0032", ["account.read"]],
 	] as const)("lets %s use a shared drive as its role says, at once, with its key", async (_name, legacy) => {
 		const agent = await newAgent("Helper", legacy);
 		const before = await scopesOf(agent.id);
@@ -506,7 +506,7 @@ describe("an agent in a shared drive", () => {
 	});
 
 	// A share of an item decides, as a role of a shared drive does.
-	it("lets an agent from before migration 0031 use an item that a person shares with it", async () => {
+	it("lets an agent from before migration 0032 use an item that a person shares with it", async () => {
 		const agent = await newAgent("Helper", ["account.read"]);
 		const { item } = await eve.call("drive.upload_file", { name: "brief.txt", content_base64: base64("v1") });
 		await eve.call("drive.share_item", { item_id: item.id, principal_id: agent.id, role: "viewer" });
@@ -520,7 +520,7 @@ describe("an agent in a shared drive", () => {
 	});
 });
 
-describe("a drive from before migration 0031", () => {
+describe("a drive from before migration 0032", () => {
 	/** Makes the drive a drive from before the deploy, and starts its object again: it narrows its agents first. */
 	async function wakeAsLegacy(spaceId: string) {
 		const stub = env.DRIVE_SPACE.get(env.DRIVE_SPACE.idFromName(spaceId));

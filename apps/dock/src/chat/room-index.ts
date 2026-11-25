@@ -316,7 +316,7 @@ export async function roomsOfPrincipal(
 
 /**
  * The role that each room gives the principal now, for the rooms of the list where it is a member. The index
- * and the list of a principal can have a membership from before migration 0031 that the room did not narrow
+ * and the list of a principal can have a membership from before migration 0032 that the room did not narrow
  * (`narrowAgentMembers`): a room narrows it when it wakes. This call wakes each room, so the answer has the
  * narrowed memberships. A room that refuses the principal, or does not have it as a member, is not in the answer.
  */

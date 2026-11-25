@@ -1298,7 +1298,7 @@ describe("directory authorization", () => {
 			address: "bob@dock.test",
 			password: PASSWORD,
 		});
-		// An agent from before migration 0031 can have narrow account scopes. Each of its keys acts with them.
+		// An agent from before migration 0032 can have narrow account scopes. Each of its keys acts with them.
 		await setLegacyScopes(bot.id, ["account.read", "mail.read"]);
 		const { api_key } = await ada.call("account.create_api_key", { principal_id: bot.id, label: "reader" });
 		expect(api_key).toMatchObject({ principal_id: bot.id, scopes: [] });

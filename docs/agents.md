@@ -43,7 +43,7 @@ A connection has no scopes. The memberships of the agent decide what it can do i
 room and shared drive. See [Access of an agent](#access-of-an-agent).
 
 An agent sees only the tools that it can call. A new agent can call each tool of its kind. An agent from
-before migration `0031` can have narrower account scopes. `account.whoami` then lists `missing_scopes`:
+before migration `0032` can have narrower account scopes. `account.whoami` then lists `missing_scopes`:
 each account scope that the agent does not hold, with the operations that no membership can give. The MCP
 instructions also name these scopes.
 
@@ -121,7 +121,7 @@ or for a key.
   This state is its read marker, its star, its drafts, its saved messages and its reminders. An agent also needs the
   account scope to leave a room, and to read a public room that it is not a member of. A new agent gets
   each scope of its kind. Nothing changes the
-  account scopes after that. An agent from before migration `0031` keeps the narrower account scopes that
+  account scopes after that. An agent from before migration `0032` keeps the narrower account scopes that
   it had, and **Access** says so. See [Resource access for agents](self-hosting.md#resource-access-for-agents).
 - **No escalation.** To create or rotate a key, or connect an app to the agent, the credential must hold
   each account scope of the agent. To create an agent, the credential must hold each agent scope.

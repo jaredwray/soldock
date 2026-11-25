@@ -363,7 +363,7 @@ once, with each of its keys, and nothing changes on its account.
   without access to the drive gets `not_found` for each list.
 - **A remove.** `drive.remove_shared_drive_member` ends the access at the next call. A grant for one item
   stays until `drive.unshare_item` removes it.
-- **Drives from before.** Before migration `0031`, a call of an agent in a drive needed the drive scope on
+- **Drives from before.** Before migration `0032`, a call of an agent in a drive needed the drive scope on
   its account too. Each drive narrows its agents one time, before its first call after the deploy
   (`narrowAgentAccess`, in `blockConcurrencyWhile` of the constructor). It reads the account scopes of each
   agent member and each agent grantee from the directory:
@@ -666,7 +666,7 @@ See the [webhook module](../webhooks/README.md).
 | Webhook events | `DriveSpaceDO` table `webhook_outbox` | The event type, the item id, the time, the member ids and the subscription sequence. No file content. The alarm deletes a row after the queue accepts it |
 | Idempotency keys | `DriveSpaceDO` table `idempotency` | Kept 24 hours, with the SHA-256 hash of the request |
 | Change counter and space id | `DriveSpaceDO` table `meta` | |
-| The one-time narrow of agents | `DriveSpaceDO` table `meta`, key `agent_access_narrowed` | Set when the drive narrowed its agent members and grants after migration `0031`, or at the first migration of a new drive. A restore keeps it |
+| The one-time narrow of agents | `DriveSpaceDO` table `meta`, key `agent_access_narrowed` | Set when the drive narrowed its agent members and grants after migration `0032`, or at the first migration of a new drive. A restore keeps it |
 | Name, creator, time of creation and `deleted_at` of a shared drive | `DriveSpaceDO` table `meta`, row `drive` | A personal drive has no such row |
 | Members of a shared drive | `DriveSpaceDO` table `members` | The principal, the role, and who added it. The source of the access. The column `added_version` and the table `limit_drops` are from the time when an agent had resource limits. Nothing uses them now. They stay, so a Worker from before that change still works after a rollback |
 | Rows of the D1 index that are behind | `DriveSpaceDO` table `index_outbox` | Rows are deleted after the write to D1 |
