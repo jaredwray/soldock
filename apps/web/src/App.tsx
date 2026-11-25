@@ -109,11 +109,9 @@ export function App() {
 				<InvitePage
 					signedInAs={state.status === "signed-in" ? state.whoami.principal.address : null}
 					onSignedIn={() => {
-						// The cookie now names the person of the link. A person who was signed in before must not stay in
-						// the app: the page loads, with nobody signed in, until the new identity arrives.
-						show({ status: "loading" });
-						leaveInvite();
-						void load(false);
+						// The cookie now names the person of the link. A load of the page from before can still wait for
+						// account.whoami with the old cookie, so a new page starts: no old answer can show the person from before.
+						window.location.replace("/");
 					}}
 					onLeave={leaveInvite}
 				/>
