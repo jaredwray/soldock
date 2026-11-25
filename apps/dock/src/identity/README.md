@@ -1,7 +1,7 @@
 # `identity` module
 
 > Status: **started**. The directory, team mailboxes, API keys with an optional lifetime, service accounts with their activity log, OAuth for agents, sign-in with a password and optional two-step
-> verification (TOTP), browser sessions for humans and first-run setup exist. Passkeys, delegated OAuth tokens for humans, groups and the audit log in R2 are not built
+> verification (TOTP), invite links for new people, browser sessions for humans and first-run setup exist. Passkeys, delegated OAuth tokens for humans, groups and the audit log in R2 are not built
 > yet. Keep this README current as the module grows. It is the module's contract.
 
 | | |
@@ -9,8 +9,8 @@
 | **Purpose** | Principals (humans, agents, service accounts, groups), directory, passkeys, sessions, API keys, OAuth authorization server, `client_credentials`, authorization (`authorize()`), agent policies, audit log, `PrincipalDO`. |
 | **Owns** | D1 `directory` tables, except `chat_rooms`, `chat_members`, `chat_custom_emoji`, `chat_incoming_webhooks`, `chat_slash_commands`, `chat_member_requests` (`chat`), `drive_share_requests` (`drive`) and `webhooks` and `chat_webhooks` (`webhooks`). `PrincipalDO` owns the Chat state, personal Chat views (activity, sections, saved messages, drafts, scheduled messages, reminders), notification settings and events sockets of each principal. Later: R2 `audit`. |
 | **Depends on** | `platform`. |
-| **Operations** | `chat.get_presence`, `chat.set_status`, `account.whoami`, `account.list_api_keys`, `account.create_api_key`, `account.revoke_api_key`, `account.rotate_api_key`, `account.end_api_key_rotation`, `account.set_password`, `account.create_totp_secret`, `account.enable_totp`, `account.disable_totp`, `directory.list_principals`, `directory.get_principals`, `directory.create_principal`, `directory.update_agent_policy`, `directory.update_principal`, `directory.archive_principal`, `directory.restore_principal`, `directory.delete_principal`, `directory.list_mail_domains`, `directory.add_mail_domain`, `directory.remove_mail_domain`, `directory.list_team_mailboxes`, `directory.create_team_mailbox`, `directory.update_team_mailbox`, `directory.add_team_mailbox_member`, `directory.remove_team_mailbox_member`, `directory.create_service_account`, `directory.list_service_account_activity`, `directory.get_member_access`, `directory.get_agent_access`, `oauth.get_authorization`, `oauth.approve_authorization`, `oauth.deny_authorization`, `oauth.list_grants`, `oauth.revoke_grant` |
-| **Data inventory** | D1 `directory`: `principals` (with `password_hash`, `totp_secret`, `totp_pending_secret`, `totp_last_step`, `sign_in_failures`, `sign_in_locked_until`, `chat_online_until`, `chat_active_until`, `chat_status_json`, `archived_at`, `deleted_at`, and the name aliases of a Chat mention `alias_first`, `alias_full` and `aliases_set`, and the name in the form of a search `name_folded`, which come from the display name, and `service`, `description` and `created_by` of [service accounts](#service-accounts), and the `agent_scopes` of each agent and service account, which apply only to its own mailbox, its own drive and the actions without a resource, and which nothing writes after the creation of the account, and `access_version`, which the Worker does not read or write, and which a later migration removes (jaredwray/soldock#211), see [Access of an agent](#access-of-an-agent); migration `0034` removed the columns `agent_resources`, `service_scopes` and `service_resources`), `addresses`, `api_keys` (with `expires_at`, `description` and `revoked_by`, and for a rotation `prev_key_hash`, `prev_expires_at`, `rotation`, `rotated_at` and `rotated_by`, `expiry_notice_at` for the notice before a token ends, `scopes`, which the Worker reads only for a key of a person since migration `0027`, and `resources`, which is not read since migration `0026`), `sessions`, `setup_lock`, `mail_domains`, `team_mailboxes` (name, address, creator), `team_mailbox_members` (mailbox, principal, who added the member, and `scopes`: what the member can do in the mailbox; migration `0033` narrowed the scopes of each agent member), `oauth_clients` (registered MCP clients: name, URI, redirect URIs), `oauth_requests` (authorization requests: client, redirect URI, state, PKCE challenge, requested scopes, approval, code hash, the grant that the code made, and `granted_scopes`, which is not read since migration `0027`), `oauth_grants` (approved connections: client, principal, approver, hashes of the access token and of the current, previous and consumed refresh tokens, and `scopes`, which is not read since migration `0027`) ([`migrations/`](../../migrations/)). The TOTP secrets are stored as plain base32 in D1, because a server must read them to check a code. Unused and empty since migration `0004`, kept for the Worker from before it: `principals.sign_in_email` and `sign_in_codes`. A later migration removes them. `PrincipalDO` (one for each principal, keyed by the principal id): tables `chat_rooms`, `chat_threads`, `chat_addressed`, `chat_activity` (with `subject_json`: the account to add or to share with, for an item of the kind `member_request` or `share_request`, and `item_json`: the Drive item, for an item of the kind `share_request`), `chat_sections`, `chat_section_rooms`, `chat_saved_messages`, `chat_drafts`, `chat_scheduled_messages`, `chat_reminders`, `chat_notification_levels`, `chat_push_devices`, and `chat_notification_sounds` (see [The object of a principal](#the-object-of-a-principal)), table `service_activity` (the activity log of a service account: at most 10,000 calls, at most 1,000 membership changes by members, its admin changes, and 90 days, see [Service accounts](#service-accounts)), table `meta` (schema version, the owner id in `presence_principal`, `chat_seeded` after the first fill, and `chat_threads_filled` after the first fill of the threads), and the hibernatable sockets of `/ws/events` (not in the database: each keeps the reference to its credential, the time of its open and of its last check, and its latest activity report; no backup). Backups: not built yet. |
+| **Operations** | `chat.get_presence`, `chat.set_status`, `account.whoami`, `account.list_api_keys`, `account.create_api_key`, `account.revoke_api_key`, `account.rotate_api_key`, `account.end_api_key_rotation`, `account.set_password`, `account.create_totp_secret`, `account.enable_totp`, `account.disable_totp`, `directory.list_principals`, `directory.get_principals`, `directory.create_principal`, `directory.create_invite`, `directory.update_agent_policy`, `directory.update_principal`, `directory.archive_principal`, `directory.restore_principal`, `directory.delete_principal`, `directory.list_mail_domains`, `directory.add_mail_domain`, `directory.remove_mail_domain`, `directory.list_team_mailboxes`, `directory.create_team_mailbox`, `directory.update_team_mailbox`, `directory.add_team_mailbox_member`, `directory.remove_team_mailbox_member`, `directory.create_service_account`, `directory.list_service_account_activity`, `directory.get_member_access`, `directory.get_agent_access`, `oauth.get_authorization`, `oauth.approve_authorization`, `oauth.deny_authorization`, `oauth.list_grants`, `oauth.revoke_grant` |
+| **Data inventory** | D1 `directory`: `principals` (with `password_hash`, `totp_secret`, `totp_pending_secret`, `totp_last_step`, `sign_in_failures`, `sign_in_locked_until`, `chat_online_until`, `chat_active_until`, `chat_status_json`, `archived_at`, `deleted_at`, and the name aliases of a Chat mention `alias_first`, `alias_full` and `aliases_set`, and the name in the form of a search `name_folded`, which come from the display name, and `service`, `description` and `created_by` of [service accounts](#service-accounts), and the `agent_scopes` of each agent and service account, which apply only to its own mailbox, its own drive and the actions without a resource, and which nothing writes after the creation of the account, and `access_version`, which the Worker does not read or write, and which a later migration removes (jaredwray/soldock#211), see [Access of an agent](#access-of-an-agent); migration `0034` removed the columns `agent_resources`, `service_scopes` and `service_resources`), `addresses`, `api_keys` (with `expires_at`, `description` and `revoked_by`, and for a rotation `prev_key_hash`, `prev_expires_at`, `rotation`, `rotated_at` and `rotated_by`, `expiry_notice_at` for the notice before a token ends, `scopes`, which the Worker reads only for a key of a person since migration `0027`, and `resources`, which is not read since migration `0026`), `sessions`, `invites` (the invite link of a person without a password: the SHA-256 of the secret, the person, who made it, and its end; at most one for each person; migration `0035`, see [Invite links](#invite-links)), `setup_lock`, `mail_domains`, `team_mailboxes` (name, address, creator), `team_mailbox_members` (mailbox, principal, who added the member, and `scopes`: what the member can do in the mailbox; migration `0033` narrowed the scopes of each agent member), `oauth_clients` (registered MCP clients: name, URI, redirect URIs), `oauth_requests` (authorization requests: client, redirect URI, state, PKCE challenge, requested scopes, approval, code hash, the grant that the code made, and `granted_scopes`, which is not read since migration `0027`), `oauth_grants` (approved connections: client, principal, approver, hashes of the access token and of the current, previous and consumed refresh tokens, and `scopes`, which is not read since migration `0027`) ([`migrations/`](../../migrations/)). The TOTP secrets are stored as plain base32 in D1, because a server must read them to check a code. Unused and empty since migration `0004`, kept for the Worker from before it: `principals.sign_in_email` and `sign_in_codes`. A later migration removes them. `PrincipalDO` (one for each principal, keyed by the principal id): tables `chat_rooms`, `chat_threads`, `chat_addressed`, `chat_activity` (with `subject_json`: the account to add or to share with, for an item of the kind `member_request` or `share_request`, and `item_json`: the Drive item, for an item of the kind `share_request`), `chat_sections`, `chat_section_rooms`, `chat_saved_messages`, `chat_drafts`, `chat_scheduled_messages`, `chat_reminders`, `chat_notification_levels`, `chat_push_devices`, and `chat_notification_sounds` (see [The object of a principal](#the-object-of-a-principal)), table `service_activity` (the activity log of a service account: at most 10,000 calls, at most 1,000 membership changes by members, its admin changes, and 90 days, see [Service accounts](#service-accounts)), table `meta` (schema version, the owner id in `presence_principal`, `chat_seeded` after the first fill, and `chat_threads_filled` after the first fill of the threads), and the hibernatable sockets of `/ws/events` (not in the database: each keeps the reference to its credential, the time of its open and of its last check, and its latest activity report; no backup). Backups: not built yet. |
 
 Public surface: `index.ts` only. Other domains must not import files from this folder directly.
 
@@ -195,8 +195,9 @@ The directory stores these fields in `chat_status_json`. Each read checks the en
 - A **service account** gives a script or a system access through the API. It is an agent row with
   `service = 1`, so mail, Drive and Chat apply each agent rule to it. The directory and
   `account.whoami` show the kind `service`. [Service accounts](#service-accounts) has the rules.
-- `directory.create_principal` gives a new human a first password and no API key (`api_key` is
-  null). The person signs in, and creates keys in Settings with `account.create_api_key`. An owner
+- `directory.create_principal` gives a new human a first password, or an invite link (`invite`) when the call
+  has no `password`, and no API key (`api_key` is null). [Invite links](#invite-links) has the rules. The
+  person signs in, and creates keys in Settings with `account.create_api_key`. An owner
   or an admin can also create a key for the person. A new agent needs `scopes`: the scopes of the
   agent, inside `AGENT_SCOPES`. The credential of the call must hold each one (`grantableScopes`). The
   agent also gets a first key, `First key`, with no scopes of its own. Its secret shows once. A human
@@ -311,7 +312,7 @@ can act on another admin. Only the owner is out of reach, as for credentials.
 - `directory.delete_principal` cannot be undone. The `principals` row stays with `deleted_at`, because
   `api_keys.created_by`, `team_mailboxes.created_by`, `team_mailbox_members.added_by` and the OAuth
   rows of other principals refer to it. One D1 transaction clears the password and the TOTP columns,
-  deletes the addresses, the sessions and the team mailbox memberships, and revokes the keys and the
+  deletes the addresses, the sessions, the invite link and the team mailbox memberships, and revokes the keys and the
   grants. So the address is free for a new principal, and inbound and local mail to it is refused.
   The same transaction deletes the subscriptions for that target, then the endpoints that the principal created
   (tables `webhook_subscriptions` and `webhook_endpoints` of the [shared webhook module](../webhooks/README.md)).
@@ -816,6 +817,7 @@ A saved domain does not verify DNS or configure Cloudflare Email Routing or Emai
 | OAuth access token `sdo_<43 base64url characters>` | Agents, through an MCP client | `Authorization: Bearer` on `/api/v1` and `/mcp`. It works for one hour. Only the SHA-256 is stored |
 | OAuth refresh token `sdr_<43 base64url characters>` | MCP clients | `POST /oauth/token`. It works for 30 days, and each refresh gives a new one. Only the SHA-256 is stored |
 | Authorization code `sdc_<43 base64url characters>` | MCP clients | `POST /oauth/token`, with the PKCE verifier. It works one time, for 60 seconds. Only the SHA-256 is stored |
+| Invite link `<origin>/invite#sdi_<43 base64url characters>` | Humans without a password | `POST /auth/invite/check` and `POST /auth/invite/accept`, from the web app. It works one time, for 7 days (`INVITE_DAYS`). Only the SHA-256 is stored. [Invite links](#invite-links) has the rules |
 | Session cookie `__Host-soldock_session` | Humans only | The web app. `Secure`, `HttpOnly`, `SameSite=Lax`, 30 days. It holds every human scope. Only the SHA-256 is stored |
 | `SETUP_TOKEN` Worker secret | The operator | `/auth/setup` only: `POST` checks it, and `GET` reports its state, never its value. At least 32 characters (`SETUP_TOKEN_MIN_LENGTH`), or setup stays off. Delete it after setup |
 
@@ -897,6 +899,8 @@ A saved domain does not verify DNS or configure Cloudflare Email Routing or Emai
   new password (`account.set_password`).
 - The sign-in route needs an `Origin` header of this origin, or it gets `403`.
 - The bodies of `/auth/*` requests can be at most 4 KiB. A larger body gets `413` while it streams.
+- `POST /auth/invite/check` (`{ token }`) and `POST /auth/invite/accept` (`{ token, password }`): the
+  page of an invite link. [Invite links](#invite-links) has the rules.
 - `POST /auth/sign-out`: deletes the session.
 
 ## OAuth for agents
@@ -1016,17 +1020,65 @@ The web app shows the QR code and the secret as text. Recovery codes do not exis
 phone, an owner or an admin turns off two-step verification for the person. The owner turns off
 their own with the API key from setup.
 
+## Invite links
+
+An owner or an admin gives a new person an invite link in place of a first password. The person opens the
+link, chooses a password, and is signed in. The code is in `invites.ts`.
+
+- `directory.create_principal` for a human without `password` returns `invite`: the link (`url`) and its end
+  (`expires_at`). The insert of the person and the insert of the invite share one transaction. A human with
+  `password` gets `invite: null`.
+- `directory.create_invite` makes a new link for a person. The rules:
+  - Owners and admins only, with a credential that holds every human scope, because the link gives a session
+    with every human scope. Nobody makes a link for the owner, also the owner from before migration `0004`, who
+    can have no password. Nobody makes a link for themselves: a signed-in person uses `account.set_password`.
+  - The person must have no password and no two-step verification, and must not be archived. Each other
+    person gets `conflict`. An agent gets `invalid`. So a link cannot replace the password of an account.
+  - The `conflict` tells the caller if the person has a password. Only owners and admins get it, and they
+    can already set that password.
+  - A new link replaces the earlier link of the person, in one transaction. A refused call keeps the earlier
+    link.
+- The link is `<origin>/invite#sdi_<43 base64url characters>`. The secret is after the `#`, so the browser
+  does not send it with the request for the page, and it is not in a server log. The result shows the link
+  once. Only the SHA-256 of the secret is stored, in `invites`, at most one row for each person.
+- A link works one time, for 7 days (`INVITE_DAYS`).
+- The page of the link sends the secret in the body of `POST /auth/invite/check` (`{ token }`). The answer
+  is the name and the address of the person, and the end of the link. The page then sends
+  `POST /auth/invite/accept` (`{ token, password }`). The password has the rules of `Password`.
+- A link that does not work gets the same `404`: an unknown or used secret, an expired link, a link that a
+  new link replaced, and a person who got a password, turned on two-step verification, or was archived or
+  deleted. The accept looks up the link before it hashes the password, so such a link costs no password
+  derivation. Both routes need an `Origin` header of this origin, or they get `403`.
+- The accept sets the password, ends the other sessions of the person, creates a new session, and deletes
+  the invite, in one D1 transaction. The write matches only while the invite is live and the person can
+  still use it. So a password, a new link or an archive during the request makes the accept fail and makes
+  no session, and a secret works one time. The response sets the session cookie.
+- `account.set_password` deletes the invite of the person, in its transaction. `directory.delete_principal`
+  deletes it too. An archive keeps it. It does not work while the person is archived, and works again after a
+  restore until its end, as the keys of the person do.
+- `directory.create_invite` writes an audit line. A success of the accept writes an `auth.accept_invite` line
+  with the credential `invite`.
+- Known limit: a link stays live when the owner or the admin who made it loses that role, is archived or is
+  deleted. That person can keep a copy of the link and use it until its end or its use. A first password from
+  an admin has the same limit, without the end. `created_by` is a record only.
+- Known limit: the accept does not end a session of a different person that the browser holds. The new
+  cookie replaces the old one, as with a sign-in, and the old session stays until its end.
+- Not built yet: an operation that stops a link without a new link, a list of the links that wait, a mail with
+  the link, and a link that resets the password of a person who has one.
+
 ## Recovery
 
 - A person who forgot the password asks an owner or an admin (`account.set_password` with
   `principal_id`).
+- A person who did not set a password yet, for example after the invite link expired, asks an owner or an
+  admin for a new invite link (`directory.create_invite`).
 - The owner sets a new password with a credential that holds every human scope, for example the API
   key from setup.
 - The operator can still start fresh with `SETUP_TOKEN`, which deletes the directory.
 - Upgrade: after migration `0004`, people keep their addresses, keys and sessions, but they have no
   password. While `sign_in.password_set` is false, the web app shows a notice in each page and in
   Settings. A person in a kept session sets a password there. The owner can also use the API key
-  from setup, and then set passwords for the others.
+  from setup, and then set passwords for the others, or send each of them an invite link.
 - Migration `0004` keeps the old Worker working, because the deploy applies migrations while the
   old Worker runs. The old Worker reads `sign_in_email` and writes `sign_in_codes`, so both stay,
   empty. The old Worker then sends no code, but sessions and API keys keep working, also after a
@@ -1064,7 +1116,7 @@ Each call passes three checks:
      need a credential that holds each scope of the agent.
    - A sign-in gives a session with every human scope. So only a credential that holds every human
      scope can change how a person signs in: `account.set_password`, `account.create_totp_secret`,
-     `account.enable_totp`, `account.disable_totp`, and `directory.create_principal` for a human. A
+     `account.enable_totp`, `account.disable_totp`, `directory.create_invite`, and `directory.create_principal` for a human. A
      narrow key cannot become a full session or lock a person out.
    - Only the person turns on their own two-step verification: the TOTP operations that make or
      check a secret take no `principal_id`.

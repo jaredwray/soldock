@@ -1,7 +1,7 @@
 import { EmailAddress, ID_CHARS, prefixedId, Timestamp } from "./common.ts";
 import { defineOperation } from "./operation.ts";
 import { ALL_SCOPES, type Scope } from "./scopes.ts";
-import { PASSWORD_MAX_LENGTH, Password, TotpCode } from "./signin.ts";
+import { INVITE_DAYS, PASSWORD_MAX_LENGTH, Password, TotpCode } from "./signin.ts";
 import { z } from "./zod.ts";
 
 const PrincipalId = prefixedId("prn");
@@ -131,6 +131,19 @@ export type ApiKey = z.infer<typeof ApiKey>;
 /** A new key. The secret is returned once and is never stored in clear text. */
 export const CreatedApiKey = ApiKey.extend({ secret: z.string() });
 export type CreatedApiKey = z.infer<typeof CreatedApiKey>;
+
+/**
+ * An invite link for a person who has no password yet. The person opens it, chooses a password, and is signed
+ * in. It works one time, until `expires_at`. The secret is after the `#` of `url`, and it shows only once.
+ */
+export const Invite = z.object({ url: z.string(), expires_at: Timestamp });
+export type Invite = z.infer<typeof Invite>;
+
+/** The rules of an invite link, for the operations that make one. */
+const INVITE_RULES = [
+	`An invite link works one time, for ${INVITE_DAYS} days. The person opens it, chooses a password, and is signed in.`,
+	"Anyone with the link can set the password of the account, so send it to the person only. The link shows only once.",
+];
 
 const READ = { readOnly: true, destructive: false, idempotent: true, openWorld: false } as const;
 
@@ -295,7 +308,8 @@ export const createPrincipal = defineOperation({
 	summary: "Create a person or an agent, with a mailbox. An agent also gets a first API key",
 	description: [
 		"Owners and admins only. Creates a human or an agent with an address on one of the mail domains of the deployment.",
-		"A human needs a first password and signs in with the address and the password. Give the password to the person, who can change it in Settings. An agent has no password.",
+		"For a human, send a first password, or leave it out to get an invite link (invite) instead. Give the password or the link to the person, who signs in with the address and the password. An agent has no password.",
+		...INVITE_RULES,
 		"A human gets no API key. The person can create keys in Settings after the sign-in.",
 		"An agent gets a sponsor (the caller by default), the internal-only outbound policy, and each agent scope for its own mailbox, its own drive and the actions that have no mailbox, room or drive.",
 		"A new agent reaches its own mailbox and its own drive. It reaches a team mailbox, a shared drive and a room when it is a member, as a person does. Its membership says what it can do there. Change a membership in the settings of that mailbox, drive or room. An API key and an OAuth connection of the agent only prove its identity.",
@@ -312,12 +326,8 @@ export const createPrincipal = defineOperation({
 			address: EmailAddress,
 			org_role: z.enum(["admin", "member"]).optional(),
 			sponsor_id: PrincipalId.optional(),
-			/** The first password. Required for a human. An agent has none. */
+			/** The first password of a human. Without it, a human gets an invite link. An agent has none. */
 			password: Password.optional(),
-		})
-		.refine((input) => input.kind !== "human" || input.password !== undefined, {
-			message: "a human needs a password",
-			path: ["password"],
 		})
 		.refine((input) => input.kind !== "agent" || input.password === undefined, {
 			message: "an agent has no password",
@@ -327,7 +337,27 @@ export const createPrincipal = defineOperation({
 		principal: Principal,
 		/** The first API key of an agent. Null for a human. */
 		api_key: CreatedApiKey.nullable(),
+		/** The invite link of a human without a password. Null for a human with a password, and for an agent. */
+		invite: Invite.nullable(),
 	}),
+	errors: ["conflict", "not_found"],
+});
+
+export const createInvite = defineOperation({
+	name: "directory.create_invite",
+	summary: "Make a new invite link for a person who has no password yet",
+	description: [
+		"Owners and admins only, with a credential that holds every human scope, because the link gives a sign-in. Nobody makes a link for the owner or for themselves.",
+		"The person must have no password and no two-step verification, and must not be archived. For a person with a password, use account.set_password.",
+		"A new link replaces the earlier link of the person: the earlier link stops.",
+		...INVITE_RULES,
+	].join(" "),
+	http: { method: "POST", path: "/api/v1/directory/principals/{principal_id}/invite" },
+	scopes: ["directory.write"],
+	callers: ["human"],
+	annotations: { readOnly: false, destructive: false, idempotent: false, openWorld: false },
+	input: z.strictObject({ principal_id: PrincipalId }),
+	output: z.object({ invite: Invite }),
 	errors: ["conflict", "not_found"],
 });
 
@@ -843,6 +873,7 @@ export const directoryOperations = {
 	"directory.list_principals": listPrincipals,
 	"directory.get_principals": getPrincipals,
 	"directory.create_principal": createPrincipal,
+	"directory.create_invite": createInvite,
 	"directory.update_agent_policy": updateAgentPolicy,
 	"directory.update_principal": updatePrincipal,
 	"directory.archive_principal": archivePrincipal,

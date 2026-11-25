@@ -25,6 +25,7 @@ import {
 	recordServiceChange,
 } from "./access.ts";
 import type { AuthContext, CallContext } from "./auth.ts";
+import { insertInvite, inviteUrl, type NewInvite, newInvite, replaceInvite } from "./invites.ts";
 import { oauthHandlers } from "./oauth-handlers.ts";
 import { toApiKeyOutput, toPrincipalOutput } from "./output.ts";
 import { hashPassword } from "./password.ts";
@@ -92,6 +93,7 @@ type IdentityOperation =
 	| "directory.list_principals"
 	| "directory.get_principals"
 	| "directory.create_principal"
+	| "directory.create_invite"
 	| "directory.list_mail_domains"
 	| "directory.add_mail_domain"
 	| "directory.remove_mail_domain"
@@ -247,8 +249,14 @@ async function principalToManage(call: CallContext, principalId: string, action:
 /**
  * Nobody archives or deletes the owner or themselves, so the organization always keeps its owner and the
  * caller. Only a credential with every human scope can do it, so a narrow key cannot lock people out.
+ * Nobody makes an invite link for the owner or themselves either: a link is a bearer credential, and the owner
+ * from before migration 0004 can have no password.
  */
-function assertRemovable(call: CallContext, target: PrincipalRecord, action: "archive" | "delete"): void {
+function assertNotOwnerOrSelf(
+	call: CallContext,
+	target: PrincipalRecord,
+	action: "archive" | "delete" | "make an invite link for",
+): void {
 	if (target.org_role === "owner") throw new OperationError("forbidden", `Nobody can ${action} the owner.`);
 	if (target.id === call.caller.principal.id) throw new OperationError("forbidden", `You cannot ${action} yourself.`);
 	assertFullCredential(call.caller);
@@ -308,6 +316,11 @@ function liveSession(call: CallContext): string | null {
 }
 
 const SESSION_ENDED = "This session ended during the request. Sign in again.";
+
+/** The invite of the result: the link on the origin of the request, with the secret after the `#`. */
+function inviteOutput(call: CallContext, invite: NewInvite) {
+	return { url: inviteUrl(call.origin, invite), expires_at: invite.expiresAt };
+}
 
 export const identityHandlers: Pick<HandlerMap<CallContext>, IdentityOperation | keyof typeof oauthHandlers> = {
 	...oauthHandlers,
@@ -405,9 +418,11 @@ export const identityHandlers: Pick<HandlerMap<CallContext>, IdentityOperation |
 			await liveSponsor(call, sponsorId);
 		} else {
 			if (input.sponsor_id) throw new OperationError("invalid", "Only an agent has a sponsor.");
-			if (!input.password) throw new OperationError("invalid", "A person needs a password to sign in.");
+			// A first password and an invite link each give a sign-in with every human scope.
 			assertFullCredential(call.caller);
 		}
+		// A person without a first password gets an invite link, in the transaction of the insert.
+		const invite = input.kind === "human" && !input.password ? await newInvite() : null;
 		// A new agent gets each agent scope for its own mailbox, its own drive and the actions that have no
 		// mailbox, room or drive. Its memberships decide the rest. A narrow key cannot make an account that does
 		// more than the key, so the credential of the call must hold each one, as for a new key.
@@ -430,8 +445,13 @@ export const identityHandlers: Pick<HandlerMap<CallContext>, IdentityOperation |
 				agent_scopes: agentScopes,
 			},
 			firstKey,
-			// A sponsor archived or deleted during the request must not get a new agent.
-			sponsorId ? { liveSponsorId: sponsorId } : {},
+			{
+				// A sponsor archived or deleted during the request must not get a new agent.
+				...(sponsorId ? { liveSponsorId: sponsorId } : {}),
+				...(invite
+					? { afterCreate: (id: string) => [insertInvite(call.env.DIRECTORY, invite, id, call.caller.principal.id)] }
+					: {}),
+			},
 		);
 		if (!created) {
 			throw new OperationError(
@@ -446,7 +466,37 @@ export const identityHandlers: Pick<HandlerMap<CallContext>, IdentityOperation |
 				created.key === null || created.secret === null
 					? null
 					: { ...toApiKeyOutput(created.key, created.principal), secret: created.secret },
+			invite: invite ? inviteOutput(call, invite) : null,
 		};
+	},
+
+	async "directory.create_invite"(call, input) {
+		if (!isAdmin(call.caller)) throw new OperationError("forbidden", "Only owners and admins can make an invite link.");
+		// An admin manages the sign-in of others, except the owner's.
+		const target = await credentialOwner(call, input.principal_id);
+		assertNotOwnerOrSelf(call, target, "make an invite link for");
+		if (target.kind !== "human") throw new OperationError("invalid", "Only a person signs in with a password.");
+		if (target.archived_at !== null) {
+			throw new OperationError("conflict", "This person is archived. Restore the person first.");
+		}
+		if (target.password_set) {
+			throw new OperationError(
+				"conflict",
+				"This person has a password. To help them sign in, set a new password with account.set_password.",
+			);
+		}
+		if (target.totp_enabled) {
+			throw new OperationError(
+				"conflict",
+				"Two-step verification is on for this person. Turn it off with account.disable_totp first.",
+			);
+		}
+		const invite = await newInvite();
+		if (!(await replaceInvite(call.env.DIRECTORY, invite, target.id, call.caller.principal.id))) {
+			throw new OperationError("conflict", DIRECTORY_CHANGED);
+		}
+		auditOk(call, "directory.create_invite", target.id);
+		return { invite: inviteOutput(call, invite) };
 	},
 
 	async "directory.create_service_account"(call, input) {
@@ -582,7 +632,7 @@ export const identityHandlers: Pick<HandlerMap<CallContext>, IdentityOperation |
 
 	async "directory.archive_principal"(call, input) {
 		const target = await principalToManage(call, input.principal_id, "archive");
-		assertRemovable(call, target, "archive");
+		assertNotOwnerOrSelf(call, target, "archive");
 		// An archived person could still act through the keys of an agent that they sponsor.
 		const agents = await countSponsoredAgents(call.env.DIRECTORY, target.id, { activeOnly: true });
 		if (agents > 0) throw new OperationError("conflict", sponsoredText(target.display_name, agents, "archive"));
@@ -616,7 +666,7 @@ export const identityHandlers: Pick<HandlerMap<CallContext>, IdentityOperation |
 
 	async "directory.delete_principal"(call, input) {
 		const target = await principalToManage(call, input.principal_id, "delete");
-		assertRemovable(call, target, "delete");
+		assertNotOwnerOrSelf(call, target, "delete");
 		const agents = await countSponsoredAgents(call.env.DIRECTORY, target.id);
 		if (agents > 0) throw new OperationError("conflict", sponsoredText(target.display_name, agents, "delete"));
 		if (!(await deletePrincipal(call.env.DIRECTORY, target.id)))

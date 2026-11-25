@@ -717,6 +717,229 @@ describe("passwords", () => {
 	});
 });
 
+/** The secret of an invite link: the part after the `#`. */
+function tokenOf(invite: { url: string } | null): string {
+	const token = invite?.url.split("#")[1];
+	if (!token) throw new Error(`no invite token in ${JSON.stringify(invite)}`);
+	return token;
+}
+
+/** Sends a request of the invite page, as the web app does. */
+function inviteRequest(path: "check" | "accept", body: unknown, origin: string | null = ORIGIN) {
+	return request(`/auth/invite/${path}`, {
+		method: "POST",
+		headers: { "content-type": "application/json", ...(origin ? { origin } : {}) },
+		body: JSON.stringify(body),
+	});
+}
+
+/** The number of invite links that the directory keeps for a principal. */
+function invitesOf(principalId: string) {
+	return env.DIRECTORY.prepare("SELECT COUNT(*) AS count FROM invites WHERE principal_id = ?")
+		.bind(principalId)
+		.first("count");
+}
+
+describe("invite links", () => {
+	const NEW_PASSWORD = "grace's own long password";
+
+	// The link replaces a first password that the admin chooses: the person chooses it, and the link works once.
+	it("gives a new person without a password a link, which sets the password and signs the person in, one time", async () => {
+		const owner = await setupOwner();
+		const before = Date.now();
+		const created = await owner.call("directory.create_principal", {
+			kind: "human",
+			display_name: "Grace Hopper",
+			address: "grace@dock.test",
+		});
+		expect(created.api_key).toBeNull();
+		expect(created.invite?.url).toMatch(/^https:\/\/dock\.test\/invite#sdi_[A-Za-z0-9_-]{43}$/);
+		const days = (Date.parse(created.invite?.expires_at ?? "") - before) / (24 * 60 * 60 * 1000);
+		expect(days).toBeGreaterThanOrEqual(7);
+		expect(days).toBeLessThan(7.01);
+		const token = tokenOf(created.invite);
+		// The person has no password until the link sets one.
+		await refusal(await submitSignIn("grace@dock.test", NEW_PASSWORD));
+
+		const check = await inviteRequest("check", { token });
+		expect(check.status).toBe(200);
+		expect(await check.json()).toEqual({
+			display_name: "Grace Hopper",
+			address: "grace@dock.test",
+			expires_at: created.invite?.expires_at,
+		});
+		expect((await inviteRequest("accept", { token, password: "too short" })).status).toBe(400);
+		for (const origin of ["https://evil.example", null]) {
+			expect((await inviteRequest("check", { token }, origin)).status).toBe(403);
+			expect((await inviteRequest("accept", { token, password: NEW_PASSWORD }, origin)).status).toBe(403);
+		}
+
+		const accepted = await inviteRequest("accept", { token, password: NEW_PASSWORD });
+		expect(accepted.status).toBe(200);
+		expect(await accepted.json()).toEqual({ status: "signed_in" });
+		expect(accepted.headers.get("set-cookie")).toMatch(SESSION_COOKIE);
+		const whoami = await request("/api/v1/account", { headers: { cookie: cookieOf(accepted) } });
+		const body = (await whoami.json()) as { principal: { id: string }; scopes: string[]; sign_in: unknown };
+		expect(body).toMatchObject({
+			principal: { id: created.principal.id },
+			sign_in: { password_set: true, totp_enabled: false },
+		});
+		expect(body.scopes.sort()).toEqual([...ALL_SCOPES].sort());
+		await signIn("grace@dock.test", NEW_PASSWORD);
+
+		// The link works one time. Each link that does not work gets the same answer.
+		const used = await inviteRequest("accept", { token, password: "a different password" });
+		expect(used.status).toBe(404);
+		expect(used.headers.get("set-cookie")).toBeNull();
+		const unknown = await inviteRequest("check", { token: `sdi_${"A".repeat(43)}` });
+		expect(unknown.status).toBe(404);
+		expect(((await unknown.json()) as { detail: string }).detail).toBe(
+			((await used.json()) as { detail: string }).detail,
+		);
+		expect((await inviteRequest("check", { token })).status).toBe(404);
+		expect((await inviteRequest("check", { token: "sdk_not-an-invite" })).status).toBe(400);
+		await signIn("grace@dock.test", NEW_PASSWORD);
+		expect(await invitesOf(created.principal.id)).toBe(0);
+	});
+
+	// The link gives a session with every human scope, so it has the rules of a first password. An admin cannot
+	// use it to take over an account that has a password.
+	it("lets owners and admins make a new link that replaces the earlier one, for a person without a password only", async () => {
+		const { owner, ada, bot } = await seedOrg();
+		const admin = await createActor(owner, {
+			kind: "human",
+			display_name: "Ann",
+			address: "ann@dock.test",
+			org_role: "admin",
+			password: PASSWORD,
+		});
+		const { principal, invite: first } = await admin.call("directory.create_principal", {
+			kind: "human",
+			display_name: "Grace",
+			address: "grace@dock.test",
+		});
+		const { invite: second } = await admin.call("directory.create_invite", { principal_id: principal.id });
+		expect((await inviteRequest("check", { token: tokenOf(first) })).status).toBe(404);
+		expect((await inviteRequest("check", { token: tokenOf(second) })).status).toBe(200);
+		// MCP gives the same operation, with the same rules.
+		const tool = await callTool(owner.key, "directory_create_invite", { principal_id: principal.id });
+		const third = (tool.structuredContent as { invite: { url: string } }).invite;
+		expect((await inviteRequest("check", { token: tokenOf(second) })).status).toBe(404);
+		expect((await inviteRequest("check", { token: tokenOf(third) })).status).toBe(200);
+		expect(await invitesOf(principal.id)).toBe(1);
+
+		const invite = (principalId: string, caller = admin) =>
+			caller.call("directory.create_invite", { principal_id: principalId });
+		expect(await denied(invite(ada.id))).toBe("conflict");
+		expect(await denied(invite(bot.id))).toBe("invalid");
+		expect(await denied(invite(owner.id))).toBe("forbidden");
+		expect(await denied(invite(principal.id, ada))).toBe("forbidden");
+		expect(await denied(bot.call("directory.create_invite", { principal_id: principal.id }))).toBe("forbidden");
+		const { api_key } = await owner.call("account.create_api_key", {
+			label: "directory only",
+			scopes: ["directory.read", "directory.write"],
+		});
+		const narrow = api(api_key.secret);
+		expect(await denied(narrow("directory.create_invite", { principal_id: principal.id }))).toBe("forbidden");
+		expect(
+			await denied(
+				narrow("directory.create_principal", { kind: "human", display_name: "Mal", address: "mal@dock.test" }),
+			),
+		).toBe("forbidden");
+		// A refused link keeps the earlier link.
+		expect((await inviteRequest("check", { token: tokenOf(third) })).status).toBe(200);
+		expect((await owner.call("directory.list_principals", { query: "mal" })).principals).toEqual([]);
+	});
+
+	it("stops the link at its end, after a new password, while the person is archived, and after a delete", async () => {
+		const owner = await setupOwner();
+		const create = async (local: string) =>
+			owner.call("directory.create_principal", { kind: "human", display_name: local, address: `${local}@dock.test` });
+
+		const late = await create("late");
+		await env.DIRECTORY.prepare("UPDATE invites SET expires_at = ? WHERE principal_id = ?")
+			.bind(new Date(Date.now() - 1).toISOString(), late.principal.id)
+			.run();
+		expect((await inviteRequest("check", { token: tokenOf(late.invite) })).status).toBe(404);
+		expect((await inviteRequest("accept", { token: tokenOf(late.invite), password: NEW_PASSWORD })).status).toBe(404);
+		// A new link works again.
+		const again = await owner.call("directory.create_invite", { principal_id: late.principal.id });
+		expect((await inviteRequest("check", { token: tokenOf(again.invite) })).status).toBe(200);
+
+		// A password that an admin sets makes the link useless, so it goes.
+		const reset = await create("reset");
+		await owner.call("account.set_password", { principal_id: reset.principal.id, password: PASSWORD });
+		expect((await inviteRequest("check", { token: tokenOf(reset.invite) })).status).toBe(404);
+		expect(await invitesOf(reset.principal.id)).toBe(0);
+		await signIn("reset@dock.test");
+
+		// An archived person cannot sign in. A restore gives the link back while it has not expired, as it gives back the keys.
+		const away = await create("away");
+		await owner.call("directory.archive_principal", { principal_id: away.principal.id });
+		expect((await inviteRequest("check", { token: tokenOf(away.invite) })).status).toBe(404);
+		expect((await inviteRequest("accept", { token: tokenOf(away.invite), password: NEW_PASSWORD })).status).toBe(404);
+		expect(await denied(owner.call("directory.create_invite", { principal_id: away.principal.id }))).toBe("conflict");
+		await owner.call("directory.restore_principal", { principal_id: away.principal.id });
+		expect((await inviteRequest("check", { token: tokenOf(away.invite) })).status).toBe(200);
+
+		const gone = await create("gone");
+		await owner.call("directory.delete_principal", { principal_id: gone.principal.id });
+		expect((await inviteRequest("check", { token: tokenOf(gone.invite) })).status).toBe(404);
+		expect(await invitesOf(gone.principal.id)).toBe(0);
+	});
+
+	// A person from before migration 0004 has no password and can keep a session. The link sets a password, so it
+	// ends the sessions from before, as each new password does. The owner and the caller never get a link: a leaked
+	// link must not give the owner account.
+	it("gives a person without a password from before the upgrade a link, which ends the sessions from before", async () => {
+		const { owner, ada } = await seedOrg();
+		const admin = await createActor(owner, {
+			kind: "human",
+			display_name: "Ann",
+			address: "ann@dock.test",
+			org_role: "admin",
+		});
+		await env.DIRECTORY.prepare("UPDATE principals SET password_hash = NULL WHERE id = ?").bind(owner.id).run();
+		expect(await denied(owner.call("directory.create_invite", { principal_id: owner.id }))).toBe("forbidden");
+		expect(await denied(admin.call("directory.create_invite", { principal_id: owner.id }))).toBe("forbidden");
+		expect(await denied(admin.call("directory.create_invite", { principal_id: admin.id }))).toBe("forbidden");
+		const old = await signIn(ada.address);
+		await env.DIRECTORY.prepare("UPDATE principals SET password_hash = NULL WHERE id = ?").bind(ada.id).run();
+		const { invite } = await owner.call("directory.create_invite", { principal_id: ada.id });
+		const accepted = await inviteRequest("accept", { token: tokenOf(invite), password: NEW_PASSWORD });
+		expect(accepted.status).toBe(200);
+		expect((await request("/api/v1/account", { headers: { cookie: old } })).status).toBe(401);
+		expect((await request("/api/v1/account", { headers: { cookie: cookieOf(accepted) } })).status).toBe(200);
+	});
+
+	// A password, a new link or an archive can land while the accept hashes the password. The accept must not
+	// then set a second password or make a session.
+	it.each([
+		{ race: "an admin set a password", change: "UPDATE principals SET password_hash = 'changed' WHERE id = ?" },
+		{ race: "a new link replaced it", change: "UPDATE invites SET token_hash = 'replaced' WHERE principal_id = ?" },
+		{
+			race: "the person was archived",
+			change: "UPDATE principals SET archived_at = '2026-01-01T00:00:00.000Z' WHERE id = ?",
+		},
+	])("refuses the accept and makes no session when $race during the request", async ({ change }) => {
+		const owner = await setupOwner();
+		const { principal, invite } = await owner.call("directory.create_principal", {
+			kind: "human",
+			display_name: "Grace",
+			address: "grace@dock.test",
+		});
+		const res = await withEnv({ DIRECTORY: racing(change, principal.id) }, "/auth/invite/accept", {
+			method: "POST",
+			headers: { origin: ORIGIN, "content-type": "application/json" },
+			body: JSON.stringify({ token: tokenOf(invite), password: NEW_PASSWORD }),
+		});
+		expect(res.status).toBe(404);
+		expect(res.headers.get("set-cookie")).toBeNull();
+		expect(await env.DIRECTORY.prepare("SELECT COUNT(*) AS count FROM sessions").first("count")).toBe(0);
+		await refusal(await submitSignIn("grace@dock.test", NEW_PASSWORD));
+	});
+});
+
 describe("sessions that end during a change", () => {
 	// A reset by an admin ends the sessions of a person. A slow request from one of those sessions must
 	// not commit after it, or the holder of a stolen session chooses the new sign-in.
@@ -1188,8 +1411,7 @@ describe("directory authorization", () => {
 		expect(await denied(create("x@not-ours.example"))).toBe("invalid");
 		expect(await denied(create("x+tag@dock.test"))).toBe("invalid");
 		expect(await denied(create("HELPER@dock.test"))).toBe("conflict");
-		// A person needs a password of at least 12 characters. An agent has none.
-		expect(await denied(create("x@dock.test", null))).toBe("invalid");
+		// A first password has at least 12 characters. An agent has none. A person without one gets an invite link.
 		expect(await denied(create("x@dock.test", "eleven char"))).toBe("invalid");
 		expect(
 			await denied(
