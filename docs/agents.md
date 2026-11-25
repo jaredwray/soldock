@@ -586,8 +586,8 @@ operations that the web app uses.
   3. Call `drive_list_share_requests` to see your requests that wait. A request that is not in the list
      has its answer. `drive_list_permissions` then tells if the account has the grant.
 
-  An item has at most 20 requests at the same time: the next one gets `conflict`. You share an item with
-  a person with `drive_share_item`, as before.
+  An item has at most 20 requests at the same time, and you have at most 100 across all items: the next
+  one gets `conflict`. You share an item with a person with `drive_share_item`, as before.
 - **Your own drive only.** Move, trash, restore, delete and share work in your own drive, and in a
   shared drive when your role lets you. An editor of an item of somebody else can change its content
   and its name, and add items to a folder.
@@ -649,7 +649,16 @@ So a person who manages that account must agree.
   `message_id` has the id of the request, and `item` has the item and the role.
 - **Share it yourself.** When you share an item with an agent that you manage, it gets the same drive
   scopes. The result of `drive.share_item` shows each change in `agent_access_changes`.
-- A request stays until a person answers it. An item has at most 20 requests at the same time.
+- A request stays until a person answers it. An item has at most 20 requests at the same time, and one
+  agent has at most 100.
+- **What a person decides.** A person decides one grant, not each item that the grant reaches later.
+  - A grant on a folder covers each item that the folder holds, also an item that the agent puts there
+    later.
+  - An agent that is an editor of a shared drive can move its own item there. Each member of the drive,
+    also an agent, then reaches the item.
+  - An agent that posts a file in a room gives each member of the room, also an agent, access to the file.
+  - In each case a person decided the container: the grant on the folder, the membership of the drive, or
+    the membership of the room.
 
 ## Chat
 

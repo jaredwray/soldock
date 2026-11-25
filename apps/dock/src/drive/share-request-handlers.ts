@@ -11,20 +11,21 @@ import {
 	type PrincipalRecord,
 	recordServiceMemberships,
 } from "../identity/index.ts";
-import { type HandlerMap, log, OperationError } from "../platform/index.ts";
-import { accept, actorOf, auditOk, openSpace, spaceOf } from "./access.ts";
+import { audit, type HandlerMap, log, OperationError } from "../platform/index.ts";
+import { accept, actorOf, auditOk, type OpenSpace, openSpace, spaceOf } from "./access.ts";
 import {
 	createShareRequest,
 	deleteShareRequest,
 	getShareRequest,
 	listShareRequestsBy,
 	listShareRequestsFor,
+	restoreShareRequest,
 	type ShareRequestRow,
 	setShareRequestNotified,
 	shareRequestActivityId,
 	toShareRequest,
 } from "./share-requests.ts";
-import type { PermissionRecord } from "./space.ts";
+import type { PermissionRecord, Refusal } from "./space.ts";
 
 type ShareRequestOperation =
 	| "drive.share_item"
@@ -34,6 +35,21 @@ type ShareRequestOperation =
 	| "drive.deny_share_request";
 
 const NO_REQUEST = "No request has that id, or you cannot decide it.";
+
+/** The audit line of a call that changed state and then failed, as `auditOk` writes a call that succeeded. */
+function auditFailed(call: CallContext, opened: OpenSpace, op: string, target: string): void {
+	audit({
+		op,
+		actor: call.caller.id,
+		actorKind: call.caller.kind,
+		credential: call.caller.credential,
+		target,
+		...(opened.own ? {} : { space: opened.spaceId }),
+		result: "error",
+		code: "conflict",
+		requestId: call.requestId,
+	});
+}
 
 function toActor(principal: PrincipalRecord) {
 	return { principal_id: principal.id, kind: principal.kind, display_name: principal.display_name };
@@ -60,7 +76,12 @@ function agentToAgent(call: CallContext, target: PrincipalRecord): boolean {
 }
 
 /** Puts a request into the activity list of the person who decides it. A second call changes nothing. */
-async function notifyDecider(call: CallContext, request: ShareRequestRow, target: PrincipalRecord): Promise<void> {
+async function notifyDecider(
+	call: CallContext,
+	request: ShareRequestRow,
+	target: PrincipalRecord,
+	actor: ReturnType<typeof actorOf>,
+): Promise<void> {
 	if (request.notified_id === null) return;
 	await call.env.PRINCIPAL.get(call.env.PRINCIPAL.idFromName(request.notified_id)).recordChatActivity([
 		{
@@ -73,7 +94,7 @@ async function notifyDecider(call: CallContext, request: ShareRequestRow, target
 			parent_id: null,
 			seq: 0,
 			parent_seq: null,
-			actor: actorOf(call),
+			actor,
 			emoji: null,
 			preview: `Asks to share ${request.item_name} with ${target.display_name}`,
 			// The agent that asked chose the name of the item, and an agent chose the name of each account.
@@ -167,12 +188,12 @@ export const driveShareRequestHandlers: Pick<HandlerMap<CallContext>, ShareReque
 				role: input.role,
 				notifiedId: decider,
 			},
-			DRIVE_LIMITS.shareRequestsPerItem,
+			{ perItem: DRIVE_LIMITS.shareRequestsPerItem, perAgent: DRIVE_LIMITS.shareRequestsPerAgent },
 		);
 		if (!stored) {
 			throw new OperationError(
 				"conflict",
-				`This item has ${DRIVE_LIMITS.shareRequestsPerItem} requests that wait for an answer, the most. Try again after a person decides one.`,
+				`This item has ${DRIVE_LIMITS.shareRequestsPerItem} requests that wait for an answer, or you have ${DRIVE_LIMITS.shareRequestsPerAgent}, the most. Try again after a person decides one.`,
 			);
 		}
 		// The line comes first: the request is in the directory, so the log must have it when a later step fails.
@@ -186,7 +207,7 @@ export const driveShareRequestHandlers: Pick<HandlerMap<CallContext>, ShareReque
 		}
 		// Each call sends the item again. The write has the id of the request, so a second one changes nothing,
 		// and it completes a write that failed.
-		await notifyDecider(call, request, target);
+		await notifyDecider(call, request, target, actorOf(call));
 		return { request: toShareRequest(request), created: stored.created };
 	},
 
@@ -213,27 +234,43 @@ export const driveShareRequestHandlers: Pick<HandlerMap<CallContext>, ShareReque
 		// The delete of the request is the decision. Only one answer deletes it, so a denial and an approval at
 		// the same time cannot both succeed. The drive writes the grant only after the approval won.
 		if (!(await removeShareRequest(call, request))) throw new OperationError("not_found", NO_REQUEST);
-		const requester = await getPrincipal(call.env.DIRECTORY, request.requested_by);
-		if (!requester || requester.archived_at !== null) {
-			throw new OperationError("conflict", "The agent that asked is archived or deleted. The request is gone.");
-		}
-		// The policy of the agent that asked can lose drive.share after the request. Then it cannot share the item.
-		if (!requester.agent_scopes.includes("drive.share")) {
-			throw new OperationError("conflict", "The agent that asked no longer holds drive.share. The request is gone.");
-		}
-		// The drive writes the grant as the agent that asked, so it must still be able to share the item.
 		const opened = spaceOf(call, request.space_id);
-		const shared = await opened.space.share(
-			{ spaceId: request.space_id, actor: toActor(requester) },
-			request.item_id,
-			target.id,
-			request.role,
-		);
-		if ("error" in shared) {
-			// The item is gone or in the trash, or the agent that asked cannot share it now.
-			throw new OperationError("conflict", `${shared.error.message} The request is gone.`);
+		const line = `${request.item_id}:${target.id}:${request.role}`;
+		// The request is gone after each of these refusals. The log keeps the person who removed it.
+		const gone = (message: string): OperationError => {
+			auditFailed(call, opened, "drive.approve_share_request", line);
+			return new OperationError("conflict", `${message} The request is gone.`);
+		};
+		const asker = await getPrincipal(call.env.DIRECTORY, request.requested_by);
+		if (!asker || asker.archived_at !== null) throw gone("The agent that asked is archived or deleted.");
+		// The policy of the agent that asked can lose drive.share after the request. Then it cannot share the item.
+		if (!asker.agent_scopes.includes("drive.share")) throw gone("The agent that asked no longer holds drive.share.");
+		// The drive writes the grant as the agent that asked, so it must still be able to share the item.
+		let shared: PermissionRecord | Refusal;
+		try {
+			shared = await opened.space.share(
+				{ spaceId: request.space_id, actor: toActor(asker) },
+				request.item_id,
+				target.id,
+				request.role,
+			);
+		} catch (error) {
+			// The drive did not answer, so nobody decided. The request and its activity item come back, and the
+			// person can approve again.
+			try {
+				await restoreShareRequest(call.env.DIRECTORY, request);
+				await notifyDecider(call, request, target, toActor(asker));
+			} catch (restoreError) {
+				// The agent can ask again. The error of the drive is the answer of the call.
+				log("warn", "drive: a share request did not come back after a failed approval", {
+					error: restoreError instanceof Error ? restoreError.message : String(restoreError),
+				});
+			}
+			throw error;
 		}
-		auditOk(call, opened, "drive.approve_share_request", `${request.item_id}:${target.id}:${request.role}`);
+		// The item is gone or in the trash, or the agent that asked cannot share it now.
+		if ("error" in shared) throw gone(shared.error.message);
+		auditOk(call, opened, "drive.approve_share_request", line);
 		recordServiceMemberships(call, [target.id], "drive.approve_share_request", request.item_id);
 		const access = await giveMemberAccess(call, [
 			{ principal_id: target.id, scopes: SHARED_DRIVE_ROLE_SCOPES[request.role] },

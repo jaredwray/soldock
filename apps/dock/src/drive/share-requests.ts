@@ -37,25 +37,26 @@ export async function getShareRequest(db: D1Database, id: string): Promise<Share
 export async function createShareRequest(
 	db: D1Database,
 	input: Omit<DriveShareRequest, "id" | "created_at"> & { notifiedId: string | null },
-	most: number,
+	most: { perItem: number; perAgent: number },
 ): Promise<{ request: ShareRequestRow; created: boolean } | null> {
 	const id = newId("srq");
 	// A request for an account that is archived or deleted cannot complete, and nobody sees it. It must not use a
-	// place of the item, so the call removes such requests of the item first.
+	// place of the item or of the agent, so the call removes such requests of the item and of the agent first.
 	await db
 		.prepare(
-			`DELETE FROM drive_share_requests WHERE space_id = ?1 AND item_id = ?2 AND principal_id IN (
-				SELECT p.id FROM principals p WHERE p.deleted_at IS NOT NULL OR p.archived_at IS NOT NULL
-			)`,
+			`DELETE FROM drive_share_requests WHERE ((space_id = ?1 AND item_id = ?2) OR requested_by = ?3)
+				AND principal_id IN (SELECT p.id FROM principals p WHERE p.deleted_at IS NOT NULL OR p.archived_at IS NOT NULL)`,
 		)
-		.bind(input.space_id, input.item_id)
+		.bind(input.space_id, input.item_id, input.requested_by)
 		.run();
-	// One statement: the count and the insert have no other request between them.
+	// One statement: the counts and the insert have no other request between them. A limit for each agent keeps an
+	// agent from filling the activity list of a person with requests for many items.
 	const inserted = await db
 		.prepare(
 			`INSERT INTO drive_share_requests (id, space_id, item_id, item_name, principal_id, requested_by, role, notified_id, created_at)
 			SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9
 			WHERE (SELECT COUNT(*) FROM drive_share_requests WHERE space_id = ?2 AND item_id = ?3) < ?10
+				AND (SELECT COUNT(*) FROM drive_share_requests WHERE requested_by = ?6) < ?11
 			ON CONFLICT (space_id, item_id, principal_id) DO NOTHING`,
 		)
 		.bind(
@@ -68,7 +69,8 @@ export async function createShareRequest(
 			input.role,
 			input.notifiedId,
 			new Date().toISOString(),
-			most,
+			most.perItem,
+			most.perAgent,
 		)
 		.run();
 	const row = await db
@@ -79,6 +81,30 @@ export async function createShareRequest(
 		.first<ShareRequestRow>();
 	if (!row) return null;
 	return { request: row, created: inserted.meta.changes === 1 && row.id === id };
+}
+
+/**
+ * Puts back a request that an approval deleted, when the approval failed before a decision: the drive did not
+ * answer. A request that a new call made in the meantime stays.
+ */
+export async function restoreShareRequest(db: D1Database, request: ShareRequestRow): Promise<void> {
+	await db
+		.prepare(
+			`INSERT INTO drive_share_requests (id, space_id, item_id, item_name, principal_id, requested_by, role, notified_id, created_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING`,
+		)
+		.bind(
+			request.id,
+			request.space_id,
+			request.item_id,
+			request.item_name,
+			request.principal_id,
+			request.requested_by,
+			request.role,
+			request.notified_id,
+			request.created_at,
+		)
+		.run();
 }
 
 /** Deletes a request. Returns false when a different call deleted it first. */

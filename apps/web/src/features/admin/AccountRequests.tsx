@@ -110,8 +110,8 @@ export function AccountRequests({ account, principals, onApproved }: AccountRequ
 									with this account.
 								</p>
 								<p className="field-hint">
-									After an approval, the account can {shareRoleVerb(request.role)} the item. Asked{" "}
-									<AskedAt at={request.created_at} />.
+									After an approval, the account can {shareRoleVerb(request.role)} the item, and all that a folder holds
+									later. Asked <AskedAt at={request.created_at} />.
 								</p>
 							</div>
 							<ShareRequestActions

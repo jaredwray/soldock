@@ -569,7 +569,8 @@ What changes for a script that calls the API with a key of an agent or a token o
   `drive.share_item`.
 - `drive.list_share_requests` returns the requests of the script that wait for an answer. After the
   answer, the request is not in the list, and `drive.list_permissions` tells if the account has the grant.
-- An item has at most 20 requests at the same time. The next one gets `conflict`.
+- An item has at most 20 requests at the same time, and one agent has at most 100. The next one gets
+  `conflict`.
 - A script with a key of an agent shares an item with a person as before.
 
 What changes for a script with a key of a person:

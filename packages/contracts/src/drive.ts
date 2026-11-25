@@ -8,6 +8,8 @@ import { z } from "./zod.ts";
 export const DRIVE_LIMITS = {
 	/** The requests of agents to share one item with an agent or a service account at the same time. */
 	shareRequestsPerItem: 20,
+	/** The most requests to share that one agent or service account has at the same time, across all items. */
+	shareRequestsPerAgent: 100,
 	/** The bytes of the small picture of a file (`drive.set_preview`). */
 	previewBytes: 256 * 1024,
 	/** The pixels of each side of the small picture of a file. */
@@ -945,7 +947,7 @@ export const requestShare = defineOperation({
 		"You must be able to share the item, as for drive.share_item: it is in your own drive.",
 		SHARE_DECIDER,
 		"That person gets the request in the activity list of Chat. After the approval, the account has the role of the request for the item.",
-		`A second call for the same item and account returns the same request, with the role of the first call. To see your requests, call drive.list_share_requests: a request that is not there is approved or denied, or its account is archived or deleted. One item has at most ${DRIVE_LIMITS.shareRequestsPerItem} requests at the same time.`,
+		`A second call for the same item and account returns the same request, with the role of the first call. To see your requests, call drive.list_share_requests: a request that is not there is approved or denied, or its account is archived or deleted. One item has at most ${DRIVE_LIMITS.shareRequestsPerItem} requests at the same time, and you have at most ${DRIVE_LIMITS.shareRequestsPerAgent} across all items. Over a limit, the call gets conflict.`,
 		IN_SPACE,
 	].join(" "),
 	http: { method: "POST", path: "/api/v1/drive/items/{item_id}/share-requests" },

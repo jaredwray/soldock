@@ -337,9 +337,10 @@ grant.
 - **One request.** An item has one request for one account (`drive_share_requests` in D1). A second call
   for the same item and account returns that request with `created: false`. The request keeps the role
   of the first call. An item has at most 20 requests that wait for an answer
-  (`DRIVE_LIMITS.shareRequestsPerItem`). The next one gets `conflict`. A new request first removes the
-  requests of the item for an account that is archived or deleted: nobody can decide them, so they must
-  not use a place.
+  (`DRIVE_LIMITS.shareRequestsPerItem`). One agent has at most 100 requests across all items
+  (`DRIVE_LIMITS.shareRequestsPerAgent`), so it cannot fill the activity list of a person. The next one
+  gets `conflict`. A new request first removes the requests of the item and of the agent for an account
+  that is archived or deleted: nobody can decide them, so they must not use a place.
 - **The name of the item.** `item_name` is the name of the item at the time of the request. A later
   rename does not change it.
 - **The lists.** `drive.list_share_requests` returns the requests that wait, the newest first, at most
@@ -360,14 +361,16 @@ grant.
   writes it as the agent that asked, so the checks of a share by that agent apply. The agent that asked
   must not be archived or deleted, its policy must still hold `drive.share`, and it must still be able
   to share the item. If not, the call gets `conflict`, and the request is gone. For example, the item is
-  in the trash.
+  in the trash. Each such `conflict` writes an audit line with `result: "error"`, so the log keeps the
+  person who removed the request.
 - **The access of the account.** After the grant, `giveMemberAccess` gives the account the drive scopes of
   the role that it does not hold, as for `drive.share_item`. The credential must hold `directory.write` for
   that. The result has `agent_access_changes` and `agent_access_pending`. `assertMemberGrants` refuses
   the call before the delete when the credential cannot give a scope.
-- **A failed write.** The drive or the directory can fail after the delete. Then the request is gone, and
-  the account can be without the grant or without its scopes. The agent asks again, or a person who
-  manages the account shares the item or sets its scopes.
+- **A failed write.** When the drive does not answer after the delete, nobody decided. The handler puts
+  the request back with the same id, sends its activity item again, and returns the error. The person can
+  approve again. A request that a new call made in the meantime stays. The directory can also fail after
+  the grant. Then the account can be without its scopes, and a person who manages it sets them.
 - **A denial.** `drive.deny_share_request` deletes the request. The account gets no grant.
 - **The activity item.** One person gets an item of the kind `share_request` in `chat.list_activity`
   (`deciderOf` of `identity`). For an agent, that person is its sponsor. For a service account, that
@@ -817,6 +820,7 @@ Backups: not built yet. Originals also come with Takeout.
 | Search query | 500 characters, 20 words | |
 | Members of one shared drive | 100 | `SHARED_DRIVE_LIMITS.members` |
 | Requests to share one item that wait for an answer | 20 | `DRIVE_LIMITS.shareRequestsPerItem` |
+| Requests to share that one agent has, across all items | 100 | `DRIVE_LIMITS.shareRequestsPerAgent` |
 | Name of a shared drive | 100 characters, no control characters | |
 | Items in one move between drives | 1,000 | `SHARED_DRIVE_LIMITS.moveItems` |
 | One run of a move between drives | 20 seconds, 400 calls to R2 and to the target | The subrequest limit of one invocation. The alarm continues |

@@ -228,7 +228,7 @@ function ShareRequestItem({ item, onGone }: { item: ChatActivityItem; onGone: ()
 			</div>
 			<p className="chat-feed-preview">
 				You manage this account. The agent cannot share the item with it without your approval. After an approval, the
-				account can {shareRoleVerb(request.role)} the item.
+				account can {shareRoleVerb(request.role)} the item. A grant on a folder also covers what the folder holds later.
 			</p>
 			<ShareRequestActions request={request} onGone={onGone} />
 		</div>
