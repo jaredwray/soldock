@@ -695,10 +695,18 @@ export const MEMBER_DELAY_MS = 500;
 
 const NOT_FOUND = "No room has that id, or you have no access to it.";
 const NOT_MEMBER =
-	"You are not a member of this room. A person joins a public room with chat.join_room. A member adds an agent or a service account with chat.add_members.";
+	"You are not a member of this room. A person joins a public room with chat.join_room. A person who is a member adds an agent or a service account with chat.add_members.";
 const NO_MESSAGE = "No message has that id in this room.";
 const EMPTY_MESSAGE = "A message needs text or a file.";
 const FULL = `A room can have ${CHAT_LIMITS.membersPerRoom} members at most.`;
+/**
+ * An agent does not put a different agent into a room. A person who manages that agent decides, because the
+ * agent then reads what the room has. This applies to a service account too: its kind here is `agent`.
+ */
+const AGENT_ASKS =
+	"An agent or a service account cannot add a different agent or service account to a room. Ask with chat.request_member: a person who manages that account decides.";
+const AGENT_DM =
+	"An agent or a service account cannot open a direct message with a different agent or service account.";
 /**
  * The member that becomes the owner when the owner leaves: the person that joined first, or the member that
  * joined first in a room without a person. The owner has each scope, so a person comes before an agent: an
@@ -1391,9 +1399,16 @@ export class ChatRoomDO extends DurableObject<Env> {
 		if (this.rawRoom()) return refuse("conflict", "A room with this id exists.");
 		const others = new Map(input.members.map((actor) => [actor.principal_id, actor]));
 		others.delete(call.actor.principal_id);
+		if (this.agentAddsAgent(call, [...others.values()])) return refuse("forbidden", AGENT_ASKS);
 		this.createRoom(call, input.kind, input.name, input.topic, [...others.values()]);
 		await this.flush();
 		return this.record(call.actor.principal_id);
+	}
+
+	/** True when the caller is an agent or a service account, and one of the new members is a different one. */
+	private agentAddsAgent(call: RoomCall, actors: readonly ActorRecord[]): boolean {
+		if (call.actor.kind !== "agent") return false;
+		return actors.some((actor) => actor.kind === "agent" && actor.principal_id !== call.actor.principal_id);
 	}
 
 	/** The direct message room of the caller and `peer`. The first call creates it. */
@@ -1403,6 +1418,7 @@ export class ChatRoomDO extends DurableObject<Env> {
 			if (existing.kind !== "dm" || !this.member(call.actor.principal_id)) return refuse("not_found", NOT_FOUND);
 			return { room: this.record(call.actor.principal_id), created: false };
 		}
+		if (this.agentAddsAgent(call, [peer])) return refuse("forbidden", AGENT_DM);
 		this.createRoom(call, "dm", null, "", [peer]);
 		await this.flush();
 		return { room: this.record(call.actor.principal_id), created: true };
@@ -1422,6 +1438,7 @@ export class ChatRoomDO extends DurableObject<Env> {
 		if (unique.size < 2 || unique.size > CHAT_LIMITS.groupDmOthersMax) {
 			return refuse("invalid", `A group direct message needs 2 to ${CHAT_LIMITS.groupDmOthersMax} other members.`);
 		}
+		if (this.agentAddsAgent(call, [...unique.values()])) return refuse("forbidden", AGENT_DM);
 		this.createRoom(call, "group_dm", null, "", [...unique.values()]);
 		await this.flush();
 		return { room: this.record(call.actor.principal_id), created: true };
@@ -1534,13 +1551,20 @@ export class ChatRoomDO extends DurableObject<Env> {
 		call: RoomCall,
 		actors: ActorRecord[],
 		scopes?: readonly RoomMemberScope[],
-	): Promise<{ added: string[]; room: RoomRecord; members: MemberRecord[] } | Refusal> {
+	): Promise<{ added: string[]; room: RoomRecord; members: MemberRecord[]; at: number } | Refusal> {
 		const first = this.checkAddMembers(call, scopes);
 		if ("error" in first) return first;
+		// The time of the step that checks and writes the members. Each member of the result was a member then.
+		const at = Date.now();
 		const written = this.insertMembers(call, actors, scopes);
 		if ("error" in written) return written;
 		if (written.added.length > 0) await this.publish({ type: "room" });
-		return { added: written.added, room: this.record(call.actor.principal_id), members: this.membersNamed(actors) };
+		return {
+			added: written.added,
+			room: this.record(call.actor.principal_id),
+			members: this.membersNamed(actors),
+			at,
+		};
 	}
 
 	/** The write of `addMembers`. It has no wait, so no other call of the room runs in it. */
@@ -1576,6 +1600,7 @@ export class ChatRoomDO extends DurableObject<Env> {
 		) {
 			return refuse("forbidden", "Only the owner of the room can give chat.add_members to an agent.");
 		}
+		if (this.agentAddsAgent(call, [...fresh.values()])) return refuse("forbidden", AGENT_ASKS);
 		if (fresh.size > 0) {
 			if (this.memberCount() + fresh.size > CHAT_LIMITS.membersPerRoom) return refuse("conflict", FULL);
 			this.ctx.storage.transactionSync(() => {
@@ -1585,6 +1610,68 @@ export class ChatRoomDO extends DurableObject<Env> {
 			});
 		}
 		return { added: [...fresh.keys()] };
+	}
+
+	/**
+	 * Refuses an agent that cannot ask for this account as a member: the caller needs the right to add members,
+	 * with each scope of the request, and the account must not be a member. Returns the name of the room for
+	 * the request. A request cannot give `chat.add_members`: a person gives that scope to an agent.
+	 */
+	checkMemberRequest(
+		call: RoomCall,
+		principalId: string,
+		scopes: readonly RoomMemberScope[],
+	): { room_name: string | null } | Refusal {
+		const allowed = this.checkAddMembers(call, scopes);
+		if ("error" in allowed) return allowed;
+		if (scopes.includes("chat.add_members")) {
+			return refuse("invalid", "A request cannot give chat.add_members. A person gives that scope to an agent.");
+		}
+		if (this.member(principalId)) return refuse("conflict", "That account is a member of this room.");
+		return { room_name: (this.room() as RoomRow).name };
+	}
+
+	/**
+	 * Makes an agent or a service account a member, after a person who manages it approved the request of
+	 * `requesterId`. The agent that asked must still have the right to add members, with each scope of the
+	 * request: the approval gives no more than that agent could give to a person. A member from before stays
+	 * as it is. `approverId` is the person of the approval, for the change record of the room.
+	 */
+	async admitMember(
+		requesterId: string,
+		actor: ActorRecord,
+		scopes: readonly RoomMemberScope[],
+		approverId: string,
+	): Promise<{ member: MemberRecord; added: boolean; at: number } | Refusal> {
+		const room = this.room();
+		if (!room) return refuse("not_found", NOT_FOUND);
+		// The time of the step that checks and writes the member. The account was a member then.
+		const at = Date.now();
+		const existing = this.member(actor.principal_id);
+		if (existing) return { member: this.memberRecord(existing), added: false, at };
+		const archived = this.ensureNotArchived(room);
+		if (archived) return archived;
+		const requester = this.member(requesterId);
+		const held = requester ? this.scopesOf(requester) : [];
+		if (
+			this.isDmKind(room.kind) ||
+			!held.includes("chat.add_members") ||
+			!scopes.every((scope) => held.includes(scope))
+		) {
+			return refuse("conflict", "The agent that asked cannot add this member to the room now.");
+		}
+		if (this.memberCount() >= CHAT_LIMITS.membersPerRoom) return refuse("conflict", FULL);
+		// A principal that left with fewer scopes than its kind gets no more from a member: only the owner gives more.
+		const kept = requester?.role === "owner" ? null : this.keptScopes(actor.principal_id);
+		const given = ROOM_MEMBER_SCOPES.filter(
+			(scope) => scope !== "chat.add_members" && scopes.includes(scope) && (kept === null || kept.includes(scope)),
+		);
+		this.ctx.storage.transactionSync(() => {
+			this.insertMember(actor, "member", Date.now(), room.last_seq, given);
+			this.roomChanged(approverId);
+		});
+		await this.publish({ type: "room" });
+		return { member: this.memberRecord(this.member(actor.principal_id) as MemberRow), added: true, at };
 	}
 
 	/** The members of the room among these principals, each with its scopes. */
@@ -1634,6 +1721,14 @@ export class ChatRoomDO extends DurableObject<Env> {
 		const target = this.member(input.principalId);
 		if (!target) return refuse("not_found", "No member of this room has that id.");
 		if (target.role === "owner") return refuse("invalid", "The owner of a room has each scope.");
+		// An agent that owns a room does not let a different agent add members: a person decides that.
+		if (
+			input.scopes.includes("chat.add_members") &&
+			!this.scopesOf(target).includes("chat.add_members") &&
+			this.agentAddsAgent(call, [JSON.parse(target.actor_json) as ActorRecord])
+		) {
+			return refuse("forbidden", "Only a person gives chat.add_members to an agent or a service account.");
+		}
 		const scopes = ROOM_MEMBER_SCOPES.filter((scope) => scope === "chat.read" || input.scopes.includes(scope));
 		const current = this.scopesOf(target);
 		if (current.length === scopes.length && scopes.every((scope) => current.includes(scope))) {

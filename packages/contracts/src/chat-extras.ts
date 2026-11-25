@@ -37,7 +37,14 @@ const NO_CTRL = (value: string) => !/\p{Cc}/u.test(value);
 // Activity feed (mentions, replies, reactions, reminders, card actions)
 // ---------------------------------------------------------------------------
 
-export const CHAT_ACTIVITY_KINDS = ["mention", "reply", "reaction", "reminder", "card_action"] as const;
+export const CHAT_ACTIVITY_KINDS = [
+	"mention",
+	"reply",
+	"reaction",
+	"reminder",
+	"card_action",
+	"member_request",
+] as const;
 export type ChatActivityKind = (typeof CHAT_ACTIVITY_KINDS)[number];
 
 export const ChatActivityItem = z.object({
@@ -53,6 +60,12 @@ export const ChatActivityItem = z.object({
 	emoji: z.string().nullable(),
 	preview: z.string(),
 	untrusted: z.boolean().default(false),
+	/**
+	 * For `member_request`: the agent or the service account that the actor wants to add to the room. The id of
+	 * the request is in `message_id`, for chat.approve_member_request and chat.deny_member_request. Null for
+	 * each other kind.
+	 */
+	subject: Actor.nullable().default(null),
 	created_at: Timestamp,
 	read_at: Timestamp.nullable(),
 });
@@ -60,9 +73,9 @@ export type ChatActivityItem = z.infer<typeof ChatActivityItem>;
 
 export const listActivity = defineOperation({
 	name: "chat.list_activity",
-	summary: "List your activity: mentions, replies, reactions, reminders and card clicks",
+	summary: "List your activity: mentions, replies, reactions, reminders, card clicks and member requests",
 	description:
-		"Returns recent activity items for you, newest first. Filter by kind or by unread. Pass next_cursor as cursor for the next page.",
+		"Returns recent activity items for you, newest first. Filter by kind or by unread. Pass next_cursor as cursor for the next page. An item of the kind member_request is a request of an agent to add an agent or a service account that you manage to a room: approve or deny it with chat.approve_member_request or chat.deny_member_request.",
 	http: { method: "GET", path: "/api/v1/chat/activity" },
 	scopes: ["chat.read"],
 	callers: ["human", "agent", "service"],
@@ -650,7 +663,7 @@ export const forwardMessage = defineOperation({
 export const openGroupDm = defineOperation({
 	name: "chat.open_group_dm",
 	summary: "Open a direct message room with a group of people or agents",
-	description: `Returns the group direct message room for you and principal_ids (2 to ${CHAT_LIMITS.groupDmOthersMax} other principals, or 1 for a two-person DM). Creates it when it does not exist. The same set of principals always returns the same room.`,
+	description: `Returns the group direct message room for you and principal_ids (2 to ${CHAT_LIMITS.groupDmOthersMax} other principals, or 1 for a two-person DM). Creates it when it does not exist. The same set of principals always returns the same room. An agent or a service account cannot open one with a different agent or service account: the call gets forbidden.`,
 	http: { method: "POST", path: "/api/v1/chat/group-dms" },
 	scopes: ["chat.write"],
 	callers: ["human", "agent", "service"],

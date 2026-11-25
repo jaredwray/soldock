@@ -5,6 +5,7 @@ import { ApiKeyManager } from "../settings/ApiKeys.tsx";
 import { AgentAccess } from "./AgentAccess.tsx";
 import { PolicyForm } from "./AgentDetails.tsx";
 import { AgentPermissions } from "./AgentPermissions.tsx";
+import { MemberRequests } from "./MemberRequests.tsx";
 import { ServiceAccountActivity } from "./ServiceAccountActivity.tsx";
 import { useAgentAccess } from "./useAgentAccess.ts";
 
@@ -17,8 +18,9 @@ interface ServiceAccountDetailsProps {
 
 /**
  * The tools of one service account, for an owner or an admin: what it is for and who created it, its
- * outbound policy, its permissions (scopes), its tokens with their lifetime, what it can reach, and its
- * activity log. A change of a token or of the permissions loads the access and the activity again.
+ * outbound policy, its permissions (scopes), its tokens with their lifetime, the requests to add it to a
+ * room, what it can reach, and its activity log. A change of a token or of the permissions, and an approval
+ * of a request, load the access and the activity again.
  */
 export function ServiceAccountDetails({ account, principals, onChanged }: ServiceAccountDetailsProps) {
 	// Each change of a token or of the permissions gives a new number, so the activity loads again.
@@ -71,6 +73,7 @@ export function ServiceAccountDetails({ account, principals, onChanged }: Servic
 				people={principals}
 				onChange={changed}
 			/>
+			<MemberRequests account={account} principals={principals} onApproved={changed} />
 			<AgentAccess agent={account} access={access} error={error} onRetry={reload} />
 			<ServiceAccountActivity account={account} principals={principals} version={version} />
 		</>

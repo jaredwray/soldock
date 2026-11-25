@@ -21,6 +21,8 @@ export const CHAT_LIMITS = {
 	membersPerRoom: 500,
 	/** The people and agents that one call adds to a room. */
 	membersPerCall: 50,
+	/** The requests of agents to add an agent or a service account that one room has at the same time. */
+	memberRequestsPerRoom: 20,
 	pageSize: 100,
 	queryChars: 100,
 	/** The live sockets of one member in one room, with the feeds of its MCP streams. */
@@ -764,6 +766,9 @@ const AGENT_MEMBER = [
 	"For such an agent, call chat.add_members with the id of the room. Do not call chat.create_room again: that makes a second room.",
 	"A membership gives no new scope to an agent that you do not manage. Such an agent uses the room with the scopes that it holds. Its sponsor, an owner or an admin gives it more.",
 ].join(" ");
+/** The rule for an agent that wants a different agent in a room. */
+const AGENT_ASKS =
+	"An agent or a service account cannot make a different agent or service account a member: the call gets forbidden. It asks with chat.request_member, and a person who manages that account decides.";
 const MENTIONS = `To mention a person or an agent, write @ and the local part of its address in text or markdown, for example @ada. When two principals have the same local part, write the full address, for example @ada@example.org. The server stores each mention as a mention node with the id of the principal, and the message lists the ids in mentions. In a private room, a mention of a principal that is not a member stays text. In a body, write a mention node: { type: mention, attrs: { id, label } }. @here and @channel mention each member of the room, except you: the message lists them in group_mentions. In a room with more than ${CHAT_LIMITS.groupMentionMembers} members, only an owner of the room can mention a group: a different member gets forbidden. In a body, write { type: group_mention, attrs: { group } }.`;
 const RATE_LIMIT = `You can send ${CHAT_LIMITS.messageBurst} new or changed messages to one room at once, and then one in each ${CHAT_LIMITS.messageRefillSeconds === 1 ? "second" : `${CHAT_LIMITS.messageRefillSeconds} seconds`}. A call above that gets rate_limited: wait, then try again.`;
 
@@ -772,7 +777,7 @@ export const listRooms = defineOperation({
 	summary: "List your rooms, or the public rooms",
 	description: [
 		"Returns the rooms of one view. The default view is joined: the rooms and the direct messages that you are a member of, with the newest message first.",
-		"The public view has each public room of the organization, in the order of the names. A room with role: null is one that you are not a member of. A person joins it with chat.join_room. A member adds an agent or a service account with chat.add_members.",
+		"The public view has each public room of the organization, in the order of the names. A room with role: null is one that you are not a member of. A person joins it with chat.join_room. A person who is a member adds an agent or a service account with chat.add_members.",
 		"The starred view has the rooms and the direct messages of the joined view that have your star (chat.star_room), with the newest message first.",
 		"Set query to get only the rooms whose name has that text. A direct message has no name, so it never matches.",
 		"Each room has unread, unread_count, mention_count, starred and version. Compare version with the value that you have to find out if the messages of a room changed.",
@@ -801,11 +806,12 @@ export const createRoom = defineOperation({
 	name: "chat.create_room",
 	summary: "Create a room",
 	description: [
-		"Creates a room and makes you its owner. Each person and each agent of the organization can find a public room. Each person can join it, and a member adds an agent or a service account.",
+		"Creates a room and makes you its owner. Each person and each agent of the organization can find a public room. Each person can join it, and a person who is a member adds an agent or a service account.",
 		"Only the members can find a private room, and a member must add each new member.",
 		`Set member_ids to add people and agents at once, at most ${CHAT_LIMITS.membersPerCall}.`,
 		NEW_MEMBER_SCOPES,
 		AGENT_MEMBER,
+		AGENT_ASKS,
 		"Two rooms can have the same name. For a conversation with one person or one agent, use chat.open_dm.",
 	].join(" "),
 	http: { method: "POST", path: "/api/v1/chat/rooms" },
@@ -834,7 +840,7 @@ export const createRoom = defineOperation({
 export const openDm = defineOperation({
 	name: "chat.open_dm",
 	summary: "Open the direct message room with one person or one agent",
-	description: `Returns the room for direct messages between you and principal_id, and creates it when it does not exist. You and that principal have one such room, so a second call returns the same room. Then post with chat.post_message. ${AGENT_MEMBER}`,
+	description: `Returns the room for direct messages between you and principal_id, and creates it when it does not exist. You and that principal have one such room, so a second call returns the same room. Then post with chat.post_message. ${AGENT_MEMBER} An agent or a service account cannot open a direct message with a different agent or service account: the call gets forbidden.`,
 	http: { method: "POST", path: "/api/v1/chat/dms" },
 	scopes: ["chat.write"],
 	callers: ["human", "agent", "service"],
@@ -892,7 +898,7 @@ export const joinRoom = defineOperation({
 	name: "chat.join_room",
 	summary: "Join a public room",
 	description:
-		"Makes you a member of a public room. You can then read its messages, also the messages from before, and post. A private room refuses: a member must add you with chat.add_members. A second call changes nothing. Only a person can join: a member of the room adds an agent or a service account with chat.add_members.",
+		"Makes you a member of a public room. You can then read its messages, also the messages from before, and post. A private room refuses: a member must add you with chat.add_members. A second call changes nothing. Only a person can join: a person who is a member of the room adds an agent or a service account with chat.add_members.",
 	http: { method: "POST", path: "/api/v1/chat/rooms/{room_id}/join" },
 	scopes: ["chat.write"],
 	callers: ["human"],
@@ -914,6 +920,7 @@ export const addMembers = defineOperation({
 		NEW_MEMBER_SCOPES,
 		"Without scopes, a new member gets only the scopes of this list that your membership has.",
 		AGENT_MEMBER,
+		AGENT_ASKS,
 		MEMBERS_ONLY,
 	].join(" "),
 	http: { method: "POST", path: "/api/v1/chat/rooms/{room_id}/members" },
@@ -970,6 +977,114 @@ export const setMemberScopes = defineOperation({
 		agent_access_pending: z.array(z.string()).default([]),
 	}),
 	errors: ["not_found", "invalid"],
+});
+
+/** The id of a request to make an agent or a service account a member of a room. */
+export const MemberRequestId = prefixedId("mrq");
+
+/**
+ * A request of an agent or a service account to make a different agent or service account a member of a
+ * room. A person who manages the account of `principal_id` approves or denies it.
+ */
+export const ChatMemberRequest = z.object({
+	id: z.string(),
+	room_id: z.string(),
+	/** The name of the room at the time of the request. */
+	room_name: z.string().nullable(),
+	/** The agent or the service account that the request is for. */
+	principal_id: z.string(),
+	/** The agent or the service account that asked. */
+	requested_by: z.string(),
+	/** What the new member can do in the room after the approval. */
+	scopes: z.array(z.enum(ROOM_MEMBER_SCOPES)),
+	created_at: Timestamp,
+});
+export type ChatMemberRequest = z.infer<typeof ChatMemberRequest>;
+
+/** Who decides a request. */
+const REQUEST_DECIDER =
+	"The sponsor of the agent of the request, an owner or an admin decides. For a service account, an owner or an admin only.";
+
+export const requestMember = defineOperation({
+	name: "chat.request_member",
+	summary: "Ask a person to let you add an agent or a service account to a room",
+	description: [
+		"An agent or a service account cannot make a different agent or service account a member of a room. This call asks for it.",
+		"Your membership of the room must have chat.add_members, as for chat.add_members. The owner of a room has it.",
+		REQUEST_DECIDER,
+		"That person gets the request in the activity list of Chat. After the approval, the account is a member with scopes: chat.read and chat.write without scopes. A request cannot give chat.add_members.",
+		"A second call for the same room and account returns the same request. It sends the request to the person who decides now when that person does not have it, for example after a change of the sponsor. To see your requests, call chat.list_member_requests: a request that is not there is approved or denied, or its account is archived or deleted, so nobody can decide it. chat.get_room tells if the account is a member.",
+		`A room has at most ${CHAT_LIMITS.memberRequestsPerRoom} requests at the same time. Add a person with chat.add_members.`,
+	].join(" "),
+	http: { method: "POST", path: "/api/v1/chat/rooms/{room_id}/member-requests" },
+	scopes: ["chat.write"],
+	callers: ["agent", "service"],
+	annotations: CHANGE,
+	input: z.strictObject({
+		room_id: RoomId,
+		principal_id: PrincipalId,
+		/** What the new member can do in the room. The default is chat.read and chat.write. */
+		scopes: RoomMemberScopes.optional(),
+	}),
+	output: z.object({
+		request: ChatMemberRequest,
+		/** False when the request was there from an earlier call. */
+		created: z.boolean(),
+	}),
+	errors: ["not_found", "invalid", "conflict", "forbidden"],
+});
+
+export const listMemberRequests = defineOperation({
+	name: "chat.list_member_requests",
+	summary: "List the requests to add an agent or a service account to a room",
+	description: [
+		"For a person: the requests for the agents and the service accounts that you manage, the newest first. Set principal_id to get the requests for one account.",
+		"For an agent or a service account: the requests that it made.",
+		"A request waits until a person approves or denies it. A person sees only the waiting requests for the accounts that the person manages now: after a change of the sponsor, the request is in the list of the new sponsor, not of the former one. A request for an account that is archived or deleted is in no list: nobody can decide it, and it never makes a member.",
+	].join(" "),
+	http: { method: "GET", path: "/api/v1/chat/member-requests" },
+	scopes: ["chat.read"],
+	callers: ["human", "agent", "service"],
+	annotations: READ,
+	input: z.strictObject({ principal_id: PrincipalId.optional() }),
+	output: z.object({ requests: z.array(ChatMemberRequest) }),
+	errors: [],
+});
+
+export const approveMemberRequest = defineOperation({
+	name: "chat.approve_member_request",
+	summary: "Approve a request to add an agent or a service account to a room",
+	description: [
+		REQUEST_DECIDER,
+		"Makes the account a member of the room, with the scopes of the request. The agent that asked must still be a member with chat.add_members: if not, the call gets conflict and the request goes away.",
+		"Only one answer to a request succeeds: a call after a different answer gets not_found.",
+		"When a person added the account to the room before the approval, the call succeeds and gives no scope: agent_access_changes is empty.",
+		"When your credential holds directory.write, the account also gets the chat scopes of the membership that it does not hold: agent_access_changes has them. Your credential must hold each scope that the account gets.",
+	].join(" "),
+	http: { method: "POST", path: "/api/v1/chat/member-requests/{request_id}/approve" },
+	scopes: ["chat.write"],
+	callers: ["human"],
+	annotations: CHANGE,
+	input: z.strictObject({ request_id: MemberRequestId }),
+	output: z.object({
+		request: ChatMemberRequest,
+		agent_access_changes: z.array(AgentAccessChange).default([]),
+		agent_access_pending: z.array(z.string()).default([]),
+	}),
+	errors: ["not_found", "conflict", "forbidden"],
+});
+
+export const denyMemberRequest = defineOperation({
+	name: "chat.deny_member_request",
+	summary: "Deny a request to add an agent or a service account to a room",
+	description: `${REQUEST_DECIDER} Removes the request. The account does not become a member. A second call, or a call after a different answer, gets not_found.`,
+	http: { method: "POST", path: "/api/v1/chat/member-requests/{request_id}/deny" },
+	scopes: ["chat.write"],
+	callers: ["human"],
+	annotations: REMOVE,
+	input: z.strictObject({ request_id: MemberRequestId }),
+	output: z.object({ denied: z.boolean() }),
+	errors: ["not_found"],
 });
 
 export const removeMember = defineOperation({
@@ -1592,6 +1707,10 @@ export const chatOperations = {
 	"chat.add_members": addMembers,
 	"chat.remove_member": removeMember,
 	"chat.set_member_scopes": setMemberScopes,
+	"chat.request_member": requestMember,
+	"chat.list_member_requests": listMemberRequests,
+	"chat.approve_member_request": approveMemberRequest,
+	"chat.deny_member_request": denyMemberRequest,
 	"chat.list_messages": listMessages,
 	"chat.post_message": postMessage,
 	"chat.list_replies": listReplies,

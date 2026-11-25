@@ -11,7 +11,10 @@ interface MemberPageProps {
 	me: Principal;
 	/** The people of the directory. The sponsor list of an agent uses them. */
 	humans: readonly Principal[];
-	/** The whole directory, for the names of the creators of a service account and of its tokens. */
+	/**
+	 * The whole directory, for the names of the creators of a service account and of its tokens, and for the
+	 * name of the agent of a member request.
+	 */
 	principals: readonly Principal[];
 	/** True for an owner or an admin. A sponsor sees the agent tools only. */
 	elevated: boolean;
@@ -24,8 +27,8 @@ interface MemberPageProps {
  * The page of one person, agent or service account in Admin › Members (`/admin/members/<prn_id>`). A
  * summary with the avatar, the address and the chips comes first. Each part follows in its own card. An
  * owner or an admin changes the account here. An agent also has the policy, the permissions, the connected
- * apps, the webhooks, the API keys and the access. A service account has the policy, the permissions, the
- * tokens, the access and the activity.
+ * apps, the webhooks, the API keys, the member requests and the access. A service account has the policy,
+ * the permissions, the tokens, the member requests, the access and the activity.
  */
 export function MemberPage({ principal, me, humans, principals, elevated, onChanged, onDeleted }: MemberPageProps) {
 	const isAgent = principal.kind === "agent";
@@ -58,6 +61,7 @@ export function MemberPage({ principal, me, humans, principals, elevated, onChan
 					<AgentDetails
 						agent={principal}
 						sponsor={sponsor}
+						principals={principals}
 						canReadMail={elevated}
 						showSponsor={!elevated}
 						onChanged={onChanged}

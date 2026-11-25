@@ -17,9 +17,9 @@
 | | |
 | --- | --- |
 | **Purpose** | Chat backend: rooms, direct messages, group direct messages, members and roles, messages, pins, forwarding, cards, read markers, stars, room lists, live room socket, replies in threads, follows and read markers of threads, files in messages (through Drive), link previews, search, notifications, presence, typing, room archive and delete, posting rules, retention, custom emoji, incoming webhooks, slash commands, admin tools, export, and personal activity, sections, saved messages, drafts, scheduled messages, and reminders. |
-| **Owns** | `ChatRoomDO` (the room, its members, messages, pins, `post_allowed`, `card_actions`, outboxes, idempotency keys, and live sockets); link preview pictures and custom emoji images in R2 `blobs`; D1 `DIRECTORY` tables `link_previews`, `link_preview_budget`, `chat_rooms`, `chat_members`, `chat_custom_emoji`, `chat_incoming_webhooks`, and `chat_slash_commands`; queues `soldock-chat-previews` and `soldock-chat-push`; `PrincipalDO` tables `chat_rooms`, `chat_threads`, `chat_addressed`, `chat_activity`, `chat_sections`, `chat_section_rooms`, `chat_saved_messages`, `chat_drafts`, `chat_scheduled_messages`, and `chat_reminders`; `ChatSearchDO` (organization search index). |
+| **Owns** | `ChatRoomDO` (the room, its members, messages, pins, `post_allowed`, `card_actions`, outboxes, idempotency keys, and live sockets); link preview pictures and custom emoji images in R2 `blobs`; D1 `DIRECTORY` tables `link_previews`, `link_preview_budget`, `chat_rooms`, `chat_members`, `chat_custom_emoji`, `chat_incoming_webhooks`, `chat_slash_commands`, and `chat_member_requests`; queues `soldock-chat-previews` and `soldock-chat-push`; `PrincipalDO` tables `chat_rooms`, `chat_threads`, `chat_addressed`, `chat_activity`, `chat_sections`, `chat_section_rooms`, `chat_saved_messages`, `chat_drafts`, `chat_scheduled_messages`, and `chat_reminders`; `ChatSearchDO` (organization search index). |
 | **Depends on** | `platform`, `webhooks` (the rules of a public address and the outbound policy of an agent), `identity` (the principals of new members, the credential of a request, the credential check of a socket, the `PrincipalDO` of each member), `drive` (the files of a message, and the grant of a room on a file), `api` (the call of a request on `/dl/` and slash command invocation). |
-| **Operations** | `chat.list_rooms`, `chat.create_room`, `chat.open_dm`, `chat.open_group_dm`, `chat.get_room`, `chat.update_room`, `chat.join_room`, `chat.add_members`, `chat.set_member_scopes`, `chat.remove_member`, `chat.list_messages`, `chat.post_message`, `chat.list_replies`, `chat.follow_thread`, `chat.mark_thread_read`, `chat.list_threads`, `chat.list_addressed`, `chat.search_messages`, `chat.edit_message`, `chat.delete_message`, `chat.download_file`, `chat.remove_link_preview`, `chat.download_link_image`, `chat.list_message_edits`, `chat.add_reaction`, `chat.remove_reaction`, `chat.mark_read`, `chat.star_room`, `chat.pin_message`, `chat.unpin_message`, `chat.list_pins`, `chat.forward_message`, `chat.list_activity`, `chat.mark_activity_read`, `chat.list_sections`, `chat.create_section`, `chat.update_section`, `chat.delete_section`, `chat.set_room_section`, `chat.save_message`, `chat.unsave_message`, `chat.list_saved_messages`, `chat.save_draft`, `chat.delete_draft`, `chat.list_drafts`, `chat.schedule_message`, `chat.list_scheduled_messages`, `chat.update_scheduled_message`, `chat.cancel_scheduled_message`, `chat.create_reminder`, `chat.list_reminders`, `chat.complete_reminder`, `chat.delete_reminder`, `chat.archive_room`, `chat.unarchive_room`, `chat.delete_room`, `chat.set_posting_rules`, `chat.set_room_retention`, `chat.admin_list_rooms`, `chat.admin_assign_owner`, `chat.admin_remove_deleted_principal`, `chat.export_room`, `chat.create_custom_emoji`, `chat.list_custom_emoji`, `chat.delete_custom_emoji`, `chat.create_incoming_webhook`, `chat.list_incoming_webhooks`, `chat.delete_incoming_webhook`, `chat.create_slash_command`, `chat.list_slash_commands`, `chat.delete_slash_command`, `chat.invoke_slash_command`, `chat.trigger_card_action`, `chat.list_card_actions`, `chat.create_webhook_subscription`, `chat.list_webhook_subscriptions`, `chat.delete_webhook_subscription` |
+| **Operations** | `chat.list_rooms`, `chat.create_room`, `chat.open_dm`, `chat.open_group_dm`, `chat.get_room`, `chat.update_room`, `chat.join_room`, `chat.add_members`, `chat.set_member_scopes`, `chat.request_member`, `chat.list_member_requests`, `chat.approve_member_request`, `chat.deny_member_request`, `chat.remove_member`, `chat.list_messages`, `chat.post_message`, `chat.list_replies`, `chat.follow_thread`, `chat.mark_thread_read`, `chat.list_threads`, `chat.list_addressed`, `chat.search_messages`, `chat.edit_message`, `chat.delete_message`, `chat.download_file`, `chat.remove_link_preview`, `chat.download_link_image`, `chat.list_message_edits`, `chat.add_reaction`, `chat.remove_reaction`, `chat.mark_read`, `chat.star_room`, `chat.pin_message`, `chat.unpin_message`, `chat.list_pins`, `chat.forward_message`, `chat.list_activity`, `chat.mark_activity_read`, `chat.list_sections`, `chat.create_section`, `chat.update_section`, `chat.delete_section`, `chat.set_room_section`, `chat.save_message`, `chat.unsave_message`, `chat.list_saved_messages`, `chat.save_draft`, `chat.delete_draft`, `chat.list_drafts`, `chat.schedule_message`, `chat.list_scheduled_messages`, `chat.update_scheduled_message`, `chat.cancel_scheduled_message`, `chat.create_reminder`, `chat.list_reminders`, `chat.complete_reminder`, `chat.delete_reminder`, `chat.archive_room`, `chat.unarchive_room`, `chat.delete_room`, `chat.set_posting_rules`, `chat.set_room_retention`, `chat.admin_list_rooms`, `chat.admin_assign_owner`, `chat.admin_remove_deleted_principal`, `chat.export_room`, `chat.create_custom_emoji`, `chat.list_custom_emoji`, `chat.delete_custom_emoji`, `chat.create_incoming_webhook`, `chat.list_incoming_webhooks`, `chat.delete_incoming_webhook`, `chat.create_slash_command`, `chat.list_slash_commands`, `chat.delete_slash_command`, `chat.invoke_slash_command`, `chat.trigger_card_action`, `chat.list_card_actions`, `chat.create_webhook_subscription`, `chat.list_webhook_subscriptions`, `chat.delete_webhook_subscription` |
 | **Live surface** | `GET /ws/chat/rooms/{room_id}` (WebSocket), and the MCP resources `chat.room`, `chat.rooms`, and `chat.addressed`. See [The socket of a room](#the-socket-of-a-room). |
 | **Downloads and hooks** | `GET /dl/chat/{room_id}/{message_id}/{item_id}` (a file, `?variant=preview` for its small picture), `GET /dl/chat/{room_id}/{message_id}/links/image?url=` (the picture of a link preview), `GET /dl/chat/emoji/{name}` (a custom emoji raster image), and `POST /hooks/chat/{webhook_id}` (signed incoming webhook endpoint). |
 | **Data inventory** | See [Data inventory](#data-inventory). Backups: not built yet. |
@@ -48,6 +48,7 @@ its own principals, operation registry and MCP surface. No code comes from Ember
 | `watch.ts` | The change feeds of the `chat.room`, `chat.rooms` and `chat.addressed` resources, for MCP `subscriptions/listen` |
 | `search.ts` | The query of `chat.search_messages`: its words and filters, and the SQL conditions of a filter for a room and for the index |
 | `search-index.ts` | `ChatSearchDO`: the search index of the organization, which finds the hits of a search across rooms |
+| `member-requests.ts` | The requests of agents to add an agent or a service account to a room: the reads and the writes of the table `chat_member_requests` in D1 |
 | `layer8-handlers.ts` | Operation handlers for Layer 8 features: pins, forwarding, group DMs, activity, sections, saved messages, drafts, scheduled messages, reminders, archive, delete, posting rules, retention, admin tools, export, cards, custom emoji, incoming webhooks, and slash commands |
 | `custom-emoji.ts` | Custom emoji validation (raster images only), R2 storage, D1 index, and `/dl/chat/emoji/{name}` download handler |
 | `incoming-webhooks.ts` | Incoming webhook creation, HMAC-SHA256 signature and replay verification, and `POST /hooks/chat/{webhook_id}` route |
@@ -68,6 +69,8 @@ A room is one `ChatRoomDO`. The id of the room names the object.
 - `chat.open_dm` returns the direct message room of the caller and one other principal. The first
   call creates it. The id is `dm_` and 26 characters from the SHA-256 of the two principal ids, so
   two principals have one room, and two first calls at the same time reach the same object.
+- An agent or a service account cannot open a direct message with a different agent or service
+  account. See [A request of an agent to add an agent](#a-request-of-an-agent-to-add-an-agent).
 - A `dm` room has no name, no topic and no owner. Its output has the other member as `peer`.
 - An object that nobody created has no tables. A call with an id that is no room gets `not_found`
   and stores nothing, so a caller cannot make data with random ids.
@@ -90,11 +93,14 @@ A room is one `ChatRoomDO`. The id of the room names the object.
 - The organization role gives no access. An owner or an admin of the organization reads a room
   only as a member of it.
 - `chat.join_room` works for a public room only. Only a person can call it (`callers: ["human"]`). A
-  member of the room adds an agent or a service account with `chat.add_members`. A new member can read
+  person who is a member of the room adds an agent or a service account with `chat.add_members`. An
+  agent that is a member asks with `chat.request_member`
+  ([A request of an agent to add an agent](#a-request-of-an-agent-to-add-an-agent)). A new member can read
   each message of the room,
   also the messages from before. A room has at most 500 members (`CHAT_LIMITS.membersPerRoom`).
 - A member with `chat.add_members` in its membership can add members (`chat.add_members`): see
-  [Member scopes](#member-scopes). The handler asks the directory for each id, so
+  [Member scopes](#member-scopes). An agent or a service account with the scope adds people only. The
+  handler asks the directory for each id, so
   only a principal becomes a member. The room stores the name of each member at that time. The
   room checks the caller before the handler reads the directory, so a caller without access to
   the room gets the same answer for each id.
@@ -135,7 +141,9 @@ person, an agent and a service account. This is the model of a
 
 - **At the start.** A person gets the three scopes. An agent or a service account gets `chat.read` and
   `chat.write` (`defaultRoomMemberScopes`). So an agent adds members only after somebody gives it
-  `chat.add_members`. The owner of a room has each scope. The members of a direct message have the scopes
+  `chat.add_members`. With the scope, an agent adds people, and it asks before it adds an agent
+  ([A request of an agent to add an agent](#a-request-of-an-agent-to-add-an-agent)). The owner of a room
+  has each scope. The members of a direct message have the scopes
   of their kind.
 - **Members from before the scopes** have no stored scopes (`members.scopes` is null), and get the scopes
   of their kind. So an agent that added members before this rule cannot add them now: the owner of the
@@ -143,7 +151,8 @@ person, an agent and a service account. This is the model of a
 - **Who sets them.** `chat.add_members` takes `scopes` for the new members. A member gives only the scopes
   that its own membership has. Without `scopes`, a new member gets the scopes of its kind that the
   membership of the caller has. `chat.set_member_scopes` changes the scopes of one member. Only the owner
-  of the room calls it, or an owner or an admin of the organization for a public room. The web app has
+  of the room calls it, or an owner or an admin of the organization for a public room. An owner that is
+  an agent cannot give `chat.add_members` to a different agent or service account. The web app has
   these in the members dialog of the room.
 - **Without `chat.write`,** a member reads the room and sets its own state: what it read, its star, the
   threads that it follows and its notification level. It can leave the room. The room refuses each change
@@ -173,16 +182,19 @@ member, as a person does ([`identity`](../identity/README.md#where-an-agent-can-
 - **What.** A manager who makes the agent a member decided that the agent can use the room. That call
   gives the agent the chat scopes of its membership that it does not hold (`giveMemberAccess`). The
   result has each change in `agent_access_changes`. An entry is `{ principal_id, scopes_added }`.
-- **Which calls.** `chat.create_room`, `chat.add_members`, `chat.set_member_scopes`, `chat.open_dm` and
-  `chat.open_group_dm`. Each call does it, also for a member from before.
-- **A member that does not manage the agent** can add it. The agent then uses the room with the scopes
-  that it holds. That membership gives the agent no new scope: its sponsor, an owner or an admin gives
-  one. An agent never changes a different agent.
+- **Which calls.** `chat.create_room`, `chat.add_members`, `chat.set_member_scopes`, `chat.open_dm`,
+  `chat.open_group_dm` and `chat.approve_member_request`. Each call does it, also for a member from before.
+- **A person who is a member and does not manage the agent** can add it. The agent then uses the room
+  with the scopes that it holds. That membership gives the agent no new scope: its sponsor, an owner or
+  an admin gives one. An agent never changes a different agent, and it does not add one
+  ([A request of an agent to add an agent](#a-request-of-an-agent-to-add-an-agent)).
 - **Who joins.** `chat.join_room` accepts people only. An agent or a service account cannot join a room:
-  a member adds it with `chat.add_members`.
+  a person who is a member adds it with `chat.add_members`.
 - **`chat.add_members` for an agent.** Only the owner of the room gives this scope to an agent or a
   service account, with an add or with `chat.set_member_scopes`. A member that has the scope cannot give
-  it to an agent. So one agent cannot give it to the next agent with no person in the decision.
+  it to an agent. An owner that is an agent cannot give it to a different agent or service account:
+  `chat.set_member_scopes` gets `forbidden`. An owner that is a person can. So one agent cannot give it
+  to the next agent with no person in the decision.
 - **The next owner.** When the owner leaves, the person that joined first becomes the owner. An agent
   becomes the owner only in a room without a person (`NEXT_OWNER_ORDER`). The owner has each scope, so a
   person comes first. The room does not know if a principal is archived or deleted. So the room reads
@@ -203,6 +215,83 @@ member, as a person does ([`identity`](../identity/README.md#where-an-agent-can-
   (`access_version`). A later call for the member completes the access.
 - **A removed agent.** `chat.remove_member` changes nothing on the account of the agent: the agent keeps
   its scopes. The membership is gone, so the agent does not reach the room.
+
+### A request of an agent to add an agent
+
+An agent or a service account does not make a different agent or service account a member of a room. It
+asks, and a person who manages that account decides. A new member reads each message of the room, also
+the messages from before. So a person decides that the account gets them.
+
+- **What the room refuses.** The rule applies when the caller is an agent or a service account, and a new
+  member is a different agent or service account (`agentAddsAgent`). `chat.create_room` with such a
+  member, `chat.add_members`, `chat.open_dm` and `chat.open_group_dm` get `forbidden` and change nothing.
+  A person adds an agent as before.
+- **Direct messages.** Two agents cannot start a direct message with each other. No request exists for a
+  direct message yet. A direct message from before this rule stays: `chat.open_dm` returns it.
+- **The request.** `chat.request_member` takes `room_id`, `principal_id` and `scopes`. Only an agent or a
+  service account calls it, with `chat.write` in its credential. The membership of the caller needs
+  `chat.add_members` and each scope of the request (`checkAddMembers`, `checkMemberRequest`). The account
+  of the request is an agent or a service account that is not archived and is not a member.
+- **The scopes of a request.** Without `scopes`, the request has `chat.read` and `chat.write`. A request
+  cannot give `chat.add_members`: the call gets `invalid`. A person gives that scope to an agent.
+- **One request.** A room has one request for one account (`chat_member_requests` in D1). A second call
+  for the same room and account returns that request with `created: false`. A room has at most 20
+  requests that wait for an answer (`CHAT_LIMITS.memberRequestsPerRoom`). The next one gets `conflict`.
+  A new request first removes the requests of the room for an account that is archived or deleted:
+  nobody can decide them, so they must not use a place.
+- **The lists.** `chat.list_member_requests` returns the requests that wait, the newest first, and
+  `principal_id` keeps the requests for one account.
+  - The sponsor of an agent gets the requests for that agent.
+  - An owner or an admin gets the requests for each agent and each service account.
+  - Only an owner or an admin gets the requests for a service account.
+  - An agent or a service account gets the requests that it made.
+- **Who decides.** `chat.approve_member_request` and `chat.deny_member_request` accept people only. The
+  caller must manage the account (`canManageAgent`): its sponsor, an owner or an admin. Only an owner or
+  an admin manages a service account. Each other caller gets `not_found`.
+- **What the person sees.** The person who decides is usually not a member of the room. The item and
+  the list show that person the id and the name of the room, the agent that asked and the account. This
+  is on purpose: the person cannot decide without them. The agent that asked chose the name of the room,
+  so the item has `untrusted: true`.
+- **When a request goes away without an answer.** The activity list keeps an item only while the request
+  waits and the person still manages the account. So the item goes away when the account is archived or
+  deleted, or when its sponsor changes. A new call of `chat.request_member` sends the item to the person
+  of now. The lists leave out a request for an archived or deleted account.
+- **A member has no request.** When a person adds the account, and after an approval, the handler removes
+  each request of the room for that account from before the write of the room (`settleMemberRequests`).
+  The room gives the time of the step that checks and writes the members (`at`). A new request can come
+  between the delete of an approval and the write of the room; this step removes it too. A request from
+  after the write stays, because it can follow a remove.
+- **One answer.** The delete of the request is the decision. An approval and a denial each delete the
+  request first, and only the call that deletes it continues. A different answer at the same time gets
+  `not_found`. So a denied account never becomes a member.
+- **An approval.** After the delete, the room makes the account a member with the scopes of the request
+  (`admitMember`). The agent that asked must still be a member with `chat.add_members` and each scope of
+  the request. If the room refuses, the call gets `conflict`, and the request is gone. When a person
+  added the account in the meantime, the approval gives the account no scope: that membership is not the
+  one of the request. A limit from an
+  earlier membership of the account still applies (`left_scopes`, [Member scopes](#member-scopes)).
+- **The access of the account.** After the write of the room, `giveMemberAccess` gives the account the
+  chat scopes that it lacks, as for [an agent as a new member](#an-agent-as-a-new-member). The credential
+  must hold `directory.write` for that. The result has `agent_access_changes` and `agent_access_pending`.
+  `assertMemberGrants` refuses the call first when the credential cannot give a scope.
+- **A failed write.** When the room or the directory fails after the delete, the request is gone and the
+  account can be without the membership or without its scopes. The agent asks again, or a person who
+  manages the account adds it to the room or sets its scopes.
+- **A denial.** `chat.deny_member_request` deletes the request. The account does not become a member.
+- **The activity item.** One person gets an item of the kind `member_request` in `chat.list_activity`
+  (`deciderOf`). For an agent, that person is its sponsor. For a service account, that person is its
+  sponsor when the sponsor is an owner or an admin. If the account has no such person, the owner of the
+  organization gets the item.
+- **The fields of the item.** `message_id` has the id of the request, `actor` has the agent that asked,
+  and `subject` has the account to add. The person is usually not a member of the room, so
+  `recordChatActivity` does not check the membership for this kind.
+- **The end of the item.** `chat.list_activity` keeps the item only while the request exists
+  (`liveMemberRequestIds`). An approval and a denial delete the item.
+- **Two stores.** The directory has the requests, as it has the OAuth requests. A request is about the
+  access of an account, and its list goes across rooms. The room object still owns the members, so an
+  approval calls the room.
+- **Audit.** `chat.request_member`, `chat.approve_member_request` and `chat.deny_member_request` write an
+  audit line with the target `<room id>:<account id>`.
 
 ## Messages
 
@@ -907,6 +996,8 @@ The [shared webhook module](../webhooks/README.md) defines the signature, the re
 - A fresh start (`POST /auth/setup` with `start_fresh`) drops `chat_rooms` and `chat_members` and
   makes them again, empty. The rooms from before stay in their objects, as old mail stays in
   storage. No new account is a member of them.
+- A fresh start also drops `chat_member_requests` and makes it again, empty. The requests name the
+  principals and the rooms from before.
 - A room object writes a row to the index only while its principal is in the directory: the
   creator for the room row, the member for a member row. So a room from before a fresh start
   cannot come back into the new index. This rule assumes that no operation deletes a principal.
@@ -1252,11 +1343,12 @@ Known limits:
 | Push jobs | Queue `soldock-chat-push` | Recipient and message identifiers. The consumer reads the current keys before it sends |
 | Presence and status | D1 `principals` and the open sockets of the principal | Availability expires. Each status has text, an emoji and an optional end time |
 | Live sockets | `ChatRoomDO` hibernatable WebSockets, with the tag `p:<principal id>` | Not in the database. Each socket keeps the reference to its credential, the time of its open and the time of its last check. A socket ends with its connection, and a restart of the object ends it. No backup |
-| `PrincipalDO` tables for Layer 8 personal state | `PrincipalDO` tables `chat_activity`, `chat_sections`, `chat_section_rooms`, `chat_saved_messages`, `chat_drafts`, `chat_scheduled_messages`, `chat_reminders` | Activity items (mentions, replies, reactions, card actions, and reminders), sidebar sections, saved message references, synced drafts, scheduled messages (alarm-delivered with credential verification), and reminders (alarm-fired into `chat_activity`) |
+| `PrincipalDO` tables for Layer 8 personal state | `PrincipalDO` tables `chat_activity`, `chat_sections`, `chat_section_rooms`, `chat_saved_messages`, `chat_drafts`, `chat_scheduled_messages`, `chat_reminders` | Activity items (mentions, replies, reactions, card actions, reminders, and the requests of agents to add an agent: `subject_json` has the account to add, and null for each other kind), sidebar sections, saved message references, synced drafts, scheduled messages (alarm-delivered with credential verification), and reminders (alarm-fired into `chat_activity`) |
 | Pins, posting rules, and card actions | `ChatRoomDO` tables `pins`, `post_allowed`, `card_actions`, `activity_outbox`; columns `room.archived_at`, `room.posting_policy`, `room.retention_days`, `room.deleted_at`, `messages.untrusted`, `messages.forwarded_json`, `messages.cards_json` | Pinned messages (up to 50 per room), posting allowlist, recorded card button clicks, pending activity notifications, room archive/delete/retention state, and message metadata for external webhook posts, forwarding, and cards |
 | Custom emoji | D1 `DIRECTORY` table `chat_custom_emoji` and R2 `blobs` key `chat/emoji/<name>-<id>` | Organization custom emoji metadata (name, R2 key, MIME type, size, uploader) and raster image bytes (PNG, JPEG, GIF, WebP; SVG rejected). Migration `0022_chat_layer8.sql` |
 | Incoming webhooks | D1 `DIRECTORY` table `chat_incoming_webhooks` | Per-room webhook id, name, creator, and HMAC-SHA256 signing secret (returned once on creation). Messages posted through `/hooks/chat/{webhook_id}` are marked `untrusted: true`. Migration `0022_chat_layer8.sql` |
 | Slash commands | D1 `DIRECTORY` table `chat_slash_commands` | Organization slash commands: name, description, usage hint, target operation, JSON input template, and creator. Invocation runs under the caller's own credential. Migration `0022_chat_layer8.sql` |
+| The requests of agents to add an agent or a service account | D1 `DIRECTORY` table `chat_member_requests` | One row for each request that waits for a person: the id (`mrq_…`), the room, the name of the room at the time of the request, the account to add (`principal_id`), the agent that asked (`requested_by`), the scopes as a JSON list, the person who got the activity item (`notified_id`, or null) and the time. One row for each room and account. An approval and a denial delete the row. Not rebuildable: no other store has a request. Migration `0030_chat_member_requests.sql` |
 | The room index | D1 `DIRECTORY` tables `chat_rooms`, `chat_members` | Rebuildable from the room objects. Migrations `0006_chat_index.sql` and `0022_chat_layer8.sql` (adds `group_dm`, `archived_at`, `posting_policy`, `retention_days`, `owner_count`). `chat_members.last_read_seq` has the marker at the time of the join only |
 
 Blob reference counts: each picture of a link preview has one owner, the link state of its message.
@@ -1267,11 +1359,11 @@ reference to their bytes.
 
 ## Layer 8 features
 
-- **Group direct messages (`group_dm`)**: `chat.open_group_dm` opens or creates a deterministic room for 2 to 8 other principals (`dm_` id derived from the sorted participant ids). Participants cannot be added or removed later.
+- **Group direct messages (`group_dm`)**: `chat.open_group_dm` opens or creates a deterministic room for 2 to 8 other principals (`dm_` id derived from the sorted participant ids). Participants cannot be added or removed later. An agent or a service account cannot open one with a different agent or service account.
 - **Pins and forwarding**: room members pin up to 50 messages (`chat.pin_message`, `chat.unpin_message`, `chat.list_pins`). `chat.forward_message` copies a message into a target room where the caller can post. Forwarding from a private room omits `source_room_name`. Forwarding an untrusted message preserves `untrusted: true`.
 - **Structured cards and actions**: messages can include up to 5 structured cards (`ChatCard`) with fields and action buttons. `chat.trigger_card_action` records the button click in `card_actions` (using the button's defined value, with optional `idempotency_key`), broadcasts a `card_action` event on the room socket, and notifies the author's activity feed. `chat.list_card_actions` lists clicks newest first.
 - **Archive, delete, posting rules, and retention**: room owners manage their own rooms, and organization admins can also manage public rooms: `chat.archive_room`, `chat.unarchive_room`, `chat.delete_room` (full human credential required, supports `dry_run`, and org admins can also delete 0-member orphaned private rooms), `chat.set_posting_rules` (`members`, `owners_only`, `allowlist`), and `chat.set_room_retention` (supports `dry_run` and alarm-driven pruning with delete events). Direct messages refuse these operations. Archived rooms are read-only.
-- **Personal views in `PrincipalDO`**: each principal owns its activity feed (`chat.list_activity`, `chat.mark_activity_read`), custom sidebar sections (`chat.list_sections`, `chat.create_section`, `chat.update_section`, `chat.delete_section`, `chat.set_room_section`), saved messages (`chat.save_message`, `chat.unsave_message`, `chat.list_saved_messages`), synced drafts (`chat.save_draft`, `chat.delete_draft`, `chat.list_drafts`), scheduled messages (`chat.schedule_message`, `chat.list_scheduled_messages`, `chat.update_scheduled_message`, `chat.cancel_scheduled_message`), and reminders (`chat.create_reminder`, `chat.list_reminders`, `chat.complete_reminder`, `chat.delete_reminder`). The `PrincipalDO` alarm checks credential validity before it delivers due scheduled messages, bounds retries, and fires due reminders into `chat_activity`. A due message of an agent or a service account fails when the agent no longer holds `chat.write`, also a message from before the credential binding ([identity](../identity/README.md#access-of-an-agent)).
+- **Personal views in `PrincipalDO`**: each principal owns its activity feed (`chat.list_activity`, `chat.mark_activity_read`; an item of the kind `member_request` is [a request of an agent to add an agent](#a-request-of-an-agent-to-add-an-agent)), custom sidebar sections (`chat.list_sections`, `chat.create_section`, `chat.update_section`, `chat.delete_section`, `chat.set_room_section`), saved messages (`chat.save_message`, `chat.unsave_message`, `chat.list_saved_messages`), synced drafts (`chat.save_draft`, `chat.delete_draft`, `chat.list_drafts`), scheduled messages (`chat.schedule_message`, `chat.list_scheduled_messages`, `chat.update_scheduled_message`, `chat.cancel_scheduled_message`), and reminders (`chat.create_reminder`, `chat.list_reminders`, `chat.complete_reminder`, `chat.delete_reminder`). The `PrincipalDO` alarm checks credential validity before it delivers due scheduled messages, bounds retries, and fires due reminders into `chat_activity`. A due message of an agent or a service account fails when the agent no longer holds `chat.write`, also a message from before the credential binding ([identity](../identity/README.md#access-of-an-agent)).
 - **Custom emoji**: org owners and admins upload raster images (PNG, JPEG, GIF, WebP; up to 256 KiB; SVG refused) with `chat.create_custom_emoji`, list them with `chat.list_custom_emoji`, and delete them with `chat.delete_custom_emoji`. Members download images at `GET /dl/chat/emoji/{name}` and use `:name:` in messages and reactions.
 - **Incoming webhooks**: room owners and org owners/admins (humans only) manage per-room incoming webhooks (`chat.create_incoming_webhook`, `chat.list_incoming_webhooks`, `chat.delete_incoming_webhook`). `POST /hooks/chat/{webhook_id}` verifies the HMAC-SHA256 signature, ±300 second timestamp window, and replay key, validates cards against `CardsInput`, posts the message, and marks it `untrusted: true`. Incoming webhooks still post when a room has `owners_only` or `allowlist` posting rules, because a room owner or org admin created the webhook for automated posts.
 - **Slash commands**: org owners and admins (humans only) manage commands (`chat.create_slash_command`, `chat.list_slash_commands`, `chat.delete_slash_command`). Commands use a strict allowlist: safe read-only `GET` operations (excluding sensitive and admin endpoints) plus `chat.post_message` pinned to the invoking room. `chat.invoke_slash_command` checks room membership, renders the template, and runs the operation under the caller's own credential.

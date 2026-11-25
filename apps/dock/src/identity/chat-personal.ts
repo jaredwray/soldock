@@ -24,6 +24,8 @@ export interface ActivityRecord {
 	emoji: string | null;
 	preview: string;
 	untrusted: boolean;
+	/** For `member_request`: the account that the actor wants to add to the room. Null for each other kind. */
+	subject: ActivityActor | null;
 	created_at: number;
 	read_at: number | null;
 }
@@ -41,6 +43,8 @@ export interface ActivityInsert {
 	emoji: string | null;
 	preview: string;
 	untrusted?: boolean | undefined;
+	/** For `member_request`: the account that the actor wants to add to the room. */
+	subject?: ActivityActor | null | undefined;
 	created_at: number;
 }
 
@@ -102,6 +106,40 @@ export interface ReminderRecord {
 	triggered_at: number | null;
 	completed_at: number | null;
 }
+
+/**
+ * The activity list gets the kind `member_request` and the column `subject_json`. SQLite cannot change the
+ * CHECK of a table, so this step makes the table again and copies each row. The new table has no CHECK of
+ * the kind: the contracts name the kinds, and only this module writes the table.
+ */
+export const CHAT_ACTIVITY_SUBJECT_MIGRATION: string[] = [
+	`CREATE TABLE chat_activity_next (
+		id TEXT PRIMARY KEY,
+		kind TEXT NOT NULL,
+		room_id TEXT NOT NULL,
+		room_name TEXT,
+		message_id TEXT NOT NULL,
+		parent_id TEXT,
+		seq INTEGER NOT NULL,
+		parent_seq INTEGER,
+		actor_json TEXT NOT NULL,
+		emoji TEXT,
+		preview TEXT NOT NULL,
+		untrusted INTEGER NOT NULL DEFAULT 0,
+		created_at INTEGER NOT NULL,
+		read_at INTEGER,
+		subject_json TEXT
+	) WITHOUT ROWID`,
+	`INSERT INTO chat_activity_next (id, kind, room_id, room_name, message_id, parent_id, seq, parent_seq,
+		actor_json, emoji, preview, untrusted, created_at, read_at)
+		SELECT id, kind, room_id, room_name, message_id, parent_id, seq, parent_seq,
+			actor_json, emoji, preview, untrusted, created_at, read_at FROM chat_activity`,
+	"DROP TABLE chat_activity",
+	"ALTER TABLE chat_activity_next RENAME TO chat_activity",
+	"CREATE INDEX chat_activity_recent ON chat_activity (created_at DESC, id DESC)",
+	"CREATE INDEX chat_activity_room ON chat_activity (room_id)",
+	"CREATE INDEX chat_activity_unread ON chat_activity (created_at DESC, id DESC) WHERE read_at IS NULL",
+];
 
 export const CHAT_PERSONAL_MIGRATION: string[] = [
 	`CREATE TABLE chat_activity (
@@ -208,6 +246,7 @@ interface ActivityRow extends Row {
 	untrusted: number;
 	created_at: number;
 	read_at: number | null;
+	subject_json: string | null;
 }
 
 interface ScheduledRow extends Row {
@@ -260,6 +299,7 @@ function toActivity(row: ActivityRow): ActivityRecord {
 		emoji: row.emoji,
 		preview: row.preview,
 		untrusted: row.untrusted === 1,
+		subject: row.subject_json == null ? null : (JSON.parse(row.subject_json) as ActivityActor),
 		created_at: row.created_at,
 		read_at: row.read_at,
 	};
@@ -291,8 +331,8 @@ export class ChatPersonalStore {
 			.exec<{ id: string }>(
 				`INSERT OR IGNORE INTO chat_activity (
 					id, kind, room_id, room_name, message_id, parent_id, seq, parent_seq,
-					actor_json, emoji, preview, untrusted, created_at, read_at
-				) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL) RETURNING id`,
+					actor_json, emoji, preview, untrusted, created_at, read_at, subject_json
+				) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?) RETURNING id`,
 				item.id,
 				item.kind,
 				item.room_id,
@@ -306,6 +346,7 @@ export class ChatPersonalStore {
 				item.preview.slice(0, 200),
 				item.untrusted ? 1 : 0,
 				item.created_at,
+				item.subject ? JSON.stringify(item.subject) : null,
 			)
 			.toArray();
 		if (inserted.length === 0) return false;

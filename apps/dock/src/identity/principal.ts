@@ -26,6 +26,7 @@ import {
 	type ActivityActor,
 	type ActivityInsert,
 	type ActivityRecord,
+	CHAT_ACTIVITY_SUBJECT_MIGRATION,
 	CHAT_PERSONAL_MIGRATION,
 	ChatPersonalStore,
 	type DraftRecord,
@@ -364,6 +365,7 @@ const MIGRATIONS: string[][] = [
 		...CHAT_PERSONAL_MIGRATION,
 	],
 	SERVICE_ACTIVITY_MIGRATION,
+	CHAT_ACTIVITY_SUBJECT_MIGRATION,
 ];
 
 const COLUMNS = `room_id, kind, name, name_key, topic, created_at, created_by_json, member_count, role, last_seq,
@@ -1046,10 +1048,14 @@ export class PrincipalDO extends DurableObject<Env> {
 			this.sql.exec<{ value: string }>("SELECT value FROM meta WHERE key = 'chat_seeded'").toArray()[0]?.value === "1";
 		this.ctx.storage.transactionSync(() => {
 			for (const item of items) {
-				const roomRow = this.sql
-					.exec<{ joined: number }>("SELECT joined FROM chat_rooms WHERE room_id = ?", item.room_id)
-					.toArray()[0];
-				if (roomRow ? roomRow.joined !== 1 : seeded) continue;
+				// A request of an agent goes to a person who manages the account of the request. That person is
+				// usually not a member of the room, so the check of the membership does not apply to it.
+				if (item.kind !== "member_request") {
+					const roomRow = this.sql
+						.exec<{ joined: number }>("SELECT joined FROM chat_rooms WHERE room_id = ?", item.room_id)
+						.toArray()[0];
+					if (roomRow ? roomRow.joined !== 1 : seeded) continue;
+				}
 				if (this.personal.recordActivity(item)) added += 1;
 			}
 		});
