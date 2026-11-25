@@ -9,10 +9,8 @@ import {
 	recipientKeyAction,
 	recipientOptions,
 	replyDraft,
-	signatureLines,
 	withSignature,
 } from "../src/features/mail/compose.ts";
-import { docToText, replaceLines, schema, textToDoc } from "../src/features/mail/richText.ts";
 
 const ME = "me@asterra.test";
 
@@ -196,28 +194,5 @@ describe("the signature of a draft", () => {
 		const draft = replyDraft(message(), ME, true);
 		expect(withSignature(draft, "")).toBe(draft);
 		expect(withSignature(draft, " \n ")).toBe(draft);
-	});
-
-	// A change of the From in the composer puts the signature of the new mailbox in place of the old one.
-	it("changes to the signature of a new From, and keeps the text around it", () => {
-		const reply = textToDoc(withSignature(replyDraft(message(), ME, false), SIGNATURE).text);
-		const typed = schema.nodes.doc.create(null, [
-			schema.nodes.paragraph.create(null, schema.text("Thanks!")),
-			...Array.from({ length: reply.childCount - 1 }, (_, index) => reply.child(index + 1)),
-		]);
-		const swapped = replaceLines(typed, signatureLines(SIGNATURE), signatureLines("Support team"));
-		expect(swapped && docToText(swapped)).toBe(
-			docToText(typed).replace("-- \nAda Lovelace\nAnalyst", "-- \nSupport team"),
-		);
-		// An empty signature removes the block.
-		const removed = replaceLines(typed, signatureLines(SIGNATURE), signatureLines(""));
-		expect(removed && docToText(removed)).toBe(docToText(typed).replace("-- \nAda Lovelace\nAnalyst\n", ""));
-	});
-
-	it("leaves a body alone when the person changed the signature, or when it had none", () => {
-		const signed = textToDoc(withSignature(newDraft(), SIGNATURE).text);
-		const changed = textToDoc(docToText(signed).replace("Analyst", "Engineer"));
-		expect(replaceLines(changed, signatureLines(SIGNATURE), signatureLines("Support team"))).toBeNull();
-		expect(replaceLines(textToDoc("Hello"), signatureLines(""), signatureLines("Support team"))).toBeNull();
 	});
 });

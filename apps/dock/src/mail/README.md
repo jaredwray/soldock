@@ -172,7 +172,8 @@ who can.
 - `mail.get_settings` returns the stored `default_from` without a check. A membership can end after the
   save. The web app then uses the address of the open mailbox: it uses a saved value only when
   `mail.list_mailboxes` has that mailbox with `mail.send`. The server does not clear a stale value. The
-  object has at most one entry for each team mailbox that the person was a member of.
+  object has at most one entry for the own mailbox and one for each team mailbox that the person was a
+  member of.
 - A change does not change the mailbox `version`, so the web app does not get the list again.
 - Only people can call them. An agent has no web app. A change writes no audit line, as for
   `chat.mark_read`: it changes the view of the person, not their data.

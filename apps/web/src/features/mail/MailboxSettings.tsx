@@ -384,7 +384,11 @@ function DefaultSection({
 	const ready = settings !== null && mailboxes !== null;
 	const current = mailboxKey(defaultFromId(mailbox.id, settings?.default_from ?? {}, senders, ownId));
 	const selected = choice ?? current;
-	const unchanged = selected === current;
+	// A saved address that the person can no longer send from does not count, but the server still has it. A
+	// save then removes it, so it does not come back with the membership.
+	const saved = settings?.default_from[mailbox.id ?? ownId];
+	const stale = saved !== undefined && mailboxKey(saved === ownId ? null : saved) !== current;
+	const unchanged = selected === current && !stale;
 	const name = mailbox.id === null ? "your mailbox" : mailbox.display_name;
 
 	async function save(event: FormEvent<HTMLFormElement>) {

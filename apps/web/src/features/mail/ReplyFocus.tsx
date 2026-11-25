@@ -33,8 +33,11 @@ interface ReplyFocusProps {
 	/** Opens the composer of Mail in its dialog, for a forward. A forward does not answer the thread. */
 	onCompose: (draft?: Draft) => void;
 	onShowHelp: () => void;
-	/** The values of the inline composer. A reply comes from the mailbox of its conversation. */
-	composer: { mailDomains: readonly string[] | null; fromOptions: readonly FromOption[]; signature: string };
+	/**
+	 * The values of the inline composer. A reply comes from the mailbox of its conversation. A null signature
+	 * did not load yet: the composer then reads it.
+	 */
+	composer: { mailDomains: readonly string[] | null; fromOptions: readonly FromOption[]; signature: string | null };
 }
 
 /** A request to open the reply of an item, for example of the next item after a send. */
