@@ -26,7 +26,8 @@ import agentAccessSchema from "../../migrations/0027_agent_access.sql";
 import aiSchema from "../../migrations/0028_ai.sql";
 import mailboxMemberScopesSchema from "../../migrations/0029_mailbox_member_scopes.sql";
 import chatMemberRequestsSchema from "../../migrations/0030_chat_member_requests.sql";
-import driveShareRequestsSchema from "../../migrations/0031_drive_share_requests.sql";
+import mailSettingsSchema from "../../migrations/0031_mail_settings.sql";
+import driveShareRequestsSchema from "../../migrations/0032_drive_share_requests.sql";
 import { log, OperationError, randomToken } from "../platform/index.ts";
 import { allMailboxIds } from "./team-mailboxes.ts";
 
@@ -126,6 +127,8 @@ function freshDirectoryStatements(db: D1Database): D1PreparedStatement[] {
 		// The AI ledger names the old mailboxes, and the settings belong to the old organization.
 		"DROP TABLE IF EXISTS ai_usage",
 		"DROP TABLE IF EXISTS ai_settings",
+		// The mail settings belong to the old organization.
+		"DROP TABLE IF EXISTS mail_settings",
 		// Remove references from agents before SQLite deletes the principals table.
 		"DELETE FROM principals WHERE kind = 'agent'",
 		"DROP TABLE principals",
@@ -158,6 +161,7 @@ function freshDirectoryStatements(db: D1Database): D1PreparedStatement[] {
 		...aiSchema.split("--> statement-breakpoint"),
 		...mailboxMemberScopesSchema.split("--> statement-breakpoint"),
 		...chatMemberRequestsSchema.split("--> statement-breakpoint"),
+		...mailSettingsSchema.split("--> statement-breakpoint"),
 		...driveShareRequestsSchema.split("--> statement-breakpoint"),
 		// The directory now has the schema of each bundled migration. Record them in the table that
 		// `wrangler d1 migrations apply` reads, or it runs them again later. A second run of 0004 would
@@ -199,5 +203,6 @@ const BUNDLED_MIGRATIONS = [
 	"0028_ai.sql",
 	"0029_mailbox_member_scopes.sql",
 	"0030_chat_member_requests.sql",
-	"0031_drive_share_requests.sql",
+	"0031_mail_settings.sql",
+	"0032_drive_share_requests.sql",
 ] as const;

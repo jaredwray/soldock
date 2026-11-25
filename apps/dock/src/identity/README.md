@@ -17,8 +17,13 @@ Public surface: `index.ts` only. Other domains must not import files from this f
 The D1 database also holds `chat_rooms` and `chat_members`. They belong to the
 [`chat`](../chat/README.md) module. A fresh start of the directory drops them and makes them again.
 The same applies to `chat_member_requests` (migration `0030`): see
-[Where an agent can act](#where-an-agent-can-act). It also applies to `drive_share_requests` (migration
-`0031`), which belongs to the [`drive`](../drive/README.md#data-inventory) module.
+[Where an agent can act](#where-an-agent-can-act). The table `mail_settings` (migration `0031`) belongs to
+the [`mail`](../mail/README.md#the-screener) module. It holds the default of the Screener. A fresh start
+of the directory drops it and replays `0031`, so the default is off again. The same applies to
+`drive_share_requests` (migration `0032`), which belongs to the [`drive`](../drive/README.md#data-inventory)
+module.
+`mailboxOwnerKind` (`team-mailboxes.ts`) tells the `mail` module who owns a mailbox: a team, a person
+or an agent. The Screener never applies to the mailbox of an agent.
 
 ## The object of a principal
 
@@ -698,11 +703,11 @@ account names its resources.
   the request on the item only. The account gets no scope
   ([`drive`](../drive/README.md#a-request-of-an-agent-to-share-an-item)).
 - **The requests to share are in the directory.** The table `drive_share_requests` has one row for each
-  request that waits for a person (migration `0031`). It belongs to the
+  request that waits for a person (migration `0032`). It belongs to the
   [`drive`](../drive/README.md#data-inventory) module. The migration only adds the table, and the Worker
-  from before does not read it. A fresh start of the directory drops the table and replays `0031`
+  from before does not read it. A fresh start of the directory drops the table and replays `0032`
   (`setup.ts`).
-- **Rollback after `0031`.** A Worker from before this change does not know the activity kind
+- **Rollback after `0032`.** A Worker from before this change does not know the activity kind
   `share_request`. Its `chat.list_activity` looks for the item in the room with the empty id. No such room
   exists, so it removes the item as old. The table of the migration and the column `item_json` stay, and
   that Worker does not use them

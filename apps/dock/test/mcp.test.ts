@@ -92,7 +92,7 @@ describe("the MCP endpoint", () => {
 		const { owner, bot } = await seedOrg();
 		const all = names((await mcp(owner.key, "tools/list")).body);
 		expect(all).toContain("directory_update_agent_policy");
-		expect(all).toHaveLength(210);
+		expect(all).toHaveLength(214);
 		// Only a person decides a member request or a share request, and only an agent or a service account makes one.
 		expect(all).not.toContain("chat_request_member");
 		expect(all).not.toContain("drive_request_share");
@@ -112,6 +112,10 @@ describe("the MCP endpoint", () => {
 				"directory_list_mail_domains",
 				"directory_add_mail_domain",
 				"directory_remove_mail_domain",
+				"mail_get_org_settings",
+				"mail_update_org_settings",
+				"mail_list_screener",
+				"mail_screen_sender",
 			]),
 		);
 		expect(names((await mcp(bot.key, "tools/list")).body)).toEqual([
@@ -243,6 +247,7 @@ describe("the MCP endpoint", () => {
 			"mail_get_thread",
 			"mail_list_labels",
 			"mail_list_mailboxes",
+			"mail_list_screener",
 			"mail_list_threads",
 			"mail_list_webhook_subscriptions",
 			"mail_modify_threads",

@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
 import { useSession } from "../features/auth/session.tsx";
-import { loadMailHomePath, useMailboxes } from "../features/mail/data.ts";
+import { useMailboxes, useMailSettings } from "../features/mail/data.ts";
 import { MailApp } from "../features/mail/MailApp.tsx";
 import { Icon } from "../lib/icons.tsx";
-import { lazyPage, PageLoading } from "../lib/lazyPage.tsx";
+import { lazyPage } from "../lib/lazyPage.tsx";
 import { setPageTitle } from "../lib/pageTitle.ts";
 import { Link, navigate, useLocation } from "../lib/router.tsx";
 import { useChatNotifications } from "../lib/useChatNotifications.ts";
@@ -34,6 +34,8 @@ export function Shell() {
 	const [navOpen, setNavOpen] = useState(false);
 	// The shell keeps the list of mailboxes, so the switcher does not empty when the mailbox changes.
 	const { mailboxes, reload: reloadMailboxes } = useMailboxes(route.page);
+	// The mail settings of the person, such as the default From of each mailbox. They stay when the mailbox changes.
+	const { settings: mailSettings, set: setMailSettings } = useMailSettings();
 	// The mailboxes that the person expanded or collapsed in the mail sidebar. The state stays when the mailbox changes.
 	const [expandedMailboxes, setExpandedMailboxes] = useState<Readonly<Record<string, boolean>>>({});
 	// After the upgrade to passwords, a person in an old session has no password. Without one, they cannot
@@ -74,18 +76,6 @@ export function Shell() {
 		if (route.page === "redirect") navigate(route.to, { replace: true });
 		else if (ownPath) navigate(ownPath, { replace: true });
 	}, [route, ownPath]);
-
-	// The start of Mail opens the inbox of the default mailbox of the person.
-	useEffect(() => {
-		if (route.page !== "mail-home") return;
-		let active = true;
-		void loadMailHomePath().then((path) => {
-			if (active) navigate(path, { replace: true });
-		});
-		return () => {
-			active = false;
-		};
-	}, [route.page]);
 
 	return (
 		<div className={needsPassword ? "app app-with-banner" : "app"}>
@@ -129,16 +119,25 @@ export function Shell() {
 		switch (route.page) {
 			case "mail":
 			case "mail-settings":
+			case "mail-screener":
 				// The effect above replaces the path. Until then, nothing shows.
 				if (ownPath) return null;
 				// The key gives each mailbox its own mail app, so the data of one never shows in a different one. The
-				// settings view of a mailbox has the same key, so its labels and its poll stay when it opens.
+				// settings view and the Screener view of a mailbox have the same key, so its labels and its poll stay.
 				return (
 					<MailApp
 						key={route.mailboxId ?? "own"}
-						route={route.page === "mail" ? route : { mailboxId: route.mailboxId, view: null, threadId: null }}
+						route={
+							route.page === "mail"
+								? route
+								: route.page === "mail-screener"
+									? { mailboxId: route.mailboxId, view: null, threadId: null, screener: route.tab }
+									: { mailboxId: route.mailboxId, view: null, threadId: null }
+						}
 						mailboxes={mailboxes}
 						onMailboxesChanged={reloadMailboxes}
+						mailSettings={mailSettings}
+						onMailSettingsSaved={setMailSettings}
 						expandedMailboxes={expandedMailboxes}
 						onSetExpanded={(key, expanded) =>
 							setExpandedMailboxes(({ [key]: _previous, ...others }) =>
@@ -187,9 +186,6 @@ export function Shell() {
 				return <SettingsPage section={route.section} navOpen={navOpen} onCloseNav={() => setNavOpen(false)} />;
 			case "redirect":
 				return null;
-			case "mail-home":
-				// The effect above reads the default mailbox, then replaces the path.
-				return <PageLoading />;
 			case "not-found":
 				return <NotFound />;
 		}

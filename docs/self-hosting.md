@@ -269,6 +269,24 @@ The saved list does not confirm that mail delivery is ready.
 On upgrade, migration `0003_mail_domains.sql` copies domains from existing mailbox addresses into settings.
 Add any unused domains from the old `MAIL_DOMAINS` configuration on the Admin page. Asterra no longer reads that variable.
 
+### The Screener
+
+The Screener holds the first mail from a new sender outside the organization out of the inbox. A person
+in the mailbox screens the sender in or out, and the sender is not told.
+
+- Open **Admin › Mail** to turn the Screener on or off by default. The default applies to each mailbox of
+  a person and each shared mailbox whose Screener setting follows the organization.
+- The members of a mailbox can choose **On** or **Off** in the settings of the mailbox. That choice wins
+  over the default.
+- The Screener never applies to the mailbox of an agent or a service account.
+- Senders that a mailbox wrote to, replies to its mail, and senders with earlier mail in the mailbox come
+  to the inbox. So when you turn on the default, only new senders wait.
+- When you turn the default off, each mailbox that follows it moves its waiting mail to the inbox at its
+  next mail from outside.
+
+On upgrade, migration `0031_mail_settings.sql` adds the table `mail_settings` with the Screener off.
+The deploy applies it. No mailbox changes until an owner, an admin or a member turns the Screener on.
+
 ### Start fresh from setup
 
 A valid `SETUP_TOKEN` shows the setup page even when accounts exist or the directory has an old schema.
@@ -555,7 +573,7 @@ An agent or a service account can no longer share a Drive item with a different 
 account. It asks with `drive.request_share`, and a person who manages that account approves or denies
 the request. A person shares an item as before.
 
-Migration `0031_drive_share_requests.sql` adds the table `drive_share_requests` for the requests. Apply
+Migration `0032_drive_share_requests.sql` adds the table `drive_share_requests` for the requests. Apply
 it with `wrangler d1 migrations apply`, as for each migration. The migration only adds a table, and the
 old Worker does not read it. The object of each principal also adds the column `item_json` to its
 activity list at its next start. The rows of the list stay.

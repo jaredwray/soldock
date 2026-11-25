@@ -169,11 +169,20 @@ MCP clients. The app has no UI-only path.
     attachments. One idempotency key for each composed message makes a retry safe.
   - Each field label of the composer ends with a colon, for example `To:` and `Subject:`. Each row
     sizes its own label, so the text field starts right after the label.
+  - The first row is **From:**. In a new message and a forward, it is a list
+    ([`Select.tsx`](src/lib/Select.tsx)) of each address that the person can send from: the own
+    address, then each shared mailbox with `mail.send` (`fromOptions` in
+    [`mailboxNav.ts`](src/features/mail/mailboxNav.ts)). The list shows also when it has one address.
+    `mail.send` gets the `mailbox_id` of the chosen address, so the sent copy goes into that mailbox.
+  - A new message and a forward start with the default address of the open mailbox (`defaultFromId`):
+    the saved `default_from` of the person while they can send from it, or else the open mailbox. A reply
+    comes from the mailbox of its conversation, because only that mailbox has the message that it
+    answers. So a reply shows its From as text, with no list.
   - "Add Cc and Bcc" is at the end of the To row. "Attach files" is at the left of the last row.
     Discard and Send are at the right. An attached file is a file card with a Remove button.
   - Each address field (To, Cc and Bcc) is an ARIA combobox ([`RecipientInput.tsx`](src/features/mail/RecipientInput.tsx)).
-    While the person types an address, a list under the field shows the addresses that the mailbox
-    sent mail to (`mail.suggest_recipients`, 8 at most). The part that matches the typed text is
+    While the person types an address, a list under the field shows the addresses that the open mailbox
+    sent mail to (`mail.suggest_recipients`, 8 at most), also after a change of the From. The part that matches the typed text is
     bold. The address can be in any position of the field, not only the last one. In the form
     `Name <address`, the list uses the text after the angle bracket.
   - The arrow keys select an address in the list, and the list scrolls to show it. A new character
@@ -204,11 +213,24 @@ MCP clients. The app has no UI-only path.
   - `mail.send` gets both forms of the body: `html` for the formatting, and `text` for mail apps
     without HTML. In the HTML, each paragraph is a `<div>`, as in most mail apps. In the text, a
     list item starts with `- ` or `1. `, a quote line starts with `> `, and a link is `text <address>`.
-  - Each new message, reply and forward starts with the signature of the mailbox (`withSignature` in
-    [`compose.ts`](src/features/mail/compose.ts), from `mail.get_mailbox_settings`): two empty lines,
-    the line `-- `, and the signature. The signature is above the quote of a reply and the header of a
-    forward. A draft with only the signature closes without a question. The person can change or remove
-    the signature in the draft.
+  - Each new message, reply and forward starts with the signature of the mailbox that sends it
+    (`withSignature` in [`compose.ts`](src/features/mail/compose.ts), from `mail.get_mailbox_settings`):
+    two empty lines, the line `-- `, and the signature. The signature is above the quote of a reply and
+    the header of a forward. A draft with only the signature closes without a question. The person can
+    change or remove the signature in the draft.
+  - A change of the From puts the signature of the new mailbox in place of the old one (`swapSignature` in
+    [`signatureSwap.ts`](src/features/mail/signatureSwap.ts)). The focus stays on the From.
+    - A body that the person did not change starts again with the new signature.
+    - In a changed body, the lines of the old signature change, also a `> ` line. When the person changed
+      those lines, the body stays as it is.
+    - A changed body without a signature gets the new one above the quote of a reply or the header of a
+      forward, or at the end when the person changed that text.
+    - A membership without `mail.read` cannot read the signature of its mailbox (`forbidden`), so the body
+      then gets no signature. After another error, the body stays as it is, and the composer asks the
+      person to check the signature.
+    - While the signature loads, **Send** waits, so a message never goes from the new address with the
+      signature of the old one. A signature that did not load before the composer opened loads in the
+      composer in the same way.
   - A reply or forward starts with the draft text from [`compose.ts`](src/features/mail/compose.ts).
     Each line becomes a paragraph, and a run of `> ` lines becomes a quote block. A line that starts
     with `>` and no space stays text, so an unchanged draft sends the same text. Quotes nest to a
@@ -244,9 +266,28 @@ MCP clients. The app has no UI-only path.
   - A deep link to a mailbox that is not in the list gives that mailbox a row, so its folders show.
   - A person with only the own mailbox sees the folders and the labels with no mailbox rows.
   - The Compose button of Mail fills the width of the sidebar.
-  - The web app uses `mail.get_settings` and `mail.update_settings` only for the default mailbox
-    (`default_mailbox_id`). Their sidebar settings are for the mailbox sections that the sidebar no
+  - The web app uses `mail.get_settings` and `mail.update_settings` only for the default From address of
+    each mailbox (`default_from`). Their sidebar settings are for the mailbox sections that the sidebar no
     longer has.
+- **The Screener** (`/mail/screener`, `/mail/screener/history`, and the same paths under a team or agent
+  mailbox, [`Screener.tsx`](src/features/mail/Screener.tsx), [`screener.ts`](src/features/mail/screener.ts)).
+  The sidebar shows **Screener** after the inbox of the open mailbox, with the number of senders that wait
+  (`screener_pending` of `mail.get_profile`). It shows while the Screener is on, and while senders wait after
+  it went off. The view replaces the list in the main pane, as the settings view does, and is a separate
+  chunk. **Waiting** lists the senders that wait (`mail.list_screener`): the name and address, the subject
+  and snippet of the newest message as plain text, the number of messages, a link that opens the newest
+  message in the search `in:screener`, and **Screen in** and **Screen out** (`mail.screen_sender`). The
+  buttons name the sender for a screen reader. After a decision, the row goes, a toast tells the result,
+  the focus goes to the next row, and the counts load again. After the last row goes, the focus goes to
+  the text of the empty list. While the Screener is off, the toast of a decision **out** tells that the
+  decision is stored. In a search of held mail (`in:screener`, `in:screened_out`), the toolbar and the
+  keys offer only the read state and the star: the server refuses a different label on held mail. **History** lists the senders that a person
+  screened out or in, with who decided and when, a button for the other decision, and a form that screens
+  out an address that did not write yet. Without `mail.modify`, the view has no buttons and says why. When
+  the Screener is off, a notice says so. Each list has loading, empty and error states, and **Load more**.
+- **Admin › Mail** (`/admin/mail`, [`MailSettingsCard.tsx`](src/features/admin/MailSettingsCard.tsx)). An
+  owner or an admin turns the default of the Screener on or off for each mailbox of a person and each team
+  mailbox that follows the default (`mail.update_org_settings`).
 - **Mailbox settings** (`/mail/settings`, `/mail/team/<tmb_id>/settings`, `/mail/agent/<prn_id>/settings`,
   [`MailboxSettings.tsx`](src/features/mail/MailboxSettings.tsx)). The gear after Refresh in the header of
   Mail is a link to the settings view of the open mailbox. The view replaces the list in the main pane,
@@ -258,17 +299,25 @@ MCP clients. The app has no UI-only path.
     They are the only AI feature of Mail. When the organization has AI or the feature off, a notice says
     so, with a link to Admin › AI for an owner or an admin. **Choose the auto labels** opens the dialog
     of the auto labels. Without `mail.modify`, the person cannot change the switch.
+  - **Screener.** A list with three choices (`screener` of `mail.update_mailbox_settings`): follow the
+    default of the organization (the choice tells whether it is on now), **On** or **Off**. A choice saves
+    at once, with a toast. Links open the Screener and its history. The mailbox of an agent shows text:
+    it has no Screener. Without `mail.modify`, the list is disabled.
   - **Access.** In a shared mailbox, an owner or an admin changes the members with the member editor of
     Admin › Shared mailboxes (`MembersPart`). A member sees the members and what each one can do. The
     own mailbox and the mailbox of an agent show text: nobody else can use the own mailbox, and owners
     and admins can only read the mailbox of an agent. After each change of the members, the shell gets
     `mail.list_mailboxes` again, so the rights of the person in the open mailbox follow a change of the
     own membership. A person who can no longer read the mailbox goes to the own inbox.
-  - **Default address.** **Make <address> my default** saves the mailbox as the default of the person
-    (`default_mailbox_id`). Mail then opens it first, so a new message comes from its address. The
-    mailbox of an agent cannot be a default. `defaultMailboxId` in `mailboxNav.ts` decides the current
-    default, as for the start of Mail. So the section shows **Loading…** until the list of the mailboxes
-    is there, except for the own mailbox with no saved default.
+  - **Default address.** The address that a new message in this mailbox comes from: a list of the
+    addresses that the person can send from (`fromOptions`), and **Save** (`default_from` of
+    `mail.update_settings`). It is a setting of the person, so each member of a shared mailbox has their
+    own. At first it is the address of the mailbox. `defaultFromId` in `mailboxNav.ts` decides the current
+    value, as for the composer. So the section shows **Loading…** until the list of the mailboxes is
+    there. When the saved address can no longer send, the list shows the address of the mailbox, and
+    **Save** removes the saved address. The mailbox of an agent, and a shared mailbox without
+    `mail.send`, show text and no list. The shell keeps the mail settings of the person
+    (`useMailSettings`), so they stay when the mailbox changes.
   - **Signature.** Plain text, at most 2,000 characters, with a counter
     (`mail.update_mailbox_settings`). The members of a shared mailbox share it. Without `mail.modify`,
     the field is read only. After a save, the next draft has the new signature. The mail app reads the
@@ -281,8 +330,9 @@ MCP clients. The app has no UI-only path.
   - The shell keeps the list of mailboxes and gets it again on window focus and when the page
     changes, for example from Admin to Mail. Each mailbox has its
     own mail app (a React key), so the data of one mailbox never shows in a different one.
-  - The composer shows a **From** row with the name and the address of the team mailbox. A reply
-    leaves out the team address, not the address of the person.
+  - In a team mailbox, the From of the composer starts with the address of the team mailbox, unless the
+    person saved a different default address for it. A reply leaves out the team address, not the
+    address of the person.
   - A sent message shows **Sent by** and the member (`sent_by`). No sender shows as "me", because
     more than one person sends from the address.
   - The views follow the scopes of the membership (`scopes` of `mail.list_mailboxes`, `mailboxRights` in
@@ -352,6 +402,10 @@ MCP clients. The app has no UI-only path.
     That member does not get the forms that change an account.
     - **New member**, above the list, opens a dialog for an owner or an admin.
       The kinds are Person, Agent and Service account, with one line that says what each kind is for.
+      The address is a mailbox name in a field and an email domain in a list. The list holds the saved
+      domains of Admin › Email domains (`directory.list_mail_domains`). It starts on the domain of the
+      admin, or on the first domain if that domain is not saved (`memberAddress.ts`). The create button
+      stays off until the list loads. With no saved domain, a hint tells the admin to add one.
       The first API key of a new agent shows once, with a copy button.
       A new person gets no API key. A toast tells the admin to give the first password to the person.
       The person can create keys in Settings after the sign-in.
@@ -1829,16 +1883,17 @@ dock Worker serves `index.html` for each app path, so a deep link works on reloa
 
 | Path | Page |
 | --- | --- |
-| `/`, `/mail` | Goes to the inbox of the default mailbox of the person (`default_mailbox_id` of `mail.get_settings`). Without a default, or when the person cannot read it now, goes to `/mail/inbox` (`mailHomePath` in `mailboxNav.ts`). The page shows **Loading…** until the setting is there. The rail link of Mail and the mark of Asterra go here |
+| `/`, `/mail` | Goes to `/mail/inbox` |
 | `/mail/<view>` | The thread list of a view: `inbox`, `starred`, `sent`, `spam`, `trash` or `all` |
 | `/mail/label/<lbl_id>` | The thread list of a user label |
 | `/mail/search?q=<query>` | The search results |
 | `/mail/<view>/<thr_id>`, `/mail/label/<lbl_id>/<thr_id>`, `/mail/search/<thr_id>?q=<query>` | One thread, opened from that view |
-| `/mail/settings` | The settings view of the own mailbox: AI, access, the default address and the signature |
-| `/mail/team/<tmb_id>/…` | The same views, threads and settings, in a team mailbox. `/mail/team/<tmb_id>` goes to its inbox |
+| `/mail/settings` | The settings view of the own mailbox: AI, the Screener, access, the default address and the signature |
+| `/mail/screener`, `/mail/screener/history` | The Screener view of the own mailbox: the senders that wait, and the decisions |
+| `/mail/team/<tmb_id>/…` | The same views, threads, settings and Screener, in a team mailbox. `/mail/team/<tmb_id>` goes to its inbox |
 | `/mail/agent/<prn_id>/…` | The same views, threads and settings, read only, in the mailbox of an agent, for an owner or an admin. `/mail/agent/<prn_id>` goes to its inbox |
 | `/admin` | Goes to the first section of Admin that the person can use |
-| `/admin/<section>` | One section of Admin: `members`, `shared-mailboxes`, `shared-drives`, `chat` or `domains` |
+| `/admin/<section>` | One section of Admin: `members`, `shared-mailboxes`, `shared-drives`, `chat`, `mail`, `domains` or `ai` |
 | `/admin/members/<prn_id>` | The page of one person, agent or service account in Admin › Members |
 | `/connect/<oar_id>` | The approval page of an OAuth request from an MCP client |
 | `/drive` | The root of the own drive |

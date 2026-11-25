@@ -82,6 +82,7 @@ export {
 	isTeamMailboxId,
 	type MailboxRecord,
 	type MemberMailboxRecord,
+	mailboxOwnerKind,
 	resolveMailboxAddress,
 	teamMailboxesOf,
 	teamMailboxFor,

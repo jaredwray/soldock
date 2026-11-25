@@ -32,6 +32,10 @@ export const MAIL_LIMITS = {
 	recipientSuggestions: 25,
 	/** The signature of a mailbox, in characters of plain text. */
 	signatureChars: 2_000,
+	/** The senders that one `mail.list_screener` call returns. */
+	screenerPageSize: 100,
+	/** When a person screens a sender back in, the mail of the sender from these last days goes to the inbox. */
+	screenerRestoreDays: 90,
 } as const;
 
 const ThreadId = prefixedId("thr");
@@ -223,7 +227,7 @@ export const listMailboxes = defineOperation({
 export const getProfile = defineOperation({
 	name: "mail.get_profile",
 	summary: "Get the address and counts of a mailbox",
-	description: `Returns the address of the mailbox, the mail domains of this deployment, its message and thread totals, the unread inbox count, and a version number. The version grows with each change, so compare it to find out if anything changed. An address on a mail domain is local: mail to it never leaves the deployment. ${IN_MAILBOX_READ}`,
+	description: `Returns the address of the mailbox, the mail domains of this deployment, its message and thread totals, the unread inbox count, the number of senders that wait in the Screener, and a version number. The totals do not count the mail that the Screener holds. The version grows with each change, so compare it to find out if anything changed. An address on a mail domain is local: mail to it never leaves the deployment. ${IN_MAILBOX_READ}`,
 	http: { method: "GET", path: "/api/v1/mail/profile" },
 	scopes: ["mail.read"],
 	callers: ["human", "agent", "service"],
@@ -238,6 +242,8 @@ export const getProfile = defineOperation({
 		messages_total: z.number().int(),
 		threads_total: z.number().int(),
 		inbox_unread: z.number().int(),
+		/** The senders that wait for a decision in the Screener. Zero when no sender waits. */
+		screener_pending: z.number().int(),
 		version: z.number().int(),
 	}),
 	errors: [],
@@ -300,6 +306,7 @@ export const listThreads = defineOperation({
 		"larger:/smaller: (with K or M, for example 2M), quoted phrases, a leading - to negate a term, and OR between terms.",
 		"Other words search the subject, the people, the body and the attachment names.",
 		"An empty query, or in:all, lists all mail except spam and trash, as the All Mail view does. Results exclude spam and trash unless the query names them or uses in:anywhere.",
+		"Results never include mail that the Screener holds, also with in:anywhere. in:screener finds the mail of senders that wait, and in:screened_out finds the mail of senders that a person screened out.",
 		"Escape a double quote inside a quoted value with a backslash. Pass next_cursor as cursor to get the next page.",
 		`${IN_MAILBOX_READ} In a team mailbox, from:me and to:me mean the address of the team mailbox.`,
 	].join(" "),
@@ -354,6 +361,7 @@ export const modifyThreads = defineOperation({
 		"Archive: remove INBOX. Mark as read: remove UNREAD. Star: add STARRED. Move to trash: add TRASH. Report spam: add SPAM.",
 		"Restore from trash or spam: remove TRASH or SPAM.",
 		"Set dry_run to true to get the counts without a change.",
+		"On a thread that the Screener holds, only UNREAD, STARRED and IMPORTANT can change. A different label fails with conflict: a person screens the sender in or out to move the mail (mail.screen_sender).",
 		`${IN_MAILBOX} A change in a team mailbox applies for each member: the members share the labels and the read state.`,
 		AGENT_READ_ONLY,
 	].join(" "),
@@ -379,7 +387,7 @@ export const modifyThreads = defineOperation({
 		messages_changed: z.number().int(),
 		dry_run: z.boolean(),
 	}),
-	errors: ["not_found"],
+	errors: ["not_found", "conflict"],
 });
 
 const OutgoingAttachment = z.strictObject({
@@ -414,6 +422,7 @@ export const send = defineOperation({
 		"The signature of the mailbox is not added. Read it with mail.get_mailbox_settings, and add it to text and html yourself.",
 		"To reply, set reply_to_message_id: the message joins that thread, and the subject defaults to Re: and the original subject.",
 		"A reply reads the message that it answers. So it also needs mail.read: in your credential, and in your membership of a team mailbox.",
+		"A send by a person to a sender that waits in the Screener screens that sender in, when the credential and the membership of a team mailbox have mail.modify. Without mail.modify, and for an agent, the send decides nothing.",
 		"An agent can send only to the recipients that its policy allows, also from a team mailbox. Otherwise the call fails with policy_denied and nothing is sent.",
 		"Set idempotency_key to make a retry safe: a second call with the same key and the same message returns the first result and sends nothing. The same key with a different message fails with conflict.",
 	].join(" "),
@@ -518,11 +527,13 @@ export const MailSettings = z.object({
 		agent_mailboxes_collapsed: z.boolean(),
 	}),
 	/**
-	 * The mailbox that the web app opens first: the id of a team mailbox that you are a member of. Null
-	 * means your own mailbox, which is the default. A membership can end after you save it, so a client
-	 * opens your own mailbox when the id is not in mail.list_mailboxes.
+	 * The default From address of a new message, for each mailbox where you write it. A key is the id of
+	 * the mailbox that is open in the web app: your own id, or the id of a team mailbox. Its value is the
+	 * id of the mailbox whose address the message comes from: your own id, or the id of a team mailbox
+	 * that you can send from. A mailbox without a key uses its own address. A membership can end after you
+	 * save a value, so a client ignores a value that mail.list_mailboxes does not show with mail.send.
 	 */
-	default_mailbox_id: z.string().nullable(),
+	default_from: z.record(z.string(), z.string()),
 });
 export type MailSettings = z.infer<typeof MailSettings>;
 
@@ -530,7 +541,7 @@ export const getSettings = defineOperation({
 	name: "mail.get_settings",
 	summary: "Get your mail settings",
 	description:
-		"Returns your mail settings: the sections of the sidebar of the web app that are collapsed, and the mailbox that the web app opens first (default_mailbox_id, null for your own mailbox). The settings belong to your own mailbox, never to a team mailbox. A setting that you did not change has its default value. For the signature of a mailbox, use mail.get_mailbox_settings.",
+		"Returns your mail settings: the sections of the sidebar of the web app that are collapsed, and the default From address of a new message in each mailbox (default_from: the id of the open mailbox, then the id of the mailbox that sends). The settings belong to your own mailbox, never to a team mailbox. A setting that you did not change has its default value. For the signature of a mailbox, use mail.get_mailbox_settings.",
 	http: { method: "GET", path: "/api/v1/mail/settings" },
 	scopes: ["mail.read"],
 	callers: ["human"],
@@ -544,7 +555,7 @@ export const updateSettings = defineOperation({
 	name: "mail.update_settings",
 	summary: "Change your mail settings",
 	description:
-		"Changes the settings that the request names, and keeps the others. Returns all your mail settings. The settings belong to your own mailbox, never to a team mailbox. A change does not change the mailbox version that mail.get_profile returns. default_mailbox_id must be your own id, null, or the id of a team mailbox that you are a member of with mail.read. The mailbox of an agent cannot be the default.",
+		"Changes the settings that the request names, and keeps the others. Returns all your mail settings. The settings belong to your own mailbox, never to a team mailbox. A change does not change the mailbox version that mail.get_profile returns. default_from changes the default From address of one mailbox, and keeps the others. Its mailbox_id is your own id, or the id of a team mailbox that you are a member of with mail.read. Its from_mailbox_id is your own id, or the id of a team mailbox that you are a member of with mail.send. Null, or the same id as mailbox_id, removes the setting, so the mailbox uses its own address. A removal needs no membership. Nobody writes or sends from the mailbox of an agent, so it cannot be in default_from.",
 	http: { method: "POST", path: "/api/v1/mail/settings" },
 	scopes: ["mail.modify"],
 	callers: ["human"],
@@ -556,9 +567,15 @@ export const updateSettings = defineOperation({
 				agent_mailboxes_collapsed: z.boolean().optional(),
 			})
 			.optional(),
-		default_mailbox_id: MailboxId.nullable()
+		default_from: z
+			.strictObject({
+				mailbox_id: MailboxId.describe("The mailbox where you write: your own id, or the id of a team mailbox."),
+				from_mailbox_id: MailboxId.nullable().describe(
+					"The mailbox whose address a new message comes from. Null, or the same id as mailbox_id, means the address of that mailbox.",
+				),
+			})
 			.optional()
-			.describe("The mailbox that the web app opens first. Null, or your own id, means your own mailbox."),
+			.describe("The default From address of a new message in one mailbox. The other mailboxes keep theirs."),
 	}),
 	output: MailSettings,
 	errors: ["not_found", "invalid"],
@@ -584,6 +601,14 @@ export const Signature = z
 		"must not contain control characters other than line breaks, or characters that change the direction of text",
 	);
 
+/** The Screener setting of a mailbox: use the default of the organization, or turn it on or off. */
+export const ScreenerMode = z.enum(["inherit", "on", "off"]);
+export type ScreenerMode = z.infer<typeof ScreenerMode>;
+
+/** The text about the Screener for the descriptions of its operations. */
+const SCREENER_TEXT =
+	"The Screener holds the first mail from a new sender outside the organization out of the inbox. A person in the mailbox then screens the sender in or out. The sender is never told.";
+
 /**
  * The settings of one mailbox. The mailbox holds them, so the members of a team mailbox share them.
  * Each setting has a default, so a mailbox without saved settings gets them.
@@ -596,13 +621,22 @@ export const MailboxSettings = z.object({
 	 * (and html) itself.
 	 */
 	signature: z.string(),
+	/** The Screener of the mailbox. See mail.list_screener. */
+	screener: z.object({
+		/** `inherit`: the mailbox uses the default of the organization. `on` or `off`: the mailbox chose. */
+		mode: ScreenerMode,
+		/** The default of the organization, which an owner or an admin sets in mail.update_org_settings. */
+		org_default: z.boolean(),
+		/** True when the Screener holds new mail in this mailbox now. Always false in the mailbox of an agent. */
+		enabled: z.boolean(),
+	}),
 });
 export type MailboxSettings = z.infer<typeof MailboxSettings>;
 
 export const getMailboxSettings = defineOperation({
 	name: "mail.get_mailbox_settings",
 	summary: "Get the settings of a mailbox",
-	description: `Returns the settings of the mailbox: for now, its plain-text signature (an empty string for none). mail.send never adds the signature. To sign a message, add the signature to text, after a line with "-- " (two dashes and a space), and to html. ${IN_MAILBOX_READ} The members of a team mailbox share its settings. For your own settings, such as the mailbox that the web app opens first, use mail.get_settings.`,
+	description: `Returns the settings of the mailbox: its plain-text signature (an empty string for none) and its Screener setting. mail.send never adds the signature. To sign a message, add the signature to text, after a line with "-- " (two dashes and a space), and to html. ${IN_MAILBOX_READ} The members of a team mailbox share its settings. For your own settings, such as the default From address of each mailbox, use mail.get_settings.`,
 	http: { method: "GET", path: "/api/v1/mail/mailbox-settings" },
 	scopes: ["mail.read"],
 	callers: ["human", "agent", "service"],
@@ -615,7 +649,7 @@ export const getMailboxSettings = defineOperation({
 export const updateMailboxSettings = defineOperation({
 	name: "mail.update_mailbox_settings",
 	summary: "Change the settings of a mailbox",
-	description: `Changes the settings that the request names, and keeps the others. Returns all the settings of the mailbox. Name at least one setting: to read the settings, use mail.get_mailbox_settings. signature is plain text of at most ${MAIL_LIMITS.signatureChars} characters. An empty string removes it. ${IN_MAILBOX} The members of a team mailbox share its settings, so only a person changes them there. An agent or a service account can change only the settings of its own mailbox. ${AGENT_READ_ONLY} A change does not change the mailbox version that mail.get_profile returns.`,
+	description: `Changes the settings that the request names, and keeps the others. Returns all the settings of the mailbox. Name at least one setting: to read the settings, use mail.get_mailbox_settings. signature is plain text of at most ${MAIL_LIMITS.signatureChars} characters. An empty string removes it. screener is inherit (use the default of the organization), on or off. ${SCREENER_TEXT} When the Screener goes off, the mail that waits in it moves to the inbox. The Screener is not for the own mailbox of an agent or a service account: a change of screener there fails with forbidden. ${IN_MAILBOX} The members of a team mailbox share its settings, so only a person changes them there. An agent or a service account can change only the settings of its own mailbox. ${AGENT_READ_ONLY} A change does not change the mailbox version that mail.get_profile returns.`,
 	http: { method: "POST", path: "/api/v1/mail/mailbox-settings" },
 	scopes: ["mail.modify"],
 	callers: ["human", "agent", "service"],
@@ -626,11 +660,162 @@ export const updateMailboxSettings = defineOperation({
 			signature: Signature.optional().describe(
 				`The plain-text signature, at most ${MAIL_LIMITS.signatureChars} characters. An empty string removes it.`,
 			),
+			screener: ScreenerMode.optional().describe(
+				"inherit uses the default of the organization. on or off is the choice of this mailbox.",
+			),
 		})
 		// A change returns the settings. Without a setting to change, the call would only read them, with the
 		// scope to change and not the scope to read. Use mail.get_mailbox_settings to read them.
-		.refine((input) => input.signature !== undefined, "name a setting to change"),
+		.refine((input) => input.signature !== undefined || input.screener !== undefined, "name a setting to change"),
 	output: MailboxSettings,
+	errors: [],
+});
+
+/** The mail settings of the organization. */
+export const MailOrgSettings = z.object({
+	screener: z.object({
+		/** True when the Screener is on in each mailbox of a person and each team mailbox whose setting is inherit. */
+		default_enabled: z.boolean(),
+	}),
+});
+export type MailOrgSettings = z.infer<typeof MailOrgSettings>;
+
+const ORG_SETTINGS_TEXT =
+	"Owners and admins only. The default applies to each mailbox of a person and each team mailbox whose Screener setting is inherit (see mail.update_mailbox_settings). It never applies to the mailbox of an agent or a service account.";
+
+export const getOrgSettings = defineOperation({
+	name: "mail.get_org_settings",
+	summary: "Get the mail settings of the organization",
+	description: `Returns the mail settings of the organization: for now, the default of the Screener. ${SCREENER_TEXT} ${ORG_SETTINGS_TEXT}`,
+	http: { method: "GET", path: "/api/v1/mail/org-settings" },
+	scopes: ["directory.read"],
+	callers: ["human"],
+	annotations: READ,
+	auditDenied: true,
+	input: z.strictObject({}),
+	output: MailOrgSettings,
+	errors: [],
+});
+
+export const updateOrgSettings = defineOperation({
+	name: "mail.update_org_settings",
+	summary: "Change the mail settings of the organization",
+	description: `Changes the default of the Screener and returns the mail settings of the organization. ${SCREENER_TEXT} ${ORG_SETTINGS_TEXT} A change applies to the next mail from outside that each mailbox gets. When the default goes off, a mailbox moves the mail that waits in its Screener to the inbox at that time.`,
+	http: { method: "POST", path: "/api/v1/mail/org-settings" },
+	scopes: ["directory.write"],
+	callers: ["human"],
+	annotations: { readOnly: false, destructive: false, idempotent: true, openWorld: false },
+	input: z.strictObject({
+		screener: z.strictObject({
+			default_enabled: z.boolean().describe("True turns the Screener on in each mailbox whose setting is inherit."),
+		}),
+	}),
+	output: MailOrgSettings,
+	errors: [],
+});
+
+/** The status of a sender in the Screener. `pending`: the sender waits for a decision. */
+export const ScreenerStatus = z.enum(["pending", "in", "out"]);
+export type ScreenerStatus = z.infer<typeof ScreenerStatus>;
+
+/** A sender in the Screener of a mailbox. The name, subject and snippet come from outside, so they are untrusted. */
+export const ScreenerSender = z.object({
+	/** The address of the sender, in lowercase. */
+	address: z.string(),
+	/** The display name of the newest message from the sender, or null. Untrusted. */
+	name: z.string().nullable(),
+	status: ScreenerStatus,
+	/** The messages that wait (pending) or that are hidden (out). Zero for a sender that is screened in. */
+	messages_held: z.number().int(),
+	/** The time of the first message from the sender that the Screener held, or of the decision. */
+	first_seen_at: Timestamp,
+	/** The newest message that the Screener holds from the sender, or null when it holds none. */
+	latest: z
+		.object({
+			thread_id: z.string(),
+			message_id: z.string(),
+			subject: z.string(),
+			snippet: z.string(),
+			received_at: Timestamp,
+			has_attachments: z.boolean(),
+		})
+		.nullable(),
+	/** The time of the decision. Null for a sender that waits. */
+	decided_at: Timestamp.nullable(),
+	/** The person who decided, with the name at that time. Null for a sender that waits. */
+	decided_by: z
+		.object({
+			principal_id: z.string(),
+			kind: z.literal("human"),
+			display_name: z.string(),
+		})
+		.nullable(),
+	untrusted: z.literal(true),
+});
+export type ScreenerSender = z.infer<typeof ScreenerSender>;
+
+export const listScreener = defineOperation({
+	name: "mail.list_screener",
+	summary: "List the senders in the Screener",
+	description: [
+		SCREENER_TEXT,
+		"Returns the senders with a status: pending (the default) lists the senders that wait, newest mail first.",
+		"in and out list the decisions (the Screener history), newest decision first.",
+		"Each sender has its newest held message: read it with mail.get_thread or mail.get_message.",
+		"The name, the subject and the snippet come from outside the organization, so they are untrusted.",
+		"Pass next_cursor as cursor to get the next page.",
+		`${IN_MAILBOX_READ} The members of a team mailbox share its Screener. The mailbox of an agent has no Screener.`,
+	].join(" "),
+	http: { method: "GET", path: "/api/v1/mail/screener" },
+	scopes: ["mail.read"],
+	callers: ["human", "agent", "service"],
+	annotations: READ,
+	input: z.strictObject({
+		mailbox_id: MailboxParam,
+		status: ScreenerStatus.default("pending"),
+		cursor: z.string().max(400).optional(),
+		limit: z.coerce.number().int().min(1).max(MAIL_LIMITS.screenerPageSize).optional(),
+	}),
+	output: z.object({
+		senders: z.array(ScreenerSender),
+		next_cursor: z.string().nullable(),
+	}),
+	errors: ["invalid"],
+});
+
+export const screenSender = defineOperation({
+	name: "mail.screen_sender",
+	summary: "Screen a sender in or out",
+	description: [
+		SCREENER_TEXT,
+		"in: the mail of the sender that waits goes to the inbox with its dates, and later mail from the sender comes to the inbox.",
+		`For a sender that was screened out, only the mail of the last ${MAIL_LIMITS.screenerRestoreDays} days goes to the inbox. Older mail goes to All mail, marked as read.`,
+		"out: the mail of the sender that waits, and later mail from the sender, stay out of each view. in:screened_out finds it. Mail that is already in a view stays there.",
+		"The sender is never told. To change a decision, screen the sender again with the other decision.",
+		"You can also decide for a sender that did not write yet. While the Screener is off, the decision is stored, and it decides when the Screener is on.",
+		"Set dry_run to true to get the counts without a change. People only.",
+		`${IN_MAILBOX} ${AGENT_READ_ONLY}`,
+	].join(" "),
+	http: { method: "POST", path: "/api/v1/mail/screener/decisions" },
+	scopes: ["mail.modify"],
+	callers: ["human"],
+	annotations: { readOnly: false, destructive: true, idempotent: true, openWorld: false },
+	input: z.strictObject({
+		mailbox_id: MailboxParam,
+		address: EmailAddress,
+		decision: z.enum(["in", "out"]),
+		dry_run: z.boolean().default(false),
+	}),
+	output: z.object({
+		address: z.string(),
+		decision: z.enum(["in", "out"]),
+		/** False when the sender already had this decision. */
+		changed: z.boolean(),
+		messages_to_inbox: z.number().int(),
+		messages_archived: z.number().int(),
+		messages_screened_out: z.number().int(),
+		dry_run: z.boolean(),
+	}),
 	errors: [],
 });
 
@@ -949,6 +1134,10 @@ export const mailOperations = {
 	"mail.update_settings": updateSettings,
 	"mail.get_mailbox_settings": getMailboxSettings,
 	"mail.update_mailbox_settings": updateMailboxSettings,
+	"mail.get_org_settings": getOrgSettings,
+	"mail.update_org_settings": updateOrgSettings,
+	"mail.list_screener": listScreener,
+	"mail.screen_sender": screenSender,
 	"mail.get_auto_labels": getAutoLabels,
 	"mail.update_auto_labels": updateAutoLabels,
 	"mail.create_auto_label": createAutoLabel,

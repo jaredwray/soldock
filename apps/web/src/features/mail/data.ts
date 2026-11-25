@@ -2,16 +2,16 @@ import {
 	type Label,
 	MAIL_LIMITS,
 	type Mailbox,
+	type MailSettings,
 	type OutputOf,
 	type Thread,
 	type ThreadSummary,
 } from "@asterra/contracts";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, errorMessage } from "../../lib/api.ts";
-import { INBOX_PATH, type MailView } from "../../routes.ts";
+import type { MailView } from "../../routes.ts";
 import { applyToSummary, belongsInView, changeLabels, type LabelChange } from "./actions.ts";
 import { mailboxInput } from "./mailbox.tsx";
-import { mailHomePath } from "./mailboxNav.ts";
 
 export type Profile = OutputOf<"mail.get_profile">;
 export type MailboxSettings = OutputOf<"mail.get_mailbox_settings">;
@@ -68,35 +68,23 @@ export function useProfilePoll(mailboxId: string | null, onVersionChange: () => 
 }
 
 /**
- * Reads the default mailbox of the person, and returns the path of its inbox. Without a saved default, it
- * does not read the mailboxes. When a read fails, Mail opens the own inbox.
- */
-export async function loadMailHomePath(): Promise<string> {
-	try {
-		const { default_mailbox_id } = await api.call("mail.get_settings");
-		if (default_mailbox_id === null) return INBOX_PATH;
-		const { mailboxes } = await api.call("mail.list_mailboxes");
-		return mailHomePath(default_mailbox_id, mailboxes);
-	} catch {
-		return INBOX_PATH;
-	}
-}
-
-/**
  * The settings of the mailbox (`mail.get_mailbox_settings`), such as its signature. Null while they load,
  * and when they do not load: the composer then starts with no signature. They load again when the window
  * gets the focus, so a read that failed gets a second try, and a change in a different tab shows. `set`
- * keeps the settings that the settings view saved, so the next draft has the new signature.
+ * keeps the settings that the settings view saved, so the next draft has the new signature. With `enabled`
+ * false, nothing loads and the settings are null.
  */
-export function useMailboxSettings(mailboxId: string | null) {
-	const [settings, setSettings] = useState<MailboxSettings | null>(null);
+export function useMailboxSettings(mailboxId: string | null, enabled = true) {
+	// The settings keep the mailbox that they are for, so a different mailbox never gets them.
+	const [loaded, setLoaded] = useState<{ mailboxId: string | null; settings: MailboxSettings } | null>(null);
 
 	useEffect(() => {
+		if (!enabled) return;
 		let active = true;
 		const load = () => {
 			api.call("mail.get_mailbox_settings", mailboxInput(mailboxId)).then(
 				(result) => {
-					if (active) setSettings(result);
+					if (active) setLoaded({ mailboxId, settings: result });
 				},
 				() => {
 					// The settings stay as they are: without them, a draft has no signature. A 401 shows the sign-in
@@ -110,7 +98,40 @@ export function useMailboxSettings(mailboxId: string | null) {
 			active = false;
 			window.removeEventListener("focus", load);
 		};
-	}, [mailboxId]);
+	}, [mailboxId, enabled]);
+
+	const set = useCallback((settings: MailboxSettings) => setLoaded({ mailboxId, settings }), [mailboxId]);
+	const settings = enabled && loaded?.mailboxId === mailboxId ? loaded.settings : null;
+	return { settings, set };
+}
+
+/**
+ * The mail settings of the person (`mail.get_settings`): for the composer, the default From address of each
+ * mailbox. Null while they load, and when they do not load: a new message then comes from the open mailbox.
+ * They load again when the window gets the focus. `set` keeps the settings that the settings view saved.
+ */
+export function useMailSettings() {
+	const [settings, setSettings] = useState<MailSettings | null>(null);
+
+	useEffect(() => {
+		let active = true;
+		const load = () => {
+			api.call("mail.get_settings").then(
+				(result) => {
+					if (active) setSettings(result);
+				},
+				() => {
+					// The settings stay as they are. A 401 shows the sign-in page through lib/api.ts.
+				},
+			);
+		};
+		load();
+		window.addEventListener("focus", load);
+		return () => {
+			active = false;
+			window.removeEventListener("focus", load);
+		};
+	}, []);
 
 	return { settings, set: setSettings };
 }
