@@ -20,12 +20,17 @@ interface ToolbarProps {
 	selection: "none" | "some" | "all";
 	anyUnread: boolean;
 	allStarred: boolean;
-	/** True when each target is in Reply later. */
+	/** True when each thread of the targets is in Reply later. The button then takes them out. */
 	allReplyLater: boolean;
 	userLabels: readonly Label[];
 	listEmpty: boolean;
 	/** True in the mailbox of an agent: no selection and no actions. */
 	readOnly: boolean;
+	/**
+	 * True in a search of the mail that the Screener holds. Only the read state and the star change there:
+	 * a person screens the sender in or out to move the mail.
+	 */
+	held: boolean;
 	onToggleAll: () => void;
 	onAction: (action: MailAction) => void;
 	onBack: () => void;
@@ -39,9 +44,10 @@ interface ToolbarProps {
  * the search box, Refresh and the settings of the mailbox.
  */
 export function Toolbar(props: ToolbarProps) {
-	const { view, mode, targetCount, anyUnread, allStarred, allReplyLater, userLabels, onAction } = props;
+	const { view, mode, targetCount, anyUnread, allStarred, allReplyLater, userLabels, held, onAction } = props;
 	const inSpam = view.kind === "system" && view.view === "spam";
 	const inTrash = view.kind === "system" && view.view === "trash";
+	const moves = !inSpam && !inTrash && !held;
 	const hasTargets = !props.readOnly && targetCount > 0;
 
 	return (
@@ -63,14 +69,14 @@ export function Toolbar(props: ToolbarProps) {
 				<div className="toolbar-actions">
 					{inSpam && <TextButton icon="restore" label="Not spam" onClick={() => onAction("notSpam")} />}
 					{inTrash && <TextButton icon="restore" label="Restore" onClick={() => onAction("restore")} />}
-					{!inSpam && !inTrash && (
+					{moves && (
 						<>
 							<ToolButton icon="archive" label="Archive" shortcut="e" onClick={() => onAction("archive")} />
 							<ToolButton icon="spam" label="Report spam" onClick={() => onAction("spam")} />
 							<ToolButton icon="trash" label="Move to Trash" shortcut="#" onClick={() => onAction("trash")} />
 						</>
 					)}
-					<span className="toolbar-divider" aria-hidden="true" />
+					{!held && <span className="toolbar-divider" aria-hidden="true" />}
 					{anyUnread ? (
 						<ToolButton icon="mailOpen" label="Mark as read" onClick={() => onAction("read")} />
 					) : (
@@ -85,16 +91,19 @@ export function Toolbar(props: ToolbarProps) {
 							onClick={() => onAction(allStarred ? "unstar" : "star")}
 						/>
 					)}
-					{!inSpam && !inTrash && (
-						<ToolButton
-							icon="clock"
-							label={allReplyLater ? "Remove from Reply later" : "Reply later"}
-							shortcut="b"
-							pressed={allReplyLater}
-							onClick={() => onAction(allReplyLater ? "replyLaterOff" : "replyLater")}
-						/>
-					)}
-					{!inSpam && !inTrash && userLabels.length > 0 && (
+					{/* Held mail moves only when a person screens its sender, so it has no Reply later. */}
+					{moves &&
+						(allReplyLater ? (
+							<ToolButton
+								icon="check"
+								label="Done: remove from Reply later"
+								shortcut="l"
+								onClick={() => onAction("replyLaterDone")}
+							/>
+						) : (
+							<ToolButton icon="clock" label="Reply later" shortcut="l" onClick={() => onAction("replyLater")} />
+						))}
+					{moves && userLabels.length > 0 && (
 						<LabelPicker labels={userLabels} onPick={(id) => onAction({ label: id })} />
 					)}
 					{view.kind === "label" && (
@@ -149,26 +158,18 @@ function ToolButton({
 	label,
 	shortcut,
 	filled,
-	pressed,
 	onClick,
 }: {
 	icon: IconName;
 	label: string;
 	shortcut?: string;
 	filled?: boolean;
-	/** A toggle that is on. The label tells the change, so a screen reader also hears the state. */
-	pressed?: boolean;
 	onClick: () => void;
 }) {
-	const className = filled
-		? "icon-button icon-button-star"
-		: pressed
-			? "icon-button icon-button-pressed"
-			: "icon-button";
 	return (
 		<button
 			type="button"
-			className={className}
+			className={filled ? "icon-button icon-button-star" : "icon-button"}
 			aria-label={label}
 			title={shortcut ? `${label} (${shortcut})` : label}
 			aria-keyshortcuts={shortcut === "#" ? "Shift+3" : shortcut}

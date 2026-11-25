@@ -146,7 +146,9 @@ MCP clients. The app has no UI-only path.
     page. The empty state and the error state have an icon on a tile.
   - The toolbar acts on the selection or on the open thread: archive, report spam, trash, mark as
     read or unread, star, Reply later, apply a label and remove a label. The spam and trash views show "Not
-    spam" and "Restore". An action that moves threads shows a toast with "Undo".
+    spam" and "Restore". An action that moves threads shows a toast with "Undo". Undo gives each thread
+    back only the labels that the action changed on it (`undoChanges` in `actions.ts`). An open thread that
+    still loads gets no undo, because the app does not know its labels yet.
   - The thread view shows each message with its sender, recipients, date, labels, body,
     attachments and, for sent mail, the delivery status of each recipient. External mail gets an
     "External sender" notice with the SPF, DKIM and DMARC results. A message with the SPAM label
@@ -166,9 +168,7 @@ MCP clients. The app has no UI-only path.
     brings a new unread message into the open thread, the app removes UNREAD again. The app keeps
     the set of unread message ids that it marked, so it does not send the same change twice.
   - The composer is a modal dialog. It does new mail, reply, reply all and forward, with
-    attachments. One idempotency key for each composed message makes a retry safe. The focus view of
-    Reply later shows the same composer in the page, under its conversation (`frame="inline"`). The
-    inline composer gives the focus to its first field, as the dialog does, and Escape closes it.
+    attachments. One idempotency key for each composed message makes a retry safe.
   - Each field label of the composer ends with a colon, for example `To:` and `Subject:`. Each row
     sizes its own label, so the text field starts right after the label.
   - The first row is **From:**. In a new message and a forward, it is a list
@@ -251,45 +251,41 @@ MCP clients. The app has no UI-only path.
     the line `Attachments (not included): …`. Inline images are not in this line.
   - The app polls `mail.get_profile` every 15 seconds while the tab is visible, and on window
     focus. When the version changes, it gets the labels, the list and the open thread again.
-  - Keyboard shortcuts: `j`, `k`, `o`, Enter, `u`, `e`, `#`, `s`, `b`, `x`, `c`, `r`, `/` and `?`. Press `?`
+  - Keyboard shortcuts: `j`, `k`, `o`, Enter, `u`, `e`, `#`, `s`, `l`, `x`, `c`, `r`, `/` and `?`. Press `?`
     to see the list, in four groups (`SHORTCUT_GROUPS` in
     [`ShortcutHelp.tsx`](src/features/mail/ShortcutHelp.tsx)). Shortcuts do not work while the focus is in a text field.
-- **Reply later** (`/mail/reply-later`, [`replyLater.ts`](src/features/mail/replyLater.ts)). A queue of the
-  conversations that need an answer. It is the system label `REPLY_LATER`, so the server keeps it, and an
-  agent uses it with the same operations ([mail README](../dock/src/mail/README.md#reply-later)).
-  - The **Reply later** button of the toolbar (a clock) and the `b` key put the selection, the row at the
-    cursor or the open thread in the queue. The same control takes them out, with a toast and **Undo**.
-    The button is pressed while each target is in the queue. A conversation stays in the inbox.
-  - The **Reply later** view is after Inbox in the sidebar. Its count is the number of conversations in the
-    queue, not the unread number. A row in a different view shows a clock when its conversation is in
-    the queue.
-  - Above the list of the view, a bar says how many conversations wait and links to the focus view. The
-    bar shows only to a person who can send from the mailbox.
-- **Focus view of Reply later** (`/mail/reply-later/focus`, also under the path of a shared or agent
-  mailbox, [`ReplyFocus.tsx`](src/features/mail/ReplyFocus.tsx)). Only the conversations in the queue, one
-  after the other, each in a card with its thread. The sidebar stays, with Reply later as the current view.
-  - The header has a link back to the Reply later view, the title and the number of conversations left.
-    While the queue has more pages, the number is the count of the label.
-  - Reply, Reply all and Forward are under each open message, as in the thread view. Reply and Reply all
-    open the composer in the card. Forward opens the composer dialog: a forward does not answer.
-  - A sent reply takes the conversation out of the queue: the server removes the label. The card goes, the
-    next card becomes active, and its reply opens with the focus in the editor.
-  - **Done** takes a conversation out without a reply, with a toast and **Undo**. It shows while the card
-    has no open reply, so a click never discards text. The next card then gets the focus.
-  - While a reply has text or a file, the app asks "Discard your reply?" before it leaves the view: for a
-    link, for `u` and for a different mailbox (`addNavigationGuard` in
-    [`navigationGuard.ts`](src/lib/navigationGuard.ts), which `navigate` asks). The browser asks before it
-    closes or reloads the tab. The Back button of the browser does not ask, and the reply is lost.
-  - The cards keep their order when the queue refreshes. A new conversation goes at the end. A card with
-    an open reply stays, also when the conversation left the queue, for example after a reply by a
-    different member (`mergeQueue`). That card gets its thread again, so the person sees the answer. A
-    refresh gets one page of the queue. A card from **Older** that can be on a later page stays (`leftQueue`).
-  - The active card has a bar at its left and is marked as read, as an open thread is. A click or the
-    focus in a card makes it active. `j` and `k` move the active card and the focus, `r` opens its reply, `b` is Done (not while its reply is open), `c` composes, `u`
-    goes back to the Reply later view, and `?` shows the shortcuts.
-  - Each card gets its thread once, and again only when a new message arrives in it.
-  - The empty state says that no conversation waits, and links to the inbox.
-  - A person who cannot change the mailbox sees no Done, and a person who cannot send sees no reply.
+- **Reply later** (`/mail/reply-later`, [`FocusReply.tsx`](src/features/mail/FocusReply.tsx)). A place for
+  the conversations that the person answers later.
+  - **Reply later** in the toolbar, or the `l` key, adds `REPLY_LATER` and removes `INBOX`
+    (`mail.modify_threads`). The conversation leaves the inbox.
+  - When each target is in Reply later already, the button is **Done** (a check), and `l` removes
+    `REPLY_LATER`. In the inbox, the button and `l` always move the conversation out. A conversation there
+    with `REPLY_LATER` got new mail. The spam and trash views have neither action.
+  - The sidebar shows **Reply later** after the inbox, with the number of all its conversations (`navCount`
+    in `views.ts`). Its list uses the query `in:reply_later`.
+  - At the end of the inbox list, a pile tells how many conversations wait for an answer. It has links to the
+    list and to Focus & Reply. The pile shows only when the count is more than 0.
+  - The Reply later list has a banner with **Focus & Reply** above its rows.
+  - **Focus & Reply** (`/mail/reply-later/focus`) shows a card for each conversation of Reply later. The
+    cards are in the order of the list, newest first.
+  - A card has the subject, the people, the number of other messages and **Done**. The subject is a link to
+    the conversation.
+  - A card shows the newest message that the mailbox got, with Reply, Reply all and Forward. A forward can
+    join the conversation, and a reply to it would go to the wrong people. When each message is a sent
+    message, the card shows the newest one.
+  - A card gets its conversation (`mail.get_thread`) when it comes near the visible part of the page. It gets
+    the conversation again only when the list shows a new message in it.
+  - The page shows the first 50 conversations, and **Older** gets more. The count at the top comes from the
+    label, so it counts each waiting conversation.
+  - A reply from the composer removes `REPLY_LATER` on the server. After the send, the card leaves the page.
+  - **Done** removes the label without a reply, with a toast and **Undo**.
+  - When the card with the focus leaves, the focus goes to the subject of the card in its place. When no card
+    stays, the focus goes to the page.
+  - Focus & Reply does not mark a conversation as read.
+  - The shortcuts `c`, `/` and `?` work in Focus & Reply, and `u` goes back to the Reply later list.
+  - Without `mail.modify`, Focus & Reply has no **Done**. Without `mail.send`, it has no Reply. The notice of
+    the list says why. The mailbox of an agent shows the notice of a read-only mailbox, because each card
+    opens a conversation, and the audit log records it.
 - **Mailbox tree.** When the person can use more than the own mailbox, the sidebar shows a row for
   each mailbox (`mail.list_mailboxes`, `mailboxNav.ts`). "My mailbox" is first, then the shared
   (team) mailboxes, then the agent mailboxes. The sidebar has no group headings.
@@ -307,6 +303,25 @@ MCP clients. The app has no UI-only path.
   - The web app uses `mail.get_settings` and `mail.update_settings` only for the default From address of
     each mailbox (`default_from`). Their sidebar settings are for the mailbox sections that the sidebar no
     longer has.
+- **The Screener** (`/mail/screener`, `/mail/screener/history`, and the same paths under a team or agent
+  mailbox, [`Screener.tsx`](src/features/mail/Screener.tsx), [`screener.ts`](src/features/mail/screener.ts)).
+  The sidebar shows **Screener** after the inbox of the open mailbox, with the number of senders that wait
+  (`screener_pending` of `mail.get_profile`). It shows while the Screener is on, and while senders wait after
+  it went off. The view replaces the list in the main pane, as the settings view does, and is a separate
+  chunk. **Waiting** lists the senders that wait (`mail.list_screener`): the name and address, the subject
+  and snippet of the newest message as plain text, the number of messages, a link that opens the newest
+  message in the search `in:screener`, and **Screen in** and **Screen out** (`mail.screen_sender`). The
+  buttons name the sender for a screen reader. After a decision, the row goes, a toast tells the result,
+  the focus goes to the next row, and the counts load again. After the last row goes, the focus goes to
+  the text of the empty list. While the Screener is off, the toast of a decision **out** tells that the
+  decision is stored. In a search of held mail (`in:screener`, `in:screened_out`), the toolbar and the
+  keys offer only the read state and the star: the server refuses a different label on held mail. **History** lists the senders that a person
+  screened out or in, with who decided and when, a button for the other decision, and a form that screens
+  out an address that did not write yet. Without `mail.modify`, the view has no buttons and says why. When
+  the Screener is off, a notice says so. Each list has loading, empty and error states, and **Load more**.
+- **Admin › Mail** (`/admin/mail`, [`MailSettingsCard.tsx`](src/features/admin/MailSettingsCard.tsx)). An
+  owner or an admin turns the default of the Screener on or off for each mailbox of a person and each team
+  mailbox that follows the default (`mail.update_org_settings`).
 - **Mailbox settings** (`/mail/settings`, `/mail/team/<tmb_id>/settings`, `/mail/agent/<prn_id>/settings`,
   [`MailboxSettings.tsx`](src/features/mail/MailboxSettings.tsx)). The gear after Refresh in the header of
   Mail is a link to the settings view of the open mailbox. The view replaces the list in the main pane,
@@ -318,6 +333,10 @@ MCP clients. The app has no UI-only path.
     They are the only AI feature of Mail. When the organization has AI or the feature off, a notice says
     so, with a link to Admin › AI for an owner or an admin. **Choose the auto labels** opens the dialog
     of the auto labels. Without `mail.modify`, the person cannot change the switch.
+  - **Screener.** A list with three choices (`screener` of `mail.update_mailbox_settings`): follow the
+    default of the organization (the choice tells whether it is on now), **On** or **Off**. A choice saves
+    at once, with a toast. Links open the Screener and its history. The mailbox of an agent shows text:
+    it has no Screener. Without `mail.modify`, the list is disabled.
   - **Access.** In a shared mailbox, an owner or an admin changes the members with the member editor of
     Admin › Shared mailboxes (`MembersPart`). A member sees the members and what each one can do. The
     own mailbox and the mailbox of an agent show text: nobody else can use the own mailbox, and owners
@@ -369,7 +388,7 @@ MCP clients. The app has no UI-only path.
   - A notice above the list says that the mailbox is read only and that the audit log records the lists
     and the conversations that the person opens.
   - The views show no Compose button, no select boxes, no toolbar actions, no star control, no label
-    changes and no Reply or Forward. The shortcuts `e`, `#`, `s`, `b`, `x`, `c` and `r` do nothing.
+    changes and no Reply or Forward. The shortcuts `e`, `#`, `s`, `l`, `x`, `c` and `r` do nothing.
   - An open thread stays unread: the app does not mark it as read, so the agent still finds its new
     mail. The server refuses each change and each send in the mailbox of an agent.
   - **Admin › Members** has a **Read the mail of …** link on the page of each agent.
@@ -1883,15 +1902,17 @@ dock Worker serves `index.html` for each app path, so a deep link works on reloa
 | Path | Page |
 | --- | --- |
 | `/`, `/mail` | Goes to `/mail/inbox` |
-| `/mail/<view>` | The thread list of a view: `inbox`, `starred`, `sent`, `spam`, `trash` or `all` |
+| `/mail/<view>` | The thread list of a view: `inbox`, `reply-later`, `starred`, `sent`, `spam`, `trash` or `all` |
+| `/mail/reply-later/focus` | Focus & Reply: each conversation of Reply later with its newest message |
 | `/mail/label/<lbl_id>` | The thread list of a user label |
 | `/mail/search?q=<query>` | The search results |
 | `/mail/<view>/<thr_id>`, `/mail/label/<lbl_id>/<thr_id>`, `/mail/search/<thr_id>?q=<query>` | One thread, opened from that view |
-| `/mail/settings` | The settings view of the own mailbox: AI, access, the default address and the signature |
-| `/mail/team/<tmb_id>/…` | The same views, threads and settings, in a team mailbox. `/mail/team/<tmb_id>` goes to its inbox |
+| `/mail/settings` | The settings view of the own mailbox: AI, the Screener, access, the default address and the signature |
+| `/mail/screener`, `/mail/screener/history` | The Screener view of the own mailbox: the senders that wait, and the decisions |
+| `/mail/team/<tmb_id>/…` | The same views, threads, settings and Screener, in a team mailbox. `/mail/team/<tmb_id>` goes to its inbox |
 | `/mail/agent/<prn_id>/…` | The same views, threads and settings, read only, in the mailbox of an agent, for an owner or an admin. `/mail/agent/<prn_id>` goes to its inbox |
 | `/admin` | Goes to the first section of Admin that the person can use |
-| `/admin/<section>` | One section of Admin: `members`, `shared-mailboxes`, `shared-drives`, `chat` or `domains` |
+| `/admin/<section>` | One section of Admin: `members`, `shared-mailboxes`, `shared-drives`, `chat`, `mail`, `domains` or `ai` |
 | `/admin/members/<prn_id>` | The page of one person, agent or service account in Admin › Members |
 | `/connect/<oar_id>` | The approval page of an OAuth request from an MCP client |
 | `/drive` | The root of the own drive |
@@ -1911,8 +1932,8 @@ dock Worker serves `index.html` for each app path, so a deep link works on reloa
 | `/settings` | Goes to the Account section of Settings |
 | `/settings/<section>` | One section of Settings: `account`, `notifications`, `security` or `api-keys` |
 
-Each view uses one search query: Inbox `in:inbox`, Starred `is:starred`, Sent `in:sent`, Spam
-`in:spam`, Trash `in:trash`, All mail an empty string, and a user label `label:"<name>"`.
+Each view uses one search query: Inbox `in:inbox`, Reply later `in:reply_later`, Starred `is:starred`,
+Sent `in:sent`, Spam `in:spam`, Trash `in:trash`, All mail an empty string, and a user label `label:"<name>"`.
 
 ## Layout
 

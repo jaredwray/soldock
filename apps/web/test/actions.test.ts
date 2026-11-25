@@ -5,9 +5,8 @@ import {
 	applyToSummary,
 	belongsInView,
 	changeLabels,
-	changesLabels,
-	invertChange,
 	type MailAction,
+	undoChanges,
 } from "../src/features/mail/actions.ts";
 import type { MailView } from "../src/routes.ts";
 
@@ -22,27 +21,45 @@ const ACTIONS: readonly [action: MailAction, add: string[], remove: string[], be
 	["unread", ["UNREAD"], [], ["INBOX"]],
 	["star", ["STARRED"], [], ["INBOX"]],
 	["unstar", [], ["STARRED"], ["INBOX", "STARRED"]],
-	["replyLater", ["REPLY_LATER"], [], ["INBOX"]],
-	["replyLaterOff", [], ["REPLY_LATER"], ["INBOX", "REPLY_LATER"]],
+	["replyLater", ["REPLY_LATER"], ["INBOX"], ["INBOX", "UNREAD"]],
+	["replyLaterDone", [], ["REPLY_LATER"], ["REPLY_LATER"]],
 	[{ label: "lbl_1" }, ["lbl_1"], [], ["INBOX"]],
 	[{ unlabel: "lbl_1" }, [], ["lbl_1"], ["INBOX", "lbl_1"]],
 ];
 
 describe("actions", () => {
-	it("makes one label change for each action, and the inverse change undoes it", () => {
+	it("makes one label change for each action, and its undo gives back the labels from before", () => {
 		for (const [action, add, remove, before] of ACTIONS) {
 			const change = actionChange(action);
 			expect(change, JSON.stringify(action)).toEqual({ add, remove });
-			expect(changesLabels(before, change)).toBe(true);
 			const after = changeLabels(before, change);
 			expect(after).not.toEqual(before);
-			expect(changeLabels(after, invertChange(change)).sort()).toEqual([...before].sort());
+			const undos = undoChanges([{ id: "thr_1", labelIds: before }], change);
+			expect(undos.map((undo) => undo.ids)).toEqual([["thr_1"]]);
+			expect(changeLabels(after, undos[0]?.change ?? { add: [], remove: [] }).sort()).toEqual([...before].sort());
 		}
 	});
 
-	it("reports no change when the labels already match, so undo leaves that thread alone", () => {
-		expect(changesLabels(["INBOX", "STARRED"], actionChange("star"))).toBe(false);
-		expect(changesLabels(["SENT"], actionChange("archive"))).toBe(false);
+	it("has no undo for a thread whose labels already match, so undo leaves that thread alone", () => {
+		expect(undoChanges([{ id: "thr_1", labelIds: ["INBOX", "STARRED"] }], actionChange("star"))).toEqual([]);
+		expect(undoChanges([{ id: "thr_1", labelIds: ["SENT"] }], actionChange("archive"))).toEqual([]);
+	});
+
+	// Reply later changes two labels. Undo must not put a thread in the inbox that was not in it before.
+	it("undoes Reply later on each thread with only the labels that it changed there", () => {
+		const undos = undoChanges(
+			[
+				{ id: "thr_inbox", labelIds: ["INBOX", "UNREAD"] },
+				{ id: "thr_archived", labelIds: ["lbl_1"] },
+				{ id: "thr_waiting", labelIds: ["REPLY_LATER"] },
+				{ id: "thr_inbox2", labelIds: ["INBOX"] },
+			],
+			actionChange("replyLater"),
+		);
+		expect(undos).toEqual([
+			{ ids: ["thr_inbox", "thr_inbox2"], change: { add: ["INBOX"], remove: ["REPLY_LATER"] } },
+			{ ids: ["thr_archived"], change: { add: [], remove: ["REPLY_LATER"] } },
+		]);
 	});
 
 	it("keeps the unread and starred flags of a list row in step with its labels", () => {

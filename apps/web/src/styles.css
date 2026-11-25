@@ -354,13 +354,6 @@ kbd {
 	color: var(--star);
 }
 
-/* A toggle that is on, for example Reply later. The fill is darker than a hover. */
-.icon-button-pressed,
-.icon-button-pressed:hover:not(:disabled) {
-	background: var(--border);
-	color: var(--foreground);
-}
-
 .link-button {
 	padding: 0;
 	border: 0;
@@ -1974,6 +1967,99 @@ fieldset {
 	font-size: 13px;
 }
 
+/* Reply later: the banner above its list, the pile at the end of the inbox, and Focus & Reply. */
+
+.reply-later-banner,
+.reply-later-pile {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	justify-content: space-between;
+	gap: 8px 16px;
+	margin: 12px 16px;
+	padding: 10px 12px;
+	border: 1px solid var(--border);
+	border-radius: var(--radius-md);
+	background: var(--surface);
+	font-size: 14px;
+}
+
+.reply-later-banner p {
+	margin: 0;
+	color: var(--muted-foreground);
+}
+
+.reply-later-pile-link {
+	display: inline-flex;
+	align-items: center;
+	gap: 8px;
+	color: var(--foreground);
+	text-decoration: none;
+}
+
+.reply-later-pile-link:hover {
+	text-decoration: underline;
+}
+
+.focus-intro {
+	margin: 0;
+	padding: 16px 22px 0;
+	color: var(--muted-foreground);
+	font-size: 14px;
+}
+
+.focus-list {
+	display: flex;
+	flex-direction: column;
+	gap: 16px;
+	max-width: 1000px;
+	margin: 0;
+	padding: 16px 22px 32px;
+	list-style: none;
+}
+
+.focus-card {
+	padding: 12px 16px 4px;
+	border: 1px solid var(--border);
+	border-radius: var(--radius-md);
+}
+
+.focus-card-header {
+	display: flex;
+	align-items: flex-start;
+	justify-content: space-between;
+	gap: 12px;
+}
+
+.focus-card-title {
+	min-width: 0;
+}
+
+.focus-card-subject {
+	font-size: 17px;
+	font-weight: 650;
+	overflow-wrap: anywhere;
+}
+
+.focus-card-subject a {
+	color: inherit;
+	text-decoration: none;
+}
+
+.focus-card-subject a:hover {
+	text-decoration: underline;
+}
+
+.focus-card-people {
+	margin: 2px 0 0;
+	color: var(--muted-foreground);
+	font-size: 13px;
+}
+
+.focus-card-state {
+	margin: 8px 0 12px;
+}
+
 /* Thread view */
 
 .thread-view {
@@ -2601,73 +2687,6 @@ fieldset {
 	line-height: 1;
 }
 
-/* Reply later. The bar above the list of the Reply later view opens the focus view. */
-
-.reply-later-bar {
-	display: flex;
-	flex: none;
-	flex-wrap: wrap;
-	align-items: center;
-	justify-content: space-between;
-	gap: 8px 16px;
-	margin: 12px 16px 0;
-	padding: 10px 12px 10px 16px;
-	border: 1px solid var(--border);
-	border-radius: var(--radius-md);
-	background: var(--surface);
-	font-size: 14px;
-}
-
-.focus-count {
-	flex: none;
-	margin-left: auto;
-	color: var(--muted-foreground);
-	font-size: 13px;
-}
-
-/* The focus view: one conversation after the other, each in a card with its reply. */
-.focus-list {
-	display: flex;
-	flex-direction: column;
-	gap: 16px;
-	max-width: 1000px;
-	margin: 0;
-	padding: 16px;
-	list-style: none;
-}
-
-.focus-item {
-	position: relative;
-	/* A smooth scroll to an item stops under the top of the view, not under the header row. */
-	scroll-margin-top: 16px;
-	border: 1px solid var(--border);
-	border-radius: var(--radius);
-	background: var(--card);
-}
-
-/* The active item: a bar at the left, as the keyboard cursor of the list. */
-.focus-item-active::before {
-	content: "";
-	position: absolute;
-	top: 16px;
-	bottom: 16px;
-	left: -1px;
-	width: 3px;
-	border-radius: 2px;
-	background: var(--foreground);
-}
-
-.focus-item .thread-view {
-	padding-bottom: 8px;
-}
-
-.focus-item-actions {
-	display: flex;
-	flex-wrap: wrap;
-	gap: 8px;
-	padding: 0 22px 20px 70px;
-}
-
 /* Composer */
 
 .composer {
@@ -2991,19 +3010,6 @@ fieldset {
 	gap: 8px;
 	padding-bottom: 24px;
 	color: var(--muted-foreground);
-}
-
-/* The composer in the page, under its conversation. */
-.compose-inline {
-	border-top: 1px solid var(--border);
-}
-
-.compose-inline .compose-fields {
-	padding-top: 4px;
-}
-
-.compose-inline .composer-loading {
-	padding: 16px 24px;
 }
 
 .link-fields {
@@ -4108,20 +4114,6 @@ fieldset {
 }
 
 @media (max-width: 600px) {
-	.focus-list {
-		padding: 12px 0;
-	}
-
-	.focus-item {
-		border-right: 0;
-		border-left: 0;
-		border-radius: 0;
-	}
-
-	.focus-item-actions {
-		padding: 0 16px 16px;
-	}
-
 	.access-list {
 		grid-template-columns: 1fr;
 	}
@@ -4467,6 +4459,18 @@ fieldset {
 
 	.thread-view {
 		padding: 12px 16px 24px;
+	}
+
+	.focus-intro {
+		padding: 12px 16px 0;
+	}
+
+	.focus-list {
+		padding: 12px 16px 24px;
+	}
+
+	.focus-card {
+		padding: 10px 12px 4px;
 	}
 
 	.thread-header {
@@ -5708,6 +5712,100 @@ fieldset {
 .default-from-select {
 	width: auto;
 	max-width: 100%;
+}
+
+/* The Screener view of a mailbox: the senders that wait, and the decisions. */
+.screener {
+	display: flex;
+	flex-direction: column;
+	gap: 16px;
+}
+
+.screener > .panel-intro,
+.screener > .notice {
+	margin: 0;
+}
+
+/* A line of text in the Screener view, without the margin of its paragraph. */
+.screener-line {
+	margin: 0;
+}
+
+.screener-tabs,
+.screener-links {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px 16px;
+}
+
+.screener-tabs .segment {
+	color: inherit;
+	text-decoration: none;
+}
+
+.screener-list {
+	margin: 0;
+	padding: 0;
+	list-style: none;
+}
+
+.screener-row {
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+	padding: 12px 0;
+	border-bottom: 1px solid var(--border);
+}
+
+.screener-row:first-child {
+	padding-top: 0;
+}
+
+.screener-row:last-child {
+	padding-bottom: 0;
+	border-bottom: 0;
+}
+
+.screener-sender {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: baseline;
+	gap: 0 8px;
+	min-width: 0;
+	overflow-wrap: anywhere;
+}
+
+.screener-name,
+.screener-subject {
+	font-weight: 600;
+}
+
+.screener-preview {
+	overflow-wrap: anywhere;
+}
+
+.screener-actions {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
+	margin-top: 4px;
+}
+
+.screener-form {
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+}
+
+.screener-form-row {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
+}
+
+.screener-form-row > .input {
+	flex: 1 1 220px;
+	min-width: 0;
 }
 
 .signature-form {

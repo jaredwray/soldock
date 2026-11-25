@@ -5,7 +5,7 @@ import { setPageTitle } from "../../lib/pageTitle.ts";
 import { navigate } from "../../lib/router.tsx";
 import { useToast } from "../../lib/toast.tsx";
 import { useOnChange } from "../../lib/useOnChange.ts";
-import { isAgentMailbox, type MailView, viewPath } from "../../routes.ts";
+import { isAgentMailbox, type MailView, type ScreenerTab, viewPath } from "../../routes.ts";
 import { SEARCH_INPUT_ID } from "../../shell/nav.ts";
 import { useSession } from "../auth/session.tsx";
 import { AutoLabelsDialog } from "./AutoLabelsDialog.tsx";
@@ -13,13 +13,14 @@ import type { SendResult } from "./Composer.tsx";
 import { Composer, usePreloadComposer } from "./ComposerLoader.tsx";
 import { type Draft, newDraft } from "./compose.ts";
 import { useLabels, useMailboxSettings, useProfilePoll } from "./data.ts";
+import { FocusReply } from "./FocusReply.tsx";
 import { DeleteLabelDialog, NewLabelDialog } from "./LabelDialogs.tsx";
 import { MailPane } from "./MailPane.tsx";
 import { MailboxProvider, MailboxRightsProvider } from "./mailbox.tsx";
 import { defaultFromId, fromOptions, mailboxRights } from "./mailboxNav.ts";
-import { ReplyFocus } from "./ReplyFocus.tsx";
 import { ShortcutHelp } from "./ShortcutHelp.tsx";
 import { Sidebar } from "./Sidebar.tsx";
+import { showScreener } from "./screener.ts";
 import { useShortcuts } from "./useShortcuts.ts";
 import { viewQuery, viewTitle } from "./views.ts";
 
@@ -40,15 +41,22 @@ interface Composing {
 	signature: string | null;
 }
 
-// The settings view is a separate chunk: a person opens it seldom.
+// The settings view and the Screener view are separate chunks: a person opens them seldom.
 const MailboxSettings = lazyPage(() => import("./MailboxSettings.tsx").then((module) => module.MailboxSettings));
+const Screener = lazyPage(() => import("./Screener.tsx").then((module) => module.Screener));
 
 interface MailAppProps {
 	/**
-	 * `view` is null for the settings view of the mailbox. `focus` is true for the focus view of Reply later.
-	 * Its view is the Reply later view, so the sidebar shows Reply later as the current view.
+	 * `view` is null for the settings view and the Screener view of the mailbox. `screener` is set for the
+	 * Screener view. `focus` is true for Focus & Reply.
 	 */
-	route: { mailboxId: string | null; view: MailView | null; threadId: string | null; focus?: boolean };
+	route: {
+		mailboxId: string | null;
+		view: MailView | null;
+		threadId: string | null;
+		screener?: ScreenerTab;
+		focus?: true;
+	};
 	/** The mailboxes that the person can use, from the shell: the list stays when the mailbox changes. */
 	mailboxes: readonly Mailbox[] | null;
 	/** Loads the mailboxes again, after a change of the members of a team mailbox in its settings view. */
@@ -117,7 +125,15 @@ export function MailApp({
 		? (profile?.display_name ?? listed?.display_name ?? (isAgentMailbox(mailboxId) ? "Agent mailbox" : "Team mailbox"))
 		: null;
 	const { view } = route;
-	const title = view ? viewTitle(view, labels) : "Settings";
+	const title = route.focus
+		? "Focus & Reply"
+		: view
+			? viewTitle(view, labels)
+			: route.screener
+				? "Screener"
+				: "Settings";
+	const screenerEnabled = mailboxSettings?.screener.enabled ?? false;
+	const screenerPending = profile?.screener_pending ?? 0;
 	const inboxUnread = labelsById.get("INBOX")?.threads_unread ?? profile?.inbox_unread ?? 0;
 
 	useEffect(() => {
@@ -208,6 +224,11 @@ export function MailApp({
 						canModify={rights.modify}
 						canSend={rights.send}
 						view={view}
+						screener={
+							showScreener(screenerEnabled, screenerPending)
+								? { pending: screenerPending, active: route.screener !== undefined }
+								: null
+						}
 						labels={labels}
 						labelsError={labelsError}
 						open={navOpen}
@@ -217,8 +238,8 @@ export function MailApp({
 						onDeleteLabel={(label) => setDialog({ type: "delete-label", label })}
 						onClose={onCloseNav}
 					/>
-					{view && route.focus ? (
-						<ReplyFocus
+					{route.focus ? (
+						<FocusReply
 							mailboxName={mailboxName}
 							labelsById={labelsById}
 							myAddress={myAddress}
@@ -226,7 +247,6 @@ export function MailApp({
 							onChanged={onChanged}
 							onCompose={compose}
 							onShowHelp={() => setDialog({ type: "help" })}
-							composer={{ mailDomains: profile?.mail_domains ?? null, fromOptions: senders, signature }}
 						/>
 					) : view ? (
 						<MailPane
@@ -243,6 +263,16 @@ export function MailApp({
 							onChanged={onChanged}
 							onCompose={compose}
 							onShowHelp={() => setDialog({ type: "help" })}
+						/>
+					) : route.screener ? (
+						<Screener
+							mailboxId={mailboxId}
+							tab={route.screener}
+							title={mailboxName ? `${mailboxName}: Screener` : "Screener"}
+							enabled={screenerEnabled}
+							rights={rights}
+							refreshKey={refreshKey}
+							onChanged={onChanged}
 						/>
 					) : (
 						<MailboxSettings

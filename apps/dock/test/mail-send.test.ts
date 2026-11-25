@@ -94,6 +94,32 @@ describe("mail.send to mailboxes of this deployment", () => {
 		]);
 	});
 
+	// A reply answers the thread, so it leaves Reply later. A forward joins the thread by its subject, but it
+	// answers nobody, so the thread stays there.
+	it("removes REPLY_LATER from the thread of a reply, and not for a forward or a new message", async () => {
+		await owner.call("mail.send", { to: ["ada@dock.test"], subject: "Budget", text: "Can you check?" });
+		await drainOutbox(owner.id);
+		const [received] = (await ada.call("mail.list_threads")).threads;
+		const threadId = received?.id as string;
+		await ada.call("mail.modify_threads", {
+			thread_ids: [threadId],
+			add_label_ids: ["REPLY_LATER"],
+			remove_label_ids: ["INBOX"],
+		});
+		const waiting = async () => (await ada.call("mail.list_threads", { query: "in:reply_later" })).threads;
+
+		const forward = await ada.call("mail.send", { to: ["bot@dock.test"], subject: "Fwd: Budget", text: "FYI" });
+		await ada.call("mail.send", { to: ["bot@dock.test"], subject: "Lunch", text: "Noon?" });
+		expect(forward.thread_id).toBe(threadId);
+		expect((await waiting()).map((thread) => thread.id)).toEqual([threadId]);
+
+		const [first] = (await ada.call("mail.get_thread", { thread_id: threadId })).messages;
+		await ada.call("mail.send", { to: ["owner@dock.test"], text: "Done.", reply_to_message_id: first?.id as string });
+		expect(await waiting()).toEqual([]);
+		const thread = await ada.call("mail.get_thread", { thread_id: threadId });
+		expect(thread.messages.flatMap((message) => message.label_ids)).not.toContain("REPLY_LATER");
+	});
+
 	// Internal mail must never leave the deployment, and must not count against the Email Service quota.
 	it("never calls Email Service for an internal recipient", async () => {
 		const email = await fakeEmailService(owner.id);
@@ -111,54 +137,6 @@ describe("mail.send to mailboxes of this deployment", () => {
 		expect(thread).toMatchObject({ id: sent.thread_id, message_count: 1 });
 		expect(thread?.label_ids.sort()).toEqual(["INBOX", "SENT"]);
 		expect(await code(ada.call("mail.send", { to: ["nobody@dock.test"], text: "?" }))).toBe("not_found");
-	});
-});
-
-describe("a reply and Reply later", () => {
-	/** The owner sends a message to the actor. Returns the thread and the message in the actor's mailbox. */
-	async function received(actor: Actor, subject: string) {
-		await owner.call("mail.send", { to: [actor.address], subject, text: "Can you check this?" });
-		await drainOutbox(owner.id);
-		const thread = (await actor.call("mail.list_threads")).threads.find((t) => t.subject === subject);
-		if (!thread) throw new Error(`thread ${subject} not found`);
-		const full = await actor.call("mail.get_thread", { thread_id: thread.id });
-		return { threadId: thread.id, messageId: full.messages[0]?.id as string };
-	}
-	const queue = async (actor: Actor) =>
-		(await actor.call("mail.list_threads", { query: "label:REPLY_LATER" })).threads.map((t) => t.id);
-
-	it("a reply removes REPLY_LATER from the thread, for a person over REST and an agent over MCP", async () => {
-		const forAda = await received(ada, "Budget");
-		await ada.call("mail.modify_threads", { thread_ids: [forAda.threadId], add_label_ids: ["REPLY_LATER"] });
-		expect(await queue(ada)).toEqual([forAda.threadId]);
-		await ada.call("mail.send", { to: ["owner@dock.test"], text: "Done.", reply_to_message_id: forAda.messageId });
-		expect(await queue(ada)).toEqual([]);
-		expect((await ada.call("mail.get_thread", { thread_id: forAda.threadId })).label_ids).not.toContain("REPLY_LATER");
-
-		const forBot = await received(bot, "Invoice");
-		const mark = await callTool(bot.key, "mail_modify_threads", {
-			thread_ids: [forBot.threadId],
-			add_label_ids: ["REPLY_LATER"],
-		});
-		expect(mark.isError).toBeFalsy();
-		expect(await queue(bot)).toEqual([forBot.threadId]);
-		const reply = await callTool(bot.key, "mail_send", {
-			to: ["owner@dock.test"],
-			text: "Paid.",
-			reply_to_message_id: forBot.messageId,
-		});
-		expect(reply.isError).toBeFalsy();
-		expect(await queue(bot)).toEqual([]);
-	});
-
-	it("a new message and a forward keep the thread in Reply later", async () => {
-		const { threadId } = await received(ada, "Plans");
-		await ada.call("mail.modify_threads", { thread_ids: [threadId], add_label_ids: ["REPLY_LATER"] });
-		await ada.call("mail.send", { to: ["owner@dock.test"], subject: "Other topic", text: "Hi." });
-		// A forward has no reply_to_message_id, but its subject puts it in the thread.
-		const forward = await ada.call("mail.send", { to: ["owner@dock.test"], subject: "Fwd: Plans", text: "FYI." });
-		expect(forward.thread_id).toBe(threadId);
-		expect(await queue(ada)).toEqual([threadId]);
 	});
 });
 

@@ -1,5 +1,4 @@
 import { type AnchorHTMLAttributes, type MouseEvent, type Ref, useSyncExternalStore } from "react";
-import { navigationAllowed } from "./navigationGuard.ts";
 
 // A small router on the History API. The dock Worker serves index.html for each app path, so a
 // deep link works on reload.
@@ -24,10 +23,8 @@ export function useLocation(): string {
 	return useSyncExternalStore(subscribe, snapshot);
 }
 
-/** Changes the route. A navigation guard can keep the page (`navigationGuard.ts`): the route then stays. */
 export function navigate(to: string, options: { replace?: boolean } = {}): void {
 	if (to === snapshot()) return;
-	if (!navigationAllowed()) return;
 	if (options.replace) window.history.replaceState(null, "", to);
 	else window.history.pushState(null, "", to);
 	window.dispatchEvent(new Event(NAVIGATE_EVENT));

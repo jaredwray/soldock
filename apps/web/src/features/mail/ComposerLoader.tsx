@@ -62,18 +62,8 @@ export function usePreloadComposer(): void {
 }
 
 export function Composer(props: ComposerProps) {
-	// An inline composer waits in the page. A modal dialog there would cover the page and take the focus.
-	const fallback =
-		props.frame === "inline" ? (
-			<p className="composer-loading" role="status">
-				<span className="spinner spinner-small" aria-hidden="true" />
-				Loading the composer…
-			</p>
-		) : (
-			<ComposerLoading title={props.draft.title} onClose={props.onClose} />
-		);
 	return (
-		<Suspense fallback={fallback}>
+		<Suspense fallback={<ComposerLoading title={props.draft.title} onClose={props.onClose} />}>
 			<LazyComposer {...props} />
 		</Suspense>
 	);

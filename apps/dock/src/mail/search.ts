@@ -41,7 +41,7 @@ export function foldLabelName(name: string): string {
 	return name.normalize("NFC").toLowerCase();
 }
 
-const SYSTEM_IN = new Set(["inbox", "sent", "starred", "spam", "trash", "important", "unread"]);
+const SYSTEM_IN = new Set(["inbox", "sent", "starred", "reply_later", "spam", "trash", "important", "unread"]);
 
 interface Token {
 	text: string;
@@ -213,8 +213,13 @@ function compileTerm(term: Term, options: CompileOptions): { sql: string; params
 			};
 		case "in":
 			if (lower === "anywhere" || lower === "all") return { sql: "1", params: [] };
+			// The mail that the Screener holds: of senders that wait, or of senders that a person screened out.
+			if (lower === "screener") return { sql: "coalesce(m.screen, '') = 'pending'", params: [] };
+			if (lower === "screened_out") return { sql: "coalesce(m.screen, '') = 'out'", params: [] };
 			if (!SYSTEM_IN.has(lower))
-				throw new QueryError(`in:${value} is not a folder. Use inbox, sent, starred, spam, trash or anywhere.`);
+				throw new QueryError(
+					`in:${value} is not a folder. Use inbox, sent, starred, reply_later, spam, trash, screener, screened_out or anywhere.`,
+				);
 			return hasLabel(lower.toUpperCase());
 		case "is":
 			if (lower === "unread") return hasLabel("UNREAD");
@@ -257,6 +262,27 @@ function namesSpamOrTrash(clauses: Clause[]): boolean {
 	);
 }
 
+/**
+ * The condition that keeps held mail out of a query. A term that is not negated, in:screener or
+ * in:screened_out, lets the query see the held mail of that state only. So held mail of a state that the
+ * query does not name stays out, also when the term is one part of an OR. in:anywhere names no state: held
+ * mail waits for a decision, and is not mail of the views. Null when the query names the two states.
+ */
+function heldFilter(clauses: Clause[]): string | null {
+	const named = (value: string) =>
+		clauses.some((clause) =>
+			clause.some(
+				(term) => term.kind === "op" && term.op === "in" && !term.negate && term.value.toLowerCase() === value,
+			),
+		);
+	const pending = named("screener");
+	const out = named("screened_out");
+	if (pending && out) return null;
+	if (pending) return "(m.screen IS NULL OR m.screen = 'pending')";
+	if (out) return "(m.screen IS NULL OR m.screen = 'out')";
+	return "m.screen IS NULL";
+}
+
 export function compileQuery(clauses: Clause[], options: CompileOptions): CompiledQuery {
 	const parts: string[] = [];
 	const params: (string | number)[] = [];
@@ -269,6 +295,8 @@ export function compileQuery(clauses: Clause[], options: CompileOptions): Compil
 		parts.push(terms.length === 1 ? (terms[0] as string) : `(${terms.join(" OR ")})`);
 	}
 	if (params.length > MAX_QUERY_PARAMS) throw new QueryError("The query has too many terms. Use fewer terms.");
+	const held = heldFilter(clauses);
+	if (held) parts.push(held);
 	if (!namesSpamOrTrash(clauses)) {
 		parts.push(
 			"NOT EXISTS (SELECT 1 FROM message_labels ml WHERE ml.message_seq = m.seq AND ml.label_id IN ('SPAM', 'TRASH'))",

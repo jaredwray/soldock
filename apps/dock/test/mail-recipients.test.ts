@@ -106,9 +106,11 @@ describe("mail.suggest_recipients", () => {
 		const mailbox = env.MAILBOX.get(env.MAILBOX.idFromName(ada.id));
 		await runInDurableObject(mailbox, (_instance, state) => {
 			// Back to schema 3: before the recipients table (migration 4), the auto labels (migration 5) and the
-			// system label REPLY_LATER (migration 6).
+			// Screener (migration 6).
 			const sql = state.storage.sql;
-			sql.exec("DELETE FROM labels WHERE id = 'REPLY_LATER'");
+			sql.exec("DROP TABLE screener_senders");
+			sql.exec("DROP INDEX messages_from");
+			sql.exec("ALTER TABLE messages DROP COLUMN screen");
 			sql.exec("DROP TABLE recipients");
 			sql.exec("DROP TABLE auto_labels");
 			sql.exec("DROP TABLE label_corrections");

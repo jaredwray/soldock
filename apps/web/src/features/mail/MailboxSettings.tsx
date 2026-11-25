@@ -5,6 +5,7 @@ import {
 	type MailboxKind,
 	type MailSettings,
 	type Principal,
+	type ScreenerMode,
 	type TeamMailbox,
 } from "@asterra/contracts";
 import { type FormEvent, type ReactNode, useCallback, useEffect, useId, useState } from "react";
@@ -15,7 +16,7 @@ import { Select } from "../../lib/Select.tsx";
 import { useToast } from "../../lib/toast.tsx";
 import { useOnChange } from "../../lib/useOnChange.ts";
 import { usePrincipals } from "../../lib/usePrincipals.ts";
-import { adminPath, INBOX_PATH, viewPath } from "../../routes.ts";
+import { adminPath, INBOX_PATH, screenerPath, viewPath } from "../../routes.ts";
 import { SearchBox } from "../../shell/SearchBox.tsx";
 import { memberScopes, scopesText } from "../admin/mailboxScopes.ts";
 import { byName, MembersPart } from "../admin/SharedMailboxPanel.tsx";
@@ -24,6 +25,7 @@ import { unavailableText } from "./autoLabels.ts";
 import type { MailboxSettings as MailboxSettingsData } from "./data.ts";
 import { mailboxInput } from "./mailbox.tsx";
 import { defaultFromId, type FromOption, type MailboxRights, mailboxKey } from "./mailboxNav.ts";
+import { screenerModeOptions } from "./screener.ts";
 
 /** The mailbox of the settings view, as the person sees it. `id` is null for the own mailbox of the person. */
 export interface SettingsMailbox {
@@ -58,8 +60,8 @@ export interface MailboxSettingsProps {
 
 /**
  * The settings view of the open mailbox (`/mail/settings`, or under the path of a team or agent mailbox),
- * from the gear in the header of Mail: AI, who can use the mailbox, the default From address of the person
- * in the mailbox, and the signature. It replaces the list in the main pane, next to the sidebar. Each section saves on its own.
+ * from the gear in the header of Mail: AI, the Screener, who can use the mailbox, the default From address of
+ * the person in the mailbox, and the signature. It replaces the list in the main pane, next to the sidebar. Each section saves on its own.
  */
 export function MailboxSettings(props: MailboxSettingsProps) {
 	const { mailbox } = props;
@@ -85,6 +87,12 @@ export function MailboxSettings(props: MailboxSettingsProps) {
 						{mailbox.address && ` (${mailbox.address})`}.
 					</p>
 					<AiSection {...props} />
+					<ScreenerSection
+						mailbox={mailbox}
+						rights={props.rights}
+						onSaved={props.onSettingsSaved}
+						onChanged={props.onChanged}
+					/>
 					<AccessSection mailbox={mailbox} onMembersChanged={props.onMembersChanged} />
 					<DefaultSection
 						mailbox={mailbox}
@@ -216,6 +224,99 @@ function AiSection({ mailbox, rights, refreshKey, onOpenAutoLabels, onChanged }:
 							Choose the auto labels
 						</button>
 					)}
+					{error && (
+						<p className="form-error" role="alert">
+							{error}
+						</p>
+					)}
+				</>
+			)}
+		</Panel>
+	);
+}
+
+/**
+ * The Screener of the mailbox (`screener` of `mail.update_mailbox_settings`): follow the default of the
+ * organization, or turn it on or off. The members of a shared mailbox share it. The mailbox of an agent has
+ * no Screener.
+ */
+function ScreenerSection({
+	mailbox,
+	rights,
+	onSaved,
+	onChanged,
+}: {
+	mailbox: SettingsMailbox;
+	rights: MailboxRights;
+	onSaved: (settings: MailboxSettingsData) => void;
+	onChanged: () => void;
+}) {
+	const toast = useToast();
+	const ids = { field: useId(), hint: useId() };
+	const load = useCallback(() => api.call("mail.get_mailbox_settings", mailboxInput(mailbox.id)), [mailbox.id]);
+	const { data: settings, setData, error, setError, reload } = useLoad<MailboxSettingsData>(load);
+	const [busy, setBusy] = useState(false);
+
+	if (mailbox.kind === "agent") {
+		return (
+			<Panel title="Screener">
+				<p className="field-hint">The Screener is not for the mailbox of an agent. All its mail goes to its inbox.</p>
+			</Panel>
+		);
+	}
+
+	async function change(mode: ScreenerMode) {
+		if (!settings || mode === settings.screener.mode) return;
+		setBusy(true);
+		setError(null);
+		try {
+			const next = await api.call("mail.update_mailbox_settings", { ...mailboxInput(mailbox.id), screener: mode });
+			setData(next);
+			onSaved(next);
+			onChanged();
+			toast({
+				message: next.screener.enabled
+					? "The Screener is on in this mailbox."
+					: "The Screener is off in this mailbox. New mail goes to the inbox.",
+			});
+		} catch (caught) {
+			setError(errorMessage(caught));
+		} finally {
+			setBusy(false);
+		}
+	}
+
+	return (
+		<Panel title="Screener">
+			<p id={ids.hint} className="field-hint">
+				When the Screener is on, the first mail from a new sender outside the organization waits in the Screener. You
+				screen the sender in or out, and the sender is not told. Senders that you wrote to, and senders with mail in
+				this mailbox, come to the inbox. When you turn the Screener off, the mail that waits moves to the inbox.
+				{mailbox.kind === "team" && " The members of this shared mailbox share this setting."}
+			</p>
+			{!settings && !error && <p className="field-hint">Loading…</p>}
+			{!settings && error && <LoadError error={error} onRetry={() => void reload()} />}
+			{settings && (
+				<>
+					<label htmlFor={ids.field} className="visually-hidden">
+						Screener
+					</label>
+					<Select
+						id={ids.field}
+						className="input default-from-select"
+						value={settings.screener.mode}
+						options={screenerModeOptions(settings.screener.org_default)}
+						onChange={(value) => void change(value as ScreenerMode)}
+						disabled={busy || !rights.modify}
+						aria-describedby={ids.hint}
+					/>
+					{!rights.modify && (
+						<p className="field-hint">Your membership does not let you change the Screener of this mailbox.</p>
+					)}
+					<p className="screener-links">
+						<Link to={screenerPath(mailbox.id, "waiting")}>Open the Screener</Link>
+						<Link to={screenerPath(mailbox.id, "history")}>Open the Screener history</Link>
+					</p>
 					{error && (
 						<p className="form-error" role="alert">
 							{error}

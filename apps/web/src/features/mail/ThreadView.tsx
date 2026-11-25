@@ -14,30 +14,16 @@ interface ThreadViewProps {
 	onRetry: () => void;
 	/** Removes a user label from the thread. Absent in a mailbox that the person can only read. */
 	onRemoveLabel?: ((labelId: string) => void) | undefined;
-	/**
-	 * The level of the subject heading: h1 for the one open thread (the default), h2 for a thread in a list of
-	 * threads. Only an h1 gets the focus when the thread opens: a page with many threads must not move the focus.
-	 */
-	headingLevel?: "h1" | "h2";
 }
 
-export function ThreadView({
-	state,
-	myAddress,
-	labelsById,
-	onReply,
-	onRetry,
-	onRemoveLabel,
-	headingLevel = "h1",
-}: ThreadViewProps) {
+export function ThreadView({ state, myAddress, labelsById, onReply, onRetry, onRemoveLabel }: ThreadViewProps) {
 	const headingRef = useRef<HTMLHeadingElement>(null);
 	const threadId = state.thread?.id ?? null;
-	const Heading = headingLevel;
 
 	// Move the focus to the subject when a new thread opens, so a screen reader starts there.
 	useEffect(() => {
-		if (threadId && headingLevel === "h1") headingRef.current?.focus();
-	}, [threadId, headingLevel]);
+		if (threadId) headingRef.current?.focus();
+	}, [threadId]);
 
 	if (state.status === "loading" || state.status === "idle") {
 		return (
@@ -72,9 +58,9 @@ export function ThreadView({
 	return (
 		<div className="thread-view">
 			<div className="thread-header">
-				<Heading className="thread-subject-heading" ref={headingRef} tabIndex={-1}>
+				<h1 className="thread-subject-heading" ref={headingRef} tabIndex={-1}>
 					{thread.subject.trim() || "(no subject)"}
-				</Heading>
+				</h1>
 				{chips.length > 0 && (
 					<ul className="chips" aria-label="Labels">
 						{chips.map((chip) => (

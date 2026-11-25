@@ -1,5 +1,6 @@
 import { MAIL_LIMITS, type ThreadSummary } from "@asterra/contracts";
-import { api } from "../../lib/api.ts";
+import { api, errorMessage } from "../../lib/api.ts";
+import type { ToastInput } from "../../lib/toast.tsx";
 import type { MailView } from "../../routes.ts";
 import { mailboxInput } from "./mailbox.tsx";
 
@@ -20,11 +21,14 @@ export type MailAction =
 	| "star"
 	| "unstar"
 	| "replyLater"
-	| "replyLaterOff"
+	| "replyLaterDone"
 	| { label: string }
 	| { unlabel: string };
 
-/** Each action is one label change, as the operation description says. */
+/**
+ * Each action is one label change, as the operation description says. Reply later is the only change of two
+ * labels: the thread leaves the inbox and waits in Reply later. Done takes it out of Reply later.
+ */
 export function actionChange(action: MailAction): LabelChange {
 	if (typeof action === "object") {
 		return "label" in action ? { add: [action.label], remove: [] } : { add: [], remove: [action.unlabel] };
@@ -49,8 +53,8 @@ export function actionChange(action: MailAction): LabelChange {
 		case "unstar":
 			return { add: [], remove: ["STARRED"] };
 		case "replyLater":
-			return { add: ["REPLY_LATER"], remove: [] };
-		case "replyLaterOff":
+			return { add: ["REPLY_LATER"], remove: ["INBOX"] };
+		case "replyLaterDone":
 			return { add: [], remove: ["REPLY_LATER"] };
 	}
 }
@@ -69,15 +73,44 @@ export function actionNotice(action: MailAction, count: number): string | null {
 			return `${what} removed from Spam.`;
 		case "restore":
 			return `${what} restored from Trash.`;
-		case "replyLaterOff":
+		case "replyLater":
+			return `${what} moved to Reply later.`;
+		case "replyLaterDone":
 			return `${what} removed from Reply later.`;
 		default:
 			return null;
 	}
 }
 
-export function invertChange(change: LabelChange): LabelChange {
-	return { add: change.remove, remove: change.add };
+/** One change of an undo, for the threads that need the same change. */
+export interface Undo {
+	ids: string[];
+	change: LabelChange;
+}
+
+/**
+ * The changes that undo `change` on threads with these labels before it. Each thread gets back only the
+ * labels that the change took away, and loses only the labels that the change added. For example, Reply later
+ * on a thread outside the inbox does not put the thread in the inbox on undo. Threads with the same undo share
+ * one change, and a thread that the change did not alter gets none.
+ */
+export function undoChanges(
+	threads: readonly { id: string; labelIds: readonly string[] }[],
+	change: LabelChange,
+): Undo[] {
+	const groups = new Map<string, Undo>();
+	for (const thread of threads) {
+		const undo = {
+			add: change.remove.filter((id) => thread.labelIds.includes(id)),
+			remove: change.add.filter((id) => !thread.labelIds.includes(id)),
+		};
+		if (undo.add.length === 0 && undo.remove.length === 0) continue;
+		const key = JSON.stringify(undo);
+		const group = groups.get(key);
+		if (group) group.ids.push(thread.id);
+		else groups.set(key, { ids: [thread.id], change: undo });
+	}
+	return [...groups.values()];
 }
 
 export function changeLabels(labelIds: readonly string[], change: LabelChange): string[] {
@@ -85,11 +118,6 @@ export function changeLabels(labelIds: readonly string[], change: LabelChange): 
 	for (const id of change.remove) next.delete(id);
 	for (const id of change.add) next.add(id);
 	return [...next];
-}
-
-/** True when the change alters the labels, so an undo must revert it. */
-export function changesLabels(labelIds: readonly string[], change: LabelChange): boolean {
-	return change.add.some((id) => !labelIds.includes(id)) || change.remove.some((id) => labelIds.includes(id));
 }
 
 export function applyToSummary(thread: ThreadSummary, change: LabelChange): ThreadSummary {
@@ -138,5 +166,19 @@ export async function modifyThreads(
 			add_label_ids: [...change.add],
 			remove_label_ids: [...change.remove],
 		});
+	}
+}
+
+/** Sends the changes of an undo, and tells the person how it ended. */
+export async function undoNow(
+	mailboxId: string | null,
+	undos: readonly Undo[],
+	toast: (toast: ToastInput) => void,
+): Promise<void> {
+	try {
+		for (const undo of undos) await modifyThreads(mailboxId, undo.ids, undo.change);
+		toast({ message: "Action undone." });
+	} catch (error) {
+		toast({ message: `The undo failed. ${errorMessage(error)}`, tone: "error" });
 	}
 }

@@ -14,6 +14,7 @@ import { AdminSidebar, defaultSection, isAdminOnly, sectionIcon, sectionTitle } 
 import { AiSection } from "./AiSection.tsx";
 import { ChatAdminSection } from "./ChatAdminSection.tsx";
 import { MailDomainsCard } from "./MailDomainsCard.tsx";
+import { MailSettingsCard } from "./MailSettingsCard.tsx";
 import { memberIcon } from "./MemberIdentity.tsx";
 import { MemberPage } from "./MemberPage.tsx";
 import { listedPrincipals, type MemberFilter, MembersSection } from "./MembersSection.tsx";
@@ -228,6 +229,8 @@ export function AdminPage({ section: routeSection, memberId: routeMemberId, navO
 				return <SharedDrivesSection principals={principals} selfId={me.id} />;
 			case "chat":
 				return <ChatAdminSection principals={principals} />;
+			case "mail":
+				return <MailSettingsCard />;
 			case "domains":
 				return <MailDomainsCard />;
 			case "ai":
