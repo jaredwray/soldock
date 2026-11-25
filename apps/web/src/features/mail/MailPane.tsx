@@ -2,10 +2,18 @@ import type { Label, Message, ThreadSummary } from "@asterra/contracts";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { api, errorMessage } from "../../lib/api.ts";
 import { Icon } from "../../lib/icons.tsx";
-import { navigate } from "../../lib/router.tsx";
+import { Link, navigate } from "../../lib/router.tsx";
 import { useToast } from "../../lib/toast.tsx";
 import { useOnChange } from "../../lib/useOnChange.ts";
-import { isAgentMailbox, type MailView, mailSettingsPath, threadPath, viewPath } from "../../routes.ts";
+import {
+	focusReplyPath,
+	isAgentMailbox,
+	type MailView,
+	mailSettingsPath,
+	REPLY_LATER_VIEW,
+	threadPath,
+	viewPath,
+} from "../../routes.ts";
 import { SEARCH_INPUT_ID } from "../../shell/nav.ts";
 import { SearchBox } from "../../shell/SearchBox.tsx";
 import {
@@ -13,10 +21,11 @@ import {
 	actionNotice,
 	belongsInView,
 	changeLabels,
-	changesLabels,
-	invertChange,
 	type MailAction,
 	modifyThreads,
+	type Undo,
+	undoChanges,
+	undoNow,
 } from "./actions.ts";
 import { removesAutoLabel } from "./autoLabels.ts";
 import { type Draft, forwardDraft, replyDraft } from "./compose.ts";
@@ -34,7 +43,7 @@ import { type ViewQuery, viewIcon } from "./views.ts";
 const LEAVE_THREAD: readonly MailAction[] = ["archive", "trash", "spam", "notSpam", "restore", "unread"];
 
 /** The shortcuts that change the mailbox, or select threads for a change. They need `mail.modify`. */
-const CHANGE_KEYS: ReadonlySet<string> = new Set(["e", "#", "s", "x"]);
+const CHANGE_KEYS: ReadonlySet<string> = new Set(["e", "#", "s", "x", "l"]);
 
 /** The shortcuts that start a message. They need `mail.send`. */
 const SEND_KEYS: ReadonlySet<string> = new Set(["c", "r"]);
@@ -138,11 +147,12 @@ export function MailPane(props: MailPaneProps) {
 	async function run(action: MailAction, ids: readonly string[]) {
 		if (ids.length === 0 || readOnly) return;
 		const change = actionChange(action);
-		// Undo reverts the change only on the threads that it changed.
-		const changed = ids.filter((id) => {
-			const labelIds = labelsOf(id);
-			return labelIds === null || changesLabels(labelIds, change);
-		});
+		// Undo reverts the change only on the threads that it changed, and only the labels that it changed. A
+		// thread that the pane does not know gets the full inverse.
+		const undos = undoChanges(
+			ids.map((id) => ({ id, labelIds: labelsOf(id) ?? change.remove })),
+			change,
+		);
 		const openLabels = threadId && ids.includes(threadId) ? labelsOf(threadId) : null;
 		// A person who removes a label that auto labels applied corrects them. Say that they learn from it.
 		const corrects = removesAutoLabel(
@@ -175,8 +185,8 @@ export function MailPane(props: MailPaneProps) {
 			}
 			if (notice) {
 				toast(
-					changed.length > 0
-						? { message: notice, action: { label: "Undo", run: () => void undo(changed, change) } }
+					undos.length > 0
+						? { message: notice, action: { label: "Undo", run: () => void undo(undos) } }
 						: { message: notice },
 				);
 			}
@@ -186,13 +196,8 @@ export function MailPane(props: MailPaneProps) {
 		onChanged();
 	}
 
-	async function undo(ids: readonly string[], change: ReturnType<typeof actionChange>) {
-		try {
-			await modifyThreads(mailboxId, ids, invertChange(change));
-			toast({ message: "Action undone." });
-		} catch (error) {
-			toast({ message: `The undo failed. ${errorMessage(error)}`, tone: "error" });
-		}
+	async function undo(undos: readonly Undo[]) {
+		await undoNow(mailboxId, undos, toast);
 		onChanged();
 	}
 
@@ -219,7 +224,11 @@ export function MailPane(props: MailPaneProps) {
 	const allStarred = listMode
 		? targetSummaries.length > 0 && targetSummaries.every((item) => item.starred)
 		: (openThread?.label_ids.includes("STARRED") ?? false);
+	const allReplyLater = listMode
+		? targetSummaries.length > 0 && targetSummaries.every((item) => item.label_ids.includes("REPLY_LATER"))
+		: (openThread?.label_ids.includes("REPLY_LATER") ?? false);
 	const inSpamOrTrash = view.kind === "system" && (view.view === "spam" || view.view === "trash");
+	const replyLaterCount = labelsById.get("REPLY_LATER")?.threads_total ?? 0;
 
 	useShortcuts((event) => {
 		if (readOnly && CHANGE_KEYS.has(event.key)) return;
@@ -265,6 +274,15 @@ export function MailPane(props: MailPaneProps) {
 				void run(starred ? "unstar" : "star", ids);
 				break;
 			}
+			case "l": {
+				// Reply later, or Done for threads that are in Reply later already.
+				if (inSpamOrTrash) break;
+				const inReplyLater = listMode
+					? keyTargets.length > 0 && keyTargets.every((id) => labelsOf(id)?.includes("REPLY_LATER") === true)
+					: allReplyLater;
+				void run(inReplyLater ? "replyLaterDone" : "replyLater", keyTargets);
+				break;
+			}
 			case "x":
 				if (listMode && current) toggleSelect(current.id);
 				break;
@@ -302,6 +320,7 @@ export function MailPane(props: MailPaneProps) {
 				selection={selection}
 				anyUnread={anyUnread}
 				allStarred={allStarred}
+				allReplyLater={allReplyLater}
 				userLabels={userLabels}
 				listEmpty={threads.length === 0}
 				readOnly={readOnly}
@@ -337,29 +356,37 @@ export function MailPane(props: MailPaneProps) {
 						This label does not exist.
 					</div>
 				) : listMode ? (
-					<ThreadList
-						view={view}
-						title={title}
-						list={list}
-						// In a team mailbox, more than one person sends from the address, so no sender shows as "me". In
-						// the mailbox of an agent, the person who reads is not the sender.
-						myAddress={mailboxId ? "" : myAddress}
-						labelsById={labelsById}
-						selected={selected}
-						cursor={cursorIndex}
-						focusToken={focusToken}
-						onToggleSelect={toggleSelect}
-						onToggleStar={toggleStar}
-						onFocusRow={setCursor}
-						onLoadOlder={() =>
-							void list
-								.loadOlder()
-								.catch((error: unknown) =>
-									toast({ message: `Older conversations did not load. ${errorMessage(error)}`, tone: "error" }),
-								)
-						}
-						onRetry={() => void list.retry()}
-					/>
+					<>
+						{view.kind === "system" && view.view === "reply-later" && threads.length > 0 && (
+							<FocusBanner mailboxId={mailboxId} />
+						)}
+						<ThreadList
+							view={view}
+							title={title}
+							list={list}
+							// In a team mailbox, more than one person sends from the address, so no sender shows as "me". In
+							// the mailbox of an agent, the person who reads is not the sender.
+							myAddress={mailboxId ? "" : myAddress}
+							labelsById={labelsById}
+							selected={selected}
+							cursor={cursorIndex}
+							focusToken={focusToken}
+							onToggleSelect={toggleSelect}
+							onToggleStar={toggleStar}
+							onFocusRow={setCursor}
+							onLoadOlder={() =>
+								void list
+									.loadOlder()
+									.catch((error: unknown) =>
+										toast({ message: `Older conversations did not load. ${errorMessage(error)}`, tone: "error" }),
+									)
+							}
+							onRetry={() => void list.retry()}
+						/>
+						{view.kind === "system" && view.view === "inbox" && replyLaterCount > 0 && list.status === "ready" && (
+							<ReplyLaterPile mailboxId={mailboxId} count={replyLaterCount} />
+						)}
+					</>
 				) : (
 					<ThreadView
 						state={thread}
@@ -374,5 +401,39 @@ export function MailPane(props: MailPaneProps) {
 				)}
 			</div>
 		</main>
+	);
+}
+
+/** The top of the Reply later list: the way into Focus & Reply. */
+function FocusBanner({ mailboxId }: { mailboxId: string | null }) {
+	return (
+		<div className="reply-later-banner">
+			<p>Answer these conversations one after the other, each with its newest message.</p>
+			<Link to={focusReplyPath(mailboxId)} className="button button-primary button-small">
+				<Icon name="reply" size={16} />
+				Focus &amp; Reply
+			</Link>
+		</div>
+	);
+}
+
+/**
+ * The pile of Reply later at the end of the inbox. The conversations in it are out of the inbox, so the pile
+ * shows that they still wait for an answer.
+ */
+function ReplyLaterPile({ mailboxId, count }: { mailboxId: string | null; count: number }) {
+	return (
+		<section className="reply-later-pile" aria-label="Reply later">
+			<Link to={viewPath(REPLY_LATER_VIEW, mailboxId)} className="reply-later-pile-link">
+				<Icon name="clock" size={18} />
+				<span>
+					<strong>Reply later</strong> · {count} {count === 1 ? "conversation waits" : "conversations wait"} for an
+					answer
+				</span>
+			</Link>
+			<Link to={focusReplyPath(mailboxId)} className="button button-small">
+				Focus &amp; Reply
+			</Link>
+		</section>
 	);
 }

@@ -7,7 +7,7 @@ import { MAIL_NAV_ID, MENU_BUTTON_ID } from "../../shell/nav.ts";
 import { SidebarHeader } from "../../shell/SidebarHeader.tsx";
 import { useLabels } from "./data.ts";
 import { isExpanded, type MailboxEntry, mailboxNav } from "./mailboxNav.ts";
-import { labelRows, SYSTEM_NAV } from "./views.ts";
+import { labelRows, navCount, SYSTEM_NAV } from "./views.ts";
 
 interface SidebarProps {
 	/** The team mailbox or the agent mailbox of the views, or null for the own mailbox. */
@@ -245,7 +245,7 @@ function MailboxContents({
 			<ul className="nav-list">
 				{SYSTEM_NAV.map((item) => {
 					const active = view?.kind === "system" && view.view === item.view;
-					const unread = item.countLabel ? (byId.get(item.countLabel)?.threads_unread ?? 0) : 0;
+					const count = navCount(item, byId);
 					return (
 						<li key={item.view}>
 							<Link
@@ -255,10 +255,10 @@ function MailboxContents({
 							>
 								<Icon name={item.icon} />
 								<span className="nav-name">{item.title}</span>
-								{unread > 0 && (
+								{count > 0 && (
 									<span className="nav-count">
-										{unread}
-										<span className="visually-hidden"> unread</span>
+										{count}
+										<span className="visually-hidden">{item.count?.of === "total" ? " to answer" : " unread"}</span>
 									</span>
 								)}
 							</Link>

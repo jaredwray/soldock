@@ -238,6 +238,13 @@ To find an address that you wrote to before, call `mail_suggest_recipients` with
 address, for example `{"query": "acme"}`. The result has only the addresses that your mailbox sent
 mail to, with the newest send first. Mail that arrives adds no address.
 
+To keep a conversation for a later answer, call `mail_modify_threads` with
+`{"add_label_ids": ["REPLY_LATER"], "remove_label_ids": ["INBOX"]}`. The conversation leaves the inbox.
+`mail_list_threads` with the query `in:reply_later` lists the conversations that wait. A reply with
+`mail_send` and `reply_to_message_id` removes `REPLY_LATER` from its conversation. To remove it without a
+reply, call `mail_modify_threads` with `{"remove_label_ids": ["REPLY_LATER"]}`. The people of a team mailbox
+see the same list in the web app.
+
 `resources/list` shows the inbox of each mailbox that you can use, with the URI
 `asterra://mail/<mailbox id>/inbox`. `resources/read` returns the newest threads of the inbox, as
 `mail_list_threads` with the query `in:inbox` returns them.
