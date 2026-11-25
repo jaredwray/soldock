@@ -76,8 +76,23 @@ test("room archive shows read-only notice and admin chat manages rooms and slash
 		// Open /admin/chat and check archived room filter and slash command creation.
 		await page.goto("/admin/chat");
 		await expect(page.getByRole("heading", { name: "Chat", exact: true })).toBeVisible();
-		await page.getByRole("button", { name: "Archived", exact: true }).click();
+		const archivedFilter = page.getByRole("button", { name: "Archived", exact: true });
+		await archivedFilter.click();
+		await expect(archivedFilter).toHaveAttribute("aria-pressed", "true");
 		await expect(page.locator("main")).toContainText(roomName);
+
+		// The full load of Admin does not load chat.css. The buttons of a room and the cards still have space between them.
+		const roomRow = page.locator(".chat-admin-row").filter({ hasText: roomName });
+		const assign = await roomRow.getByRole("button", { name: "Assign owner" }).boundingBox();
+		const unarchive = await roomRow.getByRole("button", { name: "Unarchive" }).boundingBox();
+		expect(unarchive && assign && unarchive.x - (assign.x + assign.width)).toBeGreaterThanOrEqual(8);
+		const roomsCard = await page
+			.locator(".panel-card", { has: page.getByRole("heading", { name: "Chat rooms" }) })
+			.boundingBox();
+		const cleanupCard = await page
+			.locator(".panel-card", { has: page.getByRole("heading", { name: "Deleted principal cleanup" }) })
+			.boundingBox();
+		expect(cleanupCard && roomsCard && cleanupCard.y - (roomsCard.y + roomsCard.height)).toBeGreaterThanOrEqual(12);
 
 		const cmdName = `ping${Date.now().toString(36).slice(-4)}`;
 		await page.getByRole("textbox", { name: "Command name" }).fill(cmdName);

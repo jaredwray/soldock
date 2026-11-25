@@ -7,7 +7,7 @@ import {
 } from "@asterra/contracts";
 import { type FormEvent, useCallback, useEffect, useId, useState } from "react";
 import { api, errorMessage } from "../../lib/api.ts";
-import { shortDate } from "../../lib/format.ts";
+import { plural, shortDate } from "../../lib/format.ts";
 import { useToast } from "../../lib/toast.tsx";
 import { useSession } from "../auth/session.tsx";
 
@@ -292,30 +292,35 @@ export function ChatAdminSection({ principals }: { principals: readonly Principa
 	}
 
 	return (
-		<div className="admin-chat">
+		<section className="panel">
 			{error && (
 				<p className="form-error" role="alert">
 					{error}
 				</p>
 			)}
 
-			<section className="panel-card">
+			<section className="panel-card chat-admin-card">
 				<h2 className="panel-title">Chat rooms</h2>
-				<div className="chat-subview-bar">
-					{(["all", "ownerless", "archived"] as const).map((f) => (
-						<button
-							key={f}
-							type="button"
-							className={filter === f ? "chip chip-active" : "chip"}
-							onClick={() => setFilter(f)}
-						>
-							{f === "all" ? "All" : f === "ownerless" ? "Ownerless" : "Archived"}
-						</button>
-					))}
+				<div className="chat-admin-toolbar">
+					<fieldset className="chat-admin-filter">
+						<legend className="visually-hidden">Show</legend>
+						{(["all", "ownerless", "archived"] as const).map((f) => (
+							<button
+								key={f}
+								type="button"
+								className="button button-small"
+								aria-pressed={filter === f}
+								onClick={() => setFilter(f)}
+							>
+								{f === "all" ? "All" : f === "ownerless" ? "Ownerless" : "Archived"}
+							</button>
+						))}
+					</fieldset>
 					<input
 						type="search"
 						className="input"
 						placeholder="Filter rooms by name…"
+						aria-label="Filter rooms by name"
 						value={query}
 						onChange={(event) => setQuery(event.target.value)}
 					/>
@@ -329,14 +334,18 @@ export function ChatAdminSection({ principals }: { principals: readonly Principa
 						{rooms.map((room) => (
 							<li key={room.id} className="chat-admin-row">
 								<div className="chat-admin-meta">
-									<strong>{room.name ?? room.id}</strong> <span className="kind">{room.kind}</span>
-									{room.archived_at && <span className="kind">archived</span>}
-									{room.owner_count === 0 && <span className="kind">ownerless</span>}
-									<p className="muted">
-										{room.member_count} members · {room.owner_count} owners · created {shortDate(room.created_at)}
+									<div className="chat-admin-name">
+										<strong>{room.name ?? room.id}</strong>
+										<span className="chip">{room.kind}</span>
+										{room.archived_at && <span className="chip">archived</span>}
+										{room.owner_count === 0 && <span className="chip">ownerless</span>}
+									</div>
+									<p className="muted chat-admin-detail">
+										{plural(room.member_count, "member")} · {plural(room.owner_count, "owner")} · created{" "}
+										{shortDate(room.created_at)}
 									</p>
 								</div>
-								<div className="chat-feed-actions">
+								<div className="chat-admin-actions">
 									<button
 										type="button"
 										className="button button-small"
@@ -373,7 +382,7 @@ export function ChatAdminSection({ principals }: { principals: readonly Principa
 									</button>
 								</div>
 								{assignRoomId === room.id && (
-									<div className="chat-inline-row">
+									<div className="chat-admin-inline">
 										<select
 											className="input"
 											aria-label="New owner"
@@ -398,12 +407,12 @@ export function ChatAdminSection({ principals }: { principals: readonly Principa
 									</div>
 								)}
 								{deletePreview?.roomId === room.id && (
-									<div className="chat-delete-confirm">
-										<p>
-											Permanently delete {room.name ?? room.id}? ({deletePreview.message_count} messages,{" "}
-											{deletePreview.member_count} members)
+									<div className="chat-admin-confirm">
+										<p className="chat-admin-question">
+											Permanently delete {room.name ?? room.id}? ({plural(deletePreview.message_count, "message")},{" "}
+											{plural(deletePreview.member_count, "member")})
 										</p>
-										<div className="chat-feed-actions">
+										<div className="chat-admin-actions">
 											<button
 												type="button"
 												className="button button-small button-danger"
@@ -424,12 +433,12 @@ export function ChatAdminSection({ principals }: { principals: readonly Principa
 				)}
 			</section>
 
-			<section className="panel-card">
+			<section className="panel-card chat-admin-card">
 				<h2 className="panel-title">Deleted principal cleanup</h2>
 				<p className="field-hint">
 					Remove a deleted principal from any chat rooms that still hold a membership row for them.
 				</p>
-				<form className="chat-inline-row" onSubmit={cleanupDeletedPrincipal}>
+				<form className="chat-admin-inline" onSubmit={cleanupDeletedPrincipal}>
 					<label htmlFor={cleanupId} className="visually-hidden">
 						Deleted principal ID
 					</label>
@@ -447,9 +456,9 @@ export function ChatAdminSection({ principals }: { principals: readonly Principa
 				</form>
 			</section>
 
-			<section className="panel-card">
+			<section className="panel-card chat-admin-card">
 				<h2 className="panel-title">Custom emoji ({emojiList.length})</h2>
-				<form className="chat-inline-row" onSubmit={uploadEmoji}>
+				<form className="chat-admin-inline" onSubmit={uploadEmoji}>
 					<label htmlFor={emojiNameId} className="visually-hidden">
 						Emoji name
 					</label>
@@ -479,7 +488,7 @@ export function ChatAdminSection({ principals }: { principals: readonly Principa
 					<ul className="chat-admin-emoji-grid">
 						{emojiList.map((item) => (
 							<li key={item.name} className="chat-admin-emoji-card">
-								<img src={item.url_path} alt={`:${item.name}:`} className="chat-custom-emoji" />
+								<img src={item.url_path} alt={`:${item.name}:`} />
 								<code>:{item.name}:</code>
 								<button
 									type="button"
@@ -495,10 +504,10 @@ export function ChatAdminSection({ principals }: { principals: readonly Principa
 				)}
 			</section>
 
-			<section className="panel-card">
+			<section className="panel-card chat-admin-card">
 				<h2 className="panel-title">Slash commands ({commands.length})</h2>
-				<form className="chat-form" onSubmit={createCommand}>
-					<div className="chat-inline-row">
+				<form className="chat-admin-form" onSubmit={createCommand}>
+					<div className="chat-admin-inline">
 						<input
 							className="input"
 							placeholder="command (without /)"
@@ -524,7 +533,7 @@ export function ChatAdminSection({ principals }: { principals: readonly Principa
 							disabled={busy}
 						/>
 					</div>
-					<div className="chat-inline-row">
+					<div className="chat-admin-inline">
 						<input
 							className="input"
 							placeholder="Operation (e.g. chat.post_message)"
@@ -559,8 +568,11 @@ export function ChatAdminSection({ principals }: { principals: readonly Principa
 						{commands.map((cmd) => (
 							<li key={cmd.id} className="chat-admin-row">
 								<div className="chat-admin-meta">
-									<strong>/{cmd.command}</strong> <span className="muted">→ {cmd.operation}</span>
-									<p className="muted">{cmd.description}</p>
+									<div className="chat-admin-name">
+										<strong>/{cmd.command}</strong>
+										<span className="muted">→ {cmd.operation}</span>
+									</div>
+									<p className="muted chat-admin-detail">{cmd.description}</p>
 								</div>
 								<button
 									type="button"
@@ -575,6 +587,6 @@ export function ChatAdminSection({ principals }: { principals: readonly Principa
 					</ul>
 				)}
 			</section>
-		</div>
+		</section>
 	);
 }

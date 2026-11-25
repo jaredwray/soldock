@@ -4385,9 +4385,147 @@ fieldset {
 	margin-bottom: 12px;
 }
 
-.member-filter .button[aria-pressed="true"] {
+.member-filter .button[aria-pressed="true"],
+.chat-admin-filter .button[aria-pressed="true"] {
 	border-color: var(--foreground);
 	background: var(--hover);
+}
+
+/* Admin › Chat. These rules are here and not in chat.css: the Chat page loads chat.css, and Admin can open first. */
+.chat-admin-card {
+	display: flex;
+	flex-direction: column;
+	gap: 12px;
+}
+
+.chat-admin-card > .panel-title,
+.chat-admin-card .field-hint {
+	margin: 0;
+}
+
+.chat-admin-toolbar {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 8px 16px;
+}
+
+.chat-admin-filter {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
+}
+
+.chat-admin-toolbar > .input {
+	flex: 1 1 240px;
+	max-width: 400px;
+}
+
+.chat-admin-list {
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+	margin: 0;
+	padding: 0;
+	list-style: none;
+}
+
+/* A room or a command: the name and the counts at the left, the buttons at the right. */
+.chat-admin-row {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	justify-content: space-between;
+	gap: 12px 16px;
+	padding: 12px 16px;
+	border: 1px solid var(--border);
+	border-radius: var(--radius-md);
+}
+
+.chat-admin-meta {
+	flex: 1 1 240px;
+	min-width: 0;
+}
+
+.chat-admin-name {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 6px 8px;
+	overflow-wrap: anywhere;
+}
+
+.chat-admin-detail {
+	margin: 4px 0 0;
+	font-size: 13px;
+}
+
+.chat-admin-actions {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
+}
+
+/* Fields and their button in one row. */
+.chat-admin-inline {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 8px;
+}
+
+.chat-admin-inline > .input {
+	flex: 1 1 200px;
+	max-width: 400px;
+}
+
+/* The owner picker and the delete question take a full line under the room. */
+.chat-admin-row > .chat-admin-inline,
+.chat-admin-confirm {
+	flex-basis: 100%;
+}
+
+.chat-admin-confirm {
+	padding: 12px;
+	border: 1px solid var(--border);
+	border-radius: var(--radius-md);
+	background: var(--hover);
+	font-size: 13px;
+}
+
+.chat-admin-question {
+	margin: 0 0 8px;
+	overflow-wrap: anywhere;
+}
+
+.chat-admin-form {
+	display: flex;
+	flex-direction: column;
+	gap: 12px;
+}
+
+.chat-admin-emoji-grid {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
+	margin: 0;
+	padding: 0;
+	list-style: none;
+}
+
+.chat-admin-emoji-card {
+	display: inline-flex;
+	align-items: center;
+	gap: 8px;
+	padding: 6px 10px;
+	border: 1px solid var(--border);
+	border-radius: var(--radius-md);
+}
+
+.chat-admin-emoji-card img {
+	width: 24px;
+	height: 24px;
+	object-fit: contain;
 }
 
 .admin-card-form {
