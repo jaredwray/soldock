@@ -7,15 +7,15 @@ export interface SystemNavItem {
 	title: string;
 	icon: IconName;
 	/**
-	 * The count next to the view: the unread threads of a label, or all its threads. Reply later counts all
-	 * its threads, because each one waits for an answer.
+	 * The count next to the view: the unread threads of a label, or all its threads. Snoozed counts all its
+	 * threads, because each one comes back.
 	 */
 	count: { label: string; of: "unread" | "total" } | null;
 }
 
 export const SYSTEM_NAV: readonly SystemNavItem[] = [
 	{ view: "inbox", title: "Inbox", icon: "inbox", count: { label: "INBOX", of: "unread" } },
-	{ view: "reply-later", title: "Reply later", icon: "clock", count: { label: "REPLY_LATER", of: "total" } },
+	{ view: "snoozed", title: "Snoozed", icon: "clock", count: { label: "SNOOZED", of: "total" } },
 	{ view: "starred", title: "Starred", icon: "star", count: null },
 	{ view: "sent", title: "Sent", icon: "send", count: null },
 	{ view: "all", title: "All mail", icon: "allMail", count: null },
@@ -39,7 +39,7 @@ export function viewIcon(view: MailView): IconName {
 
 const SYSTEM_QUERIES: Record<SystemView, string> = {
 	inbox: "in:inbox",
-	"reply-later": "in:reply_later",
+	snoozed: "in:snoozed",
 	starred: "is:starred",
 	sent: "in:sent",
 	spam: "in:spam",
@@ -53,7 +53,7 @@ const SYSTEM_LABEL_NAMES: Record<string, string | null> = {
 	INBOX: "Inbox",
 	STARRED: "Starred",
 	IMPORTANT: "Important",
-	REPLY_LATER: "Reply later",
+	SNOOZED: "Snoozed",
 	SENT: "Sent",
 	SPAM: "Spam",
 	TRASH: "Trash",

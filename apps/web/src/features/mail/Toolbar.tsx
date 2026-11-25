@@ -20,8 +20,8 @@ interface ToolbarProps {
 	selection: "none" | "some" | "all";
 	anyUnread: boolean;
 	allStarred: boolean;
-	/** True when each thread of the targets is in Reply later. The button then takes them out. */
-	allReplyLater: boolean;
+	/** True when each thread of the targets is snoozed. Unsnooze then shows, which puts them back in the inbox. */
+	allSnoozed: boolean;
 	userLabels: readonly Label[];
 	listEmpty: boolean;
 	/** True in the mailbox of an agent: no selection and no actions. */
@@ -33,6 +33,8 @@ interface ToolbarProps {
 	held: boolean;
 	onToggleAll: () => void;
 	onAction: (action: MailAction) => void;
+	/** Opens the dialog that asks for the time of a snooze. */
+	onSnooze: () => void;
 	onBack: () => void;
 	onRefresh: () => void;
 	/** The path of Focus in the view, or null for a view without it. */
@@ -46,7 +48,7 @@ interface ToolbarProps {
  * the search box, Refresh and the settings of the mailbox.
  */
 export function Toolbar(props: ToolbarProps) {
-	const { view, mode, targetCount, anyUnread, allStarred, allReplyLater, userLabels, held, onAction } = props;
+	const { view, mode, targetCount, anyUnread, allStarred, allSnoozed, userLabels, held, onAction } = props;
 	const inSpam = view.kind === "system" && view.view === "spam";
 	const inTrash = view.kind === "system" && view.view === "trash";
 	const moves = !inSpam && !inTrash && !held;
@@ -93,18 +95,16 @@ export function Toolbar(props: ToolbarProps) {
 							onClick={() => onAction(allStarred ? "unstar" : "star")}
 						/>
 					)}
-					{/* Held mail moves only when a person screens its sender, so it has no Reply later. */}
-					{moves &&
-						(allReplyLater ? (
-							<ToolButton
-								icon="check"
-								label="Done: remove from Reply later"
-								shortcut="l"
-								onClick={() => onAction("replyLaterDone")}
-							/>
-						) : (
-							<ToolButton icon="clock" label="Reply later" shortcut="l" onClick={() => onAction("replyLater")} />
-						))}
+					{/* Held mail moves only when a person screens its sender, so it has no Snooze. */}
+					{moves && (
+						<ToolButton
+							icon="clock"
+							label={allSnoozed ? "Snooze until a different time" : "Snooze"}
+							shortcut="b"
+							onClick={props.onSnooze}
+						/>
+					)}
+					{moves && allSnoozed && <TextButton icon="inbox" label="Unsnooze" onClick={() => onAction("unsnooze")} />}
 					{moves && userLabels.length > 0 && (
 						<LabelPicker labels={userLabels} onPick={(id) => onAction({ label: id })} />
 					)}

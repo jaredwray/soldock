@@ -7,7 +7,7 @@ import { addNavigationGuard } from "../../lib/navigationGuard.ts";
 import { Link, navigate } from "../../lib/router.tsx";
 import { useToast } from "../../lib/toast.tsx";
 import { useOnChange } from "../../lib/useOnChange.ts";
-import { type MailView, REPLY_LATER_VIEW, threadPath, viewPath } from "../../routes.ts";
+import { type MailView, threadPath, viewPath } from "../../routes.ts";
 import { SEARCH_INPUT_ID } from "../../shell/nav.ts";
 import { SearchBox } from "../../shell/SearchBox.tsx";
 import { actionChange, actionNotice, type LabelChange, modifyThreads, type Undo, undoChanges } from "./actions.ts";
@@ -39,6 +39,7 @@ import { MailboxNotice } from "./MailboxNotice.tsx";
 import { MessageCard, type ReplyMode } from "./MessageCard.tsx";
 import { useMailboxId, useMailboxRights } from "./mailbox.tsx";
 import type { FromOption } from "./mailboxNav.ts";
+import { SnoozeDialog } from "./SnoozeDialog.tsx";
 import { useShortcuts } from "./useShortcuts.ts";
 import type { ViewQuery } from "./views.ts";
 
@@ -57,7 +58,7 @@ interface FocusReplyProps {
 	query: ViewQuery;
 	/** The title of the view, for example "Inbox" or the name of a label. */
 	viewTitle: string;
-	/** What Done, Later and a reply do in the view (`focusMode`). */
+	/** What Done, a snooze and a reply do in the view (`focusMode`). */
 	mode: FocusMode;
 	/** The name of the team mailbox or the agent mailbox, or null in the own mailbox. */
 	mailboxName: string | null;
@@ -90,14 +91,14 @@ type FocusAfter = "heading" | "keep";
 type Source = "key" | "button";
 
 /** An action on the conversation on screen. "primary" is Archive or Done (`primaryAction`). */
-type Action = "primary" | "archive" | "spam" | "later";
+type Action = "primary" | "archive" | "spam" | { snooze: string };
 
 /** The text of a cleared conversation in the list of the finish state. */
 const CLEARED_TEXT: Record<ClearKind, string> = {
 	answered: "Answered",
 	archived: "Archived",
 	done: "Done",
-	later: "Reply later",
+	snoozed: "Snoozed",
 	spam: "Spam",
 };
 
@@ -107,12 +108,11 @@ function olderFailed(error: unknown) {
 }
 
 /**
- * Focus: the conversations of a view, one at a time. Previous and Next move between them. Archive, Spam, Later
- * and Done take the conversation out of the view and show the next one (`focusMode`). Reply opens the composer in
- * the page. After a send, the next conversation shows with its reply open, so the person answers one
- * conversation after the other with no click. In Reply later, the server then removes the conversation from Reply
- * later. In the inbox, the page archives it. When no conversation stays, the page shows what the person cleared
- * in this visit.
+ * Focus: the conversations of a view, one at a time. Previous and Next move between them. Archive, Spam, Snooze
+ * and Done take the conversation out of the view and show the next one (`focusMode`). Snooze first asks for the
+ * time. Reply opens the composer in the page. After a send, the next conversation shows with its reply open, so
+ * the person answers one conversation after the other with no click. In the inbox, the page archives the
+ * conversation after a send. When no conversation stays, the page shows what the person cleared in this visit.
  */
 export function FocusReply(props: FocusReplyProps) {
 	const { view, mode, labelsById, myAddress, onChanged, onCompose } = props;
@@ -156,6 +156,8 @@ export function FocusReply(props: FocusReplyProps) {
 	const [olderFrom, setOlderFrom] = useState<string | null>(null);
 	/** Next at the last loaded conversation while the next page loads: the move waits for the page. */
 	const [pendingNext, setPendingNext] = useState<Source | null>(null);
+	/** The source of the open Snooze dialog, or null while it is closed. */
+	const [snoozing, setSnoozing] = useState<Source | null>(null);
 
 	/**
 	 * The conversations that the person cleared in this visit, with their number of messages. A refresh does not
@@ -167,12 +169,10 @@ export function FocusReply(props: FocusReplyProps) {
 	goneRef.current = gone;
 	const title = props.mailboxName ? `${props.mailboxName}: Focus` : "Focus";
 	const isInbox = view.kind === "system" && view.view === "inbox";
-	const isReplyLater = view.kind === "system" && view.view === "reply-later";
 	/** The view in a sentence, for example "the inbox" or "Starred". */
 	const place = isInbox ? "the inbox" : props.viewTitle;
 	const listPath = viewPath(view, mailboxId);
 	const inboxPath = viewPath({ kind: "system", view: "inbox" }, mailboxId);
-	const replyLaterPath = viewPath(REPLY_LATER_VIEW, mailboxId);
 
 	const ids = items.map((item) => item.id);
 	const active = activeId !== null && ids.includes(activeId) ? activeId : (ids[0] ?? null);
@@ -409,7 +409,7 @@ export function FocusReply(props: FocusReplyProps) {
 
 	function sent(thread: ThreadSummary, result: SendResult) {
 		const archive = mode.archiveOnReply && rights.modify;
-		// In Reply later, the server took the conversation out of the view. In the inbox, the archive below does.
+		// In the inbox, the archive below takes the conversation out of the view.
 		const leavesView = mode.archiveOnReply ? archive : mode.leaves.answered;
 		const next = leave(thread, "answered", leavesView ? mode.done : null, !leavesView, "heading", "Reply sent. ");
 		// The reply of the next conversation opens: the person continues with no click.
@@ -432,27 +432,45 @@ export function FocusReply(props: FocusReplyProps) {
 		onChanged();
 	}
 
-	/** Archive, Spam, Later or Done on the conversation on screen. Each change has Undo. */
+	/** True when a reply with text stops an action from `source`. A button asks first, and a key never discards. */
+	function keepsReply(source: Source): boolean {
+		return draft !== null && dirty && (source === "key" || !window.confirm("Discard your reply?"));
+	}
+
+	/** Opens the dialog that asks for the time of a snooze. The snooze itself goes through `act`. */
+	function askSnooze(source: Source) {
+		if (!rights.modify || !current || keepsReply(source)) return;
+		setSnoozing(source);
+	}
+
+	/** Archive, Spam, Snooze or Done on the conversation on screen. Each change has Undo. */
 	async function act(action: Action, source: Source) {
 		const thread = current;
-		if (!rights.modify || !thread || (action === "later" && !mode.later)) return;
-		if (draft && dirty && (source === "key" || !window.confirm("Discard your reply?"))) return;
+		if (!rights.modify || !thread) return;
+		// The Snooze dialog asked about the reply before it opened.
+		if (typeof action !== "object" && keepsReply(source)) return;
 		const primary = primaryAction(mode, thread.label_ids);
 		const kind: Action | "none" = action === "primary" ? (primary === "done" ? "primary" : primary) : action;
 		const plan: { how: ClearKind; change: LabelChange | null; notice: string; leaves: boolean } =
-			kind === "archive"
-				? { how: "archived", change: actionChange("archive"), notice: "", leaves: mode.leaves.archived }
-				: kind === "spam"
-					? { how: "spam", change: actionChange("spam"), notice: "", leaves: mode.leaves.spam }
-					: kind === "later"
-						? { how: "later", change: actionChange("replyLater"), notice: "", leaves: mode.leaves.later }
+			typeof kind === "object"
+				? {
+						how: "snoozed",
+						change: actionChange(kind),
+						notice: actionNotice(kind, 1) ?? "",
+						leaves: mode.leaves.snoozed,
+					}
+				: kind === "archive"
+					? { how: "archived", change: actionChange("archive"), notice: "", leaves: mode.leaves.archived }
+					: kind === "spam"
+						? { how: "spam", change: actionChange("spam"), notice: "", leaves: mode.leaves.spam }
 						: kind === "none"
 							? { how: "done", change: null, notice: "Conversation marked as done.", leaves: false }
 							: { how: "done", change: mode.done, notice: mode.doneNotice, leaves: mode.leaves.done };
-		const notice =
-			plan.notice || (actionNotice(kind === "archive" ? "archive" : kind === "spam" ? "spam" : "replyLater", 1) ?? "");
+		const notice = plan.notice || (actionNotice(kind === "spam" ? "spam" : "archive", 1) ?? "");
 		const position = ids.indexOf(thread.id);
-		const undos = plan.change ? undoChanges([{ id: thread.id, labelIds: thread.label_ids }], plan.change) : [];
+		const undos = plan.change
+			? undoChanges([{ id: thread.id, labelIds: thread.label_ids, snoozedUntil: thread.snoozed_until }], plan.change)
+			: [];
 		// A button that stays keeps the focus. The second Archive can go with the move, so its focus goes on.
 		const focus: FocusAfter = source === "key" || action === "archive" ? "heading" : "keep";
 		leave(thread, plan.how, plan.change, !plan.leaves, focus);
@@ -536,9 +554,9 @@ export function FocusReply(props: FocusReplyProps) {
 			case "e":
 				void act("primary", "key");
 				break;
-			case "l":
-				// l is Reply later, as in the list. In Reply later, it is Done.
-				void act(mode.later ? "later" : "primary", "key");
+			case "b":
+				// b is Snooze, as in the list.
+				askSnooze("key");
 				break;
 			case "!":
 				void act("spam", "key");
@@ -588,16 +606,14 @@ export function FocusReply(props: FocusReplyProps) {
 						onClick={() => void act("archive", "button")}
 					/>
 				)}
-				{mode.later && (
-					<ActionButton
-						icon="clock"
-						text="Later"
-						label={`Later: move “${subject}” to Reply later`}
-						title="Reply later (l)"
-						keys="l"
-						onClick={() => void act("later", "button")}
-					/>
-				)}
+				<ActionButton
+					icon="clock"
+					text="Snooze"
+					label={`Snooze “${subject}” until a date and a time`}
+					title="Snooze (b)"
+					keys="b"
+					onClick={() => askSnooze("button")}
+				/>
 				<ActionButton
 					primary
 					icon={primary === "archive" ? "archive" : "check"}
@@ -609,12 +625,8 @@ export function FocusReply(props: FocusReplyProps) {
 								? "Done: go to the next conversation"
 								: `Done: ${mode.doneText(subject)}`
 					}
-					title={
-						primary !== "archive" && isReplyLater
-							? "Done (e or l)"
-							: `${primary === "archive" ? "Archive" : "Done"} (e)`
-					}
-					keys={primary !== "archive" && isReplyLater ? "e l" : "e"}
+					title={`${primary === "archive" ? "Archive" : "Done"} (e)`}
+					keys="e"
 					onClick={() => void act("primary", "button")}
 				/>
 			</>
@@ -713,12 +725,8 @@ export function FocusReply(props: FocusReplyProps) {
 						log={log}
 						mailboxId={mailboxId}
 						inboxPath={inboxPath}
-						// After the inbox and Reply later, the next pile is Reply later. Else the person goes back to the view.
-						next={
-							isInbox || isReplyLater
-								? { path: replyLaterPath, text: "Reply later list" }
-								: { path: listPath, text: `Back to ${place}` }
-						}
+						// "Go to the inbox" is the way back to the inbox. After a different view, the person can also go back to it.
+						next={isInbox ? null : { path: listPath, text: `Back to ${place}` }}
 					/>
 				) : shown === "older" ? (
 					loadingOlder || olderFrom !== nextCursor ? (
@@ -739,18 +747,11 @@ export function FocusReply(props: FocusReplyProps) {
 						<span className="mail-state-icon">
 							<Icon name="check" size={22} />
 						</span>
-						{isReplyLater ? (
-							<>
-								<p className="mail-state-title">No conversation waits for an answer.</p>
-								<p className="mail-state-text">Use Reply later on a conversation to put it here.</p>
-							</>
-						) : (
-							<p className="mail-state-title">
-								{view.kind === "search" ? `No conversations match “${view.query}”.` : `No conversations in ${place}.`}
-							</p>
-						)}
-						<Link to={isReplyLater ? inboxPath : listPath} className="button">
-							{isReplyLater ? "Go to the inbox" : `Back to ${place}`}
+						<p className="mail-state-title">
+							{view.kind === "search" ? `No conversations match “${view.query}”.` : `No conversations in ${place}.`}
+						</p>
+						<Link to={listPath} className="button">
+							Back to {place}
 						</Link>
 					</div>
 				) : current ? (
@@ -788,6 +789,16 @@ export function FocusReply(props: FocusReplyProps) {
 					{actions}
 				</fieldset>
 			)}
+			{snoozing && (
+				<SnoozeDialog
+					count={1}
+					onClose={() => setSnoozing(null)}
+					onPick={(until) => {
+						setSnoozing(null);
+						void act({ snooze: until.toISOString() }, snoozing);
+					}}
+				/>
+			)}
 		</main>
 	);
 }
@@ -821,8 +832,8 @@ function ActionButton(props: {
 }
 
 /**
- * The page after the last conversation goes: what the person answered, archived, marked as done, moved to Reply
- * later and marked as spam in this visit. `next` is the second link, after "Go to the inbox".
+ * The page after the last conversation goes: what the person answered, archived, marked as done, snoozed and
+ * marked as spam in this visit. `next` is the second link, after "Go to the inbox".
  */
 function FinishState({
 	log,
@@ -833,7 +844,8 @@ function FinishState({
 	log: readonly Cleared[];
 	mailboxId: string | null;
 	inboxPath: string;
-	next: { path: string; text: string };
+	/** The link after "Go to the inbox", or null after the inbox. */
+	next: { path: string; text: string } | null;
 }) {
 	const shown = log.slice(0, FINISH_LIST_MAX);
 	return (
@@ -861,9 +873,11 @@ function FinishState({
 				<Link to={inboxPath} className="button button-primary">
 					Go to the inbox
 				</Link>
-				<Link to={next.path} className="button">
-					{next.text}
-				</Link>
+				{next && (
+					<Link to={next.path} className="button">
+						{next.text}
+					</Link>
+				)}
 			</div>
 		</div>
 	);

@@ -1,11 +1,10 @@
 import type { Label, Message, ThreadSummary } from "@asterra/contracts";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { api, errorMessage } from "../../lib/api.ts";
-import { Icon } from "../../lib/icons.tsx";
-import { Link, navigate } from "../../lib/router.tsx";
+import { navigate } from "../../lib/router.tsx";
 import { useToast } from "../../lib/toast.tsx";
 import { useOnChange } from "../../lib/useOnChange.ts";
-import { focusPath, type MailView, mailSettingsPath, REPLY_LATER_VIEW, threadPath, viewPath } from "../../routes.ts";
+import { focusPath, type MailView, mailSettingsPath, threadPath, viewPath } from "../../routes.ts";
 import { SEARCH_INPUT_ID } from "../../shell/nav.ts";
 import { SearchBox } from "../../shell/SearchBox.tsx";
 import {
@@ -26,6 +25,7 @@ import { focusMode } from "./focusReply.ts";
 import { MailboxNotice } from "./MailboxNotice.tsx";
 import type { ReplyMode } from "./MessageCard.tsx";
 import { mailboxInput, useMailboxId, useMailboxRights } from "./mailbox.tsx";
+import { SnoozeDialog } from "./SnoozeDialog.tsx";
 import { showsHeldMail } from "./screener.ts";
 import { ThreadList } from "./ThreadList.tsx";
 import { ThreadView } from "./ThreadView.tsx";
@@ -37,7 +37,7 @@ import { type ViewQuery, viewIcon } from "./views.ts";
 const LEAVE_THREAD: readonly MailAction[] = ["archive", "trash", "spam", "notSpam", "restore", "unread"];
 
 /** The shortcuts that change the mailbox, or select threads for a change. They need `mail.modify`. */
-const CHANGE_KEYS: ReadonlySet<string> = new Set(["e", "#", "s", "x", "l"]);
+const CHANGE_KEYS: ReadonlySet<string> = new Set(["e", "#", "s", "x", "b"]);
 
 /** The shortcuts that start a message. They need `mail.send`. */
 const SEND_KEYS: ReadonlySet<string> = new Set(["c", "r"]);
@@ -72,6 +72,8 @@ export function MailPane(props: MailPaneProps) {
 	const [selected, setSelected] = useState<ReadonlySet<string>>(() => new Set());
 	const [cursor, setCursor] = useState(0);
 	const [focusToken, setFocusToken] = useState(0);
+	/** The threads that the open Snooze dialog is for, or null while it is closed. */
+	const [snoozing, setSnoozing] = useState<readonly string[] | null>(null);
 	/** The thread id and the unread message ids that the pane marked as read last. */
 	const markedRef = useRef<string | null>(null);
 	const scrollRef = useRef<HTMLDivElement>(null);
@@ -136,6 +138,9 @@ export function MailPane(props: MailPaneProps) {
 			threads.find((item) => item.id === id)?.label_ids ?? (openThread?.id === id ? openThread.label_ids : null),
 		[threads, openThread],
 	);
+	/** The time of the snooze of a thread, for an undo that puts the snooze back. */
+	const snoozedUntilOf = (id: string): string | null =>
+		threads.find((item) => item.id === id)?.snoozed_until ?? (openThread?.id === id ? openThread.snoozed_until : null);
 
 	async function run(action: MailAction, ids: readonly string[]) {
 		if (ids.length === 0 || readOnly) return;
@@ -146,7 +151,7 @@ export function MailPane(props: MailPaneProps) {
 		const undos = undoChanges(
 			ids.flatMap((id) => {
 				const labelIds = labelsOf(id);
-				return labelIds === null ? [] : [{ id, labelIds }];
+				return labelIds === null ? [] : [{ id, labelIds, snoozedUntil: snoozedUntilOf(id) }];
 			}),
 			change,
 		);
@@ -221,16 +226,10 @@ export function MailPane(props: MailPaneProps) {
 	const allStarred = listMode
 		? targetSummaries.length > 0 && targetSummaries.every((item) => item.starred)
 		: (openThread?.label_ids.includes("STARRED") ?? false);
-	// In the inbox, Reply later always moves the threads out. A thread with REPLY_LATER is in the inbox only
-	// because new mail came, and the person then wants it out again, not out of Reply later.
-	const inInbox = view.kind === "system" && view.view === "inbox";
-	const allReplyLater =
-		!inInbox &&
-		(listMode
-			? targetSummaries.length > 0 && targetSummaries.every((item) => item.label_ids.includes("REPLY_LATER"))
-			: (openThread?.label_ids.includes("REPLY_LATER") ?? false));
+	const allSnoozed = listMode
+		? targetSummaries.length > 0 && targetSummaries.every((item) => item.label_ids.includes("SNOOZED"))
+		: (openThread?.label_ids.includes("SNOOZED") ?? false);
 	const inSpamOrTrash = view.kind === "system" && (view.view === "spam" || view.view === "trash");
-	const replyLaterCount = labelsById.get("REPLY_LATER")?.threads_total ?? 0;
 	// The server refuses a move of the mail that the Screener holds, so the pane does not offer one.
 	const held = showsHeldMail(view);
 
@@ -278,17 +277,10 @@ export function MailPane(props: MailPaneProps) {
 				void run(starred ? "unstar" : "star", ids);
 				break;
 			}
-			case "l": {
-				// Reply later, or Done for threads that are in Reply later already.
-				if (inSpamOrTrash || held) break;
-				const inReplyLater = listMode
-					? !inInbox &&
-						keyTargets.length > 0 &&
-						keyTargets.every((id) => labelsOf(id)?.includes("REPLY_LATER") === true)
-					: allReplyLater;
-				void run(inReplyLater ? "replyLaterDone" : "replyLater", keyTargets);
+			case "b":
+				// Snooze: the dialog asks for the time.
+				if (!inSpamOrTrash && !held && keyTargets.length > 0) setSnoozing(keyTargets);
 				break;
-			}
 			case "x":
 				if (listMode && current) toggleSelect(current.id);
 				break;
@@ -326,13 +318,14 @@ export function MailPane(props: MailPaneProps) {
 				selection={selection}
 				anyUnread={anyUnread}
 				allStarred={allStarred}
-				allReplyLater={allReplyLater}
+				allSnoozed={allSnoozed}
 				userLabels={userLabels}
 				listEmpty={threads.length === 0}
 				readOnly={readOnly}
 				held={held}
 				onToggleAll={() => setSelected(selection === "all" ? new Set() : new Set(threads.map((item) => item.id)))}
 				onAction={(action) => void run(action, targets)}
+				onSnooze={() => setSnoozing(targets)}
 				onBack={() => navigate(viewPath(view, mailboxId))}
 				onRefresh={() => {
 					void list.refresh();
@@ -348,37 +341,29 @@ export function MailPane(props: MailPaneProps) {
 						This label does not exist.
 					</div>
 				) : listMode ? (
-					<>
-						{view.kind === "system" && view.view === "reply-later" && threads.length > 0 && (
-							<FocusBanner mailboxId={mailboxId} />
-						)}
-						<ThreadList
-							view={view}
-							title={title}
-							list={list}
-							// In a team mailbox, more than one person sends from the address, so no sender shows as "me". In
-							// the mailbox of an agent, the person who reads is not the sender.
-							myAddress={mailboxId ? "" : myAddress}
-							labelsById={labelsById}
-							selected={selected}
-							cursor={cursorIndex}
-							focusToken={focusToken}
-							onToggleSelect={toggleSelect}
-							onToggleStar={toggleStar}
-							onFocusRow={setCursor}
-							onLoadOlder={() =>
-								void list
-									.loadOlder()
-									.catch((error: unknown) =>
-										toast({ message: `Older conversations did not load. ${errorMessage(error)}`, tone: "error" }),
-									)
-							}
-							onRetry={() => void list.retry()}
-						/>
-						{view.kind === "system" && view.view === "inbox" && replyLaterCount > 0 && list.status === "ready" && (
-							<ReplyLaterPile mailboxId={mailboxId} count={replyLaterCount} />
-						)}
-					</>
+					<ThreadList
+						view={view}
+						title={title}
+						list={list}
+						// In a team mailbox, more than one person sends from the address, so no sender shows as "me". In
+						// the mailbox of an agent, the person who reads is not the sender.
+						myAddress={mailboxId ? "" : myAddress}
+						labelsById={labelsById}
+						selected={selected}
+						cursor={cursorIndex}
+						focusToken={focusToken}
+						onToggleSelect={toggleSelect}
+						onToggleStar={toggleStar}
+						onFocusRow={setCursor}
+						onLoadOlder={() =>
+							void list
+								.loadOlder()
+								.catch((error: unknown) =>
+									toast({ message: `Older conversations did not load. ${errorMessage(error)}`, tone: "error" }),
+								)
+						}
+						onRetry={() => void list.retry()}
+					/>
 				) : (
 					<ThreadView
 						state={thread}
@@ -392,46 +377,16 @@ export function MailPane(props: MailPaneProps) {
 					/>
 				)}
 			</div>
+			{snoozing && (
+				<SnoozeDialog
+					count={snoozing.length}
+					onClose={() => setSnoozing(null)}
+					onPick={(until) => {
+						setSnoozing(null);
+						void run({ snooze: until.toISOString() }, snoozing);
+					}}
+				/>
+			)}
 		</main>
-	);
-}
-
-/** The top of the Reply later list: the way into Focus. */
-function FocusBanner({ mailboxId }: { mailboxId: string | null }) {
-	return (
-		<div className="reply-later-banner">
-			<p>Answer these conversations one after the other, each with its newest message.</p>
-			<Link to={focusPath(REPLY_LATER_VIEW, mailboxId)} className="button button-primary button-small">
-				<Icon name="focus" size={16} />
-				Focus
-			</Link>
-		</div>
-	);
-}
-
-/**
- * The pile of Reply later at the end of the inbox. The conversations in it are out of the inbox, so the pile
- * shows that they still wait for an answer.
- */
-function ReplyLaterPile({ mailboxId, count }: { mailboxId: string | null; count: number }) {
-	return (
-		<section className="reply-later-pile" aria-label="Reply later">
-			<Link to={viewPath(REPLY_LATER_VIEW, mailboxId)} className="reply-later-pile-link">
-				<Icon name="clock" size={18} />
-				<span>
-					<strong>Reply later</strong> · {count} {count === 1 ? "conversation waits" : "conversations wait"} for an
-					answer
-				</span>
-			</Link>
-			{/* The header row of the inbox has its own Focus. This one opens Focus in Reply later. */}
-			<Link
-				to={focusPath(REPLY_LATER_VIEW, mailboxId)}
-				className="button button-small"
-				aria-label="Focus in Reply later"
-			>
-				<Icon name="focus" size={16} />
-				Focus
-			</Link>
-		</section>
 	);
 }

@@ -57,12 +57,103 @@ function focusPage(page: Page) {
 	};
 }
 
-// Reply later: a conversation leaves the inbox and waits in its own list, with a count in the sidebar and a
-// pile at the end of the inbox. Focus shows the waiting conversations one at a time, each with its newest
-// message. Reply opens the composer in the page, a send takes the conversation out of Reply later, and the next
-// conversation shows with its reply open. Done takes a conversation out without a reply, and Undo shows it
-// again. When no conversation stays, a finish state shows what the person cleared.
-test("a member puts mail in Reply later and answers it in Focus", async ({ browser }) => {
+// Snooze: a conversation leaves the inbox until a time that the person picks, and waits in the Snoozed list
+// with a count in the sidebar. The dialog offers times, and it has a field for a date and a time. Unsnooze puts
+// a conversation back in the inbox, and its Undo gives the snooze back with the same time. The server test
+// covers the return to the inbox at the time.
+test("a member snoozes mail until a time, changes the time, and ends a snooze", async ({ browser }) => {
+	const admin = await signIn(browser, "tomasz");
+	const member = await signIn(browser, "rafael");
+	try {
+		const mailbox = await newTeamMailbox(admin, member, "Partners");
+		const first = unique("Contract terms");
+		const second = unique("Event venue");
+		const address = mailbox.address;
+		await post(admin, "/api/v1/mail/messages", { to: [address], subject: first, text: "Can you check clause 4?" });
+		await post(admin, "/api/v1/mail/messages", { to: [address], subject: second, text: "Which venue do you like?" });
+		/** The time of the snooze of each snoozed conversation, by subject, from the server. */
+		const snoozed = async () => {
+			const response = await member.request.get(`/api/v1/mail/threads?mailbox_id=${mailbox.id}&query=in%3Asnoozed`);
+			const { threads } = (await response.json()) as { threads: { subject: string; snoozed_until: string }[] };
+			return Object.fromEntries(threads.map((thread) => [thread.subject, thread.snoozed_until]));
+		};
+
+		const page = await member.newPage();
+		const inbox = `/mail/team/${mailbox.id}/inbox`;
+		const firstRow = page.getByRole("listitem").filter({ hasText: first });
+		const secondRow = page.getByRole("listitem").filter({ hasText: second });
+		await openList(page, inbox, [first, second]);
+		const dialog = page.getByRole("dialog", { name: "Snooze until" });
+
+		// From an open conversation: Snooze asks for the time. A time of the dialog sends the conversation out of
+		// the inbox and back to the list.
+		await firstRow.getByRole("link").click();
+		await page.getByRole("button", { name: "Snooze", exact: true }).click();
+		await dialog.getByRole("button", { name: /^Tomorrow/ }).click();
+		await expect(dialog).toHaveCount(0);
+		await expect(page.getByText(/^Conversation snoozed until .+\.$/)).toBeVisible();
+		await expect(page).toHaveURL(new RegExp(`${inbox}$`));
+		await expect(firstRow).toHaveCount(0);
+		const tomorrow = new Date();
+		tomorrow.setDate(tomorrow.getDate() + 1);
+		tomorrow.setHours(8, 0, 0, 0);
+		await expect.poll(snoozed).toEqual({ [first]: tomorrow.toISOString() });
+
+		// From the list, with the keyboard: the b key on the row at the cursor, then a date and a time of the
+		// person. The dialog refuses a time that is not later than now, and stays open.
+		await expect(secondRow).toBeVisible();
+		await page.keyboard.press("b");
+		const field = dialog.getByLabel("Pick a date and a time");
+		await field.fill("2020-01-06T09:30");
+		await dialog.getByRole("button", { name: "Snooze", exact: true }).click();
+		await expect(dialog.getByRole("alert")).toHaveText("Pick a date and a time that are later than now.");
+		await field.fill("2031-01-06T09:30");
+		await dialog.getByRole("button", { name: "Snooze", exact: true }).click();
+		await expect(secondRow).toHaveCount(0);
+		const picked = new Date(2031, 0, 6, 9, 30).toISOString();
+		await expect.poll(snoozed).toEqual({ [first]: tomorrow.toISOString(), [second]: picked });
+		await expect(page.getByText("The inbox of this team mailbox is empty.")).toBeVisible();
+
+		// The sidebar counts the snoozed conversations, and each row of the Snoozed list shows its time.
+		const nav = page.getByRole("navigation", { name: "Mailboxes, folders and labels" });
+		await nav.getByRole("link", { name: /^Snoozed\s*2 conversations$/ }).click();
+		await expect(page).toHaveURL(new RegExp(`/mail/team/${mailbox.id}/snoozed$`));
+		await expect(firstRow).toContainText("Snoozed until");
+		await expect(secondRow).toContainText("Snoozed until");
+
+		// Unsnooze puts the conversation back in the inbox. Undo gives the snooze back, with the time from before.
+		await secondRow.getByRole("checkbox").check();
+		await page.getByRole("button", { name: "Unsnooze" }).click();
+		await expect(secondRow).toHaveCount(0);
+		await expect.poll(() => subjects(member, mailbox.id, "in:inbox")).toEqual([second]);
+		await page
+			.locator(".toast")
+			.filter({ hasText: "Conversation moved to the inbox." })
+			.getByRole("button", { name: "Undo" })
+			.click();
+		await expect(page.getByText("Action undone.")).toBeVisible();
+		await expect.poll(snoozed).toEqual({ [first]: tomorrow.toISOString(), [second]: picked });
+		await expect(secondRow).toBeVisible();
+
+		// A snooze of a snoozed conversation changes its time, and the conversation stays in the list.
+		await firstRow.getByRole("checkbox").check();
+		await page.getByRole("button", { name: "Snooze until a different time" }).click();
+		await field.fill("2031-02-03T10:00");
+		await dialog.getByRole("button", { name: "Snooze", exact: true }).click();
+		await expect.poll(snoozed).toEqual({ [first]: new Date(2031, 1, 3, 10, 0).toISOString(), [second]: picked });
+		await expect(firstRow).toBeVisible();
+		expect(await subjects(member, mailbox.id, "in:inbox")).toEqual([]);
+	} finally {
+		await admin.close();
+		await member.close();
+	}
+});
+
+// Focus shows the conversations of a list one at a time, each with its newest message. Reply opens the composer
+// in the page, and after a send the next conversation shows with its reply open. Done takes a conversation out
+// of the list without a reply, and Undo shows it again. When no conversation stays, a finish state shows what
+// the person cleared. This test uses Starred: Done there removes the star.
+test("a member answers starred mail in Focus", async ({ browser }) => {
 	const admin = await signIn(browser, "tomasz");
 	const member = await signIn(browser, "rafael");
 	try {
@@ -77,35 +168,17 @@ test("a member puts mail in Reply later and answers it in Focus", async ({ brows
 
 		const page = await member.newPage();
 		const inbox = `/mail/team/${mailbox.id}/inbox`;
-		const firstRow = page.getByRole("listitem").filter({ hasText: first });
-		const secondRow = page.getByRole("listitem").filter({ hasText: second });
-		const thirdRow = page.getByRole("listitem").filter({ hasText: third });
 		await openList(page, inbox, [first, second, third]);
+		for (const subject of [first, second, third]) {
+			const row = page.getByRole("listitem").filter({ hasText: subject });
+			await row.getByRole("button", { name: "Star" }).click();
+			await expect(row.getByRole("button", { name: "Star" })).toHaveAttribute("title", "Starred");
+		}
+		await expect.poll(async () => (await subjects(member, mailbox.id, "is:starred")).length).toBe(3);
 
-		// From an open conversation: Reply later sends it out of the inbox and back to the list.
-		await firstRow.getByRole("link").click();
-		await page.getByRole("button", { name: "Reply later" }).click();
-		await expect(page.getByText("Conversation moved to Reply later.")).toBeVisible();
-		await expect(page).toHaveURL(new RegExp(`${inbox}$`));
-		await expect(firstRow).toHaveCount(0);
-		const pile = page.getByRole("region", { name: "Reply later" });
-		await expect(pile).toContainText("1 conversation waits for an answer");
-
-		// From the list, with the keyboard: the l key on the row at the cursor.
-		await expect(secondRow).toBeVisible();
-		await page.keyboard.press("l");
-		await expect(secondRow).toHaveCount(0);
-		await expect(pile).toContainText("2 conversations wait for an answer");
-		// A row that has the focus has the cursor.
-		await thirdRow.getByRole("link").focus();
-		await page.keyboard.press("l");
-		await expect(thirdRow).toHaveCount(0);
-		await expect(pile).toContainText("3 conversations wait for an answer");
-		const nav = page.getByRole("navigation", { name: "Mailboxes, folders and labels" });
-		await expect(nav.getByRole("link", { name: /^Reply later\s*3 to answer$/ })).toBeVisible();
-
-		await pile.getByRole("link", { name: "Focus in Reply later" }).click();
-		await expect(page).toHaveURL(new RegExp(`/mail/team/${mailbox.id}/reply-later/focus$`));
+		await page.goto(`/mail/team/${mailbox.id}/starred`);
+		await page.getByRole("main").getByRole("link", { name: "Focus", exact: true }).click();
+		await expect(page).toHaveURL(new RegExp(`/mail/team/${mailbox.id}/starred/focus$`));
 		const focus = focusPage(page);
 		const { main, subject, reply, message } = focus;
 		await expect(main.getByRole("heading", { level: 1, name: `${mailbox.name}: Focus` })).toBeVisible();
@@ -136,11 +209,12 @@ test("a member puts mail in Reply later and answers it in Focus", async ({ brows
 		await page.keyboard.press("r");
 		await expect(message).toBeFocused();
 		await message.pressSequentially("Pizza, please.");
-		// While the reply has text, the keys do nothing, so a key never discards it.
+		// While the reply has text, the keys do nothing, so a key never discards it. b opens no Snooze dialog.
 		await subject.focus();
-		for (const key of ["j", "e", "l", "!"]) await page.keyboard.press(key);
+		for (const key of ["j", "e", "b", "!"]) await page.keyboard.press(key);
 		await expect(subject).toHaveText(third);
 		await expect(message).toContainText("Pizza, please.");
+		await expect(page.getByRole("dialog")).toHaveCount(0);
 
 		// Ctrl+Enter in the link dialog of the editor does not send the message. The reply and its text stay.
 		await reply.getByRole("button", { name: "Link" }).click();
@@ -149,11 +223,13 @@ test("a member puts mail in Reply later and answers it in Focus", async ({ brows
 		await linkDialog.getByRole("button", { name: "Cancel" }).click({ timeout: 5000 });
 		await expect(linkDialog).toHaveCount(0);
 
-		// While the reply has text, the Back link, Next and Done ask first. A No keeps the conversation and the text.
+		// While the reply has text, the Back link, Next, Done and Snooze ask first. A No keeps the conversation and
+		// the text, and Snooze then opens no dialog.
 		for (const control of [
-			main.getByRole("link", { name: "Back to Reply later" }),
+			main.getByRole("link", { name: "Back to Starred" }),
 			main.getByRole("button", { name: "Next conversation" }),
 			main.getByRole("button", { name: /^Done/ }),
+			main.getByRole("button", { name: /^Snooze/ }),
 		]) {
 			let question = "";
 			page.once("dialog", (dialog) => {
@@ -164,7 +240,8 @@ test("a member puts mail in Reply later and answers it in Focus", async ({ brows
 			expect(question).toBe("Discard your reply?");
 			await expect(message).toContainText("Pizza, please.");
 		}
-		await expect(page).toHaveURL(/\/reply-later\/focus$/);
+		await expect(page.getByRole("dialog")).toHaveCount(0);
+		await expect(page).toHaveURL(/\/starred\/focus$/);
 		await expect(subject).toHaveText(third);
 
 		// Ctrl+Enter sends. The next conversation shows, with its reply open and the focus in the message.
@@ -182,14 +259,14 @@ test("a member puts mail in Reply later and answers it in Focus", async ({ brows
 		await main.getByRole("button", { name: /^Done/ }).click();
 		await expect(subject).toHaveText(first);
 		await expect(focus.position("1 of 1")).toBeVisible();
-		await focus.undo("Conversation removed from Reply later.").click();
+		await focus.undo("Star removed.").click();
 		await expect(page.getByText("Action undone.")).toBeVisible();
 		await expect(subject).toHaveText(second);
 		await expect(focus.position("1 of 2")).toBeVisible();
 		await expect(reply).toHaveCount(0);
 
-		// l is Done in Reply later. Done on the last one shows the finish state with what the member cleared.
-		await page.keyboard.press("l");
+		// e is Done. Done on the last one shows the finish state with what the member cleared.
+		await page.keyboard.press("e");
 		await expect(subject).toHaveText(first);
 		await main.getByRole("button", { name: /^Done/ }).click();
 		await expect(main.getByText("All caught up.", { exact: true })).toBeVisible();
@@ -198,19 +275,16 @@ test("a member puts mail in Reply later and answers it in Focus", async ({ brows
 		await expect(session.getByRole("link", { name: third })).toBeVisible();
 		await expect(main).toBeFocused();
 
-		// The server has no conversation in Reply later now, and none is back in the inbox. The page shows the finish
-		// state before the server confirms the last Done.
-		await expect.poll(() => subjects(member, mailbox.id, "in:reply_later")).toEqual([]);
-		await page.goto(inbox);
-		await expect(page.getByText("The inbox of this team mailbox is empty.")).toBeVisible();
-		await expect(page.getByRole("region", { name: "Reply later" })).toHaveCount(0);
+		// A reply keeps the star, and Done removed the two other stars. The page shows the finish state before the
+		// server confirms the last Done.
+		await expect.poll(() => subjects(member, mailbox.id, "is:starred")).toEqual([third]);
 	} finally {
 		await admin.close();
 		await member.close();
 	}
 });
 
-// Focus works in each list. In the inbox, a send also archives the conversation, l moves it to Reply later, !
+// Focus works in each list. In the inbox, a send also archives the conversation, b snoozes it, !
 // marks it as spam, and the primary button is Archive (e). In Starred, the primary button is Done, and a reply
 // keeps the star. A conversation that the person cleared does not come back in this visit.
 test("a member clears the inbox and Starred in Focus", async ({ browser }) => {
@@ -265,11 +339,15 @@ test("a member clears the inbox and Starred in Focus", async ({ browser }) => {
 		await expect(message).toBeFocused();
 		await expect(focus.position("1 of 3")).toBeVisible();
 
-		// l moves the conversation to Reply later, as in the list of the inbox.
+		// b snoozes the conversation, as in the list of the inbox. The dialog asks for the time.
 		await page.keyboard.press("Escape");
-		await page.keyboard.press("l");
+		await page.keyboard.press("b");
+		await page
+			.getByRole("dialog", { name: "Snooze until" })
+			.getByRole("button", { name: /^Tomorrow/ })
+			.click();
 		await expect(subject).toHaveText(older);
-		await expect(page.getByText("Conversation moved to Reply later.")).toBeVisible();
+		await expect(page.getByText(/^Conversation snoozed until .+\.$/)).toBeVisible();
 
 		// Next and Previous move between the conversations, stop at the ends, and keep the focus.
 		const next = main.getByRole("button", { name: "Next conversation" });
@@ -309,12 +387,12 @@ test("a member clears the inbox and Starred in Focus", async ({ browser }) => {
 		await page.keyboard.press("e");
 		await expect(main.getByText("All caught up.", { exact: true })).toBeVisible();
 		await expect(
-			main.getByText("You answered 1 conversation, archived 1, moved 1 to Reply later and marked 1 as spam.", {
+			main.getByText("You answered 1 conversation, archived 1, snoozed 1 and marked 1 as spam.", {
 				exact: true,
 			}),
 		).toBeVisible();
 		await expect.poll(() => subjects(member, mailbox.id, "in:inbox")).toEqual([]);
-		expect(await subjects(member, mailbox.id, "in:reply_later")).toEqual([newer]);
+		expect(await subjects(member, mailbox.id, "in:snoozed")).toEqual([newer]);
 		expect(await subjects(member, mailbox.id, "in:spam")).toEqual([older]);
 
 		// In Starred, the primary button is Done. A reply keeps the star, and the conversation does not come back.
