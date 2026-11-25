@@ -15,6 +15,7 @@ import serviceTokenMigration from "../migrations/0025_service_tokens.sql?raw";
 import serviceAccessMigration from "../migrations/0026_service_access.sql?raw";
 import agentAccessMigration from "../migrations/0027_agent_access.sql?raw";
 import mailboxMemberScopesMigration from "../migrations/0029_mailbox_member_scopes.sql?raw";
+import unusedAccessColumnsMigration from "../migrations/0034_remove_unused_access_columns.sql?raw";
 import { matchTotp, totpCode } from "../src/identity/totp.ts";
 import legacyDirectory from "./fixtures/directory-v1.sql?raw";
 import {
@@ -1015,6 +1016,19 @@ describe("directory upgrade", () => {
 			["account.read", "mail.send"],
 			["account.read", "mail.send"],
 		]);
+		// 0034 removes the three columns that the Worker does not read. Three accounts have limits in them. Each
+		// other value of each principal stays, so the calls below run on the schema without these columns.
+		const before = await db.prepare("SELECT * FROM principals ORDER BY id").all<Record<string, unknown>>();
+		expect(before.results.filter((row) => row.agent_resources !== null).map((row) => row.id)).toEqual([
+			BIG,
+			"prn_bad",
+			"prn_ci",
+		]);
+		await run(unusedAccessColumnsMigration.split("--> statement-breakpoint"));
+		const after = await db.prepare("SELECT * FROM principals ORDER BY id").all<Record<string, unknown>>();
+		expect(after.results).toStrictEqual(
+			before.results.map(({ agent_resources, service_scopes, service_resources, ...kept }) => kept),
+		);
 		// A key from before the migration works with the scopes of its agent. The Worker leaves out the scope
 		// outside the agent ceiling.
 		expect(await api(botSecret)("account.whoami")).toMatchObject({
