@@ -30,7 +30,9 @@ test("an admin creates a person with no API key, and an agent with scopes and a 
 		const person = unique("Cooper Wray");
 		await page.getByRole("button", { name: "New member" }).click();
 		await dialog.getByLabel("Display name").fill(person);
-		await dialog.getByLabel("Address", { exact: true }).fill(`cooper-${local}@example.com`);
+		await dialog.getByLabel("Address", { exact: true }).fill(`cooper-${local}`);
+		// The domain is a list of the saved domains, not free text. It starts on the domain of the admin.
+		await expect(dialog.getByRole("combobox", { name: "Email domain" })).toHaveText("example.com");
 		await dialog.getByLabel("First password").fill("cooper local password");
 		ids.push(await submit(page, "Create person"));
 		await expect(dialog).toBeHidden();
@@ -41,7 +43,7 @@ test("an admin creates a person with no API key, and an agent with scopes and a 
 		await page.getByRole("button", { name: "New member" }).click();
 		await dialog.getByLabel("Agent").check();
 		await dialog.getByLabel("Display name").fill(agent);
-		await dialog.getByLabel("Address", { exact: true }).fill(`helper-${local}@example.com`);
+		await dialog.getByLabel("Address", { exact: true }).fill(`helper-${local}`);
 		// The agent starts with account.read. The admin adds a scope: the scopes are on the agent, not on a key.
 		await expect(dialog.getByRole("checkbox", { name: /^account\.read/ })).toBeChecked();
 		await expect(dialog.getByRole("checkbox", { name: /^chat\.read/ })).not.toBeChecked();

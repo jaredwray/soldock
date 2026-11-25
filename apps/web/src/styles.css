@@ -4540,7 +4540,7 @@ fieldset {
 	margin: 0;
 }
 
-/* The owner address: the mailbox name in a field, and the domain as text after it. */
+/* An address: the mailbox name in a field, and the domain after it. Setup shows the domain as text. */
 .address-row {
 	display: flex;
 	align-items: center;
@@ -4560,6 +4560,12 @@ fieldset {
 	flex: 0 1 auto;
 	width: auto;
 	overflow-wrap: anywhere;
+}
+
+/* The New member address: the mailbox name in a field, and a list of the saved domains after it. */
+.address-row .address-domain-select {
+	flex: 1 1 0;
+	max-width: 50%;
 }
 
 /* Two-step verification setup */
