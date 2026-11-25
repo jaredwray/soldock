@@ -546,7 +546,8 @@ MCP clients. The app has no UI-only path.
       stays off until the list loads. With no saved domain, a hint tells the admin to add one.
       When the address format of Admin › Mail is on (`mail.get_org_settings`), the mailbox name of a person
       follows the display name in that format (`addressLocalPart` in `packages/contracts`). The fill stops when
-      the admin types a different mailbox name, and starts again when the admin clears the field. The form does
+      the admin types a different mailbox name. After the admin clears the field, the next change of the display
+      name fills it again. The field does not fill at the moment it becomes empty. The form does
       not fill the name of an agent or a service account. If the settings do not load, the admin types the name.
       The form checks the address 300 ms after the last change (`directory.check_address`, `addressToCheck` in
       `memberAddress.ts`), and ignores a result for an earlier address. A live line under the field shows
