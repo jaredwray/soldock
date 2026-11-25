@@ -150,6 +150,7 @@ describe("textToDoc", () => {
 			origin: "internal",
 			untrusted: false,
 			authentication: null,
+			sender_verification: null,
 			body: {
 				text: "Hello\n\n> an older quote\n>>no space, so not a quote marker\nBye",
 				html: null,

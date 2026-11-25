@@ -2667,24 +2667,104 @@ fieldset {
 	color: var(--negative);
 }
 
-/* The SPF, DKIM and DMARC results: quiet chips. The color of the text shows pass or fail, and the text tells it. */
-.auth-results {
-	display: flex;
-	flex-wrap: wrap;
-	gap: 6px;
-	margin: 8px 0 0;
+/* A verified sender is not a safe message. The notice is quiet, and only the icon has a color. */
+.sender-verified {
+	border-color: var(--border);
+	background: var(--surface);
+}
+
+.sender-verified > .icon {
+	color: var(--positive);
+}
+
+.sender-notice-text {
+	flex: 1;
+	min-width: 0;
+	overflow-wrap: anywhere;
+}
+
+.sender-details > summary {
+	display: inline-flex;
+	gap: 4px;
+	align-items: center;
+	margin-top: 6px;
+	border-radius: var(--radius-sm);
+	color: var(--muted-foreground);
+	font-weight: 500;
+	cursor: pointer;
+	list-style: none;
+}
+
+.sender-details > summary::-webkit-details-marker {
+	display: none;
+}
+
+.sender-details > summary:hover,
+.sender-details[open] > summary {
+	color: var(--foreground);
+}
+
+.sender-details > summary:focus-visible {
+	outline: 2px solid var(--focus);
+	outline-offset: 2px;
+}
+
+.sender-details[open] > summary .icon {
+	transform: rotate(180deg);
+}
+
+/* The checks of the receiving server: a name and a sentence, and the SPF, DKIM or DMARC result as a quiet chip. */
+.sender-checks,
+.sender-checks-empty {
+	margin: 8px 0 2px;
+	border: 1px solid var(--border);
+	border-radius: var(--radius-sm);
+	background: var(--background);
+}
+
+.sender-checks {
 	padding: 0;
 	list-style: none;
 }
 
-.auth-results li {
+.sender-checks-empty {
+	padding: 8px 10px;
+	color: var(--muted-foreground);
+}
+
+.sender-checks li {
+	display: flex;
+	gap: 12px;
+	align-items: flex-start;
+	padding: 8px 10px;
+}
+
+.sender-checks li + li {
+	border-top: 1px solid var(--border);
+}
+
+.sender-check-text {
+	display: flex;
+	flex: 1;
+	flex-direction: column;
+	min-width: 0;
+}
+
+.sender-check-text > span {
+	color: var(--muted-foreground);
+}
+
+/* The color of the text shows a pass or a failure, and the text tells it. Each other result is muted. */
+.auth-result {
+	flex: none;
 	padding: 0 6px;
 	border: 1px solid var(--border);
 	border-radius: var(--radius-sm);
-	background: var(--background);
 	font-family: var(--mono);
 	font-size: 11px;
 	line-height: 18px;
+	white-space: nowrap;
+	color: var(--muted-foreground);
 }
 
 .auth-pass {

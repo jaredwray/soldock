@@ -608,6 +608,8 @@ message of a run has `may_archive` 0, so the classifier stage keeps the message 
   and RPC allows 32 MiB. The bodies of a thread share a budget of 6,000,000 characters.
 - The newest bodies get the budget first. A message without its body has `body.omitted: true`.
   `mail.get_message` returns that message with its body.
+- An external message has `authentication` (the SPF, DKIM and DMARC results of the receiving server)
+  and `sender_verification` (the verdict from them, see [Safety](#safety)). REST and MCP return both.
 - Each message is sanitized alone. When the sanitizer fails on one message, that message gets
   `body.html: null` and a text body from its HTML. The other messages of the thread do not change.
 
@@ -869,6 +871,28 @@ A disabled endpoint stays disabled. Delete it and create a new one.
   `allow-same-origin`, under a CSP that refuses each remote load.
 - Only the topmost `Authentication-Results` header from `MAIL_AUTHSERV_ID` counts. A sender cannot
   forge a pass with its own header.
+- A result counts only at the start of a part of that header (`method=result` after a `;`, after any
+  comment). The receiving server can copy text of the sender into a comment or a quoted string, so the
+  parser reads such text as no result. A quoted value counts only when it is one plain word, for
+  example `header.from="sender.example"`. With two SPF results, the result for the envelope sender (`smtp.mailfrom`) counts. A DKIM
+  pass of one signature is a DKIM pass.
+- Each external message has a verdict, `sender_verification`. It answers one question: did the From
+  domain send this message? The rule is `senderVerification()` in `mime/parse.ts`:
+  - `verified`: the receiving server recorded a DMARC pass for the domain of the stored From address.
+  - `failed`: it recorded a DMARC failure. Such mail goes to Spam.
+  - `unverified`: each other result, and no result.
+
+  Only DMARC ties a result to the From domain, so an SPF pass or a DKIM pass alone is `unverified`.
+  Spam, auto labels and the verdict use this one rule. Internal mail and sent mail have `null`.
+  `verified` proves the domain only. The content stays `untrusted: true`.
+- A person sees the domain of the stored From address beside the verdict. The receiving server can
+  read a From header in a different way than the mailbox, for example a header with two addresses. So
+  a DMARC pass counts only when its `header.from` is equal to that domain. A domain with other
+  characters than ASCII letters, digits, `-` and `.` is never `verified`, because it can look like a
+  different domain. An internationalized domain is `verified` only in its `xn--` form.
+- Assumption: the receiving server names the domain in `header.from`. A DMARC pass without
+  `header.from` is `verified` for the domain of the stored From address. Results that the mailbox
+  stored before `dmarcFrom` are in this group.
 - Attachments are returned as base64 JSON, never served as active content on the origin.
 - Auto labels: the classifier gets the message as delimited data, with a nonce for each call. Its
   answer can only choose candidate labels of the mailbox, which the mailbox checks again. It can

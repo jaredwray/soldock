@@ -188,6 +188,7 @@ export {
 	ScreenerMode,
 	ScreenerSender,
 	ScreenerStatus,
+	SenderVerification,
 	SYSTEM_LABELS,
 	type SystemLabel,
 	Thread,
