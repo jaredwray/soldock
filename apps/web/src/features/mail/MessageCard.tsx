@@ -286,7 +286,7 @@ function SenderNotice({
 	inSpam: boolean;
 }) {
 	const domain = senderDomain(message.from?.address);
-	const checks = senderChecks(message.authentication, domain);
+	const checks = senderChecks(message.authentication, domain, verdict);
 	const from = domain ? <strong>{domain}</strong> : "the domain of its sender";
 	const { icon, className } = SENDER_NOTICES[verdict];
 	return (

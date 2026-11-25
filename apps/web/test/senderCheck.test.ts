@@ -22,7 +22,7 @@ describe("the sender notice of a message", () => {
 	});
 
 	it("puts DMARC first, and marks as a failure only a result that is one", () => {
-		const checks = senderChecks({ spf: "softfail", dkim: "pass", dmarc: "none" }, "sender.example");
+		const checks = senderChecks({ spf: "softfail", dkim: "pass", dmarc: "none" }, "sender.example", "unverified");
 		expect(checks.map((check) => [check.chip, check.tone])).toEqual([
 			["DMARC: none", "none"],
 			["DKIM: pass", "pass"],
@@ -36,12 +36,23 @@ describe("the sender notice of a message", () => {
 
 	// The server sends each result as the receiving server wrote it, so a value can be unknown here.
 	it("explains a result that it does not know, and leaves out a check with no result", () => {
-		const checks = senderChecks({ spf: null, dkim: "temperror", dmarc: "bestguesspass" }, null);
+		const checks = senderChecks({ spf: null, dkim: "temperror", dmarc: "bestguesspass" }, null, "unverified");
 		expect(checks.map((check) => [check.chip, check.tone, check.text])).toEqual([
 			["DMARC: bestguesspass", "none", "This result is not a pass and not a failure."],
 			["DKIM: temperror", "none", "This result is not a pass and not a failure."],
 		]);
-		expect(senderChecks(null, "sender.example")).toEqual([]);
+		expect(senderChecks(null, "sender.example", "unverified")).toEqual([]);
+	});
+
+	// The server can record a DMARC pass for a different domain. The details must not credit the domain of the sender.
+	it("names the domain of the sender in a DMARC pass only when the sender is verified", () => {
+		const pass = { spf: null, dkim: null, dmarc: "pass" };
+		expect(senderChecks(pass, "bank.example", "verified")[0]?.text).toMatch(
+			/^The message passed the policy of bank\.example\./,
+		);
+		expect(senderChecks(pass, "bank.example", "unverified")[0]?.text).toBe(
+			"The pass is not for bank.example, so it proves nothing about this sender.",
+		);
 	});
 
 	it("reads the domain of the sender from the part after the last @", () => {
