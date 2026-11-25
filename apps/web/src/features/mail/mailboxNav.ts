@@ -124,12 +124,18 @@ export function rightsNotice(rights: MailboxRights): string | null {
 }
 
 /**
- * The path that Mail opens first: the inbox of the default mailbox of the person. A saved team mailbox
- * opens only while the person can read it: a removed membership, or a membership without `mail.read`,
- * opens the own mailbox. The mailbox of an agent is never a default.
+ * The default mailbox of the person, from the saved `default_mailbox_id`: the id of a team mailbox, or
+ * null for the own mailbox. A saved team mailbox is the default only while the person can read it: a
+ * removed membership, or a membership without `mail.read`, gives the own mailbox. The mailbox of an agent
+ * is never a default.
  */
-export function mailHomePath(defaultMailboxId: string | null, mailboxes: readonly Mailbox[]): string {
-	const listed = mailboxes.find((mailbox) => mailbox.id === defaultMailboxId);
-	if (listed?.kind !== "team" || !listed.scopes.includes("mail.read")) return INBOX_PATH;
-	return viewPath({ kind: "system", view: "inbox" }, listed.id);
+export function defaultMailboxId(saved: string | null, mailboxes: readonly Mailbox[]): string | null {
+	const listed = mailboxes.find((mailbox) => mailbox.id === saved);
+	return listed?.kind === "team" && listed.scopes.includes("mail.read") ? listed.id : null;
+}
+
+/** The path that Mail opens first: the inbox of the default mailbox of the person (`defaultMailboxId`). */
+export function mailHomePath(saved: string | null, mailboxes: readonly Mailbox[]): string {
+	const id = defaultMailboxId(saved, mailboxes);
+	return id === null ? INBOX_PATH : viewPath({ kind: "system", view: "inbox" }, id);
 }

@@ -23,7 +23,8 @@ function PageUnavailable() {
 	);
 }
 
-function PageLoading() {
+/** The page while a chunk loads, or while the shell finds the path to open. */
+export function PageLoading() {
 	return (
 		<main id="main" className="page" tabIndex={-1}>
 			<p className="list-state" role="status">

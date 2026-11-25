@@ -6,6 +6,7 @@ import { navigate } from "../../lib/router.tsx";
 import { useToast } from "../../lib/toast.tsx";
 import { useOnChange } from "../../lib/useOnChange.ts";
 import { isAgentMailbox, type MailView, viewPath } from "../../routes.ts";
+import { SEARCH_INPUT_ID } from "../../shell/nav.ts";
 import { useSession } from "../auth/session.tsx";
 import { AutoLabelsDialog } from "./AutoLabelsDialog.tsx";
 import type { SendResult } from "./Composer.tsx";
@@ -18,6 +19,7 @@ import { MailboxProvider, MailboxRightsProvider } from "./mailbox.tsx";
 import { mailboxRights } from "./mailboxNav.ts";
 import { ShortcutHelp } from "./ShortcutHelp.tsx";
 import { Sidebar } from "./Sidebar.tsx";
+import { useShortcuts } from "./useShortcuts.ts";
 import { viewQuery, viewTitle } from "./views.ts";
 
 type MailDialog =
@@ -35,6 +37,8 @@ interface MailAppProps {
 	route: { mailboxId: string | null; view: MailView | null; threadId: string | null };
 	/** The mailboxes that the person can use, from the shell: the list stays when the mailbox changes. */
 	mailboxes: readonly Mailbox[] | null;
+	/** Loads the mailboxes again, after a change of the members of a team mailbox in its settings view. */
+	onMailboxesChanged: () => void;
 	/** The mailboxes of the sidebar that the person expanded or collapsed, from the shell: the state stays when the mailbox changes. */
 	expandedMailboxes: Readonly<Record<string, boolean>>;
 	/** Expands or collapses a mailbox in the sidebar. Null goes back to the default. */
@@ -50,7 +54,15 @@ interface MailAppProps {
  * for the current view has a key, so a new view starts clean. The shell gives this component a key
  * for each mailbox, so no data of one mailbox shows in a different one.
  */
-export function MailApp({ route, mailboxes, expandedMailboxes, onSetExpanded, navOpen, onCloseNav }: MailAppProps) {
+export function MailApp({
+	route,
+	mailboxes,
+	onMailboxesChanged,
+	expandedMailboxes,
+	onSetExpanded,
+	navOpen,
+	onCloseNav,
+}: MailAppProps) {
 	const { whoami } = useSession();
 	const toast = useToast();
 	const [refreshKey, setRefreshKey] = useState(0);
@@ -104,6 +116,28 @@ export function MailApp({ route, mailboxes, expandedMailboxes, onSetExpanded, na
 		},
 		[rights.send, signature],
 	);
+
+	// The list has the shortcuts of Mail. The settings view keeps the ones that do not need a list.
+	useShortcuts((event) => {
+		if (view) return;
+		switch (event.key) {
+			case "c":
+				compose();
+				break;
+			case "u":
+				navigate(viewPath({ kind: "system", view: "inbox" }, mailboxId));
+				break;
+			case "/":
+				document.getElementById(SEARCH_INPUT_ID)?.focus();
+				break;
+			case "?":
+				setDialog({ type: "help" });
+				break;
+			default:
+				return;
+		}
+		event.preventDefault();
+	});
 
 	function sent(result: SendResult) {
 		setDraft(null);
@@ -171,6 +205,7 @@ export function MailApp({ route, mailboxes, expandedMailboxes, onSetExpanded, na
 							mailboxes={mailboxes}
 							refreshKey={refreshKey}
 							onSettingsSaved={setMailboxSettings}
+							onMembersChanged={onMailboxesChanged}
 							onOpenAutoLabels={() => setDialog({ type: "auto-labels" })}
 							onChanged={onChanged}
 						/>

@@ -325,6 +325,8 @@ export const mailHandlers: Pick<HandlerMap<CallContext>, MailOperation> = {
 				"An agent or a service account can change only the settings of its own mailbox.",
 			);
 		}
+		// A request that names no setting changes nothing: no write, and no audit line.
+		if (input.signature === undefined) return { mailbox_id: record.id, ...(await box.mailboxSettings()) };
 		const settings = await box.updateMailboxSettings({ signature: input.signature });
 		// The line names the mailbox only. It never holds the signature.
 		auditOk(call, record, "mail.update_mailbox_settings", record.id);

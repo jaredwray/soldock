@@ -252,7 +252,8 @@ MCP clients. The app has no UI-only path.
   Mail is a link to the settings view of the open mailbox. The view replaces the list in the main pane,
   next to the sidebar, so a reload and a deep link stay on it. Its header has a link back to the inbox, the
   title and the search box. The view is a separate chunk. Each section loads and saves on its own, with its
-  own error and **Try again**.
+  own error and **Try again**. The shortcuts `c`, `/` and `?` work as in the list, and `u` goes back to the
+  inbox.
   - **AI features.** The switch of the inbox auto labels (`mail.update_auto_labels` with `enabled`).
     They are the only AI feature of Mail. When the organization has AI or the feature off, a notice says
     so, with a link to Admin › AI for an owner or an admin. **Choose the auto labels** opens the dialog
@@ -260,13 +261,19 @@ MCP clients. The app has no UI-only path.
   - **Access.** In a shared mailbox, an owner or an admin changes the members with the member editor of
     Admin › Shared mailboxes (`MembersPart`). A member sees the members and what each one can do. The
     own mailbox and the mailbox of an agent show text: nobody else can use the own mailbox, and owners
-    and admins can only read the mailbox of an agent.
+    and admins can only read the mailbox of an agent. After each change of the members, the shell gets
+    `mail.list_mailboxes` again, so the rights of the person in the open mailbox follow a change of the
+    own membership. A person who can no longer read the mailbox goes to the own inbox.
   - **Default address.** **Make <address> my default** saves the mailbox as the default of the person
     (`default_mailbox_id`). Mail then opens it first, so a new message comes from its address. The
-    mailbox of an agent cannot be a default.
+    mailbox of an agent cannot be a default. `defaultMailboxId` in `mailboxNav.ts` decides the current
+    default, as for the start of Mail. So the section shows **Loading…** until the list of the mailboxes
+    is there, except for the own mailbox with no saved default.
   - **Signature.** Plain text, at most 2,000 characters, with a counter
     (`mail.update_mailbox_settings`). The members of a shared mailbox share it. Without `mail.modify`,
-    the field is read only. After a save, the next draft has the new signature.
+    the field is read only. After a save, the next draft has the new signature. The mail app reads the
+    signature again when the window gets the focus. While the field has text that is not saved, the
+    browser asks before it closes or reloads the tab. A link in the app does not ask.
 - **Shared mailboxes.** The UI name of a team mailbox, on the Admin page.
   - A team mailbox has its own paths (`/mail/team/<tmb_id>/…`), so a deep link and a reload stay in
     it. Each mail call of its views sends `mailbox_id`. Search, labels and the composer use the
@@ -1771,7 +1778,7 @@ dock Worker serves `index.html` for each app path, so a deep link works on reloa
 
 | Path | Page |
 | --- | --- |
-| `/`, `/mail` | Goes to the inbox of the default mailbox of the person (`default_mailbox_id` of `mail.get_settings`). Without a default, or when the person cannot read it now, goes to `/mail/inbox` (`mailHomePath` in `mailboxNav.ts`). The rail link of Mail and the mark of Asterra go here |
+| `/`, `/mail` | Goes to the inbox of the default mailbox of the person (`default_mailbox_id` of `mail.get_settings`). Without a default, or when the person cannot read it now, goes to `/mail/inbox` (`mailHomePath` in `mailboxNav.ts`). The page shows **Loading…** until the setting is there. The rail link of Mail and the mark of Asterra go here |
 | `/mail/<view>` | The thread list of a view: `inbox`, `starred`, `sent`, `spam`, `trash` or `all` |
 | `/mail/label/<lbl_id>` | The thread list of a user label |
 | `/mail/search?q=<query>` | The search results |

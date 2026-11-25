@@ -3,7 +3,7 @@ import { useSession } from "../features/auth/session.tsx";
 import { loadMailHomePath, useMailboxes } from "../features/mail/data.ts";
 import { MailApp } from "../features/mail/MailApp.tsx";
 import { Icon } from "../lib/icons.tsx";
-import { lazyPage } from "../lib/lazyPage.tsx";
+import { lazyPage, PageLoading } from "../lib/lazyPage.tsx";
 import { setPageTitle } from "../lib/pageTitle.ts";
 import { Link, navigate, useLocation } from "../lib/router.tsx";
 import { useChatNotifications } from "../lib/useChatNotifications.ts";
@@ -33,7 +33,7 @@ export function Shell() {
 	const route = useMemo(() => parseRoute(location), [location]);
 	const [navOpen, setNavOpen] = useState(false);
 	// The shell keeps the list of mailboxes, so the switcher does not empty when the mailbox changes.
-	const mailboxes = useMailboxes(route.page);
+	const { mailboxes, reload: reloadMailboxes } = useMailboxes(route.page);
 	// The mailboxes that the person expanded or collapsed in the mail sidebar. The state stays when the mailbox changes.
 	const [expandedMailboxes, setExpandedMailboxes] = useState<Readonly<Record<string, boolean>>>({});
 	// After the upgrade to passwords, a person in an old session has no password. Without one, they cannot
@@ -138,6 +138,7 @@ export function Shell() {
 						key={route.mailboxId ?? "own"}
 						route={route.page === "mail" ? route : { mailboxId: route.mailboxId, view: null, threadId: null }}
 						mailboxes={mailboxes}
+						onMailboxesChanged={reloadMailboxes}
 						expandedMailboxes={expandedMailboxes}
 						onSetExpanded={(key, expanded) =>
 							setExpandedMailboxes(({ [key]: _previous, ...others }) =>
@@ -178,8 +179,10 @@ export function Shell() {
 			case "settings":
 				return <SettingsPage section={route.section} navOpen={navOpen} onCloseNav={() => setNavOpen(false)} />;
 			case "redirect":
-			case "mail-home":
 				return null;
+			case "mail-home":
+				// The effect above reads the default mailbox, then replaces the path.
+				return <PageLoading />;
 			case "not-found":
 				return <NotFound />;
 		}

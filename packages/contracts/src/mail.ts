@@ -565,13 +565,24 @@ export const updateSettings = defineOperation({
 });
 
 /**
+ * The control characters, except a line break and a tab, the Unicode line and paragraph separators, and
+ * the controls that change the direction of text (embeddings, overrides and isolates). A signature goes
+ * into the mail of each member, so it must not hide or move text there.
+ */
+const SIGNATURE_REFUSED = /[^\P{Cc}\n\r\t]|[\u2028\u2029\u202A-\u202E\u2066-\u2069]/u;
+
+/**
  * The plain-text signature of a mailbox. A line break and a tab are the only control characters that it
- * can hold. The mailbox stores `\n` for each line break, and removes the spaces at the end of each line.
+ * can hold. It cannot hold a Unicode line or paragraph separator, or a control that changes the direction
+ * of text. The mailbox stores `\n` for each line break, and removes the spaces at the end of each line.
  */
 export const Signature = z
 	.string()
 	.max(MAIL_LIMITS.signatureChars)
-	.refine((text) => !/[^\P{Cc}\n\r\t]/u.test(text), "must not contain control characters other than line breaks");
+	.refine(
+		(text) => !SIGNATURE_REFUSED.test(text),
+		"must not contain control characters other than line breaks, or characters that change the direction of text",
+	);
 
 /**
  * The settings of one mailbox. The mailbox holds them, so the members of a team mailbox share them.
@@ -591,7 +602,7 @@ export type MailboxSettings = z.infer<typeof MailboxSettings>;
 export const getMailboxSettings = defineOperation({
 	name: "mail.get_mailbox_settings",
 	summary: "Get the settings of a mailbox",
-	description: `Returns the settings of the mailbox: for now, its plain-text signature (an empty string for none). mail.send never adds the signature. To sign a message, add the signature to text, after a line with "--", and to html. ${IN_MAILBOX_READ} The members of a team mailbox share its settings. For your own settings, such as the mailbox that the web app opens first, use mail.get_settings.`,
+	description: `Returns the settings of the mailbox: for now, its plain-text signature (an empty string for none). mail.send never adds the signature. To sign a message, add the signature to text, after a line with "-- " (two dashes and a space), and to html. ${IN_MAILBOX_READ} The members of a team mailbox share its settings. For your own settings, such as the mailbox that the web app opens first, use mail.get_settings.`,
 	http: { method: "GET", path: "/api/v1/mail/mailbox-settings" },
 	scopes: ["mail.read"],
 	callers: ["human", "agent", "service"],

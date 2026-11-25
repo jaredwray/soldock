@@ -5439,6 +5439,15 @@ fieldset {
 	align-self: stretch;
 }
 
+/* A button with an address in its text: at phone width, a long address goes to a second line. */
+.mailbox-settings-card > .button {
+	max-width: 100%;
+	padding-block: 6px;
+	text-align: start;
+	white-space: normal;
+	overflow-wrap: anywhere;
+}
+
 .mailbox-member-list {
 	align-self: stretch;
 	margin: 0;

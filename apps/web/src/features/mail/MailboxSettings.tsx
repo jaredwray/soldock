@@ -10,11 +10,11 @@ import {
 import { type FormEvent, type ReactNode, useCallback, useEffect, useId, useState } from "react";
 import { api, errorMessage } from "../../lib/api.ts";
 import { Icon } from "../../lib/icons.tsx";
-import { Link } from "../../lib/router.tsx";
+import { Link, navigate } from "../../lib/router.tsx";
 import { useToast } from "../../lib/toast.tsx";
 import { useOnChange } from "../../lib/useOnChange.ts";
 import { usePrincipals } from "../../lib/usePrincipals.ts";
-import { adminPath, viewPath } from "../../routes.ts";
+import { adminPath, INBOX_PATH, viewPath } from "../../routes.ts";
 import { SearchBox } from "../../shell/SearchBox.tsx";
 import { memberScopes, scopesText } from "../admin/mailboxScopes.ts";
 import { byName, MembersPart } from "../admin/SharedMailboxPanel.tsx";
@@ -22,7 +22,7 @@ import { isOrgAdmin, useSession } from "../auth/session.tsx";
 import { unavailableText } from "./autoLabels.ts";
 import type { MailboxSettings as MailboxSettingsData } from "./data.ts";
 import { mailboxInput } from "./mailbox.tsx";
-import type { MailboxRights } from "./mailboxNav.ts";
+import { defaultMailboxId, type MailboxRights } from "./mailboxNav.ts";
 
 /** The mailbox of the settings view, as the person sees it. `id` is null for the own mailbox of the person. */
 export interface SettingsMailbox {
@@ -43,6 +43,8 @@ export interface MailboxSettingsProps {
 	refreshKey: number;
 	/** Called with the settings that a save returned, so the next draft has the new signature. */
 	onSettingsSaved: (settings: MailboxSettingsData) => void;
+	/** Called after a change of the members of a team mailbox, so the rights of the person load again. */
+	onMembersChanged: () => void;
 	/** Opens the dialog of the auto labels. */
 	onOpenAutoLabels: () => void;
 	/** Called after a change that can change the labels of the mailbox. */
@@ -74,10 +76,11 @@ export function MailboxSettings(props: MailboxSettingsProps) {
 			<div className="mail-scroll">
 				<div className="page mailbox-settings">
 					<p className="panel-intro">
-						The settings of {name} ({mailbox.address}).
+						The settings of {name}
+						{mailbox.address && ` (${mailbox.address})`}.
 					</p>
 					<AiSection {...props} />
-					<AccessSection mailbox={mailbox} />
+					<AccessSection mailbox={mailbox} onMembersChanged={props.onMembersChanged} />
 					<DefaultSection mailbox={mailbox} mailboxes={props.mailboxes} />
 					<SignatureSection mailbox={mailbox} rights={props.rights} onSaved={props.onSettingsSaved} />
 				</div>
@@ -218,10 +221,14 @@ function AiSection({ mailbox, rights, refreshKey, onOpenAutoLabels, onChanged }:
  * Shared mailboxes. A member sees the list. The own mailbox of a person and the mailbox of an agent have
  * no members.
  */
-function AccessSection({ mailbox }: { mailbox: SettingsMailbox }) {
+function AccessSection({ mailbox, onMembersChanged }: { mailbox: SettingsMailbox; onMembersChanged: () => void }) {
 	const { whoami } = useSession();
 	const admin = isOrgAdmin(whoami.principal);
-	if (mailbox.kind === "team" && mailbox.id !== null) return <TeamAccess mailboxId={mailbox.id} admin={admin} />;
+	if (mailbox.kind === "team" && mailbox.id !== null) {
+		return (
+			<TeamAccess mailboxId={mailbox.id} admin={admin} selfId={whoami.principal.id} onChanged={onMembersChanged} />
+		);
+	}
 	return (
 		<Panel title="Access">
 			{mailbox.kind === "agent" ? (
@@ -243,7 +250,17 @@ function AccessSection({ mailbox }: { mailbox: SettingsMailbox }) {
 	);
 }
 
-function TeamAccess({ mailboxId, admin }: { mailboxId: string; admin: boolean }) {
+function TeamAccess({
+	mailboxId,
+	admin,
+	selfId,
+	onChanged,
+}: {
+	mailboxId: string;
+	admin: boolean;
+	selfId: string;
+	onChanged: () => void;
+}) {
 	const principals = usePrincipals();
 	const load = useCallback(async () => {
 		const { team_mailboxes } = await api.call("directory.list_team_mailboxes");
@@ -253,9 +270,18 @@ function TeamAccess({ mailboxId, admin }: { mailboxId: string; admin: boolean })
 	}, [mailboxId]);
 	const { data: team, setData, error, reload } = useLoad<TeamMailbox>(load);
 
+	// The admin can change the own membership. The rights of the open mailbox come from the list of the
+	// mailboxes, so the list loads again. An admin who can no longer read the mailbox goes to the own inbox.
+	function membersChanged(next: TeamMailbox) {
+		setData(next);
+		onChanged();
+		const own = next.members.find((member) => member.principal_id === selfId);
+		if (!own?.scopes.includes("mail.read")) navigate(INBOX_PATH, { replace: true });
+	}
+
 	// An owner or an admin gets the member editor of Admin › Shared mailboxes. It is a section with its own title.
 	if (admin && team && principals) {
-		return <MembersPart mailbox={team} principals={principals} onChanged={setData} heading="Access" />;
+		return <MembersPart mailbox={team} principals={principals} onChanged={membersChanged} heading="Access" />;
 	}
 	return (
 		<Panel title="Access">
@@ -315,11 +341,13 @@ function DefaultSection({ mailbox, mailboxes }: { mailbox: SettingsMailbox; mail
 		);
 	}
 
-	// A saved team mailbox that the person can no longer read does not open: Mail opens the own mailbox.
+	// The list of the mailboxes decides the default (`defaultMailboxId`, as for the start of Mail), and if
+	// this mailbox can be one. Without a saved default, the own mailbox needs no list.
 	const saved = settings?.default_mailbox_id ?? null;
-	const savedOpens = saved !== null && (mailboxes ?? []).some((item) => item.id === saved);
-	const current = savedOpens ? saved : null;
-	const isDefault = current === mailbox.id;
+	const ready = settings !== null && (mailboxes !== null || (mailbox.id === null && saved === null));
+	const isDefault = defaultMailboxId(saved, mailboxes ?? []) === mailbox.id;
+	// A team mailbox can be the default only while the person can read it, as the server decides.
+	const allowed = mailbox.id === null || defaultMailboxId(mailbox.id, mailboxes ?? []) !== null;
 
 	async function makeDefault() {
 		setBusy(true);
@@ -339,9 +367,9 @@ function DefaultSection({ mailbox, mailboxes }: { mailbox: SettingsMailbox; mail
 			<p className="field-hint">
 				Mail opens the mailbox of your default address first, so a new message comes from that address.
 			</p>
-			{!settings && !error && <p className="field-hint">Loading…</p>}
+			{!ready && !(error && !settings) && <p className="field-hint">Loading…</p>}
 			{!settings && error && <LoadError error={error} onRetry={() => void reload()} />}
-			{settings &&
+			{ready &&
 				(isDefault ? (
 					<p className="mailbox-default" role="status">
 						<Icon name="check" size={16} />
@@ -349,10 +377,12 @@ function DefaultSection({ mailbox, mailboxes }: { mailbox: SettingsMailbox; mail
 							<strong>{mailbox.address}</strong> is your default address.
 						</span>
 					</p>
-				) : (
+				) : allowed ? (
 					<button type="button" className="button button-small" onClick={() => void makeDefault()} disabled={busy}>
 						Make {mailbox.address} my default
 					</button>
+				) : (
+					<p className="field-hint">You cannot read this mailbox now, so it cannot be your default address.</p>
 				))}
 			{settings && error && (
 				<p className="form-error" role="alert">
@@ -385,6 +415,18 @@ function SignatureSection({
 	const value = text ?? settings?.signature ?? "";
 	const unchanged = settings !== null && value === settings.signature;
 	const tooLong = value.length > MAIL_LIMITS.signatureChars;
+
+	// The browser asks before it closes or reloads a tab with a signature that the server does not have.
+	const unsaved = settings !== null && !unchanged;
+	useEffect(() => {
+		if (!unsaved) return;
+		const warn = (event: BeforeUnloadEvent) => {
+			event.preventDefault();
+			event.returnValue = "";
+		};
+		window.addEventListener("beforeunload", warn);
+		return () => window.removeEventListener("beforeunload", warn);
+	}, [unsaved]);
 
 	async function save(event: FormEvent<HTMLFormElement>) {
 		event.preventDefault();

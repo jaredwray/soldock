@@ -85,3 +85,38 @@ test("a member sets the signature and the default address of a shared mailbox in
 		await member.close();
 	}
 });
+
+// A member who can only read a shared mailbox sees its settings and cannot change them. The server refuses
+// the change too, so the view must not offer it.
+test("a member without the change right sees the settings of a shared mailbox read only", async ({ browser }) => {
+	const admin = await signIn(browser, "tomasz");
+	const member = await signIn(browser, "nadia");
+	const local = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+	const name = unique("Returns");
+	try {
+		const me = await (await member.request.get("/api/v1/account")).json();
+		const { team_mailbox: mailbox } = await post<{ team_mailbox: { id: string } }>(
+			admin,
+			"/api/v1/directory/team-mailboxes",
+			{ display_name: name, address: `returns-${local}@example.com` },
+		);
+		await post(admin, `/api/v1/directory/team-mailboxes/${mailbox.id}/members`, {
+			principal_id: me.principal.id,
+			scopes: ["mail.read"],
+		});
+
+		const page = await member.newPage();
+		await page.goto(`/mail/team/${mailbox.id}/settings`);
+		const view = page.getByRole("main");
+		await expect(view.getByRole("heading", { level: 1, name: `${name}: Settings` })).toBeVisible();
+		await expect(view.getByRole("checkbox", { name: /Use AI in this mailbox/ })).toBeDisabled();
+		await expect(view.getByText("Your membership does not let you change this mailbox.")).toBeVisible();
+		const signature = view.getByRole("textbox", { name: "Signature" });
+		await expect(signature).toHaveAttribute("readonly", "");
+		await expect(signature).toHaveAttribute("placeholder", "No signature");
+		await expect(view.getByRole("button", { name: "Save signature" })).toHaveCount(0);
+	} finally {
+		await admin.close();
+		await member.close();
+	}
+});

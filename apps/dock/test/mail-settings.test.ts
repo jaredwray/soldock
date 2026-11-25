@@ -158,6 +158,8 @@ describe("the settings of a mailbox", () => {
 		const tooLong = "x".repeat(MAIL_LIMITS.signatureChars + 1);
 		expect(await codeOf(ada.call("mail.update_mailbox_settings", { signature: tooLong }))).toBe("invalid");
 		expect(await codeOf(ada.call("mail.update_mailbox_settings", { signature: "Ada\u0007" }))).toBe("invalid");
+		// A control that changes the direction of text could hide or move text in the mail of each member.
+		expect(await codeOf(ada.call("mail.update_mailbox_settings", { signature: "Ada\u202Egro.live" }))).toBe("invalid");
 		expect(
 			(await ada.call("mail.update_mailbox_settings", { signature: "x".repeat(MAIL_LIMITS.signatureChars) })).signature,
 		).toHaveLength(MAIL_LIMITS.signatureChars);
@@ -183,6 +185,9 @@ describe("the settings of a mailbox", () => {
 		const line = lines.find((entry) => entry.op === "mail.update_mailbox_settings");
 		expect(line).toMatchObject({ actor: ada.id, target: support, mailbox: support, result: "ok" });
 		expect(JSON.stringify(lines)).not.toContain("Private line");
+		// A request that names no setting changes nothing, so it writes no line.
+		const empty = await auditLines(() => ada.call("mail.update_mailbox_settings", { mailbox_id: support }));
+		expect(empty.filter((entry) => entry.op === "mail.update_mailbox_settings")).toEqual([]);
 	});
 
 	it("is shared by the members of a team mailbox, and each member needs the scope in the membership", async () => {
@@ -228,7 +233,7 @@ describe("the settings of a mailbox", () => {
 		expect((await bot.call("mail.get_mailbox_settings", { mailbox_id: support })).signature).toBe("");
 	});
 
-	it("lets a service account change its own signature", async () => {
+	it("lets a service account change its own signature, never the signature of a team mailbox", async () => {
 		const { principal } = await owner.call("directory.create_service_account", {
 			display_name: "CI Pipeline",
 			address: "ci@dock.test",
@@ -242,6 +247,12 @@ describe("the settings of a mailbox", () => {
 			mailbox_id: principal.id,
 			signature: "CI",
 		});
+		// In a team mailbox, the rule for an agent is also the rule for a service account.
+		const support = await createSupport([{ id: principal.id }, { id: ada.id }]);
+		expect(await codeOf(service("mail.update_mailbox_settings", { mailbox_id: support, signature: "Pay now" }))).toBe(
+			"forbidden",
+		);
+		expect((await ada.call("mail.get_mailbox_settings", { mailbox_id: support })).signature).toBe("");
 	});
 
 	it("lets an owner or an admin read the signature of an agent, and not change it", async () => {
