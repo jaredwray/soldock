@@ -9,6 +9,7 @@ const SECTIONS: Record<AdminSection, { title: string; icon: IconName; adminOnly:
 	"shared-mailboxes": { title: "Shared mailboxes", icon: "inbox", adminOnly: true },
 	"shared-drives": { title: "Shared drives", icon: "allMail", adminOnly: true },
 	chat: { title: "Chat", icon: "chat", adminOnly: true },
+	mail: { title: "Mail", icon: "mail", adminOnly: true },
 	domains: { title: "Email domains", icon: "external", adminOnly: true },
 	ai: { title: "AI", icon: "sparks", adminOnly: true },
 };

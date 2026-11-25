@@ -17,7 +17,11 @@ Public surface: `index.ts` only. Other domains must not import files from this f
 The D1 database also holds `chat_rooms` and `chat_members`. They belong to the
 [`chat`](../chat/README.md) module. A fresh start of the directory drops them and makes them again.
 The same applies to `chat_member_requests` (migration `0030`): see
-[Where an agent can act](#where-an-agent-can-act).
+[Where an agent can act](#where-an-agent-can-act). The table `mail_settings` (migration `0031`) belongs to
+the [`mail`](../mail/README.md#the-screener) module. It holds the default of the Screener. A fresh start
+of the directory drops it and replays `0031`, so the default is off again.
+`mailboxOwnerKind` (`team-mailboxes.ts`) tells the `mail` module who owns a mailbox: a team, a person
+or an agent. The Screener never applies to the mailbox of an agent.
 
 ## The object of a principal
 

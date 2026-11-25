@@ -18,6 +18,9 @@ const DEFAULTS = {
 	default_from: {},
 };
 
+/** The Screener part of the settings of a mailbox that follows the default of the organization, which is off. */
+const SCREENER = { mode: "inherit", org_default: false, enabled: false };
+
 /** Creates the team mailbox support@dock.test with the given members, and returns its id. */
 async function createSupport(members: { id: string; scopes?: ("mail.read" | "mail.modify" | "mail.send")[] }[]) {
 	const { team_mailbox } = await owner.call("directory.create_team_mailbox", {
@@ -163,12 +166,16 @@ describe("the default From address of each mailbox", () => {
 
 describe("the settings of a mailbox", () => {
 	it("starts with no signature, saves one, clears it, and does not change the mailbox version", async () => {
-		expect(await ada.call("mail.get_mailbox_settings")).toEqual({ mailbox_id: ada.id, signature: "" });
+		expect(await ada.call("mail.get_mailbox_settings")).toEqual({
+			mailbox_id: ada.id,
+			signature: "",
+			screener: SCREENER,
+		});
 		const { version } = await ada.call("mail.get_profile");
 
 		// Line breaks become \n, and the spaces at the end of a line and the empty lines at the end go.
 		const saved = await ada.call("mail.update_mailbox_settings", { signature: "Ada Lovelace  \r\nAnalyst\r\n\r\n" });
-		expect(saved).toEqual({ mailbox_id: ada.id, signature: "Ada Lovelace\nAnalyst" });
+		expect(saved).toEqual({ mailbox_id: ada.id, signature: "Ada Lovelace\nAnalyst", screener: SCREENER });
 		expect(await ada.call("mail.get_mailbox_settings", { mailbox_id: ada.id })).toEqual(saved);
 		// A request must name a setting. It cannot read the settings with the scope to change them.
 		expect(await codeOf(ada.call("mail.update_mailbox_settings", {}))).toBe("invalid");
@@ -184,7 +191,25 @@ describe("the settings of a mailbox", () => {
 		expect(await ada.call("mail.update_mailbox_settings", { signature: "" })).toEqual({
 			mailbox_id: ada.id,
 			signature: "",
+			screener: SCREENER,
 		});
+
+		// The Screener follows the default of the organization until the mailbox chooses. A change of the
+		// Screener alone is a request, it keeps the signature, and it does not change the version.
+		const before = (await ada.call("mail.get_profile")).version;
+		await owner.call("mail.update_org_settings", { screener: { default_enabled: true } });
+		expect((await ada.call("mail.get_mailbox_settings")).screener).toEqual({
+			mode: "inherit",
+			org_default: true,
+			enabled: true,
+		});
+		await ada.call("mail.update_mailbox_settings", { signature: "Ada" });
+		expect(await ada.call("mail.update_mailbox_settings", { screener: "off" })).toEqual({
+			mailbox_id: ada.id,
+			signature: "Ada",
+			screener: { mode: "off", org_default: true, enabled: false },
+		});
+		expect((await ada.call("mail.get_profile")).version).toBe(before);
 	});
 
 	it("refuses a signature that is too long or holds control characters", async () => {
@@ -202,13 +227,18 @@ describe("the settings of a mailbox", () => {
 
 	it("works through MCP, and a key with only mail.read reads it and cannot change it", async () => {
 		const tool = await callTool(ada.key, "mail_update_mailbox_settings", { signature: "Ada" });
-		expect(tool.structuredContent).toEqual({ mailbox_id: ada.id, signature: "Ada" });
+		expect(tool.structuredContent).toEqual({ mailbox_id: ada.id, signature: "Ada", screener: SCREENER });
 		const read = await callTool(ada.key, "mail_get_mailbox_settings");
 		expect(read.structuredContent).toEqual(tool.structuredContent);
 
 		const reader = await narrowKey(ada, ["mail.read"]);
-		expect(await reader("mail.get_mailbox_settings")).toEqual({ mailbox_id: ada.id, signature: "Ada" });
+		expect(await reader("mail.get_mailbox_settings")).toEqual({
+			mailbox_id: ada.id,
+			signature: "Ada",
+			screener: SCREENER,
+		});
 		expect(await codeOf(reader("mail.update_mailbox_settings", { signature: "Eve" }))).toBe("forbidden");
+		expect(await codeOf(reader("mail.update_mailbox_settings", { screener: "on" }))).toBe("forbidden");
 		expect((await ada.call("mail.get_mailbox_settings")).signature).toBe("Ada");
 	});
 
@@ -239,10 +269,12 @@ describe("the settings of a mailbox", () => {
 		const support = await createSupport([{ id: ada.id }, { id: grace.id, scopes: ["mail.read", "mail.send"] }]);
 
 		await ada.call("mail.update_mailbox_settings", { mailbox_id: support, signature: "The Support team" });
-		// Each member reads the same signature. A member without mail.modify reads it and cannot change it.
+		await ada.call("mail.update_mailbox_settings", { mailbox_id: support, screener: "on" });
+		// Each member reads the same settings. A member without mail.modify reads them and cannot change them.
 		expect(await grace.call("mail.get_mailbox_settings", { mailbox_id: support })).toEqual({
 			mailbox_id: support,
 			signature: "The Support team",
+			screener: { mode: "on", org_default: false, enabled: true },
 		});
 		expect(await codeOf(grace.call("mail.update_mailbox_settings", { mailbox_id: support, signature: "Grace" }))).toBe(
 			"forbidden",
@@ -261,6 +293,7 @@ describe("the settings of a mailbox", () => {
 		expect(await bot.call("mail.update_mailbox_settings", { signature: "Billing Bot" })).toEqual({
 			mailbox_id: bot.id,
 			signature: "Billing Bot",
+			screener: SCREENER,
 		});
 		// The agent reads the team signature. A change there would go into the mail of each member.
 		expect((await bot.call("mail.get_mailbox_settings", { mailbox_id: support })).signature).toBe("");
@@ -285,6 +318,7 @@ describe("the settings of a mailbox", () => {
 		expect(await service("mail.update_mailbox_settings", { signature: "CI" })).toEqual({
 			mailbox_id: principal.id,
 			signature: "CI",
+			screener: SCREENER,
 		});
 		// In a team mailbox, the rule for an agent is also the rule for a service account.
 		const support = await createSupport([{ id: principal.id }, { id: ada.id }]);
@@ -299,6 +333,7 @@ describe("the settings of a mailbox", () => {
 		expect(await owner.call("mail.get_mailbox_settings", { mailbox_id: bot.id })).toEqual({
 			mailbox_id: bot.id,
 			signature: "Billing Bot",
+			screener: SCREENER,
 		});
 		expect(await codeOf(owner.call("mail.update_mailbox_settings", { mailbox_id: bot.id, signature: "Owner" }))).toBe(
 			"forbidden",

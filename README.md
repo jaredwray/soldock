@@ -55,6 +55,10 @@ state. Owners and admins can read the mailbox of each agent.
 Mail from outside is untrusted content. Asterra sanitizes the HTML of a message before it shows the
 message.
 
+The Screener keeps the first mail from a new sender out of the inbox until you screen the sender in or
+out. The sender is not told. An admin sets the default for the organization, and each mailbox can turn
+it on or off.
+
 Auto labels sort new mail with labels such as Needs reply, Meeting, Newsletter, Cold pitch and
 Receipt, and with labels that you describe in plain words. A label can keep its mail out of the inbox.
 Rules from the mail headers decide first, so most bulk mail costs nothing. A Workers AI model through
