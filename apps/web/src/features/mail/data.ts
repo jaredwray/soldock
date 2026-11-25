@@ -131,14 +131,18 @@ export interface LabelsState {
 export function useMailboxes(page: string): { mailboxes: Mailbox[] | null; reload: () => void } {
 	const [mailboxes, setMailboxes] = useState<Mailbox[] | null>(null);
 
-	// The shell lives as long as the session, so an answer never comes after it unmounts. Only the answer to
-	// the newest request counts: an older answer can still list a membership that ended after it.
-	const latest = useRef(0);
+	// The shell lives as long as the session, so an answer never comes after it unmounts. An answer replaces the
+	// list only when no newer answer replaced it first: an older answer can still list a membership that ended.
+	// A request that fails changes nothing, so the answer of an older request still counts.
+	const sent = useRef(0);
+	const applied = useRef(0);
 	const reload = useCallback(() => {
-		const request = ++latest.current;
+		const request = ++sent.current;
 		api.call("mail.list_mailboxes").then(
 			(result) => {
-				if (request === latest.current) setMailboxes(result.mailboxes);
+				if (request < applied.current) return;
+				applied.current = request;
+				setMailboxes(result.mailboxes);
 			},
 			() => {
 				// The list stays as it is. A 401 shows the sign-in page through lib/api.ts.
