@@ -62,6 +62,9 @@ test("a member copies the address of the sender from the header of an open messa
 		const toggle = message.getByRole("button", { name: "Ada Sender", exact: true });
 		const copy = message.getByRole("button", { name: `Copy the address ${sender}` });
 		await expect(toggle).toHaveAttribute("aria-expanded", "true");
+		// The address and the date are outside the toggle, so they are its description.
+		const fullDate = await message.locator("time").textContent();
+		await expect(toggle).toHaveAccessibleDescription(`<${sender}> ${fullDate}`);
 		await expect(copy).toHaveCSS("opacity", "0");
 
 		await toggle.hover();

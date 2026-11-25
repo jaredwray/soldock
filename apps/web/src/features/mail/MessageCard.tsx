@@ -82,6 +82,8 @@ export function MessageCard({
 		if (body) onFullBodyRef.current?.({ ...message, body });
 	}, [message, body]);
 	const bodyId = useId();
+	const addressId = useId();
+	const dateId = useId();
 	// In a team mailbox, more than one person sends from the address, so the sender is not "me". In the
 	// mailbox of an agent, the sender is the agent, not the person who reads.
 	const mailboxId = useMailboxId();
@@ -103,7 +105,7 @@ export function MessageCard({
 	});
 
 	const date = (
-		<time className="message-date" dateTime={message.date} title={fullDate(message.date)}>
+		<time id={dateId} className="message-date" dateTime={message.date} title={fullDate(message.date)}>
 			{expanded ? fullDate(message.date) : shortDate(message.date)}
 		</time>
 	);
@@ -121,6 +123,8 @@ export function MessageCard({
 							className="message-toggle"
 							aria-expanded={expanded}
 							aria-controls={bodyId}
+							// The address and the date of an open message are outside the toggle. They describe it.
+							aria-describedby={expanded ? (sender?.name ? `${addressId} ${dateId}` : dateId) : undefined}
 							onClick={() => setExpanded((value) => !value)}
 						>
 							<span className="message-avatar" aria-hidden="true">
@@ -143,7 +147,11 @@ export function MessageCard({
 					</Heading>
 					{expanded && sender && (
 						<span className="message-sender-detail">
-							{sender.name && <span className="message-sender-address">&lt;{sender.address}&gt;</span>}
+							{sender.name && (
+								<span id={addressId} className="message-sender-address">
+									&lt;{sender.address}&gt;
+								</span>
+							)}
 							<CopyAddressButton address={sender.address} />
 						</span>
 					)}

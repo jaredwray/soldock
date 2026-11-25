@@ -187,7 +187,7 @@ MCP clients. The app has no UI-only path.
     the sender. The button puts the address on the clipboard. On a touch screen, the button always shows.
     The address and the button are outside the toggle, because a button cannot hold a button. The person
     can also select the text of the address. The toggle covers the rest of the header, so a click there
-    closes the message.
+    closes the message. The address and the date are the description of the toggle (`aria-describedby`).
   - An attachment is a file card: an icon, the name, the size and the type, and a Download button.
     The delivery status of a recipient is a chip with a dot, the address and the status.
   - In a very large thread, `mail.get_thread` leaves out the bodies of older messages
