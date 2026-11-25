@@ -352,6 +352,10 @@ MCP clients. The app has no UI-only path.
     That member does not get the forms that change an account.
     - **New member**, above the list, opens a dialog for an owner or an admin.
       The kinds are Person, Agent and Service account, with one line that says what each kind is for.
+      The address is a mailbox name in a field and an email domain in a list. The list holds the saved
+      domains of Admin › Email domains (`directory.list_mail_domains`). It starts on the domain of the
+      admin, or on the first domain if that domain is not saved (`memberAddress.ts`). The create button
+      stays off until the list loads. With no saved domain, a hint tells the admin to add one.
       The first API key of a new agent shows once, with a copy button.
       A new person gets no API key. A toast tells the admin to give the first password to the person.
       The person can create keys in Settings after the sign-in.

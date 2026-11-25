@@ -19,7 +19,7 @@ test("an admin creates a service account with scopes and a 7-day token, sees its
 		const dialog = page.getByRole("dialog", { name: "New member" });
 		await dialog.getByLabel("Service account").check();
 		await dialog.getByLabel("Display name").fill(name);
-		await dialog.getByLabel("Address", { exact: true }).fill(`${local}@example.com`);
+		await dialog.getByLabel("Address", { exact: true }).fill(local);
 		await dialog.getByLabel("Description").fill("Posts build results");
 		// The account starts with account.read. The admin adds a scope: the scopes are on the account.
 		await expect(dialog.getByRole("checkbox", { name: /^account\.read/ })).toBeChecked();

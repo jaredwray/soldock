@@ -10,13 +10,14 @@ import {
 	type Scope,
 	scopeDescription,
 } from "@asterra/contracts";
-import { type FormEvent, useId, useState } from "react";
+import { type FormEvent, useEffect, useId, useState } from "react";
 import { api, errorMessage } from "../../lib/api.ts";
 import { Dialog } from "../../lib/Dialog.tsx";
 import { KIND_NAMES } from "../../lib/principalKind.ts";
 import { Select } from "../../lib/Select.tsx";
 import { useSession } from "../auth/session.tsx";
 import { McpEndpointBanner } from "./McpEndpointBanner.tsx";
+import { defaultMailDomain } from "./memberAddress.ts";
 import { scopesFor } from "./permissionsDraft.ts";
 
 const ROLE_OPTIONS = [
@@ -65,7 +66,7 @@ const KIND_HINTS: Record<Kind, string> = {
  * service account reaches its own mailbox and its own drive, and then each shared mailbox, shared drive and
  * room that a member adds it to. The result of an agent holds a first API key, which shows once. A person gets no key: the person signs in with the
  * password and creates keys in Settings. A service account gets its tokens on its page, with a lifetime
- * for each.
+ * for each. The address is a mailbox name and a saved mail domain, which the admin selects from a list.
  */
 function CreatePrincipalForm({ me, humans, onBusy, onCancel, onCreated }: CreatePrincipalFormProps) {
 	const { whoami } = useSession();
@@ -74,7 +75,11 @@ function CreatePrincipalForm({ me, humans, onBusy, onCancel, onCreated }: Create
 	const offered = kind === "human" ? [] : scopesFor({ kind }).filter((scope) => whoami.scopes.includes(scope));
 	const [description, setDescription] = useState("");
 	const [name, setName] = useState("");
-	const [address, setAddress] = useState("");
+	const [localPart, setLocalPart] = useState("");
+	// The saved mail domains: null while they load. The server accepts an address only on a saved domain.
+	const [domains, setDomains] = useState<readonly string[] | null>(null);
+	const [domainsError, setDomainsError] = useState<string | null>(null);
+	const [domain, setDomain] = useState("");
 	const [password, setPassword] = useState("");
 	const [role, setRole] = useState<"member" | "admin">("member");
 	const sponsors = humans.filter((human) => human.archived_at === null);
@@ -88,6 +93,7 @@ function CreatePrincipalForm({ me, humans, onBusy, onCancel, onCreated }: Create
 	const ids = {
 		name: useId(),
 		address: useId(),
+		addressHint: useId(),
 		password: useId(),
 		passwordHint: useId(),
 		role: useId(),
@@ -96,10 +102,31 @@ function CreatePrincipalForm({ me, humans, onBusy, onCancel, onCreated }: Create
 		kindHint: useId(),
 	};
 
+	useEffect(() => {
+		let live = true;
+		api.call("directory.list_mail_domains").then(
+			({ mail_domains }) => {
+				if (!live) return;
+				setDomains(mail_domains);
+				setDomain(defaultMailDomain(mail_domains, me.address));
+			},
+			(caught: unknown) => {
+				if (live) setDomainsError(errorMessage(caught));
+			},
+		);
+		return () => {
+			live = false;
+		};
+	}, [me.address]);
+
+	const address = `${localPart.trim()}@${domain}`;
+
 	async function submit(event: FormEvent<HTMLFormElement>) {
 		event.preventDefault();
 		if (!name.trim()) return setError("Enter a name.");
-		if (!EmailAddress.safeParse(address).success) return setError("Enter one address, such as ada@example.com.");
+		if (!domain) return setError("Add an email domain in Admin › Email domains first.");
+		if (localPart.includes("@")) return setError("Enter only the part before @. Select the domain from the list.");
+		if (!EmailAddress.safeParse(address).success) return setError("Enter a mailbox name, such as ada.");
 		if (kind === "human" && !Password.safeParse(password).success) {
 			return setError(`Enter a first password of ${PASSWORD_MIN_LENGTH} to ${PASSWORD_MAX_LENGTH} characters.`);
 		}
@@ -113,7 +140,7 @@ function CreatePrincipalForm({ me, humans, onBusy, onCancel, onCreated }: Create
 			try {
 				const result = await api.call("directory.create_service_account", {
 					display_name: name.trim(),
-					address: address.trim(),
+					address,
 					sponsor_id: sponsorId,
 					// `scopesFor` gives `SERVICE_SCOPES` for a service account, which are the scopes that the operation takes.
 					scopes: selected as InputOf<"directory.create_service_account">["scopes"],
@@ -132,14 +159,14 @@ function CreatePrincipalForm({ me, humans, onBusy, onCancel, onCreated }: Create
 				? {
 						kind,
 						display_name: name.trim(),
-						address: address.trim(),
+						address,
 						org_role: role,
 						password,
 					}
 				: {
 						kind,
 						display_name: name.trim(),
-						address: address.trim(),
+						address,
 						sponsor_id: sponsorId,
 						scopes: selected,
 					};
@@ -212,7 +239,7 @@ function CreatePrincipalForm({ me, humans, onBusy, onCancel, onCreated }: Create
 						<McpEndpointBanner />
 					</div>
 				)}
-				<div className="field">
+				<div className="field form-grid-wide">
 					<label htmlFor={ids.name} className="field-label">
 						Display name
 					</label>
@@ -226,21 +253,44 @@ function CreatePrincipalForm({ me, humans, onBusy, onCancel, onCreated }: Create
 						placeholder={kind === "agent" ? "Invoice assistant" : kind === "service" ? "CI pipeline" : "Ada Lovelace"}
 					/>
 				</div>
-				<div className="field">
+				<div className="field form-grid-wide">
 					<label htmlFor={ids.address} className="field-label">
 						Address
 					</label>
-					<input
-						id={ids.address}
-						className="input"
-						type="email"
-						value={address}
-						onChange={(event) => setAddress(event.target.value)}
-						disabled={busy}
-						placeholder={
-							kind === "agent" ? "invoices@example.com" : kind === "service" ? "ci@example.com" : "ada@example.com"
-						}
-					/>
+					<div className="address-row">
+						<input
+							id={ids.address}
+							className="input"
+							autoComplete="off"
+							autoCapitalize="none"
+							spellCheck={false}
+							value={localPart}
+							onChange={(event) => setLocalPart(event.target.value)}
+							aria-describedby={ids.addressHint}
+							disabled={busy}
+							placeholder={kind === "agent" ? "invoices" : kind === "service" ? "ci" : "ada"}
+						/>
+						<span className="address-at" aria-hidden="true">
+							@
+						</span>
+						<Select
+							label="Email domain"
+							className="input address-domain-select"
+							value={domain}
+							options={(domains ?? []).map((value) => ({ value, label: value }))}
+							onChange={setDomain}
+							placeholder={domains === null ? (domainsError ? "Not available" : "Loading…") : "No domains"}
+							disabled={busy || !domains?.length}
+							aria-describedby={ids.addressHint}
+						/>
+					</div>
+					<p id={ids.addressHint} className={domainsError ? "form-error" : "field-hint"}>
+						{domainsError
+							? `The email domains did not load. ${domainsError}`
+							: domains?.length === 0
+								? "There are no email domains yet. Add one in Admin › Email domains."
+								: "Select a saved email domain. Manage the domains in Admin › Email domains."}
+					</p>
 				</div>
 				{kind === "human" ? (
 					<>
@@ -349,7 +399,8 @@ function CreatePrincipalForm({ me, humans, onBusy, onCancel, onCreated }: Create
 				<button type="button" className="button" onClick={onCancel} disabled={busy}>
 					Cancel
 				</button>
-				<button type="submit" className="button button-primary" disabled={busy}>
+				{/* The submit waits for the domains. Without a saved domain, the form cannot make an address. */}
+				<button type="submit" className="button button-primary" disabled={busy || domains === null}>
 					{busy
 						? "Creating…"
 						: kind === "agent"
