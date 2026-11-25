@@ -7,34 +7,37 @@ import { addNavigationGuard } from "../../lib/navigationGuard.ts";
 import { Link, navigate } from "../../lib/router.tsx";
 import { useToast } from "../../lib/toast.tsx";
 import { useOnChange } from "../../lib/useOnChange.ts";
-import { REPLY_LATER_VIEW, threadPath, viewPath } from "../../routes.ts";
+import { type MailView, REPLY_LATER_VIEW, threadPath, viewPath } from "../../routes.ts";
 import { SEARCH_INPUT_ID } from "../../shell/nav.ts";
 import { SearchBox } from "../../shell/SearchBox.tsx";
-import { actionChange, actionNotice, modifyThreads, type Undo, undoChanges } from "./actions.ts";
+import { actionChange, actionNotice, type LabelChange, modifyThreads, type Undo, undoChanges } from "./actions.ts";
 import type { SendResult } from "./Composer.tsx";
 import { Composer } from "./ComposerLoader.tsx";
 import { type Draft, forwardDraft, replyDraft } from "./compose.ts";
 import { useThread, useThreadList } from "./data.ts";
 import {
 	type Cleared,
+	type ClearKind,
+	type FocusMode,
 	finishSummary,
+	isGone,
 	leftQueue,
 	mergeQueue,
 	moveActive,
 	nextActive,
+	queueView,
 	replySource,
 	replyTarget,
 	restoreAt,
 	sessionProgress,
+	waitingCount,
 } from "./focusReply.ts";
 import { MailboxNotice } from "./MailboxNotice.tsx";
 import { MessageCard, type ReplyMode } from "./MessageCard.tsx";
 import { useMailboxId, useMailboxRights } from "./mailbox.tsx";
 import type { FromOption } from "./mailboxNav.ts";
 import { useShortcuts } from "./useShortcuts.ts";
-
-/** The query of Focus & Reply: the threads in Reply later, newest first, as in the Reply later list. */
-const QUERY = "in:reply_later";
+import type { ViewQuery } from "./views.ts";
 
 /** A card loads its thread when it comes this near to the visible part of the list. */
 const PRELOAD_MARGIN = "600px 0px";
@@ -49,6 +52,13 @@ const FINISH_LIST_MAX = 8;
 const MOD_KEY = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.userAgent) ? "⌘" : "Ctrl";
 
 interface FocusReplyProps {
+	/** The view of the cards. The query gives its threads, newest first, as in its list. */
+	view: MailView;
+	query: ViewQuery;
+	/** The title of the view, for example "Inbox" or the name of a label. */
+	viewTitle: string;
+	/** What Done, Later and a reply do in the view (`focusMode`). */
+	mode: FocusMode;
 	/** The name of the team mailbox or the agent mailbox, or null in the own mailbox. */
 	mailboxName: string | null;
 	labelsById: ReadonlyMap<string, Label>;
@@ -73,8 +83,13 @@ interface CardRequest {
 	token: number;
 }
 
-/** How a card leaves the page: after a sent reply, or after Done. Each has its own exit motion. */
+/** The exit motion of a card: after a sent reply, or after Done or Later. */
 type LeaveKind = "sent" | "done";
+
+/** The toast when older conversations did not load. */
+function olderFailed(error: unknown) {
+	return { message: `Older conversations did not load. ${errorMessage(error)}`, tone: "error" as const };
+}
 
 /** True when the person asked for less motion. A browser without matchMedia gets no motion. */
 function reducedMotion(): boolean {
@@ -82,18 +97,19 @@ function reducedMotion(): boolean {
 }
 
 /**
- * Focus & Reply: each conversation in Reply later, one after the other. One card is active. Reply opens the
- * composer in the card, and a send removes the conversation from Reply later on the server. The card then goes,
- * and the reply of the next card opens with the focus in its editor, so the person answers one conversation
- * after the other with no click. Done takes a conversation out without a reply. When the last card goes, the
- * page shows what the person cleared in this visit.
+ * Focus & Reply: each conversation of a view, one after the other. One card is active. Reply opens the composer
+ * in the card. After a send, the card goes, and the reply of the next card opens with the focus in its editor, so
+ * the person answers one conversation after the other with no click. In Reply later, the server then removes the
+ * conversation from Reply later. In the inbox, the page archives it. Done takes a conversation out of the view
+ * without a reply (`focusMode`), and Later moves it to Reply later. When the last card goes, the page shows what
+ * the person cleared in this visit.
  */
 export function FocusReply(props: FocusReplyProps) {
-	const { labelsById, myAddress, onChanged, onCompose } = props;
+	const { view, mode, labelsById, myAddress, onChanged, onCompose } = props;
 	const toast = useToast();
 	const mailboxId = useMailboxId();
 	const rights = useMailboxRights();
-	const list = useThreadList(mailboxId, QUERY);
+	const list = useThreadList(mailboxId, props.query.status === "ready" ? props.query.query : null);
 	const [scroller, setScroller] = useState<HTMLDivElement | null>(null);
 	const mainRef = useRef<HTMLElement>(null);
 	const [items, setItems] = useState<ThreadSummary[]>([]);
@@ -118,19 +134,31 @@ export function FocusReply(props: FocusReplyProps) {
 	const [announce, setAnnounce] = useState("");
 	/** True while the focus is in a reply, so the hints show the keys of the composer. */
 	const [typing, setTyping] = useState(false);
+	/**
+	 * The cursor of the page that the page gets by itself, while the request runs and after it fails. A failed
+	 * request is not sent again: the page shows Older.
+	 */
+	const [olderFrom, setOlderFrom] = useState<string | null>(null);
 	/** The cards that came back with Undo. They stay until the queue from the server has them again. */
 	const restoringRef = useRef(new Set<string>());
 	/**
-	 * The conversations with a Done that the server did not confirm yet. A refresh that started before the
-	 * change still has them, and must not put their cards back.
+	 * The conversations that the person cleared in this visit, with their number of messages. A refresh does not
+	 * put their cards back until a new message comes: it can start before the change, and some views keep the
+	 * conversation, for example Starred after a reply.
 	 */
-	const pendingRef = useRef(new Set<string>());
+	const gone: ReadonlyMap<string, number> = new Map(log.map((item) => [item.id, item.count]));
+	const goneRef = useRef(gone);
+	goneRef.current = gone;
 	const keepRef = useRef<ReadonlySet<string>>(new Set());
 	keepRef.current = new Set([...drafts.keys(), ...leavingRef.current.keys(), ...restoringRef.current]);
 	const title = props.mailboxName ? `${props.mailboxName}: Focus & Reply` : "Focus & Reply";
-	const listPath = viewPath(REPLY_LATER_VIEW, mailboxId);
+	const isInbox = view.kind === "system" && view.view === "inbox";
+	const isReplyLater = view.kind === "system" && view.view === "reply-later";
+	/** The view in a sentence, for example "the inbox" or "Starred". */
+	const place = isInbox ? "the inbox" : props.viewTitle;
+	const listPath = viewPath(view, mailboxId);
 	const inboxPath = viewPath({ kind: "system", view: "inbox" }, mailboxId);
-	const doneChange = actionChange("replyLaterDone");
+	const replyLaterPath = viewPath(REPLY_LATER_VIEW, mailboxId);
 
 	useOnChange(props.refreshKey, () => void list.refresh());
 
@@ -146,7 +174,7 @@ export function FocusReply(props: FocusReplyProps) {
 	useEffect(() => {
 		if (list.status !== "ready") return;
 		setItems((current) =>
-			mergeQueue(current, list.threads, keepRef.current, list.nextCursor === null, pendingRef.current),
+			mergeQueue(current, list.threads, keepRef.current, list.nextCursor === null, goneRef.current),
 		);
 		for (const id of restoringRef.current) {
 			if (list.threads.some((thread) => thread.id === id)) restoringRef.current.delete(id);
@@ -175,18 +203,19 @@ export function FocusReply(props: FocusReplyProps) {
 	const ids = items.filter((item) => !leaving.has(item.id)).map((item) => item.id);
 	const active = activeId !== null && ids.includes(activeId) ? activeId : (ids[0] ?? null);
 	// The list has rows that the cards do not have yet: the cards come one render after the list.
-	const merging = list.status === "ready" && items.length === 0 && list.threads.length > 0;
+	const merging = list.status === "ready" && items.length === 0 && list.threads.some((thread) => !isGone(thread, gone));
 	// A card can stay for its open reply after its conversation left the queue. It does not count as waiting.
 	const queuedIds = ids.filter((id) => {
 		const item = items.find((candidate) => candidate.id === id);
 		return item !== undefined && !leftQueue(item, list.threads, complete);
 	});
-	// With more pages, the count of the label is the size of the queue. Else the cards on screen are the queue: the
-	// count of the label comes a moment later after a change.
-	const left = complete
-		? queuedIds.length
-		: Math.max(labelsById.get("REPLY_LATER")?.threads_total ?? 0, queuedIds.length);
-	const progress = sessionProgress(log.length, left);
+	const { left, more } = waitingCount({
+		complete,
+		queued: queuedIds.length,
+		total: mode.countLabel === null ? null : (labelsById.get(mode.countLabel)?.threads_total ?? null),
+		staying: log.filter((item) => item.stays).length,
+	});
+	const progress = sessionProgress(log.length, left, more);
 
 	/** Starts or stops the exit motion of a card, in the ref and in the state. */
 	function markLeaving(threadId: string, how: LeaveKind | null) {
@@ -248,20 +277,25 @@ export function FocusReply(props: FocusReplyProps) {
 		setRequest({ threadId, mode, token: requestTokens.current });
 	}
 
+	/** The log entry of a clear. `stays` is true when the conversation stays in the view on the server. */
+	function cleared(thread: ThreadSummary, how: ClearKind, stays: boolean): Cleared {
+		const count = thread.message_count + (how === "answered" ? 1 : 0);
+		return { id: thread.id, subject: thread.subject.trim() || "(no subject)", how, count, stays };
+	}
+
 	/**
-	 * Takes a card off the page. The list drops it at once, so a refresh does not bring it back. The card plays
-	 * its exit motion, and the next card becomes active at the start of the motion. Returns the next card.
+	 * Takes a card off the page. `change` is the label change that the clear makes on the server, or null when the
+	 * conversation stays in the view: the list gets it at once. The log keeps the card off the page until a new
+	 * message comes (`gone`). The card plays its exit motion, and the next card becomes active at the start of the
+	 * motion. Returns the next card.
 	 */
-	function leave(thread: ThreadSummary, how: LeaveKind): string | null {
+	function leave(thread: ThreadSummary, how: ClearKind, change: LabelChange | null, stays: boolean): string | null {
 		const next = nextActive(ids, thread.id);
 		setDraft(thread.id, null);
-		list.patch([thread.id], doneChange, REPLY_LATER_VIEW);
-		setLog((current) => [
-			...current.filter((item) => item.id !== thread.id),
-			{ id: thread.id, subject: thread.subject.trim() || "(no subject)", how: how === "sent" ? "answered" : "done" },
-		]);
+		if (change) list.patch([thread.id], change, view);
+		setLog((current) => [...current.filter((item) => item.id !== thread.id), cleared(thread, how, stays)]);
 		if (reducedMotion()) setItems((current) => current.filter((item) => item.id !== thread.id));
-		else markLeaving(thread.id, how);
+		else markLeaving(thread.id, how === "answered" ? "sent" : "done");
 		if (active === thread.id || active === null) moveTo(next);
 		return next;
 	}
@@ -284,26 +318,37 @@ export function FocusReply(props: FocusReplyProps) {
 		moveTo(threadId);
 	}
 
-	function reply(threadId: string, message: Message, mode: ReplyMode) {
+	function reply(threadId: string, message: Message, replyMode: ReplyMode) {
 		if (!rights.send) return;
-		if (mode === "forward") {
+		if (replyMode === "forward") {
 			onCompose(forwardDraft(message));
 			return;
 		}
 		activate(threadId);
 		// A new draft would mount a new composer and lose the text of the open one. The open one gets the focus.
 		if (drafts.has(threadId)) {
-			ask(threadId, mode);
+			ask(threadId, replyMode);
 			return;
 		}
-		setDraft(threadId, replyDraft(message, myAddress, mode === "replyAll"));
+		setDraft(threadId, replyDraft(message, myAddress, replyMode === "replyAll"));
 	}
 
 	function sent(thread: ThreadSummary, result: SendResult) {
-		const next = leave(thread, "sent");
+		const archive = mode.archiveOnReply && rights.modify;
+		// In Reply later, the server took the conversation out of the view. In the inbox, the archive below does.
+		const leavesView = mode.archiveOnReply ? archive : mode.leaves.answered;
+		const next = leave(thread, "answered", leavesView ? mode.done : null, !leavesView);
 		// The reply of the next card opens: the person continues with no click.
 		if (next && rights.send) ask(next, "reply");
-		setAnnounce(`Reply sent. ${sessionProgress(log.length + 1, Math.max(0, left - 1)).label}.`);
+		setAnnounce(`Reply sent. ${sessionProgress(log.length + 1, Math.max(0, left - 1), more).label}.`);
+		if (archive) {
+			modifyThreads(mailboxId, [thread.id], actionChange("archive")).then(onChanged, (error: unknown) =>
+				toast({
+					message: `Reply sent, but the conversation is still in the inbox. ${errorMessage(error)}`,
+					tone: "error",
+				}),
+			);
+		}
 		const failed = result.recipients.filter((recipient) => recipient.status === "failed");
 		if (failed.length > 0) {
 			toast({
@@ -314,28 +359,33 @@ export function FocusReply(props: FocusReplyProps) {
 		onChanged();
 	}
 
-	async function done(thread: ThreadSummary) {
-		if (!rights.modify) return;
-		// The Done button also shows on a card with an open reply. The person decides before the text goes.
+	/** Done takes the conversation out of the view, and Later moves it to Reply later. Each has Undo. */
+	async function clear(thread: ThreadSummary, how: "done" | "later") {
+		if (!rights.modify || (how === "later" && !mode.later)) return;
+		// The buttons also show on a card with an open reply. The person decides before the text goes.
 		if (dirtyIds.has(thread.id) && !window.confirm("Discard your reply?")) return;
 		const index = items.findIndex((item) => item.id === thread.id);
-		const undos = undoChanges([{ id: thread.id, labelIds: thread.label_ids }], doneChange);
-		pendingRef.current.add(thread.id);
-		leave(thread, "done");
+		const change = how === "done" ? mode.done : actionChange("replyLater");
+		const undos = undoChanges([{ id: thread.id, labelIds: thread.label_ids }], change);
+		leave(thread, how, change, !mode.leaves[how]);
 		try {
-			await modifyThreads(mailboxId, [thread.id], doneChange);
-			pendingRef.current.delete(thread.id);
+			await modifyThreads(mailboxId, [thread.id], change);
 			// A refresh that started before the change can come later, with the conversation. A new refresh
 			// replaces it.
 			void list.refresh();
-			const notice = actionNotice("replyLaterDone", 1) ?? "";
+			// Done on a conversation that the change does not alter, for example in Sent, only clears the card.
+			const notice =
+				how === "later"
+					? (actionNotice("replyLater", 1) ?? "")
+					: undos.length > 0
+						? mode.doneNotice
+						: "Conversation marked as done.";
 			toast(
 				undos.length > 0
-					? { message: notice, action: { label: "Undo", run: () => void undoDone(thread, index, undos) } }
+					? { message: notice, action: { label: "Undo", run: () => void undoClear(thread, how, index, undos) } }
 					: { message: notice },
 			);
 		} catch (error) {
-			pendingRef.current.delete(thread.id);
 			toast({ message: `The change failed. ${errorMessage(error)}`, tone: "error" });
 			restore(thread, index);
 		}
@@ -350,19 +400,16 @@ export function FocusReply(props: FocusReplyProps) {
 		setLog((current) => current.filter((item) => item.id !== thread.id));
 	}
 
-	async function undoDone(thread: ThreadSummary, index: number, undos: readonly Undo[]) {
+	async function undoClear(thread: ThreadSummary, how: "done" | "later", index: number, undos: readonly Undo[]) {
 		restore(thread, index);
 		try {
 			for (const undo of undos) await modifyThreads(mailboxId, undo.ids, undo.change);
 			toast({ message: "Action undone." });
 		} catch (error) {
-			// The conversation is not in Reply later, so its card goes again.
+			// The change stays, so the card goes again.
 			restoringRef.current.delete(thread.id);
 			setItems((current) => current.filter((item) => item.id !== thread.id));
-			setLog((current) => [
-				...current,
-				{ id: thread.id, subject: thread.subject.trim() || "(no subject)", how: "done" },
-			]);
+			setLog((current) => [...current, cleared(thread, how, !mode.leaves[how])]);
 			toast({ message: `The undo failed. ${errorMessage(error)}`, tone: "error" });
 		}
 		onChanged();
@@ -383,14 +430,16 @@ export function FocusReply(props: FocusReplyProps) {
 				if (!rights.send || active === null) return;
 				ask(active, event.key === "r" ? "reply" : event.key === "a" ? "replyAll" : "forward");
 				break;
+			case "e":
 			case "l":
 				// An open reply can hold text. Close it first, so a key press never discards it.
 				if (!rights.modify || !activeThread || drafts.has(activeThread.id)) return;
-				void done(activeThread);
+				// l is Reply later, as in the list. In Reply later, it is Done.
+				void clear(activeThread, event.key === "l" && mode.later ? "later" : "done");
 				break;
 			case "o":
 				if (active === null) return;
-				navigate(threadPath(REPLY_LATER_VIEW, active, mailboxId));
+				navigate(threadPath(view, active, mailboxId));
 				break;
 			case "u":
 				navigate(listPath);
@@ -417,8 +466,21 @@ export function FocusReply(props: FocusReplyProps) {
 		);
 	}
 
-	const finished = list.status === "ready" && !merging && items.length === 0 && log.length > 0;
+	const shown = list.status === "ready" && !merging ? queueView(items.length, log.length, complete) : null;
 	const showStatus = list.status === "ready" && (ids.length > 0 || log.length > 0);
+
+	// Each card on the page is cleared, and the queue has more pages: the page gets the next one. A refresh that
+	// starts later discards the result with no error, so the page then asks again. If the request fails, the page
+	// shows Older.
+	const { loadOlder, nextCursor, loadingOlder } = list;
+	useEffect(() => {
+		if (shown !== "older" || loadingOlder || nextCursor === null || olderFrom === nextCursor) return;
+		setOlderFrom(nextCursor);
+		loadOlder().then(
+			() => setOlderFrom(null),
+			(error: unknown) => toast(olderFailed(error)),
+		);
+	}, [shown, loadingOlder, nextCursor, olderFrom, loadOlder, toast]);
 
 	return (
 		<main
@@ -432,15 +494,16 @@ export function FocusReply(props: FocusReplyProps) {
 			}}
 		>
 			<div className="toolbar">
-				<Link to={listPath} className="icon-button" aria-label="Back to Reply later" title="Back to Reply later (u)">
+				<Link to={listPath} className="icon-button" aria-label={`Back to ${place}`} title={`Back to ${place} (u)`}>
 					<Icon name="back" />
 				</Link>
 				<div className="page-title">
 					<Icon name="reply" />
 					<h1 className="toolbar-title">{title}</h1>
+					<span className="focus-view-name">{props.viewTitle}</span>
 				</div>
 				<span className="toolbar-spacer" />
-				<SearchBox product="mail" query="" mailboxId={mailboxId} />
+				<SearchBox product="mail" query={view.kind === "search" ? view.query : ""} mailboxId={mailboxId} />
 			</div>
 			<MailboxNotice />
 			{showStatus && (
@@ -468,7 +531,12 @@ export function FocusReply(props: FocusReplyProps) {
 								)}
 								{rights.modify && (
 									<span>
-										<kbd>l</kbd> Done
+										<kbd>e</kbd> Done
+									</span>
+								)}
+								{rights.modify && mode.later && (
+									<span>
+										<kbd>l</kbd> Later
 									</span>
 								)}
 								<span>
@@ -484,7 +552,11 @@ export function FocusReply(props: FocusReplyProps) {
 				{announce}
 			</p>
 			<div className="mail-scroll" ref={setScroller}>
-				{list.status === "loading" || merging ? (
+				{props.query.status === "missing" ? (
+					<div className="list-state" role="alert">
+						This label does not exist.
+					</div>
+				) : list.status === "loading" || merging ? (
 					<div className="list-state mail-state" aria-live="polite">
 						<span className="spinner" aria-hidden="true" />
 						Loading conversations…
@@ -500,22 +572,54 @@ export function FocusReply(props: FocusReplyProps) {
 							Try again
 						</button>
 					</div>
-				) : finished ? (
-					<FinishState log={log} mailboxId={mailboxId} inboxPath={inboxPath} listPath={listPath} />
-				) : items.length === 0 ? (
+				) : shown === "finished" ? (
+					<FinishState
+						log={log}
+						mailboxId={mailboxId}
+						inboxPath={inboxPath}
+						// After the inbox and Reply later, the next pile is Reply later. Else the person goes back to the view.
+						next={
+							isInbox || isReplyLater
+								? { path: replyLaterPath, text: "Reply later list" }
+								: { path: listPath, text: `Back to ${place}` }
+						}
+					/>
+				) : shown === "older" ? (
+					loadingOlder || olderFrom !== nextCursor ? (
+						<div className="list-state mail-state" aria-live="polite">
+							<span className="spinner" aria-hidden="true" />
+							Loading older conversations…
+						</div>
+					) : (
+						<div className="list-state mail-state">
+							<p className="mail-state-title">More conversations wait in {place}.</p>
+							<button type="button" className="button" onClick={() => setOlderFrom(null)}>
+								Older
+							</button>
+						</div>
+					)
+				) : shown === "empty" ? (
 					<div className="list-state mail-state">
 						<span className="mail-state-icon">
 							<Icon name="check" size={22} />
 						</span>
-						<p className="mail-state-title">No conversation waits for an answer.</p>
-						<p className="mail-state-text">Use Reply later on a conversation to put it here.</p>
-						<Link to={inboxPath} className="button">
-							Go to the inbox
+						{isReplyLater ? (
+							<>
+								<p className="mail-state-title">No conversation waits for an answer.</p>
+								<p className="mail-state-text">Use Reply later on a conversation to put it here.</p>
+							</>
+						) : (
+							<p className="mail-state-title">
+								{view.kind === "search" ? `No conversations match “${view.query}”.` : `No conversations in ${place}.`}
+							</p>
+						)}
+						<Link to={isReplyLater ? inboxPath : listPath} className="button">
+							{isReplyLater ? "Go to the inbox" : `Back to ${place}`}
 						</Link>
 					</div>
 				) : (
 					<>
-						<ol className="focus-list" aria-label="Conversations in Reply later">
+						<ol className="focus-list" aria-label={`Conversations in ${place}`}>
 							{items.map((thread) => (
 								<FocusCard
 									key={thread.id}
@@ -524,6 +628,9 @@ export function FocusReply(props: FocusReplyProps) {
 									myAddress={myAddress}
 									labelsById={labelsById}
 									canModify={rights.modify}
+									mode={mode}
+									view={view}
+									place={place}
 									active={thread.id === active}
 									leaving={leaving.get(thread.id) ?? null}
 									queued={queuedIds.includes(thread.id)}
@@ -537,27 +644,22 @@ export function FocusReply(props: FocusReplyProps) {
 									onCloseDraft={() => closeDraft(thread.id)}
 									onDirtyChange={(dirty) => setDirty(thread.id, dirty)}
 									onSent={(result) => sent(thread, result)}
-									onDone={() => void done(thread)}
+									onDone={() => void clear(thread, "done")}
+									onLater={() => void clear(thread, "later")}
 									onSkip={() => moveTo(moveActive(ids, thread.id, 1))}
 									onLeft={() => finishLeave(thread.id)}
 								/>
 							))}
 						</ol>
-						{list.nextCursor !== null && (
+						{nextCursor !== null && (
 							<div className="list-footer">
 								<button
 									type="button"
 									className="button"
-									disabled={list.loadingOlder}
-									onClick={() =>
-										void list
-											.loadOlder()
-											.catch((error: unknown) =>
-												toast({ message: `Older conversations did not load. ${errorMessage(error)}`, tone: "error" }),
-											)
-									}
+									disabled={loadingOlder}
+									onClick={() => void loadOlder().catch((error: unknown) => toast(olderFailed(error)))}
 								>
-									{list.loadingOlder ? "Loading…" : "Older"}
+									{loadingOlder ? "Loading…" : "Older"}
 								</button>
 							</div>
 						)}
@@ -568,17 +670,23 @@ export function FocusReply(props: FocusReplyProps) {
 	);
 }
 
-/** The page after the last card goes: what the person answered and marked as done in this visit. */
+/** The text of a cleared conversation in the list of the finish state. */
+const CLEARED_TEXT: Record<ClearKind, string> = { answered: "Answered", done: "Done", later: "Reply later" };
+
+/**
+ * The page after the last card goes: what the person answered, marked as done and moved to Reply later in this
+ * visit. `next` is the second link, after "Go to the inbox".
+ */
 function FinishState({
 	log,
 	mailboxId,
 	inboxPath,
-	listPath,
+	next,
 }: {
 	log: readonly Cleared[];
 	mailboxId: string | null;
 	inboxPath: string;
-	listPath: string;
+	next: { path: string; text: string };
 }) {
 	const shown = log.slice(0, FINISH_LIST_MAX);
 	return (
@@ -596,7 +704,7 @@ function FinishState({
 					{shown.map((item) => (
 						<li key={item.id}>
 							<Link to={threadPath({ kind: "system", view: "all" }, item.id, mailboxId)}>{item.subject}</Link>
-							<span className="focus-finish-how">{item.how === "answered" ? "Answered" : "Done"}</span>
+							<span className="focus-finish-how">{CLEARED_TEXT[item.how]}</span>
 						</li>
 					))}
 					{log.length > shown.length && <li className="focus-finish-more">and {log.length - shown.length} more</li>}
@@ -606,8 +714,8 @@ function FinishState({
 				<Link to={inboxPath} className="button button-primary">
 					Go to the inbox
 				</Link>
-				<Link to={listPath} className="button">
-					Reply later list
+				<Link to={next.path} className="button">
+					{next.text}
 				</Link>
 			</div>
 		</div>
@@ -649,6 +757,10 @@ interface FocusCardProps {
 	myAddress: string;
 	labelsById: ReadonlyMap<string, Label>;
 	canModify: boolean;
+	mode: FocusMode;
+	view: MailView;
+	/** The view in a sentence, for example "the inbox". */
+	place: string;
 	active: boolean;
 	/** The exit motion of the card, or null for a card that stays. */
 	leaving: LeaveKind | null;
@@ -667,14 +779,15 @@ interface FocusCardProps {
 	onDirtyChange: (dirty: boolean) => void;
 	onSent: (result: SendResult) => void;
 	onDone: () => void;
+	onLater: () => void;
 	onSkip: () => void;
 	/** The exit motion ended. */
 	onLeft: () => void;
 }
 
 /**
- * One conversation of Focus & Reply: the subject, the people, Done and Skip, the newest message with its reply
- * buttons, and the reply in the card when it is open.
+ * One conversation of Focus & Reply: the subject, the people, Skip, Later and Done, the newest message with its
+ * reply buttons, and the reply in the card when it is open.
  */
 function FocusCard(props: FocusCardProps) {
 	const { summary, active, draft, request, onReply } = props;
@@ -775,7 +888,7 @@ function FocusCard(props: FocusCardProps) {
 				<div className="focus-card-header">
 					<div className="focus-card-title">
 						<h2 className="focus-card-subject">
-							<Link to={threadPath(REPLY_LATER_VIEW, summary.id, mailboxId)}>{subject}</Link>
+							<Link to={threadPath(props.view, summary.id, mailboxId)}>{subject}</Link>
 						</h2>
 						<p className="focus-card-people">
 							{participantsLabel(summary.participants, mailboxId ? "" : props.myAddress)}
@@ -794,11 +907,23 @@ function FocusCard(props: FocusCardProps) {
 								<span className="visually-hidden">: go to the next conversation</span>
 							</button>
 						)}
+						{props.canModify && props.mode.later && (
+							<button
+								type="button"
+								className="button button-small button-ghost"
+								onClick={props.onLater}
+								title="Reply later (l)"
+							>
+								<Icon name="clock" size={16} />
+								<span className="focus-card-later-text">Later</span>
+								<span className="visually-hidden">: move “{subject}” to Reply later</span>
+							</button>
+						)}
 						{props.canModify && (
-							<button type="button" className="button button-small" onClick={props.onDone} title="Done (l)">
+							<button type="button" className="button button-small" onClick={props.onDone} title="Done (e)">
 								<Icon name="check" size={16} />
 								Done
-								<span className="visually-hidden">: remove “{subject}” from Reply later</span>
+								<span className="visually-hidden">: {props.mode.doneText(subject)}</span>
 							</button>
 						)}
 					</div>
@@ -831,7 +956,7 @@ function FocusCard(props: FocusCardProps) {
 				)}
 				{draft && !props.queued && (
 					<p className="focus-card-note" role="status">
-						This conversation left Reply later. Your reply is still here.
+						This conversation is not in {props.place} now. Your reply is still here.
 					</p>
 				)}
 				{draft && (

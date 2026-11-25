@@ -2001,6 +2001,46 @@ fieldset {
 	text-decoration: underline;
 }
 
+/* The way into Focus & Reply in the header row of a list. A narrow row shows the icon only. */
+.toolbar-focus {
+	flex: none;
+}
+
+@media (max-width: 900px) {
+	.toolbar-focus-text {
+		display: none;
+	}
+}
+
+/* The view of Focus & Reply, after its title. The title gets shorter first. A phone has no room for the view:
+   the back button names it. */
+.focus-view-name {
+	flex: none;
+	max-width: 40%;
+	overflow: hidden;
+	color: var(--muted-foreground);
+	font-size: 14px;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+@media (max-width: 600px) {
+	.focus-view-name {
+		display: none;
+	}
+
+	/* A card on a phone has no room for three buttons with text. Later shows its icon. Its name stays for a
+	   screen reader. */
+	.focus-card-later-text {
+		position: absolute;
+		width: 1px;
+		height: 1px;
+		overflow: hidden;
+		clip: rect(0 0 0 0);
+		white-space: nowrap;
+	}
+}
+
 /* Focus & Reply. The status strip stays above the list: the progress of this visit, and the keys. */
 .focus-status {
 	position: relative;

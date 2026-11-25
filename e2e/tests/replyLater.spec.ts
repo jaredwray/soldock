@@ -203,3 +203,225 @@ test("a member puts mail in Reply later and answers it in Focus & Reply", async 
 		await member.close();
 	}
 });
+
+// Focus & Reply works in each list. In the inbox, a send also archives the conversation, e (Done) archives, and l
+// moves the conversation to Reply later, as in the list. In Starred, a reply keeps the star, and the card of the
+// conversation does not come back in this visit.
+test("a member clears the inbox and Starred in Focus & Reply", async ({ browser }) => {
+	const admin = await signIn(browser, "tomasz");
+	const member = await signIn(browser, "rafael");
+	try {
+		const name = unique("Operations");
+		const local = `operations-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+		const address = `${local}@example.com`;
+		const me = await (await member.request.get("/api/v1/account")).json();
+		const { team_mailbox: mailbox } = await post<{ team_mailbox: { id: string } }>(
+			admin,
+			"/api/v1/directory/team-mailboxes",
+			{ display_name: name, address, member_ids: [me.principal.id] },
+		);
+		const first = unique("Budget review");
+		const second = unique("Office move");
+		const third = unique("Hiring plan");
+		await post(admin, "/api/v1/mail/messages", { to: [address], subject: first, text: "Can you approve the budget?" });
+		await post(admin, "/api/v1/mail/messages", { to: [address], subject: second, text: "Which day suits the move?" });
+		await post(admin, "/api/v1/mail/messages", { to: [address], subject: third, text: "Do we hire two people?" });
+		const threads = async (query: string): Promise<{ subject: string }[]> => {
+			const response = await member.request.get(
+				`/api/v1/mail/threads?mailbox_id=${mailbox.id}&query=${encodeURIComponent(query)}`,
+			);
+			return (await response.json()).threads;
+		};
+
+		const page = await member.newPage();
+		const inbox = `/mail/team/${mailbox.id}/inbox`;
+		const firstRow = page.getByRole("listitem").filter({ hasText: first });
+		await expect(async () => {
+			await page.goto(inbox);
+			await expect(firstRow).toBeVisible({ timeout: 1000 });
+			await expect(page.getByRole("listitem").filter({ hasText: second })).toBeVisible({ timeout: 1000 });
+			await expect(page.getByRole("listitem").filter({ hasText: third })).toBeVisible({ timeout: 1000 });
+		}).toPass({ timeout: 20_000 });
+		// A star on the oldest conversation, for Starred at the end.
+		await firstRow.getByRole("button", { name: "Star" }).click();
+		await expect(firstRow.getByRole("button", { name: "Star" })).toHaveAttribute("title", "Starred");
+
+		const main = page.getByRole("main");
+		await main.getByRole("link", { name: "Focus & Reply" }).click();
+		await expect(page).toHaveURL(new RegExp(`${inbox}/focus$`));
+		await expect(main.getByRole("heading", { level: 1, name: `${name}: Focus & Reply` })).toBeVisible();
+		const cards = main.getByRole("list", { name: "Conversations in the inbox" }).locator(":scope > li");
+		const card = (subject: string) => cards.filter({ has: page.getByRole("heading", { level: 2, name: subject }) });
+		const replyBox = (subject: string) =>
+			card(subject).getByRole("region", { name: "Reply" }).getByRole("textbox", { name: "Message" });
+		await expect(cards).toHaveCount(3);
+		await expect(card(third)).toHaveAttribute("aria-current", "true");
+		await expect(main.getByText("3 left", { exact: true })).toBeVisible();
+
+		// A send archives the conversation, and the reply of the next card opens.
+		await page.keyboard.press("r");
+		await expect(replyBox(third)).toBeFocused();
+		await replyBox(third).pressSequentially("Yes, two people.");
+		await page.keyboard.press("Control+Enter");
+		await expect(card(third)).toHaveCount(0);
+		await expect(main.getByText("1 of 3 done · 2 left", { exact: true })).toBeVisible();
+		await expect(replyBox(second)).toBeFocused();
+
+		// l moves the conversation to Reply later, as in the list of the inbox.
+		await page.keyboard.press("Escape");
+		await expect(card(second).getByRole("region", { name: "Reply" })).toHaveCount(0);
+		await page.keyboard.press("l");
+		await expect(card(second)).toHaveCount(0);
+		await expect(page.getByText("Conversation moved to Reply later.")).toBeVisible();
+		await expect(main.getByText("2 of 3 done · 1 left", { exact: true })).toBeVisible();
+
+		// e is Done. In the inbox, Done archives.
+		await expect(card(first)).toHaveAttribute("aria-current", "true");
+		await page.keyboard.press("e");
+		await expect(main.getByText("All caught up.")).toBeVisible();
+		await expect(
+			main.getByText("You answered 1 conversation, marked 1 as done and moved 1 to Reply later."),
+		).toBeVisible();
+		await expect(page.getByText("Conversation archived.")).toBeVisible();
+		await expect.poll(async () => (await threads("in:inbox")).length).toBe(0);
+		expect((await threads("in:reply_later")).map((thread) => thread.subject)).toEqual([second]);
+
+		// In Starred, a reply keeps the star. The refresh after the send does not bring the card back.
+		await page.goto(`/mail/team/${mailbox.id}/starred/focus`);
+		const starred = main.getByRole("list", { name: "Conversations in Starred" }).locator(":scope > li");
+		await expect(starred).toHaveCount(1);
+		await expect(starred.getByText("Can you approve the budget?")).toBeVisible();
+		await page.keyboard.press("r");
+		const starredReply = starred.getByRole("region", { name: "Reply" }).getByRole("textbox", { name: "Message" });
+		await expect(starredReply).toBeFocused();
+		await starredReply.pressSequentially("Approved.");
+		await page.keyboard.press("Control+Enter");
+		await expect(main.getByText("You answered 1 conversation.")).toBeVisible();
+		await expect.poll(async () => (await threads("is:starred")).map((thread) => thread.subject)).toEqual([first]);
+		await expect(main.getByText("All caught up.")).toBeVisible();
+		await expect(starred).toHaveCount(0);
+	} finally {
+		await admin.close();
+		await member.close();
+	}
+});
+
+/** A new shared mailbox with the member in it, so no other test sees its mail. */
+async function newTeamMailbox(admin: BrowserContext, member: BrowserContext, prefix: string) {
+	const address = `${prefix}-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}@example.com`;
+	const me = await (await member.request.get("/api/v1/account")).json();
+	const { team_mailbox: mailbox } = await post<{ team_mailbox: { id: string } }>(
+		admin,
+		"/api/v1/directory/team-mailboxes",
+		{ display_name: unique(prefix), address, member_ids: [me.principal.id] },
+	);
+	return { id: mailbox.id, address };
+}
+
+// A search keeps a conversation after Done, so a refresh gives no new card. When each card of the first page is
+// cleared, the page gets the next page. It shows "All caught up." only at the end of the list.
+test("Focus & Reply gets the next page when each card of a search is cleared", async ({ browser }) => {
+	const admin = await signIn(browser, "tomasz");
+	const member = await signIn(browser, "rafael");
+	try {
+		const mailbox = await newTeamMailbox(admin, member, "archive");
+		const word = `batch${Date.now().toString(36)}`;
+		for (let index = 0; index < 51; index += 1) {
+			await post(admin, "/api/v1/mail/messages", { to: [mailbox.address], subject: `${word} ${index}`, text: "Hi" });
+		}
+		// Local mail goes through the outbox of the sender, so it can come a little later.
+		await expect
+			.poll(
+				async () => {
+					const response = await member.request.get(
+						`/api/v1/mail/threads?mailbox_id=${mailbox.id}&query=${word}&limit=100`,
+					);
+					return (await response.json()).threads.length;
+				},
+				{ timeout: 30_000 },
+			)
+			.toBe(51);
+
+		const page = await member.newPage();
+		await page.goto(`/mail/team/${mailbox.id}/search/focus?q=${word}`);
+		const main = page.getByRole("main");
+		const cards = main
+			.getByRole("list", { name: `Conversations in Search results for “${word}”` })
+			.locator(":scope > li");
+		await expect(cards).toHaveCount(50);
+		// A search has no label count, so the strip shows the cards on the page with a plus.
+		await expect(main.getByText("50+ left", { exact: true })).toBeVisible();
+		for (let done = 1; done <= 50; done += 1) {
+			await page.keyboard.press("e");
+			await expect(main.getByText(new RegExp(`^${done} done`))).toBeVisible();
+		}
+		// The oldest conversation is on the next page.
+		await expect(main.getByRole("heading", { level: 2, name: `${word} 0` })).toBeVisible();
+		await expect(main.getByText("All caught up.")).toHaveCount(0);
+		await page.keyboard.press("e");
+		await expect(main.getByText("All caught up.")).toBeVisible();
+	} finally {
+		await admin.close();
+		await member.close();
+	}
+});
+
+// A conversation that the person cleared stays off the page until a new message comes in it.
+test("a cleared conversation comes back in Focus & Reply when a new message comes", async ({ browser }) => {
+	const admin = await signIn(browser, "tomasz");
+	const member = await signIn(browser, "rafael");
+	try {
+		const mailbox = await newTeamMailbox(admin, member, "desk");
+		const first = unique("Parking");
+		const second = unique("Printer");
+		const sent = await post<{ message_id: string }>(admin, "/api/v1/mail/messages", {
+			to: [mailbox.address],
+			subject: first,
+			text: "Where do I park?",
+		});
+		await post(admin, "/api/v1/mail/messages", { to: [mailbox.address], subject: second, text: "The printer jams." });
+
+		const page = await member.newPage();
+		const main = page.getByRole("main");
+		const card = (subject: string) =>
+			main.locator("li.focus-card").filter({ has: page.getByRole("heading", { level: 2, name: subject }) });
+		await expect(async () => {
+			await page.goto(`/mail/team/${mailbox.id}/inbox/focus`);
+			await expect(card(first)).toBeVisible({ timeout: 1000 });
+			await expect(card(second)).toBeVisible({ timeout: 1000 });
+		}).toPass({ timeout: 20_000 });
+
+		await card(first).getByRole("button", { name: /^Done/ }).click();
+		await expect(card(first)).toHaveCount(0);
+		// After a change, the page gets the list again and reads the version of the mailbox. It reads the version
+		// after the list. A message that comes between the two shows only after the next change. So the message
+		// comes after that read.
+		await expect(page.getByText("Conversation archived.")).toBeVisible();
+		await page.waitForResponse((response) => new URL(response.url()).pathname === "/api/v1/mail/profile", {
+			timeout: 20_000,
+		});
+		await post(admin, "/api/v1/mail/messages", {
+			to: [mailbox.address],
+			reply_to_message_id: sent.message_id,
+			text: "Also, is there a bike rack?",
+		});
+		// Local mail goes through the outbox of the sender, so the server can get the message a little later.
+		await expect
+			.poll(
+				async () => {
+					const response = await member.request.get(
+						`/api/v1/mail/threads?mailbox_id=${mailbox.id}&query=${encodeURIComponent("in:inbox")}`,
+					);
+					const threads: { subject: string; message_count: number }[] = (await response.json()).threads;
+					return threads.find((thread) => thread.subject === first)?.message_count;
+				},
+				{ timeout: 30_000 },
+			)
+			.toBe(2);
+		// The poll of the mailbox gets the list again within 15 seconds. The new message brings the card back.
+		await expect(card(first).getByText("Also, is there a bike rack?")).toBeVisible({ timeout: 25_000 });
+	} finally {
+		await admin.close();
+		await member.close();
+	}
+});
