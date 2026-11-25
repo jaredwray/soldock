@@ -440,10 +440,13 @@ so `mail.list_labels` and the search use it. A person, an agent and the web app 
   sockets get the inbox signal. No webhook event goes out: the thread is not new mail.
 - The thread then shows at the top of the inbox. A list has the order of the newest message that matches, and
   a thread whose snooze ended at its time has the place of that time when it is later. `last_message_at` of
-  the thread in `mail.list_threads` is then that time.
+  the thread in `mail.list_threads` is then that time. A new snooze of the thread removes that place.
 - New mail in the thread that goes to the inbox ends the snooze: each message of the thread goes back to the
-  inbox. A message that the mailbox sends to itself does the same. Spam, and mail that an auto label keeps out
-  of the inbox, do not end it.
+  inbox. A message that the mailbox sends to itself does the same. Spam, and mail that the rules of the
+  [auto labels](#auto-labels) keep out of the inbox, do not end it.
+- The snooze ends when the new mail arrives. When the model of the auto labels archives that mail later, the
+  thread stays in the inbox, and the snooze does not come back. So the person sees the thread too early, and
+  never too late.
 - A reply that the mailbox sends does not end the snooze. The time decides.
 - `mail.modify_threads` cannot add `SNOOZED`: a snooze needs a time. It can remove `SNOOZED`, and the time
   goes with the label. With `INBOX` in `add_label_ids`, the same call puts the thread back in the inbox.
@@ -451,11 +454,15 @@ so `mail.list_labels` and the search use it. A person, an agent and the web app 
   stays in Trash.
 - `mail.list_labels` gives the total and unread counts of `SNOOZED`. The web app shows the total.
 - The members of a team mailbox share a snooze, as they share each label. A snooze needs `mail.modify`.
-- When a new message merges two threads, the thread that stays keeps the earliest snooze time of the two.
+- When a new message merges two threads, the thread that stays keeps the earliest snooze time of the two. When
+  that message does not go to the inbox (spam, for example), and one thread was in the inbox, the thread shows
+  in the inbox and in `in:snoozed` until the time. The merge does not snooze the inbox thread: mail from
+  outside must not hide mail of the inbox.
 - A `+tag` never selects `SNOOZED`, as for each system label.
 - Migration 8 adds the label and the two time columns of `threads` when the object starts. A thread of the
-  earlier Reply later feature has no time, so each one goes back to the inbox, and the label `REPLY_LATER`
-  goes away. A user label named `snoozed` first gets the lowest free number after its name, for example
+  earlier Reply later feature has no time. So each one goes back to the top of the inbox at the time of the
+  migration, as a thread whose snooze ends then, and the label `REPLY_LATER` goes away. The version of the
+  mailbox grows, so an open client gets its lists again. A user label named `snoozed` first gets the lowest free number after its name, for example
   `Snoozed (1)`, as migration 7 did for `reply_later`. The label keeps its id, its threads and its auto label.
 
 ## Auto labels

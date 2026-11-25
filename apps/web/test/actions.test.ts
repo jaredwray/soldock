@@ -65,8 +65,8 @@ describe("actions", () => {
 		]);
 	});
 
-	// The server adds SNOOZED only with a time. So the undo of Unsnooze is a snooze with the time from before,
-	// and a thread whose time the page does not know gets no SNOOZED back.
+	// The server adds SNOOZED only with a time. So the undo of Unsnooze is a snooze with the time from before.
+	// A thread whose time the page does not know gets no undo: without SNOOZED, the undo would only archive it.
 	it("undoes Unsnooze with a snooze until the time that each thread had", () => {
 		const unsnooze = actionChange("unsnooze");
 		expect(unsnooze).toEqual({ add: ["INBOX"], remove: ["SNOOZED"] });
@@ -82,7 +82,6 @@ describe("actions", () => {
 		expect(undos).toEqual([
 			{ ids: ["thr_a", "thr_c"], change: { add: ["SNOOZED"], remove: ["INBOX"], until: UNTIL } },
 			{ ids: ["thr_b"], change: { add: ["SNOOZED"], remove: ["INBOX"], until: LATER } },
-			{ ids: ["thr_unknown"], change: { add: [], remove: ["INBOX"] } },
 		]);
 	});
 

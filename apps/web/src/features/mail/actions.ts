@@ -99,8 +99,9 @@ export interface Undo {
  * labels that the change took away, and loses only the labels that the change added. For example, a snooze
  * of a thread outside the inbox does not put the thread in the inbox on undo. Threads with the same undo share
  * one change, and a thread that the change did not alter gets none. A thread that lost SNOOZED gets its snooze
- * back with the time that it had (`snoozedUntil`): SNOOZED does not come back without a time. A change of only
- * the time of a snooze has no undo.
+ * back with the time that it had (`snoozedUntil`). SNOOZED does not come back without a time, so a thread
+ * whose time the page does not know gets no undo: a part of the undo would leave it in no list. A change of
+ * only the time of a snooze has no undo.
  */
 export function undoChanges(
 	threads: readonly { id: string; labelIds: readonly string[]; snoozedUntil?: string | null }[],
@@ -110,8 +111,9 @@ export function undoChanges(
 	for (const thread of threads) {
 		const lost = change.remove.filter((id) => thread.labelIds.includes(id));
 		const until = lost.includes("SNOOZED") ? (thread.snoozedUntil ?? null) : null;
+		if (lost.includes("SNOOZED") && until === null) continue;
 		const undo: LabelChange = {
-			add: until === null ? lost.filter((id) => id !== "SNOOZED") : lost,
+			add: lost,
 			remove: change.add.filter((id) => !thread.labelIds.includes(id)),
 			...(until === null ? {} : { until }),
 		};

@@ -58,7 +58,8 @@ function focusPage(page: Page) {
 }
 
 // Snooze: a conversation leaves the inbox until a time that the person picks, and waits in the Snoozed list
-// with a count in the sidebar. The dialog offers times, and it has a field for a date and a time. Unsnooze puts
+// with a count in the sidebar. The Snooze button opens a list of times, so one more click snoozes. The dialog
+// has the same times and a field for a date and a time. Unsnooze puts
 // a conversation back in the inbox, and its Undo gives the snooze back with the same time. The server test
 // covers the return to the inbox at the time.
 test("a member snoozes mail until a time, changes the time, and ends a snooze", async ({ browser }) => {
@@ -85,22 +86,33 @@ test("a member snoozes mail until a time, changes the time, and ends a snooze", 
 		await openList(page, inbox, [first, second]);
 		const dialog = page.getByRole("dialog", { name: "Snooze until" });
 
-		// From an open conversation: Snooze asks for the time. A time of the dialog sends the conversation out of
-		// the inbox and back to the list.
+		// From an open conversation: Snooze opens a list of times, with no dialog. A time of the list sends the
+		// conversation out of the inbox and back to the list.
 		await firstRow.getByRole("link").click();
-		await page.getByRole("button", { name: "Snooze", exact: true }).click();
-		await dialog.getByRole("button", { name: /^Tomorrow/ }).click();
+		// The conversation gets the focus when it shows, and a list that is open then closes. So the member
+		// opens the list after the conversation shows.
+		await expect(page.getByText("Can you check clause 4?")).toBeVisible();
+		/** Tomorrow, 8:00, in the time zone of the browser, which is the time zone of the runner. */
+		const tomorrowMorning = () => {
+			const date = new Date();
+			date.setDate(date.getDate() + 1);
+			date.setHours(8, 0, 0, 0);
+			return date.toISOString();
+		};
+		// The day can change between the click and the check, so the time of each side of the click is correct.
+		const before = tomorrowMorning();
+		await page.getByRole("combobox", { name: "Snooze", exact: true }).click();
+		await page.getByRole("option", { name: /^Tomorrow/ }).click();
 		await expect(dialog).toHaveCount(0);
 		await expect(page.getByText(/^Conversation snoozed until .+\.$/)).toBeVisible();
 		await expect(page).toHaveURL(new RegExp(`${inbox}$`));
 		await expect(firstRow).toHaveCount(0);
-		const tomorrow = new Date();
-		tomorrow.setDate(tomorrow.getDate() + 1);
-		tomorrow.setHours(8, 0, 0, 0);
-		await expect.poll(snoozed).toEqual({ [first]: tomorrow.toISOString() });
+		await expect.poll(async () => Object.keys(await snoozed())).toEqual([first]);
+		const tomorrow = (await snoozed())[first] as string;
+		expect([before, tomorrowMorning()]).toContain(tomorrow);
 
-		// From the list, with the keyboard: the b key on the row at the cursor, then a date and a time of the
-		// person. The dialog refuses a time that is not later than now, and stays open.
+		// From the list, with the keyboard: the b key on the row at the cursor opens the dialog. The person gives a
+		// date and a time. The dialog refuses a time that is not later than now, and stays open.
 		await expect(secondRow).toBeVisible();
 		await page.keyboard.press("b");
 		const field = dialog.getByLabel("Pick a date and a time");
@@ -111,7 +123,7 @@ test("a member snoozes mail until a time, changes the time, and ends a snooze", 
 		await dialog.getByRole("button", { name: "Snooze", exact: true }).click();
 		await expect(secondRow).toHaveCount(0);
 		const picked = new Date(2031, 0, 6, 9, 30).toISOString();
-		await expect.poll(snoozed).toEqual({ [first]: tomorrow.toISOString(), [second]: picked });
+		await expect.poll(snoozed).toEqual({ [first]: tomorrow, [second]: picked });
 		await expect(page.getByText("The inbox of this team mailbox is empty.")).toBeVisible();
 
 		// The sidebar counts the snoozed conversations, and each row of the Snoozed list shows its time.
@@ -132,12 +144,14 @@ test("a member snoozes mail until a time, changes the time, and ends a snooze", 
 			.getByRole("button", { name: "Undo" })
 			.click();
 		await expect(page.getByText("Action undone.")).toBeVisible();
-		await expect.poll(snoozed).toEqual({ [first]: tomorrow.toISOString(), [second]: picked });
+		await expect.poll(snoozed).toEqual({ [first]: tomorrow, [second]: picked });
 		await expect(secondRow).toBeVisible();
 
-		// A snooze of a snoozed conversation changes its time, and the conversation stays in the list.
+		// A snooze of a snoozed conversation changes its time, and the conversation stays in the list. The last
+		// option of the Snooze list opens the dialog.
 		await firstRow.getByRole("checkbox").check();
-		await page.getByRole("button", { name: "Snooze until a different time" }).click();
+		await page.getByRole("combobox", { name: "Snooze until a different time" }).click();
+		await page.getByRole("option", { name: "Pick a date and time…" }).click();
 		await field.fill("2031-02-03T10:00");
 		await dialog.getByRole("button", { name: "Snooze", exact: true }).click();
 		await expect.poll(snoozed).toEqual({ [first]: new Date(2031, 1, 3, 10, 0).toISOString(), [second]: picked });
@@ -223,13 +237,19 @@ test("a member answers starred mail in Focus", async ({ browser }) => {
 		await linkDialog.getByRole("button", { name: "Cancel" }).click({ timeout: 5000 });
 		await expect(linkDialog).toHaveCount(0);
 
-		// While the reply has text, the Back link, Next, Done and Snooze ask first. A No keeps the conversation and
-		// the text, and Snooze then opens no dialog.
+		// While the reply has text, the Back link, Next, Done and a time of the Snooze list ask first. A No keeps
+		// the conversation and the text.
+		const snoozeTomorrow = {
+			click: async () => {
+				await main.getByRole("combobox", { name: /^Snooze/ }).click();
+				await page.getByRole("option", { name: /^Tomorrow/ }).click();
+			},
+		};
 		for (const control of [
 			main.getByRole("link", { name: "Back to Starred" }),
 			main.getByRole("button", { name: "Next conversation" }),
 			main.getByRole("button", { name: /^Done/ }),
-			main.getByRole("button", { name: /^Snooze/ }),
+			snoozeTomorrow,
 		]) {
 			let question = "";
 			page.once("dialog", (dialog) => {

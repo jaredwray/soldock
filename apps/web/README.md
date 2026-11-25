@@ -277,12 +277,15 @@ MCP clients. The app has no UI-only path.
 - **Snooze** (`/mail/snoozed`, [`SnoozeDialog.tsx`](src/features/mail/SnoozeDialog.tsx), with the rules in
   [`snooze.ts`](src/features/mail/snooze.ts)). A snooze takes a conversation out of the inbox until a time that
   the person picks.
-  - **Snooze** in the toolbar, or the `b` key, opens the dialog **Snooze until**. The dialog offers **In 3
-    hours**, **Tomorrow** (8:00) and **Next week** (the next Monday, 8:00), each with its time
-    (`snoozePresets`). On a Sunday, **Tomorrow** is that Monday, so **Next week** does not show.
-  - The dialog also has a field for a date and a time (`datetime-local`), which starts at tomorrow, 8:00. The
-    times are in the time zone of the browser. A time that is not later than now shows an error, and the dialog
-    stays open.
+  - **Snooze** in the toolbar opens a list of times under the button
+    ([`SnoozePicker.tsx`](src/features/mail/SnoozePicker.tsx)), so one more click snoozes: **In 3 hours**,
+    **Tomorrow** (8:00) and **Next week** (the next Monday, 8:00), each with its time (`snoozePresets`). On a
+    Sunday, **Tomorrow** is that Monday, so **Next week** does not show. The control is the list control of
+    "Label as…" (`Select`).
+  - The last option of the list, **Pick a date and time…**, opens the dialog **Snooze until**. The `b` key
+    opens the dialog too, because it also acts on a row with no selection. The dialog has the same times and a
+    field for a date and a time (`datetime-local`), which starts at tomorrow, 8:00. The times are in the time
+    zone of the browser. A time that is not later than now shows an error, and the dialog stays open.
   - A time calls `mail.snooze_threads`. The conversation leaves the inbox, and a toast tells the time, with
     **Undo**. The server puts the conversation back at the top of the inbox at that time.
   - The sidebar shows **Snoozed** after the inbox, with the number of all its conversations (`navCount` in
@@ -290,8 +293,8 @@ MCP clients. The app has no UI-only path.
   - A row of a snoozed conversation shows a clock and its time before the date, in each list (`snoozeTime`).
   - When each target is snoozed, the button changes the time, and **Unsnooze** shows after it. Unsnooze removes
     `SNOOZED` and adds `INBOX` (`mail.modify_threads`). Its Undo snoozes the conversation again until the time
-    that it had. The spam and trash views have neither action, and a search of the mail that the Screener holds
-    has neither.
+    that it had. A conversation whose time the page does not know gets no Undo. The spam and trash views have
+    neither action, and a search of the mail that the Screener holds has neither.
 - **Focus** ([`FocusReply.tsx`](src/features/mail/FocusReply.tsx), with the rules in
   [`focusReply.ts`](src/features/mail/focusReply.ts)) shows the conversations of a list one at a time, in the order
   of the list, newest first. The conversation is in one column of 760px.
@@ -325,9 +328,9 @@ MCP clients. The app has no UI-only path.
     | Starred | Done: removes the star | When the conversation is in the inbox | The conversation stays in the list | The star stays |
     | A label | Done: removes the label | When the conversation is in the inbox | The conversation stays in the list | The label stays |
 
-  - **Snooze** opens the dialog of the list (`SnoozeDialog`). After the person picks a time, the conversation is
-    cleared in this visit. While the reply has text, the button asks before it opens the dialog, and the `b` key
-    does nothing.
+  - **Snooze** is the list of times of the toolbar (`SnoozePicker`), and `b` opens the dialog. After the person
+    picks a time, the conversation is cleared in this visit, and the focus goes to the subject of the next one.
+    While the reply has text, a time of the list asks before it snoozes, and the `b` key does nothing.
   - **Spam** adds `SPAM` in each list. The conversation then leaves each list except Spam.
   - After Archive, Spam, Snooze, Done or a send, the next conversation shows. At the end of the list, the previous
     one shows. When no conversation stays, the page shows the finish state. Previous and Next stop at the two

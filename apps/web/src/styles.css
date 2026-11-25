@@ -1978,6 +1978,12 @@ fieldset {
 	color: var(--muted-foreground);
 }
 
+/* The Snooze button of Focus is a list control with the look of the other actions. */
+.focus-snooze .select-icon,
+.focus-snooze .select-placeholder {
+	color: inherit;
+}
+
 .snooze-presets {
 	display: grid;
 	gap: 8px;
@@ -2308,7 +2314,9 @@ fieldset {
 		justify-content: center;
 	}
 
-	.focus-actions-bar .button-ghost .focus-action-text {
+	.focus-actions-bar .button-ghost .focus-action-text,
+	.focus-actions-bar .focus-snooze .select-value,
+	.focus-actions-bar .focus-snooze .select-chevron {
 		display: none;
 	}
 

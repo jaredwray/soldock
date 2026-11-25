@@ -325,7 +325,8 @@ export function MailPane(props: MailPaneProps) {
 				held={held}
 				onToggleAll={() => setSelected(selection === "all" ? new Set() : new Set(threads.map((item) => item.id)))}
 				onAction={(action) => void run(action, targets)}
-				onSnooze={() => setSnoozing(targets)}
+				onSnooze={(until) => void run({ snooze: until.toISOString() }, targets)}
+				onSnoozeCustom={() => setSnoozing(targets)}
 				onBack={() => navigate(viewPath(view, mailboxId))}
 				onRefresh={() => {
 					void list.refresh();

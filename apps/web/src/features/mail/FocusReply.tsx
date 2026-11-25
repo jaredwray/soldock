@@ -40,6 +40,7 @@ import { MessageCard, type ReplyMode } from "./MessageCard.tsx";
 import { useMailboxId, useMailboxRights } from "./mailbox.tsx";
 import type { FromOption } from "./mailboxNav.ts";
 import { SnoozeDialog } from "./SnoozeDialog.tsx";
+import { SnoozePicker } from "./SnoozePicker.tsx";
 import { useShortcuts } from "./useShortcuts.ts";
 import type { ViewQuery } from "./views.ts";
 
@@ -437,18 +438,18 @@ export function FocusReply(props: FocusReplyProps) {
 		return draft !== null && dirty && (source === "key" || !window.confirm("Discard your reply?"));
 	}
 
-	/** Opens the dialog that asks for the time of a snooze. The snooze itself goes through `act`. */
+	/** Opens the dialog that asks for the date and the time of a snooze. The snooze itself goes through `act`. */
 	function askSnooze(source: Source) {
 		if (!rights.modify || !current || keepsReply(source)) return;
 		setSnoozing(source);
 	}
 
 	/** Archive, Spam, Snooze or Done on the conversation on screen. Each change has Undo. */
-	async function act(action: Action, source: Source) {
+	async function act(action: Action, source: Source, asked = false) {
 		const thread = current;
 		if (!rights.modify || !thread) return;
-		// The Snooze dialog asked about the reply before it opened.
-		if (typeof action !== "object" && keepsReply(source)) return;
+		// `asked`: the Snooze dialog asked about the reply before it opened.
+		if (!asked && keepsReply(source)) return;
 		const primary = primaryAction(mode, thread.label_ids);
 		const kind: Action | "none" = action === "primary" ? (primary === "done" ? "primary" : primary) : action;
 		const plan: { how: ClearKind; change: LabelChange | null; notice: string; leaves: boolean } =
@@ -472,7 +473,9 @@ export function FocusReply(props: FocusReplyProps) {
 			? undoChanges([{ id: thread.id, labelIds: thread.label_ids, snoozedUntil: thread.snoozed_until }], plan.change)
 			: [];
 		// A button that stays keeps the focus. The second Archive can go with the move, so its focus goes on.
-		const focus: FocusAfter = source === "key" || action === "archive" ? "heading" : "keep";
+		// The Snooze button is a list control: a letter key on it opens its list. So the focus goes on after a snooze.
+		const focus: FocusAfter =
+			source === "key" || action === "archive" || typeof action === "object" ? "heading" : "keep";
 		leave(thread, plan.how, plan.change, !plan.leaves, focus);
 		if (!plan.change) {
 			toast({ message: notice });
@@ -606,13 +609,12 @@ export function FocusReply(props: FocusReplyProps) {
 						onClick={() => void act("archive", "button")}
 					/>
 				)}
-				<ActionButton
-					icon="clock"
-					text="Snooze"
-					label={`Snooze “${subject}” until a date and a time`}
+				<SnoozePicker
+					className="button button-small button-ghost focus-snooze"
+					label={`Snooze “${subject}”`}
 					title="Snooze (b)"
-					keys="b"
-					onClick={() => askSnooze("button")}
+					onPick={(until) => void act({ snooze: until.toISOString() }, "button")}
+					onCustom={() => askSnooze("button")}
 				/>
 				<ActionButton
 					primary
@@ -795,7 +797,7 @@ export function FocusReply(props: FocusReplyProps) {
 					onClose={() => setSnoozing(null)}
 					onPick={(until) => {
 						setSnoozing(null);
-						void act({ snooze: until.toISOString() }, snoozing);
+						void act({ snooze: until.toISOString() }, snoozing, true);
 					}}
 				/>
 			)}

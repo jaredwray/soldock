@@ -5,6 +5,7 @@ import { Link } from "../../lib/router.tsx";
 import { Select } from "../../lib/Select.tsx";
 import type { MailView } from "../../routes.ts";
 import type { MailAction } from "./actions.ts";
+import { SnoozePicker } from "./SnoozePicker.tsx";
 
 interface ToolbarProps {
 	view: MailView;
@@ -33,8 +34,10 @@ interface ToolbarProps {
 	held: boolean;
 	onToggleAll: () => void;
 	onAction: (action: MailAction) => void;
-	/** Opens the dialog that asks for the time of a snooze. */
-	onSnooze: () => void;
+	/** Snoozes the targets until a time of the Snooze list. */
+	onSnooze: (until: Date) => void;
+	/** Opens the dialog that asks for the date and the time of a snooze. */
+	onSnoozeCustom: () => void;
 	onBack: () => void;
 	onRefresh: () => void;
 	/** The path of Focus in the view, or null for a view without it. */
@@ -97,12 +100,15 @@ export function Toolbar(props: ToolbarProps) {
 					)}
 					{/* Held mail moves only when a person screens its sender, so it has no Snooze. */}
 					{moves && (
-						<ToolButton
-							icon="clock"
-							label={allSnoozed ? "Snooze until a different time" : "Snooze"}
-							shortcut="b"
-							onClick={props.onSnooze}
-						/>
+						<span className="label-picker">
+							<SnoozePicker
+								className="label-select"
+								label={allSnoozed ? "Snooze until a different time" : "Snooze"}
+								title="Snooze (b)"
+								onPick={props.onSnooze}
+								onCustom={props.onSnoozeCustom}
+							/>
+						</span>
 					)}
 					{moves && allSnoozed && <TextButton icon="inbox" label="Unsnooze" onClick={() => onAction("unsnooze")} />}
 					{moves && userLabels.length > 0 && (

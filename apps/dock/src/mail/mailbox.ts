@@ -414,18 +414,24 @@ const MIGRATIONS: string[][] = [
 		WHERE type = 'user' AND name_folded = 'reply_later'`,
 		"INSERT OR IGNORE INTO labels (id, name, name_folded, type, created_at) VALUES ('REPLY_LATER', 'REPLY_LATER', 'reply_later', 'system', 0)",
 	],
-	// Snooze replaces Reply later. A thread of Reply later has no time, so it goes back to the inbox, and the
-	// label REPLY_LATER goes away. `snoozed_until` is the time when a snoozed thread comes back. `woke_at` is
+	// Snooze replaces Reply later. `snoozed_until` is the time when a snoozed thread comes back. `woke_at` is
 	// the time when its last snooze ended at its time: the thread then has that place in the order of a list.
-	// A user label with the name snoozed gets a free name, as for REPLY_LATER above.
+	// A thread of Reply later has no time. So it goes back to the inbox now, at the top, as a thread whose
+	// snooze ends now, and the label REPLY_LATER goes away. The version grows, so an open client gets the
+	// lists again. A user label with the name snoozed gets a free name, as for REPLY_LATER above.
 	[
+		"ALTER TABLE threads ADD COLUMN snoozed_until INTEGER",
+		"ALTER TABLE threads ADD COLUMN woke_at INTEGER",
+		"CREATE INDEX threads_snoozed ON threads (snoozed_until) WHERE snoozed_until IS NOT NULL",
+		`UPDATE threads SET woke_at = CAST(strftime('%s', 'now') AS INTEGER) * 1000 WHERE id IN (
+			SELECT m.thread_id FROM messages m JOIN message_labels ml ON ml.message_seq = m.seq
+			WHERE ml.label_id = 'REPLY_LATER'
+		)`,
 		`INSERT OR IGNORE INTO message_labels (message_seq, label_id)
 			SELECT message_seq, 'INBOX' FROM message_labels WHERE label_id = 'REPLY_LATER'`,
 		"DELETE FROM message_labels WHERE label_id = 'REPLY_LATER'",
 		"DELETE FROM labels WHERE id = 'REPLY_LATER'",
-		"ALTER TABLE threads ADD COLUMN snoozed_until INTEGER",
-		"ALTER TABLE threads ADD COLUMN woke_at INTEGER",
-		"CREATE INDEX threads_snoozed ON threads (snoozed_until) WHERE snoozed_until IS NOT NULL",
+		"UPDATE meta SET value = CAST(value AS INTEGER) + 1 WHERE key = 'version'",
 		`WITH RECURSIVE n(i) AS (
 			SELECT 1
 			UNION ALL
@@ -1905,8 +1911,9 @@ export class MailboxDO extends DurableObject<Env> {
 						"DELETE FROM message_labels WHERE label_id = 'INBOX' AND message_seq IN (SELECT seq FROM messages WHERE thread_id = ?)",
 						threadId,
 					).rowsWritten +
+					// A new snooze removes the place of an earlier one: `woke_at` is for a thread that came back only.
 					this.sql.exec(
-						"UPDATE threads SET snoozed_until = ? WHERE id = ? AND snoozed_until IS NOT ?",
+						"UPDATE threads SET snoozed_until = ?, woke_at = NULL WHERE id = ? AND (snoozed_until IS NOT ? OR woke_at IS NOT NULL)",
 						params.until,
 						threadId,
 						params.until,
@@ -2644,7 +2651,7 @@ export class MailboxDO extends DurableObject<Env> {
 				`SELECT MIN(at) AS at FROM (SELECT MIN(next_attempt_at) AS at FROM outbox
 				UNION ALL SELECT MIN(next_attempt_at) FROM event_outbox
 				UNION ALL SELECT MIN(next_attempt_at) FROM autolabel_outbox
-				UNION ALL SELECT MIN(snoozed_until) FROM threads)`,
+				UNION ALL SELECT MIN(snoozed_until) FROM threads WHERE snoozed_until IS NOT NULL)`,
 			)?.at ?? null;
 		if (next !== null) await this.ctx.storage.setAlarm(Math.max(next, Date.now()));
 	}
