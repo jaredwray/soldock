@@ -46,6 +46,8 @@ export type Route =
 	 * or an admin reads, or null for the own mailbox of the person.
 	 */
 	| { page: "mail"; mailboxId: string | null; view: MailView; threadId: string | null }
+	/** The settings view of a mailbox, in the main pane of Mail. `mailboxId` is as for `mail`. */
+	| { page: "mail-settings"; mailboxId: string | null }
 	| { page: "drive"; view: DriveView }
 	/** A doc or a sheet in its editor. `spaceId` is the drive that holds the item. */
 	| { page: "doc"; spaceId: string; itemId: string }
@@ -77,9 +79,16 @@ export type Route =
 	/** `section` is null for `/settings`. The page then shows the first section. */
 	| { page: "settings"; section: SettingsSection | null }
 	| { page: "redirect"; to: string }
+	/**
+	 * `/` and `/mail`: the inbox of the default mailbox of the person (`default_mailbox_id` of
+	 * mail.get_settings). The shell reads the setting, then replaces the path.
+	 */
+	| { page: "mail-home" }
 	| { page: "not-found" };
 
 export const INBOX_PATH = "/mail/inbox";
+/** The start of Mail: the inbox of the default mailbox of the person. */
+export const MAIL_HOME_PATH = "/mail";
 export const DRIVE_PATH = "/drive";
 export const SHARED_DRIVES_PATH = "/drive/shared-drives";
 export const CHAT_PATH = "/chat";
@@ -121,7 +130,7 @@ export function parseRoute(location: string): Route {
 	const parts = segments(url.pathname);
 	if (parts === null) return { page: "not-found" };
 	const [first, second, third, fourth] = parts;
-	if (parts.length === 0) return { page: "redirect", to: INBOX_PATH };
+	if (parts.length === 0) return { page: "mail-home" };
 	if (first === "admin" && parts.length === 1) return { page: "admin", section: null };
 	if (first === "admin" && parts.length === 2 && second === "agents")
 		return { page: "redirect", to: adminPath("members") };
@@ -168,7 +177,7 @@ export function parseRoute(location: string): Route {
 		return { page: first === "docs" ? "doc" : "sheet", spaceId: second, itemId: third };
 	}
 	if (first !== "mail") return { page: "not-found" };
-	if (second === undefined) return { page: "redirect", to: INBOX_PATH };
+	if (second === undefined) return { page: "mail-home" };
 	if (second !== "team" && second !== "agent") return parseMailView(null, parts.slice(1), url);
 	if (third === undefined || !third.startsWith(second === "team" ? "tmb_" : "prn_")) return { page: "not-found" };
 	if (fourth === undefined) return { page: "redirect", to: viewPath({ kind: "system", view: "inbox" }, third) };
@@ -178,6 +187,7 @@ export function parseRoute(location: string): Route {
 /** The view and the thread of a mail path, from the parts after the mailbox. */
 function parseMailView(mailboxId: string | null, parts: string[], url: URL): Route {
 	const [first, second, third] = parts;
+	if (first === "settings" && parts.length === 1) return { page: "mail-settings", mailboxId };
 	if (isSystemView(first) && parts.length <= 2) {
 		return { page: "mail", mailboxId, view: { kind: "system", view: first }, threadId: second ?? null };
 	}
@@ -391,8 +401,14 @@ export function viewPath(view: MailView, mailboxId: string | null = null): strin
  * own mailbox, with all its controls, and not to a read-only view of it.
  */
 export function ownMailboxPath(route: Route, selfId: string): string | null {
+	if (route.page === "mail-settings" && route.mailboxId === selfId) return mailSettingsPath(null);
 	if (route.page !== "mail" || route.mailboxId !== selfId) return null;
 	return route.threadId ? threadPath(route.view, route.threadId) : viewPath(route.view);
+}
+
+/** The path of the settings view of a mailbox: `/mail/settings`, or under the path of a team or agent mailbox. */
+export function mailSettingsPath(mailboxId: string | null = null): string {
+	return `${mailBase(mailboxId)}/settings`;
 }
 
 /** The path of one thread, opened from a view. */

@@ -162,8 +162,8 @@ is inbox auto labels. AI is off until an owner or an admin turns it on in **Admi
 4. In **Admin › AI**, enter the account ID, the gateway ID and the API token. Save the settings.
 5. Select **Test connection**.
 6. Allow the models, choose the model of **Inbox auto labels**, set the monthly budget, and turn on AI.
-7. Each person turns on auto labels for their mailbox in Mail, with the spark button next to
-   **Labels**.
+7. Each person turns on auto labels for their mailbox in Mail: in the mailbox settings (the gear in the
+   header of Mail), or with the spark button next to **Labels**.
 
 - Asterra keeps the token in the AI settings in D1, as it keeps the signing secrets of webhooks. No API
   answer and no log contains it. Admin › AI shows only that a token is saved, with **Replace** and

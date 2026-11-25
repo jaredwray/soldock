@@ -30,6 +30,8 @@ export const MAIL_LIMITS = {
 	attachmentDownloadBytes: 10 * 1024 * 1024,
 	/** The addresses that one `mail.suggest_recipients` call returns. */
 	recipientSuggestions: 25,
+	/** The signature of a mailbox, in characters of plain text. */
+	signatureChars: 2_000,
 } as const;
 
 const ThreadId = prefixedId("thr");
@@ -409,6 +411,7 @@ export const send = defineOperation({
 		`${IN_MAILBOX} The message then comes from the address and the name of the team mailbox, and the sent copy is in the team mailbox with your name in sent_by.`,
 		AGENT_READ_ONLY,
 		"For formatted mail, also set html. The message then has two parts: text for mail apps without HTML, and html. Make text the plain-text form of html.",
+		"The signature of the mailbox is not added. Read it with mail.get_mailbox_settings, and add it to text and html yourself.",
 		"To reply, set reply_to_message_id: the message joins that thread, and the subject defaults to Re: and the original subject.",
 		"A reply reads the message that it answers. So it also needs mail.read: in your credential, and in your membership of a team mailbox.",
 		"An agent can send only to the recipients that its policy allows, also from a team mailbox. Otherwise the call fails with policy_denied and nothing is sent.",
@@ -514,6 +517,12 @@ export const MailSettings = z.object({
 		/** True when the Agent mailboxes section of the sidebar of the web app is collapsed. */
 		agent_mailboxes_collapsed: z.boolean(),
 	}),
+	/**
+	 * The mailbox that the web app opens first: the id of a team mailbox that you are a member of. Null
+	 * means your own mailbox, which is the default. A membership can end after you save it, so a client
+	 * opens your own mailbox when the id is not in mail.list_mailboxes.
+	 */
+	default_mailbox_id: z.string().nullable(),
 });
 export type MailSettings = z.infer<typeof MailSettings>;
 
@@ -521,7 +530,7 @@ export const getSettings = defineOperation({
 	name: "mail.get_settings",
 	summary: "Get your mail settings",
 	description:
-		"Returns your mail settings: for now, the sections of the sidebar of the web app that are collapsed. The settings belong to your own mailbox, never to a team mailbox. A setting that you did not change has its default value.",
+		"Returns your mail settings: the sections of the sidebar of the web app that are collapsed, and the mailbox that the web app opens first (default_mailbox_id, null for your own mailbox). The settings belong to your own mailbox, never to a team mailbox. A setting that you did not change has its default value. For the signature of a mailbox, use mail.get_mailbox_settings.",
 	http: { method: "GET", path: "/api/v1/mail/settings" },
 	scopes: ["mail.read"],
 	callers: ["human"],
@@ -535,7 +544,7 @@ export const updateSettings = defineOperation({
 	name: "mail.update_settings",
 	summary: "Change your mail settings",
 	description:
-		"Changes the settings that the request names, and keeps the others. Returns all your mail settings. The settings belong to your own mailbox, never to a team mailbox. A change does not change the mailbox version that mail.get_profile returns.",
+		"Changes the settings that the request names, and keeps the others. Returns all your mail settings. The settings belong to your own mailbox, never to a team mailbox. A change does not change the mailbox version that mail.get_profile returns. default_mailbox_id must be your own id, null, or the id of a team mailbox that you are a member of with mail.read. The mailbox of an agent cannot be the default.",
 	http: { method: "POST", path: "/api/v1/mail/settings" },
 	scopes: ["mail.modify"],
 	callers: ["human"],
@@ -547,8 +556,81 @@ export const updateSettings = defineOperation({
 				agent_mailboxes_collapsed: z.boolean().optional(),
 			})
 			.optional(),
+		default_mailbox_id: MailboxId.nullable()
+			.optional()
+			.describe("The mailbox that the web app opens first. Null, or your own id, means your own mailbox."),
 	}),
 	output: MailSettings,
+	errors: ["not_found", "invalid"],
+});
+
+/**
+ * The control characters, except a line break and a tab, the Unicode line and paragraph separators, and
+ * the characters that change the direction of text (the marks, embeddings, overrides and isolates). A
+ * signature goes into the mail of each member, so it must not hide or move text there.
+ */
+const SIGNATURE_REFUSED = /[^\P{Cc}\n\r\t]|[\u2028\u2029]|[\u061C\u200E\u200F\u202A-\u202E\u2066-\u2069]/u;
+
+/**
+ * The plain-text signature of a mailbox. A line break and a tab are the only control characters that it
+ * can hold. It cannot hold a Unicode line or paragraph separator, or a control that changes the direction
+ * of text. The mailbox stores `\n` for each line break, and removes the spaces at the end of each line.
+ */
+export const Signature = z
+	.string()
+	.max(MAIL_LIMITS.signatureChars)
+	.refine(
+		(text) => !SIGNATURE_REFUSED.test(text),
+		"must not contain control characters other than line breaks, or characters that change the direction of text",
+	);
+
+/**
+ * The settings of one mailbox. The mailbox holds them, so the members of a team mailbox share them.
+ * Each setting has a default, so a mailbox without saved settings gets them.
+ */
+export const MailboxSettings = z.object({
+	mailbox_id: z.string(),
+	/**
+	 * The plain-text signature of the mailbox, or an empty string for none. The web composer adds it to
+	 * each new message, reply and forward. mail.send never adds it: a client that wants it adds it to text
+	 * (and html) itself.
+	 */
+	signature: z.string(),
+});
+export type MailboxSettings = z.infer<typeof MailboxSettings>;
+
+export const getMailboxSettings = defineOperation({
+	name: "mail.get_mailbox_settings",
+	summary: "Get the settings of a mailbox",
+	description: `Returns the settings of the mailbox: for now, its plain-text signature (an empty string for none). mail.send never adds the signature. To sign a message, add the signature to text, after a line with "-- " (two dashes and a space), and to html. ${IN_MAILBOX_READ} The members of a team mailbox share its settings. For your own settings, such as the mailbox that the web app opens first, use mail.get_settings.`,
+	http: { method: "GET", path: "/api/v1/mail/mailbox-settings" },
+	scopes: ["mail.read"],
+	callers: ["human", "agent", "service"],
+	annotations: READ,
+	input: z.strictObject({ mailbox_id: MailboxParam }),
+	output: MailboxSettings,
+	errors: [],
+});
+
+export const updateMailboxSettings = defineOperation({
+	name: "mail.update_mailbox_settings",
+	summary: "Change the settings of a mailbox",
+	description: `Changes the settings that the request names, and keeps the others. Returns all the settings of the mailbox. Name at least one setting: to read the settings, use mail.get_mailbox_settings. signature is plain text of at most ${MAIL_LIMITS.signatureChars} characters. An empty string removes it. ${IN_MAILBOX} The members of a team mailbox share its settings, so only a person changes them there. An agent or a service account can change only the settings of its own mailbox. ${AGENT_READ_ONLY} A change does not change the mailbox version that mail.get_profile returns.`,
+	http: { method: "POST", path: "/api/v1/mail/mailbox-settings" },
+	scopes: ["mail.modify"],
+	callers: ["human", "agent", "service"],
+	annotations: { readOnly: false, destructive: false, idempotent: true, openWorld: false },
+	input: z
+		.strictObject({
+			mailbox_id: MailboxParam,
+			signature: Signature.optional().describe(
+				`The plain-text signature, at most ${MAIL_LIMITS.signatureChars} characters. An empty string removes it.`,
+			),
+		})
+		// A change returns the settings. Without a setting to change, the call would only read them, with the
+		// scope to change and not the scope to read. Use mail.get_mailbox_settings to read them.
+		.refine((input) => input.signature !== undefined, "name a setting to change"),
+	output: MailboxSettings,
 	errors: [],
 });
 
@@ -865,6 +947,8 @@ export const mailOperations = {
 	"mail.list_mailboxes": listMailboxes,
 	"mail.get_settings": getSettings,
 	"mail.update_settings": updateSettings,
+	"mail.get_mailbox_settings": getMailboxSettings,
+	"mail.update_mailbox_settings": updateMailboxSettings,
 	"mail.get_auto_labels": getAutoLabels,
 	"mail.update_auto_labels": updateAutoLabels,
 	"mail.create_auto_label": createAutoLabel,

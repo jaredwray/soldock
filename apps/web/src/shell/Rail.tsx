@@ -4,14 +4,15 @@ import { useSession } from "../features/auth/session.tsx";
 import { Icon, type IconName } from "../lib/icons.tsx";
 import { Link } from "../lib/router.tsx";
 import { ASTERRA_VERSION } from "../lib/version.ts";
-import { CHAT_PATH, DRIVE_PATH, INBOX_PATH, type Route } from "../routes.ts";
+import { CHAT_PATH, DRIVE_PATH, MAIL_HOME_PATH, type Route } from "../routes.ts";
 import { AccountMenu } from "./AccountMenu.tsx";
 import { BrandMark } from "./BrandMark.tsx";
 import { MENU_BUTTON_ID, type Product, productOf, RAIL_ID } from "./nav.ts";
 
 // Meet and Slides get an entry here when they exist.
 const PRODUCTS: readonly { product: Product; name: string; icon: IconName; home: string }[] = [
-	{ product: "mail", name: "Mail", icon: "mail", home: INBOX_PATH },
+	// Mail opens the inbox of the default mailbox of the person.
+	{ product: "mail", name: "Mail", icon: "mail", home: MAIL_HOME_PATH },
 	{ product: "chat", name: "Chat", icon: "chat", home: CHAT_PATH },
 	{ product: "drive", name: "Drive", icon: "drive", home: DRIVE_PATH },
 ];
@@ -51,7 +52,7 @@ export function Rail({ route, open, hasSidebar }: RailProps) {
 	return (
 		<nav id={RAIL_ID} ref={navRef} className={open ? "rail rail-open" : "rail"} aria-label="Products">
 			<Link
-				to={INBOX_PATH}
+				to={MAIL_HOME_PATH}
 				className="rail-brand"
 				aria-label="Asterra, go to the inbox"
 				title={`Asterra - ${ASTERRA_VERSION}`}

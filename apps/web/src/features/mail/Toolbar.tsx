@@ -1,6 +1,7 @@
 import type { Label } from "@asterra/contracts";
 import { type ReactNode, useEffect, useRef } from "react";
 import { Icon, type IconName } from "../../lib/icons.tsx";
+import { Link } from "../../lib/router.tsx";
 import { Select } from "../../lib/Select.tsx";
 import type { MailView } from "../../routes.ts";
 import type { MailAction } from "./actions.ts";
@@ -27,11 +28,13 @@ interface ToolbarProps {
 	onAction: (action: MailAction) => void;
 	onBack: () => void;
 	onRefresh: () => void;
+	/** The path of the settings view of the mailbox. */
+	settingsPath: string;
 }
 
 /**
  * The header row of Mail: the title of the view, the actions on the selection or on the open thread,
- * the search box and Refresh.
+ * the search box, Refresh and the settings of the mailbox.
  */
 export function Toolbar(props: ToolbarProps) {
 	const { view, mode, targetCount, anyUnread, allStarred, userLabels, onAction } = props;
@@ -90,7 +93,14 @@ export function Toolbar(props: ToolbarProps) {
 			)}
 			<span className="toolbar-spacer" />
 			{props.search}
-			{!hasTargets && <ToolButton icon="refresh" label="Refresh" onClick={props.onRefresh} />}
+			{!hasTargets && (
+				<>
+					<ToolButton icon="refresh" label="Refresh" onClick={props.onRefresh} />
+					<Link to={props.settingsPath} className="icon-button" aria-label="Mailbox settings" title="Mailbox settings">
+						<Icon name="settings" />
+					</Link>
+				</>
+			)}
 		</div>
 	);
 }

@@ -8,11 +8,13 @@ import {
 } from "@asterra/contracts";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, errorMessage } from "../../lib/api.ts";
-import type { MailView } from "../../routes.ts";
+import { INBOX_PATH, type MailView } from "../../routes.ts";
 import { applyToSummary, belongsInView, changeLabels, type LabelChange } from "./actions.ts";
 import { mailboxInput } from "./mailbox.tsx";
+import { mailHomePath } from "./mailboxNav.ts";
 
 export type Profile = OutputOf<"mail.get_profile">;
+export type MailboxSettings = OutputOf<"mail.get_mailbox_settings">;
 
 const POLL_MS = 15_000;
 const PAGE_SIZE = 50;
@@ -65,6 +67,54 @@ export function useProfilePoll(mailboxId: string | null, onVersionChange: () => 
 	return { profile, sync };
 }
 
+/**
+ * Reads the default mailbox of the person, and returns the path of its inbox. Without a saved default, it
+ * does not read the mailboxes. When a read fails, Mail opens the own inbox.
+ */
+export async function loadMailHomePath(): Promise<string> {
+	try {
+		const { default_mailbox_id } = await api.call("mail.get_settings");
+		if (default_mailbox_id === null) return INBOX_PATH;
+		const { mailboxes } = await api.call("mail.list_mailboxes");
+		return mailHomePath(default_mailbox_id, mailboxes);
+	} catch {
+		return INBOX_PATH;
+	}
+}
+
+/**
+ * The settings of the mailbox (`mail.get_mailbox_settings`), such as its signature. Null while they load,
+ * and when they do not load: the composer then starts with no signature. They load again when the window
+ * gets the focus, so a read that failed gets a second try, and a change in a different tab shows. `set`
+ * keeps the settings that the settings view saved, so the next draft has the new signature.
+ */
+export function useMailboxSettings(mailboxId: string | null) {
+	const [settings, setSettings] = useState<MailboxSettings | null>(null);
+
+	useEffect(() => {
+		let active = true;
+		const load = () => {
+			api.call("mail.get_mailbox_settings", mailboxInput(mailboxId)).then(
+				(result) => {
+					if (active) setSettings(result);
+				},
+				() => {
+					// The settings stay as they are: without them, a draft has no signature. A 401 shows the sign-in
+					// page through lib/api.ts.
+				},
+			);
+		};
+		load();
+		window.addEventListener("focus", load);
+		return () => {
+			active = false;
+			window.removeEventListener("focus", load);
+		};
+	}, [mailboxId]);
+
+	return { settings, set: setSettings };
+}
+
 export interface LabelsState {
 	labels: Label[] | null;
 	error: string | null;
@@ -75,33 +125,39 @@ export interface LabelsState {
  * The mailboxes that the person can use: the own mailbox first, then the team mailboxes. Null while
  * the list loads, and when it does not load: the mail views then work with the own mailbox only.
  * The list loads again when the window gets the focus and when `page` changes, because an admin can
- * change the members, for example on the Admin page of this tab.
+ * change the members, for example on the Admin page of this tab. `reload` loads it again after a change of
+ * the members in a mail view, where the page stays.
  */
-export function useMailboxes(page: string): Mailbox[] | null {
+export function useMailboxes(page: string): { mailboxes: Mailbox[] | null; reload: () => void } {
 	const [mailboxes, setMailboxes] = useState<Mailbox[] | null>(null);
 
-	useEffect(() => {
-		let active = true;
-		const load = () => {
-			api.call("mail.list_mailboxes").then(
-				(result) => {
-					if (active) setMailboxes(result.mailboxes);
-				},
-				() => {
-					// The list stays as it is. A 401 shows the sign-in page through lib/api.ts.
-				},
-			);
-		};
-		// `page` is read so that a change of page runs this effect again.
-		if (page) load();
-		window.addEventListener("focus", load);
-		return () => {
-			active = false;
-			window.removeEventListener("focus", load);
-		};
-	}, [page]);
+	// The shell lives as long as the session, so an answer never comes after it unmounts. An answer replaces the
+	// list only when no newer answer replaced it first: an older answer can still list a membership that ended.
+	// A request that fails changes nothing, so the answer of an older request still counts.
+	const sent = useRef(0);
+	const applied = useRef(0);
+	const reload = useCallback(() => {
+		const request = ++sent.current;
+		api.call("mail.list_mailboxes").then(
+			(result) => {
+				if (request < applied.current) return;
+				applied.current = request;
+				setMailboxes(result.mailboxes);
+			},
+			() => {
+				// The list stays as it is. A 401 shows the sign-in page through lib/api.ts.
+			},
+		);
+	}, []);
 
-	return mailboxes;
+	useEffect(() => {
+		// `page` is read so that a change of page runs this effect again.
+		if (page) reload();
+		window.addEventListener("focus", reload);
+		return () => window.removeEventListener("focus", reload);
+	}, [page, reload]);
+
+	return { mailboxes, reload };
 }
 
 export function useLabels(mailboxId: string | null): LabelsState {

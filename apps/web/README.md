@@ -122,8 +122,8 @@ MCP clients. The app has no UI-only path.
   - At 600px and below, the search box is an icon button in the header row. With the focus, the box
     opens across the row. While the box has a query, the box shows in place of the title.
   - "Skip to content" is the first link of each page.
-- **Mail.** A header row with the title of the view, the search box and Refresh, a sidebar with the
-  system views and the user labels, a thread list and a thread view.
+- **Mail.** A header row with the title of the view, the search box, Refresh and the gear of the
+  mailbox settings, a sidebar with the system views and the user labels, a thread list and a thread view.
   - A slash in a label name makes a nested label. The sidebar shows `Clients/Northwind` as
     "Northwind" under "Clients". When no label has the parent name, the parent shows as a group row
     that is text, not a link. The link of a nested label has the full path as its accessible name,
@@ -204,6 +204,11 @@ MCP clients. The app has no UI-only path.
   - `mail.send` gets both forms of the body: `html` for the formatting, and `text` for mail apps
     without HTML. In the HTML, each paragraph is a `<div>`, as in most mail apps. In the text, a
     list item starts with `- ` or `1. `, a quote line starts with `> `, and a link is `text <address>`.
+  - Each new message, reply and forward starts with the signature of the mailbox (`withSignature` in
+    [`compose.ts`](src/features/mail/compose.ts), from `mail.get_mailbox_settings`): two empty lines,
+    the line `-- `, and the signature. The signature is above the quote of a reply and the header of a
+    forward. A draft with only the signature closes without a question. The person can change or remove
+    the signature in the draft.
   - A reply or forward starts with the draft text from [`compose.ts`](src/features/mail/compose.ts).
     Each line becomes a paragraph, and a run of `> ` lines becomes a quote block. A line that starts
     with `>` and no space stays text, so an unchanged draft sends the same text. Quotes nest to a
@@ -239,8 +244,36 @@ MCP clients. The app has no UI-only path.
   - A deep link to a mailbox that is not in the list gives that mailbox a row, so its folders show.
   - A person with only the own mailbox sees the folders and the labels with no mailbox rows.
   - The Compose button of Mail fills the width of the sidebar.
-  - The web app does not use `mail.get_settings` and `mail.update_settings` now. Their sidebar
-    settings are for the mailbox sections that the sidebar no longer has.
+  - The web app uses `mail.get_settings` and `mail.update_settings` only for the default mailbox
+    (`default_mailbox_id`). Their sidebar settings are for the mailbox sections that the sidebar no
+    longer has.
+- **Mailbox settings** (`/mail/settings`, `/mail/team/<tmb_id>/settings`, `/mail/agent/<prn_id>/settings`,
+  [`MailboxSettings.tsx`](src/features/mail/MailboxSettings.tsx)). The gear after Refresh in the header of
+  Mail is a link to the settings view of the open mailbox. The view replaces the list in the main pane,
+  next to the sidebar, so a reload and a deep link stay on it. Its header has a link back to the inbox, the
+  title and the search box. The view is a separate chunk. Each section loads and saves on its own, with its
+  own error and **Try again**. The shortcuts `c`, `/` and `?` work as in the list, and `u` goes back to the
+  inbox.
+  - **AI features.** The switch of the inbox auto labels (`mail.update_auto_labels` with `enabled`).
+    They are the only AI feature of Mail. When the organization has AI or the feature off, a notice says
+    so, with a link to Admin › AI for an owner or an admin. **Choose the auto labels** opens the dialog
+    of the auto labels. Without `mail.modify`, the person cannot change the switch.
+  - **Access.** In a shared mailbox, an owner or an admin changes the members with the member editor of
+    Admin › Shared mailboxes (`MembersPart`). A member sees the members and what each one can do. The
+    own mailbox and the mailbox of an agent show text: nobody else can use the own mailbox, and owners
+    and admins can only read the mailbox of an agent. After each change of the members, the shell gets
+    `mail.list_mailboxes` again, so the rights of the person in the open mailbox follow a change of the
+    own membership. A person who can no longer read the mailbox goes to the own inbox.
+  - **Default address.** **Make <address> my default** saves the mailbox as the default of the person
+    (`default_mailbox_id`). Mail then opens it first, so a new message comes from its address. The
+    mailbox of an agent cannot be a default. `defaultMailboxId` in `mailboxNav.ts` decides the current
+    default, as for the start of Mail. So the section shows **Loading…** until the list of the mailboxes
+    is there, except for the own mailbox with no saved default.
+  - **Signature.** Plain text, at most 2,000 characters, with a counter
+    (`mail.update_mailbox_settings`). The members of a shared mailbox share it. Without `mail.modify`,
+    the field is read only. After a save, the next draft has the new signature. The mail app reads the
+    signature again when the window gets the focus. While the field has text that is not saved, the
+    browser asks before it closes or reloads the tab. A link in the app does not ask.
 - **Shared mailboxes.** The UI name of a team mailbox, on the Admin page.
   - A team mailbox has its own paths (`/mail/team/<tmb_id>/…`), so a deep link and a reload stay in
     it. Each mail call of its views sends `mailbox_id`. Search, labels and the composer use the
@@ -1780,13 +1813,14 @@ dock Worker serves `index.html` for each app path, so a deep link works on reloa
 
 | Path | Page |
 | --- | --- |
-| `/` | Goes to `/mail/inbox` |
+| `/`, `/mail` | Goes to the inbox of the default mailbox of the person (`default_mailbox_id` of `mail.get_settings`). Without a default, or when the person cannot read it now, goes to `/mail/inbox` (`mailHomePath` in `mailboxNav.ts`). The page shows **Loading…** until the setting is there. The rail link of Mail and the mark of Asterra go here |
 | `/mail/<view>` | The thread list of a view: `inbox`, `starred`, `sent`, `spam`, `trash` or `all` |
 | `/mail/label/<lbl_id>` | The thread list of a user label |
 | `/mail/search?q=<query>` | The search results |
 | `/mail/<view>/<thr_id>`, `/mail/label/<lbl_id>/<thr_id>`, `/mail/search/<thr_id>?q=<query>` | One thread, opened from that view |
-| `/mail/team/<tmb_id>/…` | The same views and threads, in a team mailbox. `/mail/team/<tmb_id>` goes to its inbox |
-| `/mail/agent/<prn_id>/…` | The same views and threads, read only, in the mailbox of an agent, for an owner or an admin. `/mail/agent/<prn_id>` goes to its inbox |
+| `/mail/settings` | The settings view of the own mailbox: AI, access, the default address and the signature |
+| `/mail/team/<tmb_id>/…` | The same views, threads and settings, in a team mailbox. `/mail/team/<tmb_id>` goes to its inbox |
+| `/mail/agent/<prn_id>/…` | The same views, threads and settings, read only, in the mailbox of an agent, for an owner or an admin. `/mail/agent/<prn_id>` goes to its inbox |
 | `/admin` | Goes to the first section of Admin that the person can use |
 | `/admin/<section>` | One section of Admin: `members`, `shared-mailboxes`, `shared-drives`, `chat` or `domains` |
 | `/admin/members/<prn_id>` | The page of one person, agent or service account in Admin › Members |

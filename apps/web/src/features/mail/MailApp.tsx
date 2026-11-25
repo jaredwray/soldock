@@ -1,22 +1,25 @@
 import type { Label, Mailbox } from "@asterra/contracts";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { lazyPage } from "../../lib/lazyPage.tsx";
 import { setPageTitle } from "../../lib/pageTitle.ts";
 import { navigate } from "../../lib/router.tsx";
 import { useToast } from "../../lib/toast.tsx";
 import { useOnChange } from "../../lib/useOnChange.ts";
 import { isAgentMailbox, type MailView, viewPath } from "../../routes.ts";
+import { SEARCH_INPUT_ID } from "../../shell/nav.ts";
 import { useSession } from "../auth/session.tsx";
 import { AutoLabelsDialog } from "./AutoLabelsDialog.tsx";
 import type { SendResult } from "./Composer.tsx";
 import { Composer, usePreloadComposer } from "./ComposerLoader.tsx";
-import { type Draft, newDraft } from "./compose.ts";
-import { useLabels, useProfilePoll } from "./data.ts";
+import { type Draft, newDraft, withSignature } from "./compose.ts";
+import { useLabels, useMailboxSettings, useProfilePoll } from "./data.ts";
 import { DeleteLabelDialog, NewLabelDialog } from "./LabelDialogs.tsx";
 import { MailPane } from "./MailPane.tsx";
 import { MailboxProvider, MailboxRightsProvider } from "./mailbox.tsx";
 import { mailboxRights } from "./mailboxNav.ts";
 import { ShortcutHelp } from "./ShortcutHelp.tsx";
 import { Sidebar } from "./Sidebar.tsx";
+import { useShortcuts } from "./useShortcuts.ts";
 import { viewQuery, viewTitle } from "./views.ts";
 
 type MailDialog =
@@ -26,10 +29,16 @@ type MailDialog =
 	| { type: "delete-label"; label: Label }
 	| null;
 
+// The settings view is a separate chunk: a person opens it seldom.
+const MailboxSettings = lazyPage(() => import("./MailboxSettings.tsx").then((module) => module.MailboxSettings));
+
 interface MailAppProps {
-	route: { mailboxId: string | null; view: MailView; threadId: string | null };
+	/** `view` is null for the settings view of the mailbox. */
+	route: { mailboxId: string | null; view: MailView | null; threadId: string | null };
 	/** The mailboxes that the person can use, from the shell: the list stays when the mailbox changes. */
 	mailboxes: readonly Mailbox[] | null;
+	/** Loads the mailboxes again, after a change of the members of a team mailbox in its settings view. */
+	onMailboxesChanged: () => void;
 	/** The mailboxes of the sidebar that the person expanded or collapsed, from the shell: the state stays when the mailbox changes. */
 	expandedMailboxes: Readonly<Record<string, boolean>>;
 	/** Expands or collapses a mailbox in the sidebar. Null goes back to the default. */
@@ -45,7 +54,15 @@ interface MailAppProps {
  * for the current view has a key, so a new view starts clean. The shell gives this component a key
  * for each mailbox, so no data of one mailbox shows in a different one.
  */
-export function MailApp({ route, mailboxes, expandedMailboxes, onSetExpanded, navOpen, onCloseNav }: MailAppProps) {
+export function MailApp({
+	route,
+	mailboxes,
+	onMailboxesChanged,
+	expandedMailboxes,
+	onSetExpanded,
+	navOpen,
+	onCloseNav,
+}: MailAppProps) {
 	const { whoami } = useSession();
 	const toast = useToast();
 	const [refreshKey, setRefreshKey] = useState(0);
@@ -53,6 +70,7 @@ export function MailApp({ route, mailboxes, expandedMailboxes, onSetExpanded, na
 	const { mailboxId } = route;
 	const { profile, sync } = useProfilePoll(mailboxId, bump);
 	const { labels, error: labelsError, reload: reloadLabels } = useLabels(mailboxId);
+	const { settings: mailboxSettings, set: setMailboxSettings } = useMailboxSettings(mailboxId);
 	const listed = mailboxId ? (mailboxes?.find((mailbox) => mailbox.id === mailboxId) ?? null) : null;
 	const rights = useMemo(() => mailboxRights(mailboxes, mailboxId), [mailboxes, mailboxId]);
 	const [draft, setDraft] = useState<Draft | null>(null);
@@ -78,8 +96,8 @@ export function MailApp({ route, mailboxes, expandedMailboxes, onSetExpanded, na
 	const mailboxName = mailboxId
 		? (profile?.display_name ?? listed?.display_name ?? (isAgentMailbox(mailboxId) ? "Agent mailbox" : "Team mailbox"))
 		: null;
-	const query = viewQuery(route.view, labels);
-	const title = viewTitle(route.view, labels);
+	const { view } = route;
+	const title = view ? viewTitle(view, labels) : "Settings";
 	const inboxUnread = labelsById.get("INBOX")?.threads_unread ?? profile?.inbox_unread ?? 0;
 
 	useEffect(() => {
@@ -87,15 +105,39 @@ export function MailApp({ route, mailboxes, expandedMailboxes, onSetExpanded, na
 		setPageTitle(`${title}${inboxUnread > 0 ? ` (${inboxUnread})` : ""}${mailbox} – Asterra`);
 	}, [title, inboxUnread, mailboxName]);
 
+	const signature = mailboxSettings?.signature ?? "";
 	const compose = useCallback(
 		(next?: Draft) => {
 			// Nobody sends from the mailbox of an agent except the agent.
 			if (!rights.send) return;
 			closeNavRef.current();
-			setDraft(next ?? newDraft());
+			// The signature of the mailbox goes into each new message, reply and forward. The person can change it there.
+			setDraft(withSignature(next ?? newDraft(), signature));
 		},
-		[rights.send],
+		[rights.send, signature],
 	);
+
+	// The list has the shortcuts of Mail. The settings view keeps the ones that do not need a list.
+	useShortcuts((event) => {
+		if (view) return;
+		switch (event.key) {
+			case "c":
+				compose();
+				break;
+			case "u":
+				navigate(viewPath({ kind: "system", view: "inbox" }, mailboxId));
+				break;
+			case "/":
+				document.getElementById(SEARCH_INPUT_ID)?.focus();
+				break;
+			case "?":
+				setDialog({ type: "help" });
+				break;
+			default:
+				return;
+		}
+		event.preventDefault();
+	});
 
 	function sent(result: SendResult) {
 		setDraft(null);
@@ -124,7 +166,7 @@ export function MailApp({ route, mailboxes, expandedMailboxes, onSetExpanded, na
 						onSetExpanded={onSetExpanded}
 						canModify={rights.modify}
 						canSend={rights.send}
-						view={route.view}
+						view={view}
 						labels={labels}
 						labelsError={labelsError}
 						open={navOpen}
@@ -134,21 +176,40 @@ export function MailApp({ route, mailboxes, expandedMailboxes, onSetExpanded, na
 						onDeleteLabel={(label) => setDialog({ type: "delete-label", label })}
 						onClose={onCloseNav}
 					/>
-					<MailPane
-						key={viewPath(route.view)}
-						mailboxName={mailboxName}
-						view={route.view}
-						threadId={route.threadId}
-						query={query}
-						title={title}
-						labels={labels}
-						labelsById={labelsById}
-						myAddress={myAddress}
-						refreshKey={refreshKey}
-						onChanged={onChanged}
-						onCompose={compose}
-						onShowHelp={() => setDialog({ type: "help" })}
-					/>
+					{view ? (
+						<MailPane
+							key={viewPath(view)}
+							mailboxName={mailboxName}
+							view={view}
+							threadId={route.threadId}
+							query={viewQuery(view, labels)}
+							title={title}
+							labels={labels}
+							labelsById={labelsById}
+							myAddress={myAddress}
+							refreshKey={refreshKey}
+							onChanged={onChanged}
+							onCompose={compose}
+							onShowHelp={() => setDialog({ type: "help" })}
+						/>
+					) : (
+						<MailboxSettings
+							mailbox={{
+								id: mailboxId,
+								kind: mailboxId === null ? "personal" : isAgentMailbox(mailboxId) ? "agent" : "team",
+								address: myAddress,
+								display_name: mailboxName ?? whoami.principal.display_name,
+							}}
+							title={mailboxName ? `${mailboxName}: Settings` : "Settings"}
+							rights={rights}
+							mailboxes={mailboxes}
+							refreshKey={refreshKey}
+							onSettingsSaved={setMailboxSettings}
+							onMembersChanged={onMailboxesChanged}
+							onOpenAutoLabels={() => setDialog({ type: "auto-labels" })}
+							onChanged={onChanged}
+						/>
+					)}
 					{draft && rights.send && (
 						<Composer
 							key={draft.key}
@@ -178,7 +239,7 @@ export function MailApp({ route, mailboxes, expandedMailboxes, onSetExpanded, na
 							label={dialog.label}
 							onClose={() => setDialog(null)}
 							onDeleted={() => {
-								if (route.view.kind === "label" && route.view.labelId === dialog.label.id) {
+								if (view?.kind === "label" && view.labelId === dialog.label.id) {
 									navigate(viewPath({ kind: "system", view: "inbox" }, mailboxId));
 								}
 								toast({ message: `Label “${dialog.label.name}” deleted.` });

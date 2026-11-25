@@ -1,5 +1,5 @@
 import type { Mailbox } from "@asterra/contracts";
-import { isAgentMailbox } from "../../routes.ts";
+import { INBOX_PATH, isAgentMailbox, viewPath } from "../../routes.ts";
 
 /** One mailbox in the sidebar. Under it, the sidebar shows its folders and labels when it is expanded. */
 export interface MailboxEntry {
@@ -121,4 +121,21 @@ export function rightsNotice(rights: MailboxRights): string | null {
 		return "You can read this shared mailbox and send from it. You cannot change it, and the conversations that you open stay unread.";
 	}
 	return "You can read this shared mailbox. You cannot change it or send from it, and the conversations that you open stay unread.";
+}
+
+/**
+ * The default mailbox of the person, from the saved `default_mailbox_id`: the id of a team mailbox, or
+ * null for the own mailbox. A saved team mailbox is the default only while the person can read it: a
+ * removed membership, or a membership without `mail.read`, gives the own mailbox. The mailbox of an agent
+ * is never a default.
+ */
+export function defaultMailboxId(saved: string | null, mailboxes: readonly Mailbox[]): string | null {
+	const listed = mailboxes.find((mailbox) => mailbox.id === saved);
+	return listed?.kind === "team" && listed.scopes.includes("mail.read") ? listed.id : null;
+}
+
+/** The path that Mail opens first: the inbox of the default mailbox of the person (`defaultMailboxId`). */
+export function mailHomePath(saved: string | null, mailboxes: readonly Mailbox[]): string {
+	const id = defaultMailboxId(saved, mailboxes);
+	return id === null ? INBOX_PATH : viewPath({ kind: "system", view: "inbox" }, id);
 }

@@ -128,7 +128,16 @@ function NameForm({ mailbox, onChanged }: PartProps) {
  * service account. An agent or a service account also gets the scopes on its account, so it can use the
  * mailbox at once.
  */
-function MembersPart({ mailbox, principals, onChanged }: PartProps & { principals: readonly Principal[] }) {
+export function MembersPart({
+	mailbox,
+	principals,
+	onChanged,
+	heading,
+}: PartProps & {
+	principals: readonly Principal[];
+	/** The title of the part. The default is "Members of" and the name of the mailbox. */
+	heading?: string;
+}) {
 	const toast = useToast();
 	const [candidateId, setCandidateId] = useState("");
 	const [newScopes, setNewScopes] = useState<MailboxMemberScope[]>([...MAILBOX_MEMBER_SCOPES]);
@@ -205,7 +214,7 @@ function MembersPart({ mailbox, principals, onChanged }: PartProps & { principal
 	return (
 		<section className="panel" aria-labelledby={ids.heading}>
 			<h2 id={ids.heading} className="panel-title">
-				Members of {mailbox.display_name}
+				{heading ?? `Members of ${mailbox.display_name}`}
 			</h2>
 			<div className="panel-card panel-card-list">
 				{members.length === 0 ? (

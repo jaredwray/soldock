@@ -44,6 +44,8 @@ type MailOperation =
 	| "mail.list_mailboxes"
 	| "mail.get_settings"
 	| "mail.update_settings"
+	| "mail.get_mailbox_settings"
+	| "mail.update_mailbox_settings"
 	| "mail.get_auto_labels"
 	| "mail.update_auto_labels"
 	| "mail.create_auto_label"
@@ -286,7 +288,47 @@ export const mailHandlers: Pick<HandlerMap<CallContext>, MailOperation> = {
 	},
 
 	async "mail.update_settings"(call, input) {
-		return mailboxStub(call.env, call.caller.id).updateSettings(input);
+		let defaultMailboxId = input.default_mailbox_id;
+		if (defaultMailboxId === call.caller.id) defaultMailboxId = null;
+		if (defaultMailboxId) {
+			// The web app opens the default mailbox and composes from it. So it must be a team mailbox that the
+			// person reads now. Nobody composes from the mailbox of an agent, and the mailbox of a different
+			// person is private.
+			if (!isTeamMailboxId(defaultMailboxId)) {
+				throw new OperationError(
+					"invalid",
+					"The default mailbox must be your own mailbox or a team mailbox that you are a member of.",
+				);
+			}
+			await teamMailboxFor(call.env.DIRECTORY, defaultMailboxId, call.caller.id, ["mail.read"]);
+		}
+		return mailboxStub(call.env, call.caller.id).updateSettings({
+			sidebar: input.sidebar,
+			default_mailbox_id: defaultMailboxId,
+		});
+	},
+
+	// The settings of a mailbox live in that mailbox, so the members of a team mailbox share them.
+	async "mail.get_mailbox_settings"(call, input) {
+		const { record, box } = await openMailbox(call, input.mailbox_id, "mail.get_mailbox_settings");
+		// No audit line, as for mail.get_profile: the settings hold no mail content.
+		return { mailbox_id: record.id, ...(await box.mailboxSettings()) };
+	},
+
+	async "mail.update_mailbox_settings"(call, input) {
+		const { record, box } = await openMailbox(call, input.mailbox_id, "mail.update_mailbox_settings");
+		// The members of a team mailbox share its signature, and the web composer adds it to the mail of each
+		// person. An agent that a message tricks could put text into that mail, so only people change it there.
+		if (call.caller.kind !== "human" && record.kind !== "personal") {
+			throw new OperationError(
+				"forbidden",
+				"An agent or a service account can change only the settings of its own mailbox.",
+			);
+		}
+		const settings = await box.updateMailboxSettings({ signature: input.signature });
+		// The line names the mailbox only. It never holds the signature.
+		auditOk(call, record, "mail.update_mailbox_settings", record.id);
+		return { mailbox_id: record.id, ...settings };
 	},
 
 	async "mail.get_auto_labels"(call, input) {

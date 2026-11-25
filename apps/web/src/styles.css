@@ -5506,6 +5506,112 @@ fieldset {
 	gap: 8px;
 }
 
+/* The settings view of a mailbox, from the gear in the header of Mail. Each section saves on its own. */
+.mailbox-settings {
+	display: flex;
+	flex-direction: column;
+	gap: 24px;
+}
+
+.mailbox-settings > .panel-intro {
+	margin: 0;
+}
+
+.mailbox-settings-card {
+	display: flex;
+	flex-direction: column;
+	align-items: flex-start;
+	gap: 12px;
+}
+
+.mailbox-settings-card > * {
+	margin: 0;
+}
+
+.mailbox-settings-card > .notice,
+.mailbox-settings-card > .check-row {
+	align-self: stretch;
+}
+
+/* A button with an address in its text: at phone width, a long address goes to a second line. */
+.mailbox-settings-card > .button {
+	max-width: 100%;
+	padding-block: 6px;
+	text-align: start;
+	white-space: normal;
+	overflow-wrap: anywhere;
+}
+
+.mailbox-member-list {
+	align-self: stretch;
+	margin: 0;
+	padding: 0;
+	list-style: none;
+}
+
+.mailbox-member {
+	display: flex;
+	flex-wrap: wrap;
+	justify-content: space-between;
+	gap: 4px 16px;
+	padding: 6px 0;
+	border-bottom: 1px solid var(--border);
+}
+
+.mailbox-member:last-child {
+	border-bottom: 0;
+}
+
+.mailbox-member-name {
+	display: flex;
+	flex-direction: column;
+	min-width: 0;
+	overflow-wrap: anywhere;
+}
+
+.mailbox-default {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	color: var(--positive);
+	overflow-wrap: anywhere;
+}
+
+.mailbox-default strong {
+	color: var(--foreground);
+}
+
+.signature-form {
+	display: flex;
+	flex-direction: column;
+	align-items: flex-start;
+	gap: 8px;
+	align-self: stretch;
+}
+
+.signature-input {
+	width: 100%;
+	resize: vertical;
+	font-family: inherit;
+}
+
+.signature-meta {
+	display: flex;
+	justify-content: space-between;
+	gap: 12px;
+	align-self: stretch;
+}
+
+.signature-hint {
+	margin: 0;
+}
+
+.signature-count {
+	flex: none;
+	margin: 0;
+	font-variant-numeric: tabular-nums;
+}
+
 /* A saved API token: a line of text and its buttons, in place of the field. */
 .ai-token-saved {
 	display: flex;

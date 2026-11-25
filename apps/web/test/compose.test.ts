@@ -4,10 +4,12 @@ import {
 	addressTokenAt,
 	completeAddress,
 	forwardDraft,
+	newDraft,
 	parseAddressList,
 	recipientKeyAction,
 	recipientOptions,
 	replyDraft,
+	withSignature,
 } from "../src/features/mail/compose.ts";
 
 const ME = "me@asterra.test";
@@ -167,5 +169,30 @@ describe("forwardDraft", () => {
 			message({ attachments: [{ ...file, index: 0, filename: "logo.png", inline: true }] }),
 		);
 		expect(inlineOnly.text).not.toContain("Attachments");
+	});
+});
+
+// The composer adds the signature of the mailbox to each draft. It goes before the quote of a reply and the
+// header of a forward, as in Gmail, after two empty lines where the person writes.
+describe("the signature of a draft", () => {
+	const SIGNATURE = "Ada Lovelace\nAnalyst";
+
+	it("goes into a new message after two empty lines and the separator", () => {
+		expect(withSignature(newDraft(), SIGNATURE).text).toBe("\n\n-- \nAda Lovelace\nAnalyst");
+	});
+
+	it("goes above the quote of a reply and the header of a forward", () => {
+		const reply = withSignature(replyDraft(message(), ME, false), SIGNATURE);
+		expect(reply.text).toMatch(/^\n\n-- \nAda Lovelace\nAnalyst\n\nOn .+, Ada <ada@example\.com> wrote:\n> /);
+		const forward = withSignature(forwardDraft(message()), SIGNATURE);
+		expect(forward.text).toMatch(/^\n\n-- \nAda Lovelace\nAnalyst\n\n---------- Forwarded message ----------\n/);
+		// The other fields of the draft stay.
+		expect({ ...reply, text: "" }).toEqual({ ...replyDraft(message(), ME, false), key: reply.key, text: "" });
+	});
+
+	it("changes nothing without a signature", () => {
+		const draft = replyDraft(message(), ME, true);
+		expect(withSignature(draft, "")).toBe(draft);
+		expect(withSignature(draft, " \n ")).toBe(draft);
 	});
 });

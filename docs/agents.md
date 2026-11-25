@@ -473,6 +473,18 @@ agent and a service account.
 - An owner or an admin can rename a team mailbox. The `id` and the address do not change. Read the
   name from `mail_list_mailboxes` or `mail_get_profile`.
 
+## The signature of a mailbox
+
+A mailbox can have a plain-text signature. People set it in the settings of the mailbox in the web app,
+and the web composer adds it to their mail. `mail_send` never adds it.
+
+- `mail_get_mailbox_settings` returns the `signature` of a mailbox, or an empty string. Use `mailbox_id`
+  for a team mailbox.
+- To sign a message, add the signature to `text` after a line with `-- `. If you also send `html`, add
+  it there too.
+- `mail_update_mailbox_settings` changes the signature of your own mailbox. In a team mailbox, the
+  members share the signature, so only a person can change it there. Your call gets `forbidden`.
+
 ## Auto labels
 
 When an owner or an admin turns on AI and inbox auto labels, a mailbox can sort its new mail with

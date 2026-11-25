@@ -5,6 +5,7 @@ import {
 	AUTO_LABELS,
 	type AutoLabelSettings,
 	MAIL_LIMITS,
+	MailboxId,
 	type MailSettings,
 	WEBHOOK_LIMITS,
 } from "@asterra/contracts";
@@ -470,23 +471,64 @@ export interface SettingsPatch {
 	sidebar?:
 		| { shared_mailboxes_collapsed?: boolean | undefined; agent_mailboxes_collapsed?: boolean | undefined }
 		| undefined;
+	/** Null clears the default. The handler checks the mailbox before it calls the object. */
+	default_mailbox_id?: string | null | undefined;
 }
 
 /** The saved settings with the default for each setting that was never saved. A bad value gets the default. */
 function readSettings(raw: string | null): MailSettings {
-	let saved: { sidebar?: Record<string, unknown> } = {};
+	let saved: { sidebar?: Record<string, unknown>; default_mailbox_id?: unknown } = {};
 	try {
 		saved = raw ? (JSON.parse(raw) as typeof saved) : {};
 	} catch {
 		// A value that does not parse gets the defaults. The next change writes a good value.
 	}
 	const flag = (value: unknown) => value === true;
+	const defaultMailbox = MailboxId.safeParse(saved.default_mailbox_id);
 	return {
 		sidebar: {
 			shared_mailboxes_collapsed: flag(saved.sidebar?.shared_mailboxes_collapsed),
 			agent_mailboxes_collapsed: flag(saved.sidebar?.agent_mailboxes_collapsed),
 		},
+		default_mailbox_id: defaultMailbox.success ? defaultMailbox.data : null,
 	};
+}
+
+/** The meta key of the settings of the mailbox itself, which each member of a team mailbox shares. */
+const MAILBOX_SETTINGS_KEY = "mailbox_settings";
+
+/** The settings of the mailbox itself, without its id. */
+export interface StoredMailboxSettings {
+	signature: string;
+}
+
+/** A change to the settings of the mailbox: only the named settings change. */
+export interface MailboxSettingsPatch {
+	signature?: string | undefined;
+}
+
+/** The saved settings of the mailbox, with the default for each setting that was never saved or does not parse. */
+function readMailboxSettings(raw: string | null): StoredMailboxSettings {
+	let saved: { signature?: unknown } = {};
+	try {
+		saved = raw ? (JSON.parse(raw) as typeof saved) : {};
+	} catch {
+		// A value that does not parse gets the defaults. The next change writes a good value.
+	}
+	return { signature: typeof saved.signature === "string" ? saved.signature : "" };
+}
+
+/**
+ * The stored form of a signature: `\n` for each line break, no spaces at the end of a line, and no empty
+ * lines at the start or the end. So a signature from a Windows client and one from the web app are the same.
+ */
+function normalizeSignature(text: string): string {
+	return text
+		.replace(/\r\n?/g, "\n")
+		.split("\n")
+		.map((line) => line.trimEnd())
+		.join("\n")
+		.replace(/^\n+|\n+$/g, "");
 }
 
 export class MailboxDO extends DurableObject<Env> {
@@ -965,8 +1007,30 @@ export class MailboxDO extends DurableObject<Env> {
 			const value = patch.sidebar?.[key];
 			if (typeof value === "boolean") sidebar[key] = value;
 		}
-		const next = { sidebar };
+		const next: MailSettings = {
+			sidebar,
+			default_mailbox_id:
+				patch.default_mailbox_id === undefined ? current.default_mailbox_id : patch.default_mailbox_id,
+		};
 		this.setMeta("settings", JSON.stringify(next));
+		return next;
+	}
+
+	/** The settings of this mailbox. In a team mailbox, each member reads the same settings. */
+	mailboxSettings(): StoredMailboxSettings {
+		return readMailboxSettings(this.meta(MAILBOX_SETTINGS_KEY));
+	}
+
+	/**
+	 * Changes the named settings of this mailbox, keeps the others, and returns all of them. A setting is
+	 * not mail, so the change counter stays, as for `updateSettings`.
+	 */
+	updateMailboxSettings(patch: MailboxSettingsPatch): StoredMailboxSettings {
+		const current = readMailboxSettings(this.meta(MAILBOX_SETTINGS_KEY));
+		const next: StoredMailboxSettings = {
+			signature: patch.signature === undefined ? current.signature : normalizeSignature(patch.signature),
+		};
+		this.setMeta(MAILBOX_SETTINGS_KEY, JSON.stringify(next));
 		return next;
 	}
 

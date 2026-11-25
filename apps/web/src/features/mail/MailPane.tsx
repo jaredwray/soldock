@@ -5,7 +5,7 @@ import { Icon } from "../../lib/icons.tsx";
 import { navigate } from "../../lib/router.tsx";
 import { useToast } from "../../lib/toast.tsx";
 import { useOnChange } from "../../lib/useOnChange.ts";
-import { isAgentMailbox, type MailView, threadPath, viewPath } from "../../routes.ts";
+import { isAgentMailbox, type MailView, mailSettingsPath, threadPath, viewPath } from "../../routes.ts";
 import { SEARCH_INPUT_ID } from "../../shell/nav.ts";
 import { SearchBox } from "../../shell/SearchBox.tsx";
 import {
@@ -312,6 +312,7 @@ export function MailPane(props: MailPaneProps) {
 					void list.refresh();
 					onChanged();
 				}}
+				settingsPath={mailSettingsPath(mailboxId)}
 			/>
 			{isAgentMailbox(mailboxId) ? (
 				<p className="notice read-only-notice">
