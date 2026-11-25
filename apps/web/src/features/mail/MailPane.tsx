@@ -146,9 +146,13 @@ export function MailPane(props: MailPaneProps) {
 		if (ids.length === 0 || readOnly) return;
 		const change = actionChange(action);
 		// Undo reverts the change only on the threads that it changed, and only the labels that it changed. A
-		// thread that the pane does not know gets the full inverse.
+		// thread whose labels the pane does not know yet (an open thread that still loads) gets no undo: a guess
+		// could add a label that the thread did not have, for example INBOX on an archived thread.
 		const undos = undoChanges(
-			ids.map((id) => ({ id, labelIds: labelsOf(id) ?? change.remove })),
+			ids.flatMap((id) => {
+				const labelIds = labelsOf(id);
+				return labelIds === null ? [] : [{ id, labelIds }];
+			}),
 			change,
 		);
 		const openLabels = threadId && ids.includes(threadId) ? labelsOf(threadId) : null;

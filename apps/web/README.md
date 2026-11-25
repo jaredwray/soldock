@@ -147,7 +147,8 @@ MCP clients. The app has no UI-only path.
   - The toolbar acts on the selection or on the open thread: archive, report spam, trash, mark as
     read or unread, star, Reply later, apply a label and remove a label. The spam and trash views show "Not
     spam" and "Restore". An action that moves threads shows a toast with "Undo". Undo gives each thread
-    back only the labels that the action changed on it (`undoChanges` in `actions.ts`).
+    back only the labels that the action changed on it (`undoChanges` in `actions.ts`). An open thread that
+    still loads gets no undo, because the app does not know its labels yet.
   - The thread view shows each message with its sender, recipients, date, labels, body,
     attachments and, for sent mail, the delivery status of each recipient. External mail gets an
     "External sender" notice with the SPF, DKIM and DMARC results. A message with the SPAM label
