@@ -79,16 +79,9 @@ export type Route =
 	/** `section` is null for `/settings`. The page then shows the first section. */
 	| { page: "settings"; section: SettingsSection | null }
 	| { page: "redirect"; to: string }
-	/**
-	 * `/` and `/mail`: the inbox of the default mailbox of the person (`default_mailbox_id` of
-	 * mail.get_settings). The shell reads the setting, then replaces the path.
-	 */
-	| { page: "mail-home" }
 	| { page: "not-found" };
 
 export const INBOX_PATH = "/mail/inbox";
-/** The start of Mail: the inbox of the default mailbox of the person. */
-export const MAIL_HOME_PATH = "/mail";
 export const DRIVE_PATH = "/drive";
 export const SHARED_DRIVES_PATH = "/drive/shared-drives";
 export const CHAT_PATH = "/chat";
@@ -130,7 +123,7 @@ export function parseRoute(location: string): Route {
 	const parts = segments(url.pathname);
 	if (parts === null) return { page: "not-found" };
 	const [first, second, third, fourth] = parts;
-	if (parts.length === 0) return { page: "mail-home" };
+	if (parts.length === 0) return { page: "redirect", to: INBOX_PATH };
 	if (first === "admin" && parts.length === 1) return { page: "admin", section: null };
 	if (first === "admin" && parts.length === 2 && second === "agents")
 		return { page: "redirect", to: adminPath("members") };
@@ -177,7 +170,7 @@ export function parseRoute(location: string): Route {
 		return { page: first === "docs" ? "doc" : "sheet", spaceId: second, itemId: third };
 	}
 	if (first !== "mail") return { page: "not-found" };
-	if (second === undefined) return { page: "mail-home" };
+	if (second === undefined) return { page: "redirect", to: INBOX_PATH };
 	if (second !== "team" && second !== "agent") return parseMailView(null, parts.slice(1), url);
 	if (third === undefined || !third.startsWith(second === "team" ? "tmb_" : "prn_")) return { page: "not-found" };
 	if (fourth === undefined) return { page: "redirect", to: viewPath({ kind: "system", view: "inbox" }, third) };

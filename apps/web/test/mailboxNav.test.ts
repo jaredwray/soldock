@@ -1,6 +1,13 @@
 import type { Mailbox } from "@asterra/contracts";
 import { describe, expect, it } from "vitest";
-import { isExpanded, mailboxNav, mailboxRights, mailHomePath, rightsNotice } from "../src/features/mail/mailboxNav.ts";
+import {
+	defaultFromId,
+	fromOptions,
+	isExpanded,
+	mailboxNav,
+	mailboxRights,
+	rightsNotice,
+} from "../src/features/mail/mailboxNav.ts";
 
 const ALL = ["mail.read", "mail.modify", "mail.send"];
 const own: Mailbox = {
@@ -122,18 +129,38 @@ describe("the rights of the person in the open mailbox", () => {
 	});
 });
 
-// Mail opens the inbox of the default mailbox of the person. A saved default that the person cannot read
-// now opens the own inbox, so a removed membership never opens a page that fails.
-describe("the start of Mail", () => {
-	it("opens the inbox of the saved team mailbox, or the own inbox without one", () => {
-		expect(mailHomePath(support.id, [own, support, sales])).toBe(`/mail/team/${support.id}/inbox`);
-		expect(mailHomePath(null, [own, support])).toBe("/mail/inbox");
-		expect(mailHomePath(own.id, [own, support])).toBe("/mail/inbox");
+// The From of the composer lists each address that the person can send from. A new message comes from the
+// default of the open mailbox: a saved value while the person can still send from it, else the open mailbox.
+describe("the From of the composer", () => {
+	const me = { display_name: "Me", address: "me@x.test" };
+	const option = (mailbox: Mailbox) => ({
+		id: mailbox.kind === "personal" ? null : mailbox.id,
+		display_name: mailbox.display_name,
+		address: mailbox.address,
 	});
 
-	it("opens the own inbox for a membership that ended, lost mail.read, or an agent mailbox", () => {
-		expect(mailHomePath(support.id, [own, sales])).toBe("/mail/inbox");
-		expect(mailHomePath(support.id, [own, { ...support, scopes: ["mail.send"] }])).toBe("/mail/inbox");
-		expect(mailHomePath(bot.id, [own, bot])).toBe("/mail/inbox");
+	it("lists the own address, then each team mailbox with mail.send, and never an agent mailbox", () => {
+		const readOnly = { ...support, scopes: ["mail.read", "mail.modify"] };
+		expect(fromOptions([own, readOnly, sales, bot], me, null)).toEqual([option(own), option(sales)]);
+		// Before the list loads, the own address and the open team mailbox.
+		expect(fromOptions(null, me, option(support))).toEqual([{ id: null, ...me }, option(support)]);
+		expect(fromOptions([own, support], me, option(support))).toEqual([option(own), option(support)]);
+	});
+
+	it("uses the saved default of the open mailbox, or else the open mailbox", () => {
+		const options = fromOptions([own, support, sales], me, null);
+		expect(defaultFromId(support.id, {}, options, own.id)).toBe(support.id);
+		expect(defaultFromId(null, {}, options, own.id)).toBeNull();
+		expect(defaultFromId(null, { [own.id]: sales.id }, options, own.id)).toBe(sales.id);
+		// The id of the person is the own mailbox, as a key and as a value.
+		expect(defaultFromId(support.id, { [support.id]: own.id, [own.id]: sales.id }, options, own.id)).toBeNull();
+	});
+
+	it("gives the default for a saved address that the person can no longer send from", () => {
+		const options = fromOptions([own, { ...support, scopes: ["mail.read"] }], me, null);
+		expect(defaultFromId(null, { [own.id]: support.id }, options, own.id)).toBeNull();
+		expect(defaultFromId(sales.id, { [sales.id]: support.id }, options, own.id)).toBeNull();
+		// The open mailbox without mail.send: a new message comes from the own address.
+		expect(defaultFromId(support.id, {}, options, own.id)).toBeNull();
 	});
 });

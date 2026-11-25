@@ -31,7 +31,7 @@ import {
 	sha256Hex,
 } from "../platform/index.ts";
 import { mailboxStub, storeRaw } from "./delivery.ts";
-import type { Refusal, SendInput, StoredMessage } from "./mailbox.ts";
+import type { Refusal, SendInput, SettingsPatch, StoredMessage } from "./mailbox.ts";
 import { composeMessage } from "./mime/compose.ts";
 import { parseMail, readAttachment } from "./mime/parse.ts";
 import { deniedOutboundAddresses, outboundMode, outboundPolicyDenial } from "./outbound.ts";
@@ -288,24 +288,34 @@ export const mailHandlers: Pick<HandlerMap<CallContext>, MailOperation> = {
 	},
 
 	async "mail.update_settings"(call, input) {
-		let defaultMailboxId = input.default_mailbox_id;
-		if (defaultMailboxId === call.caller.id) defaultMailboxId = null;
-		if (defaultMailboxId) {
-			// The web app opens the default mailbox and composes from it. So it must be a team mailbox that the
-			// person reads now. Nobody composes from the mailbox of an agent, and the mailbox of a different
-			// person is private.
-			if (!isTeamMailboxId(defaultMailboxId)) {
+		let defaultFrom: SettingsPatch["default_from"];
+		if (input.default_from) {
+			const { mailbox_id: mailboxId } = input.default_from;
+			const own = (id: string) => id === call.caller.id;
+			// The web app composes in the own mailbox or in a team mailbox. Nobody writes from the mailbox of an
+			// agent, and the mailbox of a different person is private.
+			if (!own(mailboxId) && !isTeamMailboxId(mailboxId)) {
 				throw new OperationError(
 					"invalid",
-					"The default mailbox must be your own mailbox or a team mailbox that you are a member of.",
+					"The mailbox in default_from must be your own mailbox or a team mailbox that you are a member of.",
 				);
 			}
-			await teamMailboxFor(call.env.DIRECTORY, defaultMailboxId, call.caller.id, ["mail.read"]);
+			// The same id means the address of the mailbox itself, which is the default.
+			const fromId = input.default_from.from_mailbox_id === mailboxId ? null : input.default_from.from_mailbox_id;
+			if (fromId !== null && !own(fromId) && !isTeamMailboxId(fromId)) {
+				throw new OperationError(
+					"invalid",
+					"You can send only from your own address and from the address of a team mailbox that you are a member of.",
+				);
+			}
+			// A removal needs no membership, so a person can remove a setting after a membership ended.
+			if (fromId !== null) {
+				if (!own(mailboxId)) await teamMailboxFor(call.env.DIRECTORY, mailboxId, call.caller.id, ["mail.read"]);
+				if (!own(fromId)) await teamMailboxFor(call.env.DIRECTORY, fromId, call.caller.id, ["mail.send"]);
+			}
+			defaultFrom = { mailbox_id: mailboxId, from_mailbox_id: fromId };
 		}
-		return mailboxStub(call.env, call.caller.id).updateSettings({
-			sidebar: input.sidebar,
-			default_mailbox_id: defaultMailboxId,
-		});
+		return mailboxStub(call.env, call.caller.id).updateSettings({ sidebar: input.sidebar, default_from: defaultFrom });
 	},
 
 	// The settings of a mailbox live in that mailbox, so the members of a team mailbox share them.

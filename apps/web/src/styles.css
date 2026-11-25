@@ -2633,7 +2633,26 @@ fieldset {
 	font-size: 13px;
 }
 
-/* The sender of a message from a team mailbox. It is text: the mailbox decides it. */
+/* The From of a message: a list of the addresses that the person can send from. The text lines up with the
+   text of the other fields, and the hover background goes past it. */
+.compose-select {
+	justify-self: start;
+	max-width: calc(100% + 8px);
+	min-height: 40px;
+	margin-left: -8px;
+	padding: 6px 8px;
+	border: 0;
+	border-radius: var(--radius-sm);
+	background: transparent;
+	color: var(--foreground);
+	font: inherit;
+}
+
+.compose-select:hover:not(:disabled) {
+	background: var(--hover);
+}
+
+/* The From of a reply. It is text: a reply comes from the mailbox of its conversation. */
 .compose-from {
 	min-height: 40px;
 	padding: 10px 0;
@@ -4381,6 +4400,7 @@ fieldset {
 
 	/* Text of 16px, so that iOS does not zoom in on the fields. */
 	.compose-input,
+	.compose-select,
 	.compose-body {
 		font-size: 16px;
 	}
@@ -4768,6 +4788,7 @@ fieldset {
 	.compose-copies,
 	.toast-action,
 	.compose-input,
+	.compose-select,
 	.compose-from {
 		min-height: 44px;
 	}
@@ -5575,16 +5596,17 @@ fieldset {
 	overflow-wrap: anywhere;
 }
 
-.mailbox-default {
+.default-from-form {
 	display: flex;
+	flex-wrap: wrap;
 	align-items: center;
-	gap: 6px;
-	color: var(--positive);
-	overflow-wrap: anywhere;
+	gap: 8px;
+	align-self: stretch;
 }
 
-.mailbox-default strong {
-	color: var(--foreground);
+.default-from-select {
+	width: auto;
+	max-width: 100%;
 }
 
 .signature-form {

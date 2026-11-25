@@ -275,6 +275,15 @@ export function forwardDraft(message: Message): Draft {
 export const SIGNATURE_SEPARATOR = "-- ";
 
 /**
+ * The lines that `withSignature` adds for the signature: the separator, then each line of the signature.
+ * Empty for an empty signature.
+ */
+export function signatureLines(signature: string): string[] {
+	if (signature.trim() === "") return [];
+	return [SIGNATURE_SEPARATOR, ...signature.replace(/\r\n?/g, "\n").split("\n")];
+}
+
+/**
  * The draft with the signature of the mailbox. The text of a draft is the quote of a reply or the header of
  * a forward, so the signature goes above it, after two empty lines for the message. An empty signature
  * changes nothing.

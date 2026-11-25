@@ -15,7 +15,7 @@ beforeEach(async () => {
 
 const DEFAULTS = {
 	sidebar: { shared_mailboxes_collapsed: false, agent_mailboxes_collapsed: false },
-	default_mailbox_id: null,
+	default_from: {},
 };
 
 /** Creates the team mailbox support@dock.test with the given members, and returns its id. */
@@ -87,45 +87,77 @@ describe("mail settings", () => {
 	});
 });
 
-describe("the default mailbox of a person", () => {
-	it("accepts a team mailbox that the person reads, and keeps the sidebar settings", async () => {
+describe("the default From address of each mailbox", () => {
+	/** Sets the default From address of one mailbox for `actor`. */
+	const setFrom = (actor: Actor, mailboxId: string, fromId: string | null) =>
+		actor.call("mail.update_settings", { default_from: { mailbox_id: mailboxId, from_mailbox_id: fromId } });
+
+	it("saves one mailbox at a time for the person, and keeps the other settings", async () => {
 		const support = await createSupport([{ id: ada.id }]);
 		await ada.call("mail.update_settings", { sidebar: { agent_mailboxes_collapsed: true } });
 
-		const changed = await ada.call("mail.update_settings", { default_mailbox_id: support });
+		// In the own mailbox, a new message comes from the team mailbox. In the team mailbox, from the person.
+		await setFrom(ada, ada.id, support);
+		const changed = await setFrom(ada, support, ada.id);
 		expect(changed).toEqual({
-			...DEFAULTS,
 			sidebar: { ...DEFAULTS.sidebar, agent_mailboxes_collapsed: true },
-			default_mailbox_id: support,
+			default_from: { [ada.id]: support, [support]: ada.id },
 		});
-		// A change of a sidebar section keeps the default, and the default is for this person only.
+		// A change of a sidebar section keeps them, and they are for this person only.
 		await ada.call("mail.update_settings", { sidebar: { shared_mailboxes_collapsed: true } });
-		expect((await ada.call("mail.get_settings")).default_mailbox_id).toBe(support);
+		expect((await ada.call("mail.get_settings")).default_from).toEqual(changed.default_from);
 		expect(await owner.call("mail.get_settings")).toEqual(DEFAULTS);
 
-		// The own id and null both mean the own mailbox.
-		expect((await ada.call("mail.update_settings", { default_mailbox_id: ada.id })).default_mailbox_id).toBeNull();
-		await ada.call("mail.update_settings", { default_mailbox_id: support });
-		expect((await ada.call("mail.update_settings", { default_mailbox_id: null })).default_mailbox_id).toBeNull();
+		// The id of the mailbox itself and null both remove the setting of that mailbox only.
+		expect((await setFrom(ada, support, support)).default_from).toEqual({ [ada.id]: support });
+		expect((await setFrom(ada, ada.id, null)).default_from).toEqual({});
 	});
 
-	it("refuses a mailbox that the person cannot open, and leaves the setting as it was", async () => {
+	it("refuses a mailbox that the person cannot write in or send from, and keeps the settings", async () => {
 		const support = await createSupport([{ id: bot.id }]);
-		// Not a member of the team mailbox.
-		expect(await codeOf(ada.call("mail.update_settings", { default_mailbox_id: support }))).toBe("forbidden");
-		// An unknown team mailbox.
-		expect(
-			await codeOf(ada.call("mail.update_settings", { default_mailbox_id: "tmb_00000000000000000000000000" })),
-		).toBe("not_found");
+		const unknown = "tmb_00000000000000000000000000";
+		// Not a member of the team mailbox, as the mailbox where the person writes or as the From.
+		expect(await codeOf(setFrom(ada, support, ada.id))).toBe("forbidden");
+		expect(await codeOf(setFrom(ada, ada.id, support))).toBe("forbidden");
+		expect(await codeOf(setFrom(ada, ada.id, unknown))).toBe("not_found");
 		// The mailbox of an agent, also for the owner who can read it, and the mailbox of a different person.
-		expect(await codeOf(owner.call("mail.update_settings", { default_mailbox_id: bot.id }))).toBe("invalid");
-		expect(await codeOf(owner.call("mail.update_settings", { default_mailbox_id: ada.id }))).toBe("invalid");
+		expect(await codeOf(setFrom(owner, bot.id, owner.id))).toBe("invalid");
+		expect(await codeOf(setFrom(owner, owner.id, bot.id))).toBe("invalid");
+		expect(await codeOf(setFrom(owner, ada.id, owner.id))).toBe("invalid");
+		expect(await codeOf(setFrom(owner, owner.id, ada.id))).toBe("invalid");
 		expect(await ada.call("mail.get_settings")).toEqual(DEFAULTS);
+		expect(await owner.call("mail.get_settings")).toEqual(DEFAULTS);
 	});
 
-	it("needs mail.read in the membership", async () => {
-		const support = await createSupport([{ id: ada.id, scopes: ["mail.send"] }]);
-		expect(await codeOf(ada.call("mail.update_settings", { default_mailbox_id: support }))).toBe("forbidden");
+	it("needs mail.read where the person writes and mail.send where the message comes from", async () => {
+		const readOnly = await createSupport([{ id: ada.id, scopes: ["mail.read"] }]);
+		const { team_mailbox: sales } = await owner.call("directory.create_team_mailbox", {
+			display_name: "Sales",
+			address: "sales@dock.test",
+			member_ids: [],
+		});
+		await owner.call("directory.add_team_mailbox_member", {
+			mailbox_id: sales.id,
+			principal_id: ada.id,
+			scopes: ["mail.send"],
+		});
+		// The person reads the support mailbox, so a new message there can come from the own address.
+		expect((await setFrom(ada, readOnly, ada.id)).default_from).toEqual({ [readOnly]: ada.id });
+		// The person cannot send from the support mailbox, and cannot read the sales mailbox.
+		expect(await codeOf(setFrom(ada, ada.id, readOnly))).toBe("forbidden");
+		expect(await codeOf(setFrom(ada, sales.id, ada.id))).toBe("forbidden");
+		expect((await setFrom(ada, ada.id, sales.id)).default_from).toEqual({ [readOnly]: ada.id, [ada.id]: sales.id });
+	});
+
+	it("removes a setting after the membership ended", async () => {
+		const support = await createSupport([{ id: ada.id }]);
+		await setFrom(ada, support, ada.id);
+		await setFrom(ada, ada.id, support);
+		await owner.call("directory.remove_team_mailbox_member", { mailbox_id: support, principal_id: ada.id });
+		// A new value needs the membership. A removal does not.
+		expect(await codeOf(setFrom(ada, support, ada.id))).toBe("forbidden");
+		expect((await setFrom(ada, support, null)).default_from).toEqual({ [ada.id]: support });
+		expect((await setFrom(ada, ada.id, null)).default_from).toEqual({});
 	});
 });
 

@@ -11,6 +11,7 @@ import { type FormEvent, type ReactNode, useCallback, useEffect, useId, useState
 import { api, errorMessage } from "../../lib/api.ts";
 import { Icon } from "../../lib/icons.tsx";
 import { Link, navigate } from "../../lib/router.tsx";
+import { Select } from "../../lib/Select.tsx";
 import { useToast } from "../../lib/toast.tsx";
 import { useOnChange } from "../../lib/useOnChange.ts";
 import { usePrincipals } from "../../lib/usePrincipals.ts";
@@ -22,7 +23,7 @@ import { isOrgAdmin, useSession } from "../auth/session.tsx";
 import { unavailableText } from "./autoLabels.ts";
 import type { MailboxSettings as MailboxSettingsData } from "./data.ts";
 import { mailboxInput } from "./mailbox.tsx";
-import { defaultMailboxId, type MailboxRights } from "./mailboxNav.ts";
+import { defaultFromId, type FromOption, type MailboxRights, mailboxKey } from "./mailboxNav.ts";
 
 /** The mailbox of the settings view, as the person sees it. `id` is null for the own mailbox of the person. */
 export interface SettingsMailbox {
@@ -37,12 +38,16 @@ export interface MailboxSettingsProps {
 	/** The title of the view, with the name of a team mailbox or an agent mailbox in front. */
 	title: string;
 	rights: MailboxRights;
-	/** The mailboxes that the person can use, to know if the saved default still opens. Null while they load. */
+	/** The mailboxes that the person can use. Null while they load. */
 	mailboxes: readonly Mailbox[] | null;
+	/** The addresses that the person can send from (`fromOptions`), for the default From of the mailbox. */
+	senders: readonly FromOption[];
 	/** Grows when the mailbox changes, for example after a change in the dialog of the auto labels. */
 	refreshKey: number;
 	/** Called with the settings that a save returned, so the next draft has the new signature. */
 	onSettingsSaved: (settings: MailboxSettingsData) => void;
+	/** Called with the mail settings of the person that a save returned, so the next draft has the new From. */
+	onMailSettingsSaved: (settings: MailSettings) => void;
 	/** Called after a change of the members of a team mailbox, so the rights of the person load again. */
 	onMembersChanged: () => void;
 	/** Opens the dialog of the auto labels. */
@@ -53,8 +58,8 @@ export interface MailboxSettingsProps {
 
 /**
  * The settings view of the open mailbox (`/mail/settings`, or under the path of a team or agent mailbox),
- * from the gear in the header of Mail: AI, who can use the mailbox, the default address of the person, and
- * the signature. It replaces the list in the main pane, next to the sidebar. Each section saves on its own.
+ * from the gear in the header of Mail: AI, who can use the mailbox, the default From address of the person
+ * in the mailbox, and the signature. It replaces the list in the main pane, next to the sidebar. Each section saves on its own.
  */
 export function MailboxSettings(props: MailboxSettingsProps) {
 	const { mailbox } = props;
@@ -81,7 +86,13 @@ export function MailboxSettings(props: MailboxSettingsProps) {
 					</p>
 					<AiSection {...props} />
 					<AccessSection mailbox={mailbox} onMembersChanged={props.onMembersChanged} />
-					<DefaultSection mailbox={mailbox} mailboxes={props.mailboxes} />
+					<DefaultSection
+						mailbox={mailbox}
+						rights={props.rights}
+						mailboxes={props.mailboxes}
+						senders={props.senders}
+						onSaved={props.onMailSettingsSaved}
+					/>
 					<SignatureSection mailbox={mailbox} rights={props.rights} onSaved={props.onSettingsSaved} />
 				</div>
 			</div>
@@ -324,37 +335,72 @@ function MemberList({ team, principals }: { team: TeamMailbox; principals: reado
 }
 
 /**
- * The default address of the person: the mailbox that Mail opens first, and so the address that a new
- * message comes from. It is a setting of the person (`mail.update_settings`), not of the mailbox.
+ * The default From address of a new message in this mailbox (`default_from` of `mail.update_settings`). It is
+ * a setting of the person: each member of a shared mailbox has their own. A reply comes from the mailbox of
+ * its conversation, so this setting does not change it.
  */
-function DefaultSection({ mailbox, mailboxes }: { mailbox: SettingsMailbox; mailboxes: readonly Mailbox[] | null }) {
+function DefaultSection({
+	mailbox,
+	rights,
+	mailboxes,
+	senders,
+	onSaved,
+}: {
+	mailbox: SettingsMailbox;
+	rights: MailboxRights;
+	mailboxes: readonly Mailbox[] | null;
+	senders: readonly FromOption[];
+	onSaved: (settings: MailSettings) => void;
+}) {
+	const { whoami } = useSession();
 	const toast = useToast();
+	const ids = { field: useId(), hint: useId() };
 	const load = useCallback(() => api.call("mail.get_settings"), []);
 	const { data: settings, setData, error, setError, reload } = useLoad<MailSettings>(load);
+	// The key (`mailboxKey`) of the address that the person chose and did not save yet.
+	const [choice, setChoice] = useState<string | null>(null);
 	const [busy, setBusy] = useState(false);
 
 	if (mailbox.kind === "agent") {
 		return (
 			<Panel title="Default address">
-				<p className="field-hint">Nobody sends from the mailbox of an agent, so it cannot be your default address.</p>
+				<p className="field-hint">Nobody sends from the mailbox of an agent, so it has no default address.</p>
+			</Panel>
+		);
+	}
+	if (!rights.send) {
+		return (
+			<Panel title="Default address">
+				<p className="field-hint">
+					Your membership does not let you send from this mailbox, so you cannot write a new message in it.
+				</p>
 			</Panel>
 		);
 	}
 
-	// The list of the mailboxes decides the default (`defaultMailboxId`, as for the start of Mail), and if
-	// this mailbox can be one. Without a saved default, the own mailbox needs no list.
-	const saved = settings?.default_mailbox_id ?? null;
-	const ready = settings !== null && (mailboxes !== null || (mailbox.id === null && saved === null));
-	const isDefault = defaultMailboxId(saved, mailboxes ?? []) === mailbox.id;
-	// A team mailbox can be the default only while the person can read it, as the server decides.
-	const allowed = mailbox.id === null || defaultMailboxId(mailbox.id, mailboxes ?? []) !== null;
+	// The saved address counts only while the person can send from it, as in the composer. The list of the
+	// mailboxes decides that, so the section waits for it.
+	const ownId = whoami.principal.id;
+	const ready = settings !== null && mailboxes !== null;
+	const current = mailboxKey(defaultFromId(mailbox.id, settings?.default_from ?? {}, senders, ownId));
+	const selected = choice ?? current;
+	const unchanged = selected === current;
+	const name = mailbox.id === null ? "your mailbox" : mailbox.display_name;
 
-	async function makeDefault() {
+	async function save(event: FormEvent<HTMLFormElement>) {
+		event.preventDefault();
+		const option = senders.find((sender) => mailboxKey(sender.id) === selected);
+		if (!option || unchanged) return;
 		setBusy(true);
 		setError(null);
 		try {
-			setData(await api.call("mail.update_settings", { default_mailbox_id: mailbox.id }));
-			toast({ message: `${mailbox.address} is now your default address.` });
+			const next = await api.call("mail.update_settings", {
+				default_from: { mailbox_id: mailbox.id ?? ownId, from_mailbox_id: option.id ?? ownId },
+			});
+			setData(next);
+			setChoice(null);
+			onSaved(next);
+			toast({ message: `A new message in ${name} comes from ${option.address}.` });
 		} catch (caught) {
 			setError(errorMessage(caught));
 		} finally {
@@ -364,26 +410,36 @@ function DefaultSection({ mailbox, mailboxes }: { mailbox: SettingsMailbox; mail
 
 	return (
 		<Panel title="Default address">
-			<p className="field-hint">
-				Mail opens the mailbox of your default address first, so a new message comes from that address.
+			<p id={ids.hint} className="field-hint">
+				A new message in this mailbox comes from this address. You can change it in the composer. A reply comes from the
+				address of its conversation.
+				{mailbox.kind === "team" && " Each member of this shared mailbox chooses their own address."}
 			</p>
 			{!ready && !(error && !settings) && <p className="field-hint">Loading…</p>}
 			{!settings && error && <LoadError error={error} onRetry={() => void reload()} />}
-			{ready &&
-				(isDefault ? (
-					<p className="mailbox-default" role="status">
-						<Icon name="check" size={16} />
-						<span>
-							<strong>{mailbox.address}</strong> is your default address.
-						</span>
-					</p>
-				) : allowed ? (
-					<button type="button" className="button button-small" onClick={() => void makeDefault()} disabled={busy}>
-						Make {mailbox.address} my default
+			{ready && (
+				<form className="default-from-form" onSubmit={save} noValidate>
+					<label htmlFor={ids.field} className="visually-hidden">
+						Default address
+					</label>
+					<Select
+						id={ids.field}
+						className="input default-from-select"
+						value={selected}
+						options={senders.map((sender) => ({
+							value: mailboxKey(sender.id),
+							label: sender.display_name,
+							description: `<${sender.address}>`,
+						}))}
+						onChange={setChoice}
+						disabled={busy}
+						aria-describedby={ids.hint}
+					/>
+					<button type="submit" className="button button-primary button-small" disabled={busy || unchanged}>
+						{busy ? "Saving…" : "Save"}
 					</button>
-				) : (
-					<p className="field-hint">You cannot read this mailbox now, so it cannot be your default address.</p>
-				))}
+				</form>
+			)}
 			{settings && error && (
 				<p className="form-error" role="alert">
 					{error}
