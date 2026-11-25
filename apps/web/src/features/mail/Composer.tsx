@@ -270,7 +270,9 @@ export function Composer({
 	 */
 	function sendOnModEnter(event: KeyboardEvent<HTMLFormElement>) {
 		if (event.key !== "Enter" || !(event.ctrlKey || event.metaKey) || event.altKey || event.shiftKey) return;
-		if (keyUsed(event)) return;
+		if (keyUsed(event) || event.nativeEvent.isComposing) return;
+		// The link dialog of the editor is in a portal, but React sends its keys here. They do not send the message.
+		if (!(event.target instanceof Element) || !event.currentTarget.contains(event.target)) return;
 		event.preventDefault();
 		if (!sending) event.currentTarget.requestSubmit();
 	}
@@ -582,7 +584,8 @@ export function Composer({
 			className="compose-inline"
 			aria-label={draft.title}
 			onKeyDown={(event) => {
-				if (event.key !== "Escape" || keyUsed(event)) return;
+				// An Escape that stops the text composition of an input method does not close the reply.
+				if (event.key !== "Escape" || keyUsed(event) || event.nativeEvent.isComposing) return;
 				// The link dialog of the editor is a child in React, so its keys come here. Its Escape closes only it.
 				if (event.target instanceof Element && event.target.closest("dialog")) return;
 				event.preventDefault();
