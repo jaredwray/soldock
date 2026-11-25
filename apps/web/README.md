@@ -173,6 +173,11 @@ MCP clients. The app has no UI-only path.
     and a short date. A click on the line opens or closes the message.
   - An open message shows the initials of the sender in an avatar, the name in bold, the address
     and the full date in muted text, and the recipients under the name.
+  - When the pointer is on the header of an open message, a copy button shows next to the address of
+    the sender. The button puts the address on the clipboard. On a touch screen, the button always shows.
+    The address and the button are outside the toggle, because a button cannot hold a button. The person
+    can also select the text of the address. The toggle covers the rest of the header, so a click there
+    closes the message.
   - An attachment is a file card: an icon, the name, the size and the type, and a Download button.
     The delivery status of a recipient is a chip with a dot, the address and the status.
   - In a very large thread, `mail.get_thread` leaves out the bodies of older messages
