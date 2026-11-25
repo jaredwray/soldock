@@ -305,16 +305,23 @@ from outside, when the Screener is on:
 
 1. A decision of a person decides: `in` goes to the inbox, `out` is held as `out`, and a sender that
    waits is held as `pending`.
-2. With no decision, the mail goes to the inbox when the mailbox sent mail to the address (the table
-   `recipients`), when the message references a Message-ID of mail that the mailbox sent, or when the
-   mailbox has earlier mail from the address in a view (not spam). So when the Screener goes on in a
-   mailbox with mail, only new senders wait.
+2. With no decision, the mail goes to the inbox when a person sent mail from the mailbox to the address
+   (the column `person_sent` of the table `recipients`), when the message references a Message-ID of
+   mail that a person sent from the mailbox, or when the mailbox has earlier mail from the address in a
+   view (not spam). So when the Screener goes on in a mailbox with mail, only new senders wait. A send
+   by an agent or a service account does not count. Sent mail from before the column `sent_by_json`
+   counts as the mail of a person: at that time, only the person who owns a mailbox sent from it.
 3. Otherwise the mail is held as `pending`, and the sender gets a row with the status `pending`.
 
 - Held mail has the column `messages.screen` set (`pending` or `out`). It gets `UNREAD` and the tag
   label, and no `INBOX`. It gets no auto labels: content from a stranger does not go to the model.
-- Held mail makes no webhook event and no watch signal. All counts (`inbox_unread`, `mail.list_labels`)
-  leave it out. `mail.get_profile` gives `screener_pending`: the senders that wait.
+- Held mail makes no webhook event and no watch signal. All counts (`messages_total`, `threads_total`,
+  `inbox_unread`, `mail.list_labels`) leave it out. `mail.get_profile` gives `screener_pending`: the
+  senders that wait.
+- `mail.modify_threads` changes only `UNREAD`, `STARRED` and `IMPORTANT` on a thread with held mail. A
+  different label fails with `conflict`: a label of a view would show held mail with no decision, or
+  would stay on the mail after a decision. So held mail never gets `INBOX`, and `mail.run_auto_labels`,
+  which reads the inbox, never sends it to the model.
 - Held mail joins only held mail of the same sender (see [Threads](#threads)). So a thread view never
   shows held mail beside the mail of the views.
 - Mail without a From address is not held: no decision can name its sender.
@@ -337,7 +344,10 @@ from outside, when the Screener is on:
 - When mail goes to the inbox, the decision makes one webhook event and one watch signal, and changes the
   `version`.
 - A send by a person to a sender that waits screens that sender in, in the transaction of the send, so a
-  reply to held mail joins its thread. A send by an agent decides nothing, and a decision `out` stays.
+  reply to held mail joins its thread. This is a decision, so it needs what `mail.screen_sender` needs:
+  a person, with `mail.modify` in the credential and, in a team mailbox, in the membership. Without
+  that, the send goes out and decides nothing. A send by an agent decides nothing, and a decision `out`
+  stays.
 
 `mail.list_screener` lists the senders with one status: `pending` (the default, newest mail first), or
 `in` and `out` (the history, newest decision first). Each row has the newest held message, its subject
@@ -369,7 +379,8 @@ from outside, so each row has `untrusted: true`, and MCP adds its notice before 
 `directory.read` and `directory.write`. An agent and a service account cannot call them.
 
 A decision writes the audit line `mail.screen_sender` with the mailbox as `target`, `mailbox` for a team
-mailbox, and the decision as `code`. The line never holds the address of the sender. A change of the
+mailbox, and the decision as `code`. The line never holds the address of the sender. A send that screens
+a sender in writes the same line with the code `in`, one line for each sender. A change of the
 default writes `mail.update_org_settings` with the code `on` or `off`.
 
 ### Known limits
@@ -540,7 +551,9 @@ message of a run has `may_archive` 0, so the classifier stage keeps the message 
 - Results exclude spam and trash unless the query names them or uses `in:anywhere`.
 - Results exclude the mail that the [Screener](#the-screener) holds, also with `in:anywhere`.
   `in:screener` finds the mail of the senders that wait, and `in:screened_out` the mail of the senders
-  that a person screened out. A negated term (`-in:screener`) does not lift the exclusion.
+  that a person screened out. A term shows the held mail of its state only, also in an `OR`:
+  `in:screener OR from:x@y` does not return the mail of `x@y` that was screened out. A negated term
+  (`-in:screener`) does not lift the exclusion.
 - The query text becomes bound values only. FTS words are quoted, so FTS operators in the text
   have no effect. Control characters are removed from the query.
 
@@ -826,7 +839,8 @@ A disabled endpoint stays disabled. Delete it and create a new one.
   only such mail gets a label from the sender domain alone (R3, R4). A forged From address or forged
   list headers cannot hide mail from the inbox.
 - The Screener: only a person decides. An agent reads the queue, which is untrusted content, and an
-  agent send never screens a sender in. So a message cannot make an agent let its sender in. A forged
+  agent send never screens a sender in, and never lets a later message of its recipient past the
+  Screener. So a message cannot make an agent let its sender in. A forged
   From address of a known sender gets past the Screener when the domain has no DMARC policy.
 
 ## Data inventory
@@ -841,7 +855,7 @@ A disabled endpoint stays disabled. Delete it and create a new one.
 | Reset pause | `MailboxDO` table `meta`, keys `delivery_pause`, `delivery_pause_generation` | Keeps the old mailbox paused and rejects calls from an older reset |
 | Idempotency keys of `mail.send` | `MailboxDO` table `idempotency` | Kept 24 hours, with the SHA-256 hash of the request. In a team mailbox, the key has the principal id of its caller in front |
 | Change counter | `MailboxDO` table `meta` (`version`) | |
-| Sent recipients | `MailboxDO` table `recipients` | One row for each address that the mailbox sent mail to: the address, the number of sent messages and the time of the last one. Rebuildable from the sent messages |
+| Sent recipients | `MailboxDO` table `recipients` | One row for each address that the mailbox sent mail to: the address, the number of sent messages, the time of the last one, and `person_sent` (1 when a person sent mail to the address, for the Screener). Rebuildable from the sent messages |
 | Watch sockets | `MailboxDO` hibernatable WebSockets, tag `watch` | Not stored. A socket ends with its `subscriptions/listen` stream, and a restart of the object ends it. No backup |
 | Mail settings of a person | `MailboxDO` table `meta` (`settings`) | JSON. Only in the own mailbox of a person. The sidebar sections that the person collapsed, and the default From address of each mailbox (`default_from`) |
 | Settings of a mailbox | `MailboxDO` table `meta` (`mailbox_settings`) | JSON. In each mailbox: the plain-text signature, at most 2,000 characters, and the Screener mode (`inherit`, `on` or `off`). The members of a team mailbox share it |

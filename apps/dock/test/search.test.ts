@@ -52,16 +52,22 @@ describe("compileQuery", () => {
 		expect(compile("in:anywhere invoice").where).not.toMatch(exclusion);
 	});
 
-	it("excludes the mail that the Screener holds unless a term that is not negated names it", () => {
-		const held = /\bm\.screen IS NULL\b/;
-		expect(compile("invoice").where).toMatch(held);
+	it("excludes the mail that the Screener holds, but for the state that a term that is not negated names", () => {
+		const SPAM_TRASH =
+			"NOT EXISTS (SELECT 1 FROM message_labels ml WHERE ml.message_seq = m.seq AND ml.label_id IN ('SPAM', 'TRASH'))";
+		const held = /\bm\.screen IS NULL$/;
+		const whereOf = (query: string) => compile(query).where.replace(` AND ${SPAM_TRASH}`, "");
+		expect(whereOf("invoice")).toMatch(held);
 		// in:anywhere lifts the exclusion of spam and trash, but held mail waits for a decision.
 		expect(compile("in:anywhere").where).toMatch(held);
-		expect(compile("-in:screener").where).toMatch(held);
-		expect(compile("in:screener").where).toBe(
-			"(coalesce(m.screen, '') = 'pending') AND NOT EXISTS (SELECT 1 FROM message_labels ml WHERE ml.message_seq = m.seq AND ml.label_id IN ('SPAM', 'TRASH'))",
+		expect(whereOf("-in:screener")).toMatch(held);
+		expect(whereOf("in:screener")).toBe(
+			"(coalesce(m.screen, '') = 'pending') AND (m.screen IS NULL OR m.screen = 'pending')",
 		);
-		expect(compile("in:screened_out OR in:inbox").where).not.toMatch(held);
+		// One named state does not show the other state, also in an OR.
+		expect(whereOf("in:screener OR invoice")).toMatch(/ AND \(m\.screen IS NULL OR m\.screen = 'pending'\)$/);
+		expect(whereOf("in:screened_out OR in:inbox")).toMatch(/ AND \(m\.screen IS NULL OR m\.screen = 'out'\)$/);
+		expect(whereOf("in:screener OR in:screened_out")).not.toContain("m.screen IS NULL");
 	});
 
 	it("turns dates, ages and sizes into bound numbers", () => {

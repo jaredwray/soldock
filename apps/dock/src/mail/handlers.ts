@@ -735,6 +735,9 @@ export const mailHandlers: Pick<HandlerMap<CallContext>, MailOperation> = {
 			replyThreadId: reply?.threadId ?? null,
 			recipients,
 			sentBy: { principal_id: principal.id, kind: principal.kind, display_name: principal.display_name },
+			// A send that screens a sender in is a decision, so it needs what mail.screen_sender needs: a person
+			// with mail.modify in the credential. The check of the membership of a team mailbox is below.
+			mayScreen: call.caller.kind === "human" && call.caller.scopes.has("mail.modify"),
 		};
 		// A send has slow steps: it resolves the recipients, composes the message and writes it to R2. An
 		// admin can remove the member in that time. So the handler checks the membership again, just before
@@ -742,7 +745,11 @@ export const mailHandlers: Pick<HandlerMap<CallContext>, MailOperation> = {
 		// between them is too late to stop this send.
 		if (record.kind === "team") {
 			try {
-				await teamMailboxFor(call.env.DIRECTORY, record.id, call.caller.id, ["mail.send", ...replyScopes]);
+				const member = await teamMailboxFor(call.env.DIRECTORY, record.id, call.caller.id, [
+					"mail.send",
+					...replyScopes,
+				]);
+				sendInput.mayScreen = sendInput.mayScreen === true && member.scopes.includes("mail.modify");
 			} catch (error) {
 				// No message references this attempt's object.
 				await call.env.BLOBS.delete(rawKey);
@@ -767,6 +774,8 @@ export const mailHandlers: Pick<HandlerMap<CallContext>, MailOperation> = {
 				externalRecipients: recipients.filter((recipient) => recipient.kind === "external").length,
 			});
 		} else auditOk(call, record, "mail.send", sent.result.message_id);
+		// Each sender that the send screened in gets the line of a decision. The line never holds the address.
+		for (let n = 0; n < sent.screenedIn; n++) auditOk(call, record, "mail.screen_sender", record.id, { code: "in" });
 		return sent.result;
 	},
 

@@ -272,7 +272,10 @@ MCP clients. The app has no UI-only path.
   and snippet of the newest message as plain text, the number of messages, a link that opens the newest
   message in the search `in:screener`, and **Screen in** and **Screen out** (`mail.screen_sender`). The
   buttons name the sender for a screen reader. After a decision, the row goes, a toast tells the result,
-  the focus goes to the next row, and the counts load again. **History** lists the senders that a person
+  the focus goes to the next row, and the counts load again. After the last row goes, the focus goes to
+  the text of the empty list. While the Screener is off, the toast of a decision **out** tells that the
+  decision is stored. In a search of held mail (`in:screener`, `in:screened_out`), the toolbar and the
+  keys offer only the read state and the star: the server refuses a different label on held mail. **History** lists the senders that a person
   screened out or in, with who decided and when, a button for the other decision, and a form that screens
   out an address that did not write yet. Without `mail.modify`, the view has no buttons and says why. When
   the Screener is off, a notice says so. Each list has loading, empty and error states, and **Load more**.

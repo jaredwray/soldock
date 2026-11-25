@@ -54,6 +54,7 @@ import {
 	SCREENER_RESTORE_MS,
 	type ScreenerContext,
 	type ScreenerSenderRecord,
+	SENT_BY_PERSON,
 	screenerEnabled,
 	senderRow,
 	writeDecision,
@@ -144,6 +145,11 @@ export interface SendInput {
 	replyThreadId: string | null;
 	recipients: { address: string; kind: "local" | "external"; mailboxId: string | null; self: boolean }[];
 	sentBy: SentBy;
+	/**
+	 * True when the sender can decide in the Screener: a person, with mail.modify in the credential and, in a
+	 * team mailbox, in the membership. Only then does the send screen in a recipient that waits.
+	 */
+	mayScreen?: boolean;
 }
 
 /** The person or agent that sent a message from this mailbox, with the name at that time. */
@@ -396,6 +402,9 @@ const AUTO_LABEL_MAILBOX_KEY = "auto_label_mailbox_id";
 const AUTO_LABELS_ORDER = AUTO_LABELS.map((label) => label.key);
 /** The folded names of the built-in auto labels. A custom auto label cannot take one. */
 const AUTO_LABELS_NAMES = new Set(AUTO_LABELS.map((label) => foldLabelName(label.name)));
+
+/** The labels that `modifyThreads` can change on a thread that the Screener holds. */
+const HELD_MAIL_LABELS: ReadonlySet<string> = new Set(["UNREAD", "STARRED", "IMPORTANT"]);
 
 /** A refusal thrown inside a transaction, so the transaction rolls back. */
 class AutoLabelRefusal extends Error {
@@ -766,7 +775,7 @@ export class MailboxDO extends DurableObject<Env> {
 	/**
 	 * Where the Screener puts new mail from outside, when it is on: null for the inbox, `pending` to wait for
 	 * a decision, or `out` for a sender that a person screened out. A decision of a person comes first. With
-	 * no decision, a sender that the mailbox wrote to, a reply to mail that the mailbox sent, and a sender
+	 * no decision, a sender that a person wrote to, a reply to mail that a person sent, and a sender
 	 * with earlier mail in the views go to the inbox. So when the Screener goes on, only new senders wait.
 	 * Mail without a From address is not held: no decision can name its sender.
 	 */
@@ -775,10 +784,15 @@ export class MailboxDO extends DurableObject<Env> {
 		if (!address) return null;
 		const row = senderRow(this.sql, address);
 		if (row) return row.status === "in" ? null : row.status;
-		if (this.one("SELECT 1 AS found FROM recipients WHERE address_key = ?", address)) return null;
+		// A send by an agent decides nothing, so only the sends of a person count here and for the references.
+		if (this.one("SELECT 1 AS found FROM recipients WHERE address_key = ? AND person_sent = 1", address)) return null;
 		const refs = [...new Set([...(parsed.inReplyTo ? [parsed.inReplyTo] : []), ...parsed.references])].slice(-50);
 		for (const ref of refs) {
-			if (this.one("SELECT 1 AS found FROM messages WHERE message_id_header = ? AND origin = 'sent'", ref)) return null;
+			const sent = this.one(
+				`SELECT 1 AS found FROM messages m WHERE m.message_id_header = ? AND m.origin = 'sent' AND ${SENT_BY_PERSON}`,
+				ref,
+			);
+			if (sent) return null;
 		}
 		const earlier = this.one(
 			`SELECT 1 AS found FROM messages m WHERE m.from_addr = ? AND m.screen IS NULL AND m.origin <> 'sent'
@@ -814,16 +828,19 @@ export class MailboxDO extends DurableObject<Env> {
 
 	/**
 	 * Screens a sender in for a send by a person to the sender, inside the transaction of the send. Only a
-	 * sender that waits changes: a decision of a person stays. Returns the messages that went to the inbox.
+	 * sender that waits changes: a decision of a person stays. Returns the senders that changed and the
+	 * messages that went to the inbox.
 	 */
-	private screenInRecipients(addresses: MailAddress[], by: DecidedBy, now: number): number {
+	private screenInRecipients(addresses: MailAddress[], by: DecidedBy, now: number): { senders: number; moved: number } {
+		let senders = 0;
 		let moved = 0;
 		for (const address of new Set(addresses.map((a) => a.address.toLowerCase()))) {
 			if (senderRow(this.sql, address)?.status !== "pending") continue;
 			moved += this.releaseHeld("m.from_addr = ? AND m.screen = 'pending'", [address], true);
 			writeDecision(this.sql, address, "in", by, now);
+			senders++;
 		}
-		return moved;
+		return { senders, moved };
 	}
 
 	/**
@@ -1232,8 +1249,10 @@ export class MailboxDO extends DurableObject<Env> {
 		screener_pending: number;
 		version: number;
 	} {
+		// The totals do not count the mail that the Screener holds. A thread is all held or all in the views.
 		const counts = this.one<{ messages: number; threads: number }>(
-			"SELECT (SELECT COUNT(*) FROM messages) AS messages, (SELECT COUNT(*) FROM threads) AS threads",
+			`SELECT (SELECT COUNT(*) FROM messages WHERE screen IS NULL) AS messages,
+				(SELECT COUNT(*) FROM threads) - (SELECT COUNT(DISTINCT thread_id) FROM messages WHERE screen IS NOT NULL) AS threads`,
 		);
 		const unread = this.one<{ n: number }>(
 			`SELECT COUNT(DISTINCT m.thread_id) AS n FROM messages m
@@ -1614,23 +1633,26 @@ export class MailboxDO extends DurableObject<Env> {
 	 * Counts one send to each address of a sent message, inside the transaction of the message. The same
 	 * address twice in one message (for example in To and in Cc) counts once, with the form of its first
 	 * entry. The stored form is the form of the newest send. A send with the same time as the stored one
-	 * is newer, because it is stored later. The migration backfill uses the same rules.
+	 * is newer, because it is stored later. The migration backfill uses the same rules. `byPerson` tells that
+	 * a person sent the message: the Screener lets an address in only for such a send.
 	 */
-	private recordRecipients(addresses: MailAddress[], sentAt: number): void {
+	private recordRecipients(addresses: MailAddress[], sentAt: number, byPerson: boolean): void {
 		const seen = new Set<string>();
 		for (const { address } of addresses) {
 			const key = address.toLowerCase();
 			if (seen.has(key)) continue;
 			seen.add(key);
 			this.sql.exec(
-				`INSERT INTO recipients (address_key, address, times_sent, last_sent_at) VALUES (?, ?, 1, ?)
+				`INSERT INTO recipients (address_key, address, times_sent, last_sent_at, person_sent) VALUES (?, ?, 1, ?, ?)
 				ON CONFLICT (address_key) DO UPDATE SET
 					address = CASE WHEN excluded.last_sent_at >= last_sent_at THEN excluded.address ELSE address END,
 					times_sent = times_sent + 1,
-					last_sent_at = MAX(last_sent_at, excluded.last_sent_at)`,
+					last_sent_at = MAX(last_sent_at, excluded.last_sent_at),
+					person_sent = MAX(person_sent, excluded.person_sent)`,
 				key,
 				address,
 				sentAt,
+				byPerson ? 1 : 0,
 			);
 		}
 	}
@@ -1692,11 +1714,25 @@ export class MailboxDO extends DurableObject<Env> {
 			}
 		}
 		const threadIds = [...new Set(params.threadIds)];
+		const heldChange = [...params.add, ...params.remove].some((label) => !HELD_MAIL_LABELS.has(label));
 		const changes: { seq: number; add: string[]; remove: string[] }[] = [];
 		let threadsChanged = 0;
 		for (const threadId of threadIds) {
 			if (!this.one("SELECT 1 AS found FROM threads WHERE id = ?", threadId)) {
 				return { error: { code: "not_found", message: `No thread has the id ${threadId}.` } };
+			}
+			// Held mail is in no view. A view label would put it in a view with no decision, or would stay on it
+			// after a decision. So only the read state and the marks of a person change on held mail.
+			if (
+				heldChange &&
+				this.one("SELECT 1 AS found FROM messages WHERE thread_id = ? AND screen IS NOT NULL", threadId)
+			) {
+				return {
+					error: {
+						code: "conflict",
+						message: `The Screener holds the thread ${threadId}. On held mail, only ${[...HELD_MAIL_LABELS].join(", ")} can change. To move the mail, a person screens the sender in or out (mail.screen_sender).`,
+					},
+				};
 			}
 			let changed = false;
 			for (const { seq } of this.all<{ seq: number }>("SELECT seq FROM messages WHERE thread_id = ?", threadId)) {
@@ -2310,26 +2346,34 @@ export class MailboxDO extends DurableObject<Env> {
 	 * transaction. With an idempotency key that was used before, it stores nothing and returns the
 	 * first result.
 	 */
-	async send(input: SendInput): Promise<{ duplicate: boolean; result: SendResult } | Refusal> {
+	async send(input: SendInput): Promise<{ duplicate: boolean; result: SendResult; screenedIn: number } | Refusal> {
 		if (this.meta("delivery_pause"))
 			return { error: { code: "conflict", message: "This mailbox is paused for a reset." } };
 		const now = Date.now();
 		const selfDelivery = input.recipients.some((r) => r.self);
 		let eventAt: number | null = null;
 		let released = 0;
+		let screenedIn = 0;
 		const result = this.ctx.storage.transactionSync(() => {
 			this.sql.exec("DELETE FROM idempotency WHERE created_at < ?", now - IDEMPOTENCY_TTL_MS);
 			if (input.idempotencyKey) {
 				const earlier = this.idempotentResult(input.idempotencyKey, input.requestHash);
 				if (earlier && "error" in earlier) return earlier;
-				if (earlier) return { duplicate: true, result: earlier };
+				if (earlier) return { duplicate: true, result: earlier, screenedIn: 0 };
 			}
 			const selfAddress = input.recipients.find((r) => r.self)?.address;
 			const selfTagLabel = selfAddress ? this.tagLabel(addressTag(selfAddress)) : null;
 			// A person who writes to a sender that waits wants the mail of that sender. This runs before the
-			// message is stored, so a reply to held mail joins its thread. A send by an agent decides nothing.
-			if (input.sentBy.kind === "human") {
-				released = this.screenInRecipients([...input.parsed.to, ...input.parsed.cc, ...input.bcc], input.sentBy, now);
+			// message is stored, so a reply to held mail joins its thread. A send by an agent decides nothing, and
+			// a send by a person who cannot decide in the Screener decides nothing.
+			if (input.mayScreen === true && input.sentBy.kind === "human") {
+				const decided = this.screenInRecipients(
+					[...input.parsed.to, ...input.parsed.cc, ...input.bcc],
+					{ ...input.sentBy, kind: "human" },
+					now,
+				);
+				released = decided.moved;
+				screenedIn = decided.senders;
 			}
 			const stored = this.insertMessage({
 				id: input.messageId,
@@ -2345,7 +2389,11 @@ export class MailboxDO extends DurableObject<Env> {
 				subjectFallback: true,
 				sentBy: input.sentBy,
 			});
-			this.recordRecipients([...input.parsed.to, ...input.parsed.cc, ...input.bcc], input.internalDate);
+			this.recordRecipients(
+				[...input.parsed.to, ...input.parsed.cc, ...input.bcc],
+				input.internalDate,
+				input.sentBy.kind === "human",
+			);
 			// A reply answers the thread, so its Needs reply label goes.
 			if (this.autoLabelsOn()) this.clearNeedsReply(stored.threadId);
 			const recipients: DeliveryRecord[] = [];
@@ -2382,7 +2430,7 @@ export class MailboxDO extends DurableObject<Env> {
 				);
 			}
 			this.bump();
-			return { duplicate: false, result: sendResult };
+			return { duplicate: false, result: sendResult, screenedIn };
 		});
 		if ("error" in result || result.duplicate) return result;
 		// Mail to the mailbox itself, or the mail of a sender that the send screened in, is in its inbox now.

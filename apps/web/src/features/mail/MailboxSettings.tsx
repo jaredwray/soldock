@@ -310,7 +310,9 @@ function ScreenerSection({
 						disabled={busy || !rights.modify}
 						aria-describedby={ids.hint}
 					/>
-					{!rights.modify && <p className="field-hint">Your membership does not let you change this mailbox.</p>}
+					{!rights.modify && (
+						<p className="field-hint">Your membership does not let you change the Screener of this mailbox.</p>
+					)}
 					<p className="screener-links">
 						<Link to={screenerPath(mailbox.id, "waiting")}>Open the Screener</Link>
 						<Link to={screenerPath(mailbox.id, "history")}>Open the Screener history</Link>

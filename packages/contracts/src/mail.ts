@@ -227,7 +227,7 @@ export const listMailboxes = defineOperation({
 export const getProfile = defineOperation({
 	name: "mail.get_profile",
 	summary: "Get the address and counts of a mailbox",
-	description: `Returns the address of the mailbox, the mail domains of this deployment, its message and thread totals, the unread inbox count, the number of senders that wait in the Screener, and a version number. The version grows with each change, so compare it to find out if anything changed. An address on a mail domain is local: mail to it never leaves the deployment. ${IN_MAILBOX_READ}`,
+	description: `Returns the address of the mailbox, the mail domains of this deployment, its message and thread totals, the unread inbox count, the number of senders that wait in the Screener, and a version number. The totals do not count the mail that the Screener holds. The version grows with each change, so compare it to find out if anything changed. An address on a mail domain is local: mail to it never leaves the deployment. ${IN_MAILBOX_READ}`,
 	http: { method: "GET", path: "/api/v1/mail/profile" },
 	scopes: ["mail.read"],
 	callers: ["human", "agent", "service"],
@@ -361,6 +361,7 @@ export const modifyThreads = defineOperation({
 		"Archive: remove INBOX. Mark as read: remove UNREAD. Star: add STARRED. Move to trash: add TRASH. Report spam: add SPAM.",
 		"Restore from trash or spam: remove TRASH or SPAM.",
 		"Set dry_run to true to get the counts without a change.",
+		"On a thread that the Screener holds, only UNREAD, STARRED and IMPORTANT can change. A different label fails with conflict: a person screens the sender in or out to move the mail (mail.screen_sender).",
 		`${IN_MAILBOX} A change in a team mailbox applies for each member: the members share the labels and the read state.`,
 		AGENT_READ_ONLY,
 	].join(" "),
@@ -386,7 +387,7 @@ export const modifyThreads = defineOperation({
 		messages_changed: z.number().int(),
 		dry_run: z.boolean(),
 	}),
-	errors: ["not_found"],
+	errors: ["not_found", "conflict"],
 });
 
 const OutgoingAttachment = z.strictObject({
@@ -421,6 +422,7 @@ export const send = defineOperation({
 		"The signature of the mailbox is not added. Read it with mail.get_mailbox_settings, and add it to text and html yourself.",
 		"To reply, set reply_to_message_id: the message joins that thread, and the subject defaults to Re: and the original subject.",
 		"A reply reads the message that it answers. So it also needs mail.read: in your credential, and in your membership of a team mailbox.",
+		"A send by a person to a sender that waits in the Screener screens that sender in, when the credential and the membership of a team mailbox have mail.modify. Without mail.modify, and for an agent, the send decides nothing.",
 		"An agent can send only to the recipients that its policy allows, also from a team mailbox. Otherwise the call fails with policy_denied and nothing is sent.",
 		"Set idempotency_key to make a retry safe: a second call with the same key and the same message returns the first result and sends nothing. The same key with a different message fails with conflict.",
 	].join(" "),
@@ -744,7 +746,7 @@ export const ScreenerSender = z.object({
 	decided_by: z
 		.object({
 			principal_id: z.string(),
-			kind: z.enum(["human", "agent"]),
+			kind: z.literal("human"),
 			display_name: z.string(),
 		})
 		.nullable(),
@@ -790,7 +792,7 @@ export const screenSender = defineOperation({
 		`For a sender that was screened out, only the mail of the last ${MAIL_LIMITS.screenerRestoreDays} days goes to the inbox. Older mail goes to All mail, marked as read.`,
 		"out: the mail of the sender that waits, and later mail from the sender, stay out of each view. in:screened_out finds it. Mail that is already in a view stays there.",
 		"The sender is never told. To change a decision, screen the sender again with the other decision.",
-		"You can also decide for a sender that did not write yet. The decision applies also while the Screener is off.",
+		"You can also decide for a sender that did not write yet. While the Screener is off, the decision is stored, and it decides when the Screener is on.",
 		"Set dry_run to true to get the counts without a change. People only.",
 		`${IN_MAILBOX} ${AGENT_READ_ONLY}`,
 	].join(" "),

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { screenerModeOptions, senderTitle, showScreener } from "../src/features/mail/screener.ts";
+import { screenerModeOptions, senderTitle, showScreener, showsHeldMail } from "../src/features/mail/screener.ts";
 
 // The sidebar of Mail shows the Screener of the open mailbox, and the settings view of the mailbox lets a
 // person follow the default of the organization or choose.
@@ -15,6 +15,20 @@ describe("the Screener in Mail", () => {
 		expect(screenerModeOptions(true).map((option) => option.value)).toEqual(["inherit", "on", "off"]);
 		expect(screenerModeOptions(true)[0]?.label).toBe("Use the default of the organization (now on)");
 		expect(screenerModeOptions(false)[0]?.label).toBe("Use the default of the organization (now off)");
+	});
+
+	// The server refuses a move of held mail, so the pane must know the searches that show it.
+	it("knows the searches that show the mail that the Screener holds", () => {
+		const search = (query: string) => showsHeldMail({ kind: "search", query });
+		// The Screener view opens held mail in these two searches.
+		expect(search("in:screener")).toBe(true);
+		expect(search("in:screened_out")).toBe(true);
+		expect(search("from:bob@example.com IN:Screener")).toBe(true);
+		// A negated term and a different word do not show held mail, and no other view does.
+		expect(search("-in:screener")).toBe(false);
+		expect(search("in:screeners")).toBe(false);
+		expect(search("in:inbox")).toBe(false);
+		expect(showsHeldMail({ kind: "system", view: "all" })).toBe(false);
 	});
 
 	it("names a sender with the display name and the address, or the address alone", () => {

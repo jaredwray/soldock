@@ -6,11 +6,11 @@ import { Icon } from "../../lib/icons.tsx";
 import { Link } from "../../lib/router.tsx";
 import { useToast } from "../../lib/toast.tsx";
 import { useOnChange } from "../../lib/useOnChange.ts";
-import { type ScreenerTab, screenerPath, threadPath, viewPath } from "../../routes.ts";
+import { isAgentMailbox, type ScreenerTab, screenerPath, threadPath, viewPath } from "../../routes.ts";
 import { SearchBox } from "../../shell/SearchBox.tsx";
 import { mailboxInput } from "./mailbox.tsx";
 import type { MailboxRights } from "./mailboxNav.ts";
-import { senderTitle } from "./screener.ts";
+import { screenedOutNotice, senderTitle } from "./screener.ts";
 
 export interface ScreenerProps {
 	/** The team mailbox or the agent mailbox, or null for the own mailbox of the person. */
@@ -61,7 +61,7 @@ export function Screener(props: ScreenerProps) {
 					)}
 					{!props.rights.modify && (
 						<p className="field-hint screener-line">
-							{mailboxId?.startsWith("prn_")
+							{isAgentMailbox(mailboxId)
 								? "You can only read the mailbox of an agent."
 								: "Your membership does not let you screen senders in this mailbox."}
 						</p>
@@ -123,14 +123,16 @@ interface Page {
 }
 
 function SenderList(props: ScreenerProps & { status: "pending" | "in" | "out" }) {
-	const { mailboxId, status, refreshKey, rights, onChanged } = props;
+	const { mailboxId, status, refreshKey, rights, enabled, onChanged } = props;
 	const toast = useToast();
 	const [page, setPage] = useState<Page | null>(null);
 	const [error, setError] = useState<string | null>(null);
 	const [busy, setBusy] = useState<string | null>(null);
 	const [more, setMore] = useState(false);
 	const listRef = useRef<HTMLUListElement>(null);
+	const emptyRef = useRef<HTMLParagraphElement>(null);
 	// The row whose buttons get the focus after a decision removes a row: the next row, or the one before.
+	// After the last row goes, the text of the empty list gets the focus.
 	const [focusRow, setFocusRow] = useState<number | null>(null);
 
 	const load = useCallback(async () => {
@@ -152,7 +154,7 @@ function SenderList(props: ScreenerProps & { status: "pending" | "in" | "out" })
 		if (focusRow === null) return;
 		const rows = listRef.current?.querySelectorAll<HTMLElement>(".screener-row");
 		const target = rows?.[Math.min(focusRow, rows.length - 1)];
-		(target?.querySelector<HTMLElement>("button, a[href]") ?? listRef.current)?.focus();
+		(target?.querySelector<HTMLElement>("button, a[href]") ?? listRef.current ?? emptyRef.current)?.focus();
 		setFocusRow(null);
 	}, [focusRow]);
 
@@ -184,7 +186,7 @@ function SenderList(props: ScreenerProps & { status: "pending" | "in" | "out" })
 				message:
 					decision === "in"
 						? `Mail from ${sender.address} now comes to the inbox.`
-						: `You will not see mail from ${sender.address}. The sender is not told.`,
+						: screenedOutNotice(sender.address, enabled),
 			});
 			onChanged();
 		} catch (caught) {
@@ -214,7 +216,11 @@ function SenderList(props: ScreenerProps & { status: "pending" | "in" | "out" })
 					</button>
 				</div>
 			)}
-			{page && page.senders.length === 0 && <p className="panel-card panel-empty">{empty}</p>}
+			{page && page.senders.length === 0 && (
+				<p ref={emptyRef} className="panel-card panel-empty" tabIndex={-1}>
+					{empty}
+				</p>
+			)}
 			{page && page.senders.length > 0 && (
 				<ul ref={listRef} className="panel-card screener-list" tabIndex={-1}>
 					{page.senders.map((sender) => (
@@ -296,7 +302,7 @@ function decidedText(sender: ScreenerSender): string {
 }
 
 /** Screens out a sender that did not write yet, or whose mail is already in the views. */
-function ScreenOutForm({ mailboxId, onChanged }: ScreenerProps) {
+function ScreenOutForm({ mailboxId, enabled, onChanged }: ScreenerProps) {
 	const toast = useToast();
 	const ids = { field: useId(), hint: useId() };
 	const [address, setAddress] = useState("");
@@ -316,7 +322,7 @@ function ScreenOutForm({ mailboxId, onChanged }: ScreenerProps) {
 				decision: "out",
 			});
 			setAddress("");
-			toast({ message: `You will not see new mail from ${result.address}. The sender is not told.` });
+			toast({ message: screenedOutNotice(result.address, enabled) });
 			onChanged();
 		} catch (caught) {
 			setError(errorMessage(caught));

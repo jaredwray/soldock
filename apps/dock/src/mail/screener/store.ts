@@ -7,6 +7,12 @@ import { MAIL_LIMITS, type ScreenerMode, type ScreenerStatus } from "@asterra/co
  * holds one row for each sender that waits and for each decision of a person.
  */
 
+/**
+ * The SQL condition for a sent message `m` that a person sent. A message without `sent_by_json` is older
+ * than team mailboxes, and only the person who owns the mailbox sent it.
+ */
+export const SENT_BY_PERSON = "(m.sent_by_json IS NULL OR json_extract(m.sent_by_json, '$.kind') = 'human')";
+
 /** The migration of the mailbox for the Screener. `mail/mailbox.ts` appends it to its list. */
 export const SCREENER_MIGRATION: string[] = [
 	// Null for mail that the Screener does not hold. 'pending' or 'out' for held mail.
@@ -23,6 +29,15 @@ export const SCREENER_MIGRATION: string[] = [
 	) WITHOUT ROWID`,
 	"CREATE INDEX screener_senders_pending ON screener_senders (status, last_message_at)",
 	"CREATE INDEX screener_senders_decided ON screener_senders (status, decided_at)",
+	// 1 when a person sent mail to the address. Only such a send lets the address past the Screener: a send
+	// by an agent decides nothing. A message without `sent_by_json` is older than team mailboxes. At that
+	// time, only the person who owns a mailbox sent from it, so the backfill counts it as a send by a person.
+	"ALTER TABLE recipients ADD COLUMN person_sent INTEGER NOT NULL DEFAULT 0",
+	`UPDATE recipients SET person_sent = 1 WHERE address_key IN (
+		SELECT lower(json_extract(a.value, '$.address'))
+		FROM messages m, json_each(json_array(json(m.to_json), json(m.cc_json), json(m.bcc_json))) part, json_each(part.value) a
+		WHERE m.origin = 'sent' AND ${SENT_BY_PERSON}
+	)`,
 ];
 
 /** When a person screens a sender back in, the held mail of this last period goes to the inbox. */
@@ -55,7 +70,7 @@ function all<T extends Row>(sql: SqlStorage, query: string, ...params: SqlStorag
 /** The person who decided, as the row keeps it. */
 export interface DecidedBy {
 	principal_id: string;
-	kind: "human" | "agent";
+	kind: "human";
 	display_name: string;
 }
 
@@ -126,7 +141,7 @@ export function decidedByOf(json: string | null): DecidedBy | null {
 	if (!json) return null;
 	try {
 		const value = JSON.parse(json) as Partial<DecidedBy>;
-		if ((value.kind !== "human" && value.kind !== "agent") || typeof value.principal_id !== "string") return null;
+		if (value.kind !== "human" || typeof value.principal_id !== "string") return null;
 		return { principal_id: value.principal_id, kind: value.kind, display_name: value.display_name ?? "" };
 	} catch {
 		return null;
