@@ -18,9 +18,9 @@ The domains in this document are the domains of this instance. On your own insta
 domains.
 
 The development environment is also the project's own Asterra instance: the team uses it for its mail on
-`soldock.org`. So its data stays from one deploy to the next. The D1 migrations only add, and a
-deploy never deletes a mailbox. Each Worker serves only its custom domain. `workers.dev` and Preview
-URLs are off, because each one is a second origin with the same data.
+`soldock.org`. So its data stays from one deploy to the next. A D1 migration removes only a column that
+the Worker does not use, and a deploy never deletes a mailbox. Each Worker serves only its custom domain.
+`workers.dev` and Preview URLs are off, because each one is a second origin with the same data.
 
 ## Prerequisites
 
@@ -381,7 +381,8 @@ What the migration does:
 - It adds `principals.agent_scopes` and `agent_resources`, and copies the scopes and the limits of each
   service account into them. A service account keeps its scopes. `service_scopes` and
   `service_resources` stay for the old Worker, and the new Worker does not read them. The Worker does not
-  use `agent_resources` now ([Access follows membership](#access-follows-membership)).
+  use `agent_resources` now ([Access follows membership](#access-follows-membership)). Migration `0034`
+  removes these three columns ([Remove the old access columns](#remove-the-old-access-columns)).
 - Each agent gets each scope of these credentials, so no client of the agent loses a scope:
   - its live API keys (not revoked and not expired)
   - its live OAuth connections (not revoked, and the refresh token did not expire)
@@ -513,13 +514,14 @@ What changes for a script that calls the API:
 What changes in storage:
 
 - No D1 migration is necessary. The column `principals.agent_resources` stays in the table, and the
-  Worker does not use it.
+  Worker does not use it. Migration `0034` removes it later
+  ([Remove the old access columns](#remove-the-old-access-columns)).
 - The table `limit_drops` of each room object and each drive object stays, and the Worker does not use it.
   The column `added_version` of the members of a drive object stays too.
 
 A rollback to the Worker from before this change makes the old limits of each old account apply again.
 An account from after the upgrade has no limits there. The old Worker finds its tables and its columns,
-because this change removes none of them.
+because this change removes none of them. After migration `0034`, this rollback is not supported.
 
 The new Worker does not change the old limits. So after a rollback:
 
@@ -698,6 +700,31 @@ The deploy applies the migration while the old Worker runs. In that time, the ol
 scopes of a new membership to an agent. That gives the agent no more than its new membership. A rollback to
 a Worker from before this change makes the account scopes limit each membership again, and the narrowed
 memberships stay narrow.
+
+### Remove the old access columns
+
+Migration `0034_remove_unused_access_columns.sql` removes three columns of `principals`. The Worker does not
+read or write them:
+
+- `agent_resources`: the old resource limits of an agent or a service account. They have no effect since
+  [Access follows membership](#access-follows-membership) (jaredwray/soldock#193).
+- `service_scopes` and `service_resources`: the scopes and the limits of a service account before
+  migration `0027`. That migration copied them to the agent columns
+  ([Upgrade to permissions on the agent](#upgrade-to-permissions-on-the-agent)).
+
+The deploy applies the migration while the old Worker runs. A Worker from before
+[Access follows membership](#access-follows-membership) reads `agent_resources`. Do these steps:
+
+1. Find the version of the Worker that runs now.
+2. If that Worker is from before jaredwray/soldock#193, first deploy a version that has that change and
+   does not have migration `0034`.
+3. Deploy the version with migration `0034`.
+
+What changes:
+
+- No operation, REST path or MCP tool changes. No access changes: the deleted limits had no effect.
+- A rollback to a Worker from after jaredwray/soldock#193 works, because that Worker does not use the
+  columns. A rollback to a Worker from before it is not supported. Fix a problem with a new deploy.
 
 ### Recover a sign-in
 
