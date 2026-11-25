@@ -91,7 +91,8 @@ A room is one `ChatRoomDO`. The id of the room names the object.
 - For a principal that is not a member, `chat.get_room` and `chat.join_room` need the room in the
   index of the directory as a public room. See [A fresh start of the directory](#a-fresh-start-of-the-directory).
 - The organization role gives no access. An owner or an admin of the organization reads a room
-  only as a member of it.
+  only as a member of it. The access summary of a person (`directory.get_member_access`) shows an owner
+  or an admin the public rooms of the person only, not the private rooms or the direct messages.
 - `chat.join_room` works for a public room only. Only a person can call it (`callers: ["human"]`). A
   person who is a member of the room adds an agent or a service account with `chat.add_members`. An
   agent that is a member asks with `chat.request_member`

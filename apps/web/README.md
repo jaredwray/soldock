@@ -384,7 +384,11 @@ MCP clients. The app has no UI-only path.
       For a person who sponsors agents, the dialog names the agents.
       It tells the admin to give each agent a different sponsor first, or to archive or delete the agent.
     - The page of an agent and the page of a service account share **Access** (`directory.get_member_access`, `MemberAccess.tsx`): a read-only summary. Each shared mailbox, room and shared drive decides what the account can do there, and an API key, an OAuth connection or a token only proves its identity. The page has no permissions editor.
-      An owner or an admin also sees **Access** on the page of a person. It shows the same rows, without account scopes and without keys. **Own mailbox, own drive and organization** says that the person can do each thing there, and that the role of the person decides the rest. Each key of a person keeps its own scopes: the person picks them in **Settings › API keys**.
+      An owner or an admin also sees **Access** on the page of a person (`PersonAccess` in `MemberPage.tsx`).
+      It shows the team mailboxes, the shared drives and the public rooms (**Public chat rooms**).
+      It does not show account scopes, keys, private rooms, direct messages or items that others shared with the person.
+      **Own mailbox, own drive and organization** says that the person can do each thing there, and that the role of the person decides the actions for the organization.
+      Each key of a person keeps its own scopes. The person picks them in **Settings › API keys**.
       The rows come from `admin/accessSummary.ts`: each team mailbox with what the membership allows ("Can read and send"), each shared drive and each item shared directly with the role, and each room with its kind and role. A direct message shows the name of its other member (`peer_name`, `admin/roomLabel.ts`).
       Each row links to the place where a person changes the access, when the person who looks can open it: **Admin › Shared mailboxes** and **Admin › Shared drives** for an owner or an admin, the shared drive for a different person, a public room, and an item of the own drive of the person who looks. A private room and a direct message get no link.
       **Own mailbox, own drive and organization** lists the account scopes with their texts (`scopeDescription`). When the account holds fewer than its kind, a line tells that it is an account from before memberships decided its access, and that the limit applies only there.

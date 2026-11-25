@@ -1346,13 +1346,22 @@ describe("directory authorization", () => {
 
 describe("the access of a member", () => {
 	// Each membership decides what its member can do, for a person, an agent and a service account. So owners and
-	// admins read the access of a person as they read the access of an agent. The read changes nothing.
+	// admins read the access of a person as they read the access of an agent. The read changes nothing. For a
+	// person, the answer shows only what an owner or an admin can see in a different place: the private rooms,
+	// the direct messages and the items that others shared with the person stay private.
 	it("shows the memberships of a person to owners and admins only, and keeps directory.get_agent_access for agents", async () => {
 		const { owner, ada, bot } = await seedOrg();
 		const cy = await createActor(owner, {
 			kind: "human",
 			display_name: "Cy",
 			address: "cy@dock.test",
+			password: PASSWORD,
+		});
+		const ann = await createActor(owner, {
+			kind: "human",
+			display_name: "Ann",
+			address: "ann@dock.test",
+			org_role: "admin",
 			password: PASSWORD,
 		});
 		const { team_mailbox: support } = await owner.call("directory.create_team_mailbox", {
@@ -1368,30 +1377,54 @@ describe("the access of a member", () => {
 			name: "Plans",
 			members: [{ principal_id: ada.id, role: "manager" }],
 		});
-		const { room } = await owner.call("chat.create_room", { kind: "private", name: "Ops", member_ids: [ada.id] });
+		const { room: lobby } = await owner.call("chat.create_room", {
+			kind: "public",
+			name: "Lobby",
+			member_ids: [ada.id],
+		});
+		await owner.call("chat.create_room", { kind: "private", name: "Ops", member_ids: [ada.id] });
+		await owner.call("chat.open_dm", { principal_id: ada.id });
+		// The owner shares one file with Ada and with the agent. The agent shows it, so the share is in place.
+		const { item: brief } = await owner.call("drive.upload_file", { name: "brief.txt", content_base64: btoa("brief") });
+		for (const principalId of [ada.id, bot.id]) {
+			await owner.call("drive.share_item", { item_id: brief.id, principal_id: principalId, role: "viewer" });
+		}
 		await sendMemberStates(owner.id, ada.id);
+		await vi.waitFor(async () => {
+			const { results } = await env.DIRECTORY.prepare("SELECT room_id FROM chat_members WHERE principal_id = ?")
+				.bind(ada.id)
+				.all();
+			expect(results).toHaveLength(3);
+			const agent = await owner.call("directory.get_member_access", { principal_id: bot.id });
+			expect(agent.drive_shared_items.map((item) => item.item_id)).toEqual([brief.id]);
+		});
 		const access = await vi.waitFor(async () => {
 			const result = await owner.call("directory.get_member_access", { principal_id: ada.id });
-			expect(result.chat_rooms).toHaveLength(1);
 			expect(result.shared_drives).toHaveLength(1);
 			return result;
 		});
-		// A person has no account scopes, and each key of a person has its own scopes: both lists are empty.
+		// A person has no account scopes, and each key of a person has its own scopes: both lists are empty. The
+		// list of rooms has the public room only, and the list of shared items is empty.
 		expect(access).toMatchObject({
 			principal_id: ada.id,
 			kind: "human",
 			team_mailboxes: [{ id: support.id, scopes: ["mail.read"] }],
 			shared_drives: [{ id: drive.id, role: "manager" }],
-			chat_rooms: [{ id: room.id, role: "member" }],
+			chat_rooms: [{ id: lobby.id, kind: "public", role: "member" }],
+			chat_rooms_truncated: false,
+			drive_shared_items: [],
 			tokens: [],
 			scopes: [],
 		});
-		// Parity: the MCP tool returns the same answer.
+		expect(access.chat_rooms).toHaveLength(1);
+		// Parity: the MCP tool returns the same answer. An admin who is not the owner reads it too.
 		expect(
 			(await callTool(owner.key, "directory_get_member_access", { principal_id: ada.id })).structuredContent,
 		).toEqual(access);
-		// A person who is not an owner or an admin, and an agent, cannot read the access of a person.
+		expect(await ann.call("directory.get_member_access", { principal_id: ada.id })).toEqual(access);
+		// A person who is not an owner or an admin, the person, and an agent cannot read the access of a person.
 		expect(await denied(cy.call("directory.get_member_access", { principal_id: ada.id }))).toBe("forbidden");
+		expect(await denied(ada.call("directory.get_member_access", { principal_id: ada.id }))).toBe("forbidden");
 		expect(await denied(bot.call("directory.get_member_access", { principal_id: ada.id }))).toBe("forbidden");
 		// The old name stays for an agent and a service account only. The sponsor reads the same answer with both names.
 		expect(await denied(owner.call("directory.get_agent_access", { principal_id: ada.id }))).toBe("not_found");

@@ -1115,6 +1115,8 @@ describe("the access of a service account", () => {
 		});
 		const viaMcp = await callTool(admin.key, "directory_get_agent_access", { principal_id: service.id });
 		expect(viaMcp.structuredContent).toEqual(access);
+		// The name for each member gives the same answer.
+		expect(await admin.call("directory.get_member_access", { principal_id: service.id })).toEqual(access);
 	});
 
 	it("is for owners and admins only", async () => {
@@ -1124,6 +1126,8 @@ describe("the access of a service account", () => {
 		expect(await codeOf(ada.call("directory.get_agent_access", input))).toBe("forbidden");
 		expect(await codeOf(bot.call("directory.get_agent_access", input))).toBe("forbidden");
 		expect(await codeOf(token.call("directory.get_agent_access", input))).toBe("forbidden");
+		expect(await codeOf(token.call("directory.get_member_access", input))).toBe("forbidden");
+		expect(await codeOf(ada.call("directory.get_member_access", input))).toBe("forbidden");
 		expect(await codeOf(admin.call("directory.get_agent_access", { principal_id: ada.id }))).toBe("not_found");
 	});
 });

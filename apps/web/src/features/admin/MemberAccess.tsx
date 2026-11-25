@@ -44,8 +44,10 @@ function Rows({ rows, empty = "None" }: { rows: readonly AccessRow[]; empty?: st
  * Each team mailbox, shared drive and room decides what the member can do there, and each item share decides
  * it for the item. The rows link to the place where a person changes that access. The account scopes of an
  * agent or a service account apply to its own mailbox, its own drive and the actions that have no mailbox,
- * room or drive, and its keys only prove its identity. A person can do each thing in their own mailbox and
- * drive, and each key of a person carries its own scopes.
+ * room or drive, and its keys only prove its identity. A person can do each thing in the own mailbox and the
+ * own drive, and each key of a person has its own scopes. For a person, the summary shows only the team
+ * mailboxes, the shared drives and the public rooms: the private rooms, the direct messages and the items that
+ * others shared with the person stay private.
  */
 export function MemberAccess({ member, access, error, viewer, onRetry }: MemberAccessProps) {
 	const headingId = useId();
@@ -64,7 +66,7 @@ export function MemberAccess({ member, access, error, viewer, onRetry }: MemberA
 				Each mailbox, room and drive decides what the {noun} can do there. Change it in the settings of that mailbox,
 				room or drive.{" "}
 				{person
-					? "Each API key of the person can carry fewer scopes."
+					? "An API key of the person can have fewer scopes. The summary does not show private rooms, direct messages or items that others shared with the person."
 					: `${service ? "A token" : "An API key or an app connection"} only proves who the ${noun} is.`}
 			</p>
 			{error && (
@@ -86,26 +88,31 @@ export function MemberAccess({ member, access, error, viewer, onRetry }: MemberA
 					<dd>
 						<Rows rows={driveRows(access, viewer)} />
 					</dd>
-					<dt>Chat rooms</dt>
+					<dt>{person ? "Public chat rooms" : "Chat rooms"}</dt>
 					<dd>
 						<Rows rows={roomRows(access)} />
 						{access.chat_rooms_truncated && (
 							<p className="field-hint">The {noun} is in more rooms. The list shows the first ones by name.</p>
 						)}
 					</dd>
-					<dt>Shared directly in Drive</dt>
-					<dd>
-						<Rows rows={sharedItemRows(access, viewer)} />
-						{access.drive_shared_items_truncated && (
-							<p className="field-hint">Others shared more items. The list shows the newest shares.</p>
-						)}
-					</dd>
+					{!person && (
+						<>
+							<dt>Shared directly in Drive</dt>
+							<dd>
+								<Rows rows={sharedItemRows(access, viewer)} />
+								{access.drive_shared_items_truncated && (
+									<p className="field-hint">Others shared more items. The list shows the newest shares.</p>
+								)}
+							</dd>
+						</>
+					)}
 					<dt>Own mailbox, own drive and organization</dt>
 					<dd>
 						<p>{member.address}</p>
 						{account === null ? (
 							<span className="muted">
-								The person can do each thing in their own mailbox and drive. Their role decides the rest.
+								The person can do each thing in the own mailbox and the own drive. The role of the person (owner, admin
+								or member) decides the actions for the organization.
 							</span>
 						) : account.held.length === 0 ? (
 							<span className="muted">The {noun} can do nothing here.</span>

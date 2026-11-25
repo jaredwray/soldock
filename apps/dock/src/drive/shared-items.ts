@@ -3,7 +3,7 @@ import { accept, spaceStub, unknownSpaceIds } from "./access.ts";
 import { sharedDrivesOfPrincipal } from "./shared-index.ts";
 import type { SpaceCall } from "./space.ts";
 
-/** One item that a person shared directly with a principal, as the access view of a service account shows it. */
+/** One item that a person shared directly with a principal, as the access view of an agent or a service account shows it. */
 export interface SharedItemEntry {
 	space_id: string;
 	item_id: string;
@@ -21,13 +21,13 @@ export interface SharedItemEntry {
  */
 export async function sharedItemsOfPrincipal(
 	env: Pick<Env, "DRIVE_SPACE" | "DIRECTORY">,
-	principal: { id: string; kind: "human" | "agent"; display_name: string },
+	principal: { id: string; display_name: string },
 	limit: number,
 ): Promise<{ items: SharedItemEntry[]; truncated: boolean }> {
 	const ctxOf = (spaceId: string): SpaceCall => ({
 		spaceId,
 		// A service account is an agent in the records of Drive.
-		actor: { principal_id: principal.id, kind: principal.kind, display_name: principal.display_name },
+		actor: { principal_id: principal.id, kind: "agent", display_name: principal.display_name },
 		admin: false,
 	});
 	const page = accept(
@@ -85,14 +85,14 @@ export async function sharedDriveRolesOf(
  */
 export async function confirmedSharedDrivesOf(
 	env: Pick<Env, "DRIVE_SPACE" | "DIRECTORY">,
-	agent: { id: string; kind: "human" | "agent"; display_name: string; agent_scopes: readonly string[] },
+	member: { id: string; kind: "human" | "agent"; display_name: string; agent_scopes: readonly string[] },
 ): Promise<{ id: string; name: string; role: SharedDriveRole }[]> {
-	const listed = await sharedDrivesOfPrincipal(env.DIRECTORY, agent.id);
-	if (agent.kind !== "agent") return listed;
-	if (agent.agent_scopes.includes("drive.read") && agent.agent_scopes.includes("drive.write")) return listed;
+	const listed = await sharedDrivesOfPrincipal(env.DIRECTORY, member.id);
+	if (member.kind !== "agent") return listed;
+	if (member.agent_scopes.includes("drive.read") && member.agent_scopes.includes("drive.write")) return listed;
 	const roles = await sharedDriveRolesOf(
 		env,
-		{ principal_id: agent.id, kind: "agent", display_name: agent.display_name },
+		{ principal_id: member.id, kind: "agent", display_name: member.display_name },
 		listed.map((drive) => drive.id),
 	);
 	return listed.flatMap((drive) => {

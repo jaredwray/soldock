@@ -507,7 +507,7 @@ can do there. The membership decides, as it does for a person. A share of a Driv
 way. A service account is an agent row with `service = 1`, so the same rules apply to it. An API key or an
 OAuth connection of an agent only proves its identity: it has no scopes. A key of a person keeps its own
 scopes (`api_keys.scopes`). A call of a person in a team mailbox still needs the scope in the credential and
-in the membership.
+in the membership. The **Read** item below also gives the rule for the access summary of a person.
 
 - **Why.** The settings of each resource are the one place that says what an agent can do there. A change
   applies at once to each key and each connection of the agent, and nothing on the agent changes. The page
@@ -556,20 +556,26 @@ in the membership.
   `drive.list_shared_drives` ask each room or drive of the page. So the list never shows a membership from
   before that the object did not narrow. `mail.list_mailboxes` reads D1, which migration `0031` narrowed,
   and shows the own mailbox with the account mail scopes.
-- **Read.** `directory.get_member_access` (`GET /api/v1/directory/members/{principal_id}/access`): for an
-  agent, its sponsor, an owner or an admin (`canManageAgent`). For a service account or a person: owners and
-  admins only. An agent never reads its own access, and a person who is not an owner or an admin gets
-  `forbidden`. The answer has the `kind` of the member. For an agent or a service account, it returns the
-  account scopes and the live API keys in `tokens` (id, label and end). For a person, `scopes` and `tokens`
-  are empty: each key of a person has its own scopes, and `account.list_api_keys` lists them. It returns the team mailboxes with the scopes of the membership,
-  and the shared drives and the rooms with the role. It also returns the Drive items that others shared
-  directly with the agent, with the role. `tokens`
-  does not list the OAuth connections: `oauth.list_grants` lists them. The memberships come from the index
-  tables in D1 (`team_mailbox_members`, `shared_drive_members` and `chat_members`). At most 200 rooms
-  (`AGENT_ACCESS_LIMITS`), with `chat_rooms_truncated`.
+- **Read.** `directory.get_member_access` (`GET /api/v1/directory/members/{principal_id}/access`) gives the
+  access of each member: a person, an agent or a service account.
+  - Who reads it. For an agent: its sponsor, an owner or an admin (`canManageAgent`). For a service account
+    or a person: owners and admins only. An agent never reads its own access. A person who is not an owner
+    or an admin gets `forbidden`, also for the own access.
+  - The answer has the `kind` of the member, and the team mailboxes with the scopes of the membership. It
+    has the shared drives and the rooms with the role. The memberships come from the index tables in D1
+    (`team_mailbox_members`, `shared_drive_members` and `chat_members`). At most 200 rooms
+    (`AGENT_ACCESS_LIMITS`), with `chat_rooms_truncated`.
+  - For an agent or a service account, the answer has the account scopes, and the live API keys in `tokens`
+    (id, label and end). `tokens` does not list the OAuth connections: `oauth.list_grants` lists them. The
+    answer also has the Drive items that others shared directly with the member, with the role.
+  - For a person, `scopes` and `tokens` are empty: each key of a person has its own scopes, and
+    `account.list_api_keys` lists them. The answer has only what an owner or an admin can see in a different
+    place: the team mailboxes, the shared drives and the public rooms. It does not show the private rooms,
+    the direct messages or the items that others shared directly with the person
+    (`confirmedRoomsOf` and `src/handlers.ts`).
   - The items shared directly come from the `shared_with_me` list of its own drive
     (`sharedItemsOfPrincipal` of [`drive`](../drive/README.md)), the newest share first, at most 200,
-    with `drive_shared_items_truncated`. The drive of each item checks the access of the agent again.
+    with `drive_shared_items_truncated`. The drive of each item checks the access of the member again.
     So a removed share and an item in the trash are not in the list.
   - An index can have a membership from before migration `0031` that its object did not narrow. Only an
     account without both scopes of the product can have one: `chat.read` and `chat.write`, or `drive.read`

@@ -654,7 +654,7 @@ export const SERVICE_ACTIVITY_LIMITS = {
 export const AGENT_ACCESS_LIMITS = {
 	/** The chat rooms of `directory.get_member_access`, at most. */
 	rooms: 200,
-	/** The Drive items that others shared directly with the agent, at most. */
+	/** The Drive items that others shared directly with an agent or a service account, at most. */
 	sharedItems: 200,
 } as const;
 
@@ -752,7 +752,8 @@ const MemberAccess = z.object({
 		z.object({ id: z.string(), display_name: z.string(), address: z.string(), scopes: z.array(z.string()) }),
 	),
 	shared_drives: z.array(z.object({ id: z.string(), name: z.string(), role: z.string() })),
-	// `peer_name` is the name of the other member of a direct message. It is null for each other kind.
+	// `peer_name` is the name of the other member of a direct message. It is null for each other kind. For a
+	// person, the list has the public rooms only.
 	chat_rooms: z.array(
 		z.object({
 			id: z.string(),
@@ -763,7 +764,10 @@ const MemberAccess = z.object({
 		}),
 	),
 	chat_rooms_truncated: z.boolean(),
-	/** The items that others shared directly with the member in Drive, with its role, the newest share first. */
+	/**
+	 * The items that others shared directly with an agent or a service account in Drive, with its role, the newest
+	 * share first. Empty for a person.
+	 */
 	drive_shared_items: z.array(
 		z.object({ space_id: z.string(), item_id: z.string(), name: z.string(), kind: z.string(), role: z.string() }),
 	),
@@ -776,7 +780,7 @@ const MemberAccess = z.object({
 	/**
 	 * The account scopes of an agent or a service account: for its own mailbox, its own drive and the actions that
 	 * have no mailbox, room or drive. They never change after the account is created. Empty for a person: a
-	 * person can do each thing in their own mailbox and drive.
+	 * person can do each thing in the own mailbox and the own drive of the person.
 	 */
 	scopes: z.array(z.string()),
 });
@@ -786,6 +790,7 @@ const ACCESS_TEXT = [
 	"Returns the team mailboxes, the shared drives and the chat rooms that the member is a member of, with its role, and the Drive items that others shared directly with it, with its role.",
 	"Each membership and share decides what the member can do there. Change it in the settings of that mailbox, drive or room, or in the sharing of the item. This call changes nothing.",
 	"For an agent or a service account, scopes has its account scopes, and tokens has its live API keys. For a person, both are empty.",
+	"For a person, the answer shows only what an owner or an admin can see in a different place: the team mailboxes, the shared drives and the public rooms. It does not show the private rooms, the direct messages or the items that others shared directly with the person.",
 	`chat_rooms has at most ${AGENT_ACCESS_LIMITS.rooms} rooms, and drive_shared_items at most ${AGENT_ACCESS_LIMITS.sharedItems} items, the newest share first. The matching _truncated field is true when the member has more.`,
 ];
 

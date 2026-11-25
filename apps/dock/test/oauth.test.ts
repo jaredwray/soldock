@@ -899,13 +899,18 @@ describe("OAuth connections follow their agent", () => {
 		const { requestId, verifier } = await startAuthorization(clientId);
 		const { redirect_to } = await ada.call("oauth.approve_authorization", { request_id: requestId, agent_id: bot.id });
 		const tokens = (await (await exchange(clientId, redirect_to, verifier)).json()) as Tokens;
-		const read = (caller: (typeof ada)["call"]) => caller("directory.get_agent_access", { principal_id: bot.id });
-		expect(await codeOf(read(api(tokens.access_token)))).toBe("forbidden");
-		expect(await codeOf(read(bot.call))).toBe("forbidden");
-		// Grace is a member who does not sponsor the bot.
-		expect(await codeOf(read(grace.call))).toBe("forbidden");
-		expect((await read(ada.call)).principal_id).toBe(bot.id);
-		expect((await read(owner.call)).principal_id).toBe(bot.id);
+		for (const name of ["directory.get_agent_access", "directory.get_member_access"] as const) {
+			const read = (caller: (typeof ada)["call"]) => caller(name, { principal_id: bot.id });
+			expect(await codeOf(read(api(tokens.access_token)))).toBe("forbidden");
+			expect(await codeOf(read(bot.call))).toBe("forbidden");
+			// Grace is a member who does not sponsor the bot.
+			expect(await codeOf(read(grace.call))).toBe("forbidden");
+			expect((await read(ada.call)).principal_id).toBe(bot.id);
+			expect((await read(owner.call)).principal_id).toBe(bot.id);
+		}
+		// The token of the agent cannot read the access of a person either.
+		const person = { principal_id: grace.id };
+		expect(await codeOf(api(tokens.access_token)("directory.get_member_access", person))).toBe("forbidden");
 	});
 });
 

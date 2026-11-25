@@ -131,14 +131,15 @@ async function agentToManage(call: CallContext, principalId: string, action: str
 
 /**
  * The member whose access the caller reads. A person: owners and admins only, because the memberships of a
- * person say what the person reads. An agent or a service account: the rule of `agentToManage`. Throws
- * `not_found` for a principal that is not in the directory, and `forbidden` for each other caller.
+ * person say what the person reads. A person does not read the own access here. An agent or a service account:
+ * the rule of `agentToManage`. Throws `not_found` for a principal that is not in the directory, and `forbidden`
+ * for each other caller.
  */
 async function memberToRead(call: CallContext, principalId: string): Promise<PrincipalRecord> {
 	const target = await getPrincipal(call.env.DIRECTORY, principalId);
 	if (!target) throw new OperationError("not_found", "No member has that id.");
 	if (target.kind === "agent") return agentToManage(call, principalId, "read the access");
-	if (!isAdmin(call.caller)) {
+	if (call.caller.kind !== "human" || !isAdmin(call.caller)) {
 		throw new OperationError("forbidden", "Only an owner or an admin can read the access of a person.");
 	}
 	return target;
@@ -506,7 +507,7 @@ export const identityHandlers: Pick<HandlerMap<CallContext>, IdentityOperation |
 		return { entries: page.entries, next_cursor: page.next === null ? null : encodeCursor([page.next]) };
 	},
 
-	// The composition root adds the shared drives and the rooms (`src/handlers.ts`).
+	// The composition root adds the shared drives, the rooms and the items shared directly (`src/handlers.ts`).
 	async "directory.get_member_access"(call, input) {
 		return accessOf(call, await memberToRead(call, input.principal_id));
 	},

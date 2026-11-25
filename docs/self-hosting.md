@@ -603,8 +603,9 @@ What changes for a script that calls the API:
   scope in the credential and in the membership.
 - `directory.get_agent_access` changes nothing, and its `scopes` are the account scopes.
 - `directory.get_member_access` (`GET /api/v1/directory/members/{principal_id}/access`) is new. It gives
-  the same answer for each member: a person, an agent or a service account. Only owners and admins read
-  the access of a person. The answer has `kind`, and for a person it has no `scopes` and no `tokens`.
+  the access of each member: a person, an agent or a service account. Only owners and admins read the
+  access of a person. The answer has `kind`. For a person, `scopes`, `tokens` and `drive_shared_items` are
+  empty, and `chat_rooms` has the public rooms only.
   `directory.get_agent_access` stays as its earlier name for an agent or a service account.
 - In the contracts, `AgentAccessChange` is gone. `RESOURCE_SCOPES`, `resourceDecidedScopes` and
   `canTargetSharedResource` are new.

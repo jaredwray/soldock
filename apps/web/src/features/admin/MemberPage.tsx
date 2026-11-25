@@ -1,5 +1,6 @@
 import type { Principal } from "@asterra/contracts";
 import { AgentDetails } from "./AgentDetails.tsx";
+import type { AccessViewer } from "./accessSummary.ts";
 import { MemberAccess } from "./MemberAccess.tsx";
 import { MemberAccount } from "./MemberAccount.tsx";
 import { MemberAvatar, MemberChips, MemberName } from "./MemberIdentity.tsx";
@@ -61,7 +62,9 @@ export function MemberPage({ principal, me, humans, principals, elevated, onChan
 				{canEdit && <ProfileForm me={me} principal={principal} humans={humans} onChanged={onChanged} />}
 				{elevated && !canEdit && <p className="panel-note">Only the owner can change this account.</p>}
 				{canRemove && principal.kind === "human" && <ResetSignIn person={principal} />}
-				{elevated && principal.kind === "human" && <PersonAccess person={principal} me={me} />}
+				{elevated && principal.kind === "human" && (
+					<PersonAccess person={principal} viewer={{ id: me.id, admin: elevated }} />
+				)}
 				{isAgent && (
 					<AgentDetails
 						agent={principal}
@@ -84,9 +87,7 @@ export function MemberPage({ principal, me, humans, principals, elevated, onChan
 }
 
 /** The read-only Access summary of a person, for an owner or an admin. */
-function PersonAccess({ person, me }: { person: Principal; me: Principal }) {
+function PersonAccess({ person, viewer }: { person: Principal; viewer: AccessViewer }) {
 	const { access, error, reload } = useMemberAccess(person.id);
-	return (
-		<MemberAccess member={person} access={access} error={error} viewer={{ id: me.id, admin: true }} onRetry={reload} />
-	);
+	return <MemberAccess member={person} access={access} error={error} viewer={viewer} onRetry={reload} />;
 }

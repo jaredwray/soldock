@@ -118,8 +118,9 @@ test("an admin creates a person with no API key, and an agent with a first key, 
 		await expect(personAccess.getByRole("listitem").filter({ hasText: mailbox.display_name })).toContainText(
 			"Can read",
 		);
-		await expect(personAccess).toContainText("The person can do each thing in their own mailbox and drive.");
+		await expect(personAccess).toContainText("The person can do each thing in the own mailbox and the own drive.");
 		await expect(personAccess.getByText("Live API keys")).toHaveCount(0);
+		await expect(personAccess.getByText("Shared directly in Drive")).toHaveCount(0);
 	} finally {
 		if (mailboxId) {
 			for (const id of ids) {
