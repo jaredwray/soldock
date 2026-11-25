@@ -32,6 +32,7 @@ import { useThread, useThreadList } from "./data.ts";
 import { MailboxNotice } from "./MailboxNotice.tsx";
 import type { ReplyMode } from "./MessageCard.tsx";
 import { mailboxInput, useMailboxId, useMailboxRights } from "./mailbox.tsx";
+import { showsHeldMail } from "./screener.ts";
 import { ThreadList } from "./ThreadList.tsx";
 import { ThreadView } from "./ThreadView.tsx";
 import { Toolbar } from "./Toolbar.tsx";
@@ -236,6 +237,8 @@ export function MailPane(props: MailPaneProps) {
 			: (openThread?.label_ids.includes("REPLY_LATER") ?? false));
 	const inSpamOrTrash = view.kind === "system" && (view.view === "spam" || view.view === "trash");
 	const replyLaterCount = labelsById.get("REPLY_LATER")?.threads_total ?? 0;
+	// The server refuses a move of the mail that the Screener holds, so the pane does not offer one.
+	const held = showsHeldMail(view);
 
 	useShortcuts((event) => {
 		if (readOnly && CHANGE_KEYS.has(event.key)) return;
@@ -268,10 +271,10 @@ export function MailPane(props: MailPaneProps) {
 				if (!listMode) navigate(viewPath(view, mailboxId));
 				break;
 			case "e":
-				if (!inSpamOrTrash) void run("archive", keyTargets);
+				if (!inSpamOrTrash && !held) void run("archive", keyTargets);
 				break;
 			case "#":
-				if (!inSpamOrTrash) void run("trash", keyTargets);
+				if (!inSpamOrTrash && !held) void run("trash", keyTargets);
 				break;
 			case "s": {
 				if (inSpamOrTrash) break;
@@ -283,7 +286,7 @@ export function MailPane(props: MailPaneProps) {
 			}
 			case "l": {
 				// Reply later, or Done for threads that are in Reply later already.
-				if (inSpamOrTrash) break;
+				if (inSpamOrTrash || held) break;
 				const inReplyLater = listMode
 					? !inInbox &&
 						keyTargets.length > 0 &&
@@ -333,6 +336,7 @@ export function MailPane(props: MailPaneProps) {
 				userLabels={userLabels}
 				listEmpty={threads.length === 0}
 				readOnly={readOnly}
+				held={held}
 				onToggleAll={() => setSelected(selection === "all" ? new Set() : new Set(threads.map((item) => item.id)))}
 				onAction={(action) => void run(action, targets)}
 				onBack={() => navigate(viewPath(view, mailboxId))}
@@ -388,7 +392,7 @@ export function MailPane(props: MailPaneProps) {
 						onReply={reply}
 						onRetry={() => void thread.retry()}
 						onRemoveLabel={
-							readOnly || !openThread ? undefined : (labelId) => void run({ unlabel: labelId }, [openThread.id])
+							readOnly || held || !openThread ? undefined : (labelId) => void run({ unlabel: labelId }, [openThread.id])
 						}
 					/>
 				)}

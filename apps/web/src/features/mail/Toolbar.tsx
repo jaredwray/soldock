@@ -26,6 +26,11 @@ interface ToolbarProps {
 	listEmpty: boolean;
 	/** True in the mailbox of an agent: no selection and no actions. */
 	readOnly: boolean;
+	/**
+	 * True in a search of the mail that the Screener holds. Only the read state and the star change there:
+	 * a person screens the sender in or out to move the mail.
+	 */
+	held: boolean;
 	onToggleAll: () => void;
 	onAction: (action: MailAction) => void;
 	onBack: () => void;
@@ -39,9 +44,10 @@ interface ToolbarProps {
  * the search box, Refresh and the settings of the mailbox.
  */
 export function Toolbar(props: ToolbarProps) {
-	const { view, mode, targetCount, anyUnread, allStarred, allReplyLater, userLabels, onAction } = props;
+	const { view, mode, targetCount, anyUnread, allStarred, allReplyLater, userLabels, held, onAction } = props;
 	const inSpam = view.kind === "system" && view.view === "spam";
 	const inTrash = view.kind === "system" && view.view === "trash";
+	const moves = !inSpam && !inTrash && !held;
 	const hasTargets = !props.readOnly && targetCount > 0;
 
 	return (
@@ -63,14 +69,14 @@ export function Toolbar(props: ToolbarProps) {
 				<div className="toolbar-actions">
 					{inSpam && <TextButton icon="restore" label="Not spam" onClick={() => onAction("notSpam")} />}
 					{inTrash && <TextButton icon="restore" label="Restore" onClick={() => onAction("restore")} />}
-					{!inSpam && !inTrash && (
+					{moves && (
 						<>
 							<ToolButton icon="archive" label="Archive" shortcut="e" onClick={() => onAction("archive")} />
 							<ToolButton icon="spam" label="Report spam" onClick={() => onAction("spam")} />
 							<ToolButton icon="trash" label="Move to Trash" shortcut="#" onClick={() => onAction("trash")} />
 						</>
 					)}
-					<span className="toolbar-divider" aria-hidden="true" />
+					{!held && <span className="toolbar-divider" aria-hidden="true" />}
 					{anyUnread ? (
 						<ToolButton icon="mailOpen" label="Mark as read" onClick={() => onAction("read")} />
 					) : (
@@ -85,8 +91,8 @@ export function Toolbar(props: ToolbarProps) {
 							onClick={() => onAction(allStarred ? "unstar" : "star")}
 						/>
 					)}
-					{!inSpam &&
-						!inTrash &&
+					{/* Held mail moves only when a person screens its sender, so it has no Reply later. */}
+					{moves &&
 						(allReplyLater ? (
 							<ToolButton
 								icon="check"
@@ -97,7 +103,7 @@ export function Toolbar(props: ToolbarProps) {
 						) : (
 							<ToolButton icon="clock" label="Reply later" shortcut="l" onClick={() => onAction("replyLater")} />
 						))}
-					{!inSpam && !inTrash && userLabels.length > 0 && (
+					{moves && userLabels.length > 0 && (
 						<LabelPicker labels={userLabels} onPick={(id) => onAction({ label: id })} />
 					)}
 					{view.kind === "label" && (

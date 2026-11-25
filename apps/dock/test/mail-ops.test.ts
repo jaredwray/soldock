@@ -217,7 +217,7 @@ describe("Reply later", () => {
 		const mailbox = env.MAILBOX.get(env.MAILBOX.idFromName(ada.id));
 		const userLabel = "lbl_01JD0000000000000000000RL0";
 		await runInDurableObject(mailbox, (_instance, state) => {
-			// Back to schema 5: before the system label REPLY_LATER (migration 6).
+			// Back to schema 6: before the system label REPLY_LATER (migration 7).
 			const sql = state.storage.sql;
 			sql.exec("DELETE FROM labels WHERE id = 'REPLY_LATER'");
 			sql.exec(
@@ -232,7 +232,7 @@ describe("Reply later", () => {
 				userLabel,
 				thread.id,
 			);
-			sql.exec("UPDATE meta SET value = '5' WHERE key = 'schema_version'");
+			sql.exec("UPDATE meta SET value = '6' WHERE key = 'schema_version'");
 		});
 		await evictDurableObject(mailbox);
 

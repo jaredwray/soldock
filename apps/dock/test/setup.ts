@@ -32,5 +32,7 @@ beforeEach(async () => {
 		env.DIRECTORY.prepare("DELETE FROM principals WHERE kind = 'agent'"),
 		env.DIRECTORY.prepare("DELETE FROM principals"),
 		env.DIRECTORY.prepare("DELETE FROM mail_domains"),
+		// The default of the Screener is for the organization, so each test starts with it off.
+		env.DIRECTORY.prepare("UPDATE mail_settings SET screener_default = 0"),
 	]);
 });
