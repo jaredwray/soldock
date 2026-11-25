@@ -117,8 +117,8 @@ describe("routes", () => {
 		expect(ownMailboxPath(parseRoute(mailSettingsPath(AGENT)), "prn_01JD0000000000000000OTHER0")).toBeNull();
 	});
 
-	// Focus & Reply has its own path under each view. It is not the thread with the id "focus".
-	it("parses the Focus & Reply path of each view and mailbox back to Focus & Reply in that view", () => {
+	// Focus has its own path under each view. It is not the thread with the id "focus".
+	it("parses the Focus path of each view and mailbox back to Focus in that view", () => {
 		const views: MailView[] = [
 			{ kind: "system", view: "reply-later" },
 			{ kind: "system", view: "inbox" },

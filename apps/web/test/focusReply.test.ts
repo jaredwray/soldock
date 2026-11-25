@@ -8,11 +8,14 @@ import {
 	mergeQueue,
 	moveActive,
 	nextActive,
+	positionText,
+	primaryAction,
+	progressFraction,
 	queueView,
 	replySource,
 	replyTarget,
 	restoreAt,
-	sessionProgress,
+	showsArchive,
 	waitingCount,
 } from "../src/features/mail/focusReply.ts";
 import type { MailView } from "../src/routes.ts";
@@ -45,7 +48,7 @@ describe("mergeQueue", () => {
 		expect(merged[1]?.message_count).toBe(2);
 	});
 
-	it("drops a thread that left the queue, but keeps a card with an open reply or in its exit motion", () => {
+	it("drops a thread that left the queue, but keeps a thread in keep, such as the conversation on screen", () => {
 		const current = [thread("a"), thread("b"), thread("c")];
 		expect(idsOf(mergeQueue(current, [thread("c")], new Set(), true))).toEqual(["c"]);
 		expect(idsOf(mergeQueue(current, [thread("c")], new Set(["b"]), true))).toEqual(["b", "c"]);
@@ -57,7 +60,7 @@ describe("mergeQueue", () => {
 		const fresh = [thread("c"), thread("b"), thread("a")];
 		const gone = new Map([["b", 1]]);
 		expect(idsOf(mergeQueue([thread("a")], fresh, new Set(), true, gone))).toEqual(["a", "c"]);
-		// A card in its exit motion stays until the motion ends.
+		// The conversation on screen stays until the person moves away.
 		expect(idsOf(mergeQueue([thread("a"), thread("b")], fresh, new Set(["b"]), true, gone))).toEqual(["a", "b", "c"]);
 		// The count of a reply has the reply. A message after it is new.
 		const replied = new Map([["b", 2]]);
@@ -94,7 +97,7 @@ describe("nextActive", () => {
 });
 
 describe("moveActive", () => {
-	it("moves one card and stops at the first and the last card, and starts at the first card", () => {
+	it("moves one conversation and stops at the first and the last one, and starts at the first one", () => {
 		expect(moveActive(["a", "b", "c"], "a", 1)).toBe("b");
 		expect(moveActive(["a", "b", "c"], "c", 1)).toBe("c");
 		expect(moveActive(["a", "b", "c"], "a", -1)).toBe("a");
@@ -148,54 +151,61 @@ describe("focusMode", () => {
 	const archive = { add: [], remove: ["INBOX"] };
 
 	// Done takes the conversation out of the view where a label change can. In the inbox, a reply also archives.
-	// A view that keeps a cleared conversation does not count it as waiting (`leaves`).
+	// A view that keeps a cleared conversation does not count it as waiting (`leaves`). Spam leaves each view.
 	it("gives each view its Done, its Later, its reply change and its count", () => {
 		const table: [MailView, object][] = [
 			[
 				system("inbox"),
 				{
 					done: archive,
+					doneArchives: true,
 					later: true,
 					archiveOnReply: true,
 					countLabel: "INBOX",
-					leaves: { answered: true, done: true, later: true },
+					leaves: { answered: true, archived: true, done: true, later: true, spam: true },
 				},
 			],
 			[
 				system("reply-later"),
 				{
 					done: { add: [], remove: ["REPLY_LATER"] },
+					doneArchives: false,
 					later: false,
 					archiveOnReply: false,
 					countLabel: "REPLY_LATER",
-					leaves: { answered: true, done: true, later: true },
+					leaves: { answered: true, archived: false, done: true, later: true, spam: true },
 				},
 			],
 			[
 				system("starred"),
 				{
 					done: { add: [], remove: ["STARRED"] },
+					doneArchives: false,
 					later: true,
 					archiveOnReply: false,
 					countLabel: "STARRED",
-					leaves: { answered: false, done: true, later: false },
+					leaves: { answered: false, archived: false, done: true, later: false, spam: true },
 				},
 			],
 			[
 				{ kind: "label", labelId: "lbl_1" },
 				{
 					done: { add: [], remove: ["lbl_1"] },
+					doneArchives: false,
 					later: true,
 					archiveOnReply: false,
 					countLabel: "lbl_1",
-					leaves: { answered: false, done: true, later: false },
+					leaves: { answered: false, archived: false, done: true, later: false, spam: true },
 				},
 			],
-			[system("sent"), { done: archive, archiveOnReply: false, countLabel: "SENT", leaves: { done: false } }],
-			[system("all"), { done: archive, archiveOnReply: false, countLabel: null, leaves: { done: false } }],
+			[
+				system("sent"),
+				{ done: archive, doneArchives: true, countLabel: "SENT", leaves: { archived: false, done: false, spam: true } },
+			],
+			[system("all"), { done: archive, doneArchives: true, countLabel: null, leaves: { done: false, spam: true } }],
 			[
 				{ kind: "search", query: "from:ana" },
-				{ done: archive, archiveOnReply: false, countLabel: null, leaves: { done: false } },
+				{ done: archive, doneArchives: true, countLabel: null, leaves: { done: false, spam: true } },
 			],
 		];
 		for (const [view, mode] of table) expect(focusMode(view), JSON.stringify(view)).toMatchObject(mode);
@@ -203,7 +213,7 @@ describe("focusMode", () => {
 
 	// Spam and Trash have no reply. The server refuses to move mail that the Screener holds.
 	// A search or a label path can show Spam and Trash too. Done there would archive spam, or restore from Trash.
-	it("gives no Focus & Reply to Spam, Trash and a search of held mail, also through a search or a label path", () => {
+	it("gives no Focus to Spam, Trash and a search of held mail, also through a search or a label path", () => {
 		const search = (query: string): MailView => ({ kind: "search", query });
 		const label = (labelId: string): MailView => ({ kind: "label", labelId });
 		for (const view of [
@@ -233,10 +243,33 @@ describe("focusMode", () => {
 	});
 });
 
+describe("primaryAction and showsArchive", () => {
+	const inbox = focusMode({ kind: "system", view: "inbox" });
+	const all = focusMode({ kind: "system", view: "all" });
+	const starred = focusMode({ kind: "system", view: "starred" });
+
+	// One primary button on e: Archive when it archives, else Done. A second Archive never does the same change.
+	it("gives Archive where Done archives a conversation in the inbox, Done elsewhere, and a second Archive only beside Done", () => {
+		const table: [typeof inbox, string[], string, boolean][] = [
+			[inbox, ["INBOX"], "archive", false],
+			[all, ["INBOX", "SENT"], "archive", false],
+			// All mail, Sent and a search: a conversation out of the inbox has a Done that only moves on.
+			[all, ["SENT"], "none", false],
+			[starred, ["STARRED", "INBOX"], "done", true],
+			[starred, ["STARRED"], "done", false],
+		];
+		for (const [mode, labels, primary, second] of table) {
+			if (!mode) throw new Error("no mode");
+			expect(primaryAction(mode, labels), labels.join()).toBe(primary);
+			expect(showsArchive(mode, labels), labels.join()).toBe(second);
+		}
+	});
+});
+
 describe("queueView", () => {
-	// All mail keeps a conversation after Done, so a refresh gives no new card. The page must get the next page.
-	it("gets the next page when each card is cleared and the queue has more pages, and finishes only at its end", () => {
-		expect(queueView(2, 5, false)).toBe("cards");
+	// All mail keeps a conversation after Done, so a refresh gives no new one. The page must get the next page.
+	it("gets the next page when each conversation is cleared and the queue has more pages, and finishes only at its end", () => {
+		expect(queueView(2, 5, false)).toBe("conversation");
 		expect(queueView(0, 50, false)).toBe("older");
 		expect(queueView(0, 50, true)).toBe("finished");
 		expect(queueView(0, 0, true)).toBe("empty");
@@ -244,29 +277,29 @@ describe("queueView", () => {
 });
 
 describe("waitingCount", () => {
-	it("counts the cards when the queue is complete, else the label count without the cleared ones that stay", () => {
+	it("counts the loaded ones when the queue is complete, else the label count without the cleared ones that stay", () => {
 		expect(waitingCount({ complete: true, queued: 3, total: 40, staying: 1 })).toEqual({ left: 3, more: false });
 		// A starred conversation that the person answered stays in Starred, and the label still counts it.
 		expect(waitingCount({ complete: false, queued: 50, total: 80, staying: 2 })).toEqual({ left: 78, more: false });
-		// The label count comes a moment after a change. The cards on screen still wait.
+		// The label count comes a moment after a change. The loaded conversations still wait.
 		expect(waitingCount({ complete: false, queued: 50, total: 10, staying: 0 })).toEqual({ left: 50, more: false });
-		// All mail and a search have no label count: more can come with Older.
+		// All mail and a search have no label count: more can come with the next page.
 		expect(waitingCount({ complete: false, queued: 50, total: null, staying: 0 })).toEqual({ left: 50, more: true });
 	});
 });
 
-describe("progress and finish text", () => {
-	it("counts the conversations of this visit", () => {
-		expect(sessionProgress(0, 3)).toEqual({ total: 3, fraction: 0, label: "3 left" });
-		expect(sessionProgress(2, 3)).toEqual({ total: 5, fraction: 0.4, label: "2 of 5 done · 3 left" });
-		expect(sessionProgress(5, 0)).toEqual({ total: 5, fraction: 1, label: "5 of 5 done" });
-		// With more conversations than the page shows and no label count, the text shows no total.
-		expect(sessionProgress(0, 50, true).label).toBe("50+ left");
-		expect(sessionProgress(2, 48, true).label).toBe("2 done · 48+ left");
-		expect(sessionProgress(50, 0, true).label).toBe("50 done");
+describe("position, progress and finish text", () => {
+	it("shows the position of the conversation and the part of this visit that is done", () => {
+		expect(positionText(3, 12, false)).toBe("3 of 12");
+		// With more conversations than the page has and no label count, the total gets a plus.
+		expect(positionText(1, 50, true)).toBe("1 of 50+");
+		expect(progressFraction(0, 3)).toBe(0);
+		expect(progressFraction(2, 3)).toBe(0.4);
+		expect(progressFraction(5, 0)).toBe(1);
+		expect(progressFraction(0, 0)).toBe(0);
 	});
 
-	it("says what the person answered, marked as done and moved to Reply later", () => {
+	it("says what the person answered, archived, marked as done, moved to Reply later and marked as spam", () => {
 		const cleared = (how: ClearKind, count: number) =>
 			Array.from({ length: count }, (_, index) => ({
 				id: `${how}${index}`,
@@ -285,6 +318,12 @@ describe("progress and finish text", () => {
 			[
 				[...cleared("later", 1), ...cleared("answered", 2), ...cleared("done", 3)],
 				"You answered 2 conversations, marked 3 as done and moved 1 to Reply later.",
+			],
+			[cleared("archived", 3), "You archived 3 conversations."],
+			[cleared("spam", 1), "You marked 1 conversation as spam."],
+			[
+				[...cleared("spam", 1), ...cleared("later", 1), ...cleared("archived", 3), ...cleared("answered", 2)],
+				"You answered 2 conversations, archived 3, moved 1 to Reply later and marked 1 as spam.",
 			],
 		];
 		for (const [log, text] of table) expect(finishSummary(log)).toBe(text);
