@@ -47,17 +47,17 @@ export function senderChecks(authentication: Message["authentication"], domain: 
 	const ofOwner = domain ?? "the domain of the sender";
 	const texts: Record<SenderCheck["key"], Record<string, string>> = {
 		dmarc: {
-			pass: `The message passed the policy of ${ofOwner}. This result proves the From address.`,
+			pass: `The message passed the policy of ${ofOwner}. This result proves the domain only, not the name before the @.`,
 			fail: `The message failed the policy of ${ofOwner}.`,
-			none: `${owner} publishes no policy, so nothing proves the From address.`,
+			none: `${owner} publishes no policy, so nothing proves that the domain sent the message.`,
 		},
 		dkim: {
-			pass: "The message has a valid signature. A signature alone does not prove the From address.",
+			pass: "The message has a valid signature. A signature alone does not prove the domain of the sender.",
 			fail: "The signature of the message is not valid.",
 			none: "The message has no signature.",
 		},
 		spf: {
-			pass: "An approved server sent the message. This result alone does not prove the From address.",
+			pass: "An approved server sent the message. This result alone does not prove the domain of the sender.",
 			fail: "A server that is not approved sent the message.",
 			softfail: "A server that is not approved sent the message.",
 			none: "The sender publishes no list of approved servers.",

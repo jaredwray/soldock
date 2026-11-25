@@ -24,7 +24,9 @@ describe("the sender notice of a message", () => {
 			["SPF: softfail", "fail"],
 		]);
 		// A missing policy is not a failure of the sender.
-		expect(checks[0]?.text).toBe("sender.example publishes no policy, so nothing proves the From address.");
+		expect(checks[0]?.text).toBe(
+			"sender.example publishes no policy, so nothing proves that the domain sent the message.",
+		);
 	});
 
 	// The server sends each result as the receiving server wrote it, so a value can be unknown here.
