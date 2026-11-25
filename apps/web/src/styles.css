@@ -5014,9 +5014,9 @@ fieldset {
 		margin: 10px 0 12px;
 	}
 
-	/* The date can go to two lines, so the address and the copy button have space. */
+	/* The date goes to two lines, so the address and the copy button have space. */
 	.message-expanded .message-date {
-		flex-shrink: 1;
+		max-width: 8em;
 		white-space: normal;
 		text-align: right;
 	}
