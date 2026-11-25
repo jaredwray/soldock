@@ -1,4 +1,4 @@
-import { AGENT_SCOPES, type OutputOf, type Scope, SERVICE_SCOPES, scopeDescription } from "@asterra/contracts";
+import { AGENT_SCOPES, type OutputOf, type Scope, SERVICE_SCOPES } from "@asterra/contracts";
 import { adminPath, chatPath, itemPath, sharedDrivePath } from "../../routes.ts";
 import { memberScopes, scopesText } from "./mailboxScopes.ts";
 import { roomLabel } from "./roomLabel.ts";
@@ -107,25 +107,99 @@ export function sharedItemRows(access: Access, viewer: AccessViewer): AccessRow[
 	});
 }
 
+/** The words as a list in a sentence: "read, change and send". */
+function listText(words: readonly string[]): string {
+	if (words.length <= 1) return words.join("");
+	return `${words.slice(0, -1).join(", ")} and ${words.at(-1)}`;
+}
+
+/** One row of the account scopes: a product, and the words for each of its scopes in the order of the text. */
+interface AccountPart {
+	key: string;
+	name: string;
+	words: readonly (readonly [Scope, ...string[]])[];
+	/** The text of the row, around the words of the scopes that the account holds. */
+	text: (words: string) => string;
+}
+
+const can = (words: string) => `Can ${words}`;
+
+/**
+ * The rows of the account scopes, in the order of the summary. The words name only what the account scopes
+ * decide: in a team mailbox, a room and a shared drive, the membership decides.
+ */
+const ACCOUNT_PARTS: readonly AccountPart[] = [
+	{
+		key: "mail",
+		name: "Mailbox",
+		words: [
+			["mail.read", "read"],
+			["mail.modify", "change"],
+			["mail.send", "send"],
+		],
+		text: can,
+	},
+	{
+		key: "drive",
+		name: "Drive",
+		words: [
+			["drive.read", "read"],
+			["drive.write", "change"],
+			["drive.share", "share"],
+		],
+		text: can,
+	},
+	{
+		key: "chat",
+		name: "Chat",
+		words: [
+			["chat.read", "find public rooms"],
+			["chat.write", "create rooms", "open direct messages"],
+		],
+		text: can,
+	},
+	{
+		key: "webhooks",
+		name: "Webhooks",
+		words: [
+			["mail.webhooks", "mail"],
+			["drive.webhooks", "drive"],
+			["chat.webhooks", "chat"],
+		],
+		text: (words) => `Can create for ${words} events`,
+	},
+	{ key: "directory", name: "Directory", words: [["directory.read", "read"]], text: can },
+	{ key: "account", name: "Account", words: [["account.read", "read"]], text: can },
+];
+
 /** The account scopes of the summary: what the account can do in its own mailbox, its own drive and the organization. */
 export interface AccountScopes {
-	/** Each account scope, in the order of the kind, with its text. */
-	held: { scope: Scope; description: string }[];
+	/**
+	 * One row for each product of the kind, with what the account scopes allow there. Empty when the account
+	 * holds no scope.
+	 */
+	rows: AccessRow[];
 	/** The scopes of its kind that the account does not hold: a limit from before the memberships decided. */
 	missing: Scope[];
 }
 
 /**
- * The account scopes of an agent or a service account. A new account holds each scope of its kind. An account
- * from before can hold fewer: nothing changes them, and they apply only to its own mailbox, its own drive and
- * the actions that have no mailbox, room or drive.
+ * The account scopes of an agent or a service account, as one short row for each product. A new account holds
+ * each scope of its kind. An account from before can hold fewer: nothing changes them, and they apply only to
+ * its own mailbox, its own drive and the actions that have no mailbox, room or drive. The row of the mailbox
+ * shows the address of the account.
  */
-export function accountScopes(access: Access, kind: "agent" | "service"): AccountScopes {
+export function accountScopes(access: Access, kind: "agent" | "service", address: string): AccountScopes {
 	const ceiling = kind === "service" ? SERVICE_SCOPES : AGENT_SCOPES;
-	return {
-		held: ceiling
-			.filter((scope) => access.scopes.includes(scope))
-			.map((scope) => ({ scope, description: scopeDescription(scope, kind) })),
-		missing: ceiling.filter((scope) => !access.scopes.includes(scope)),
-	};
+	const held = ceiling.filter((scope) => access.scopes.includes(scope));
+	const rows = ACCOUNT_PARTS.filter((part) => part.words.some(([scope]) => ceiling.includes(scope))).map((part) => {
+		const words = part.words.filter(([scope]) => held.includes(scope)).flatMap(([, ...text]) => text);
+		return {
+			key: part.key,
+			name: part.key === "mail" ? `${part.name} (${address})` : part.name,
+			detail: words.length === 0 ? "Can do nothing" : part.text(listText(words)),
+			href: null,
+		};
+	});
+	return { rows: held.length === 0 ? [] : rows, missing: ceiling.filter((scope) => !held.includes(scope)) };
 }
