@@ -785,7 +785,12 @@ export async function connectRoomSocket(roomId: string, headers: Record<string, 
 
 /** Sends a request to the Worker with these bindings in place of the ones in vitest.config.ts. */
 export function withEnv(
-	overrides: { SETUP_TOKEN?: string | undefined; AI_GATEWAY_TOKEN?: string | undefined; DIRECTORY?: D1Database },
+	overrides: {
+		SETUP_TOKEN?: string | undefined;
+		AI_GATEWAY_TOKEN?: string | undefined;
+		DIRECTORY?: D1Database;
+		DRIVE_SPACE?: Env["DRIVE_SPACE"];
+	},
 	path: string,
 	init: { method?: string; headers?: Record<string, string>; body?: string } = {},
 ) {
