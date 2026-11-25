@@ -1,6 +1,6 @@
 import { evictDurableObject, listDurableObjectIds, runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	type Actor,
 	api,
@@ -569,6 +569,33 @@ describe("a drive from before migration 0031", () => {
 		});
 		await evictDurableObject(env.DRIVE_SPACE.get(env.DRIVE_SPACE.idFromName(driveId)));
 		expect((await upload(helper, "helper.txt", "v1")).name).toBe("helper.txt");
+	});
+
+	// The Access view reads the index, and the index has the role from before until the drive wakes. So the view
+	// asks each drive of such an agent, and shows the role that the drive narrowed.
+	it("shows in the access of an agent the roles that each drive narrowed", async () => {
+		const helper = await createActor(owner, { kind: "agent", display_name: "Helper", address: "helper@dock.test" });
+		await ada.call("drive.add_shared_drive_members", {
+			drive_id: driveId,
+			members: [
+				{ principal_id: helper.id, role: "editor" },
+				{ principal_id: bot.id, role: "editor" },
+			],
+		});
+		const drivesOf = async (agent: Actor) =>
+			(await owner.call("directory.get_agent_access", { principal_id: agent.id })).shared_drives.map((entry) => [
+				entry.id,
+				entry.role,
+			]);
+		await vi.waitFor(async () => {
+			expect(await drivesOf(helper)).toEqual([[driveId, "editor"]]);
+			expect(await drivesOf(bot)).toEqual([[driveId, "editor"]]);
+		});
+		await setLegacyScopes(bot.id, ["account.read", "drive.read"]);
+		await setLegacyScopes(helper.id, ["account.read"]);
+		await wakeAsLegacy(driveId);
+		expect(await drivesOf(helper)).toEqual([]);
+		expect(await drivesOf(bot)).toEqual([[driveId, "viewer"]]);
 	});
 });
 

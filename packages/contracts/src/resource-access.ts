@@ -41,6 +41,53 @@ const MEMBER_LISTS: Readonly<Record<string, (input: Record<string, unknown>) => 
 	"drive.list_shared_drives": (input) => input.all === undefined || input.all === false || input.all === "false",
 };
 
+/**
+ * The operations that name a room or a drive and that the account scopes always decide. The object of the
+ * resource does not check the scope of these operations in the membership or the share, so the resource
+ * cannot decide them. Most of them write the personal state of the caller: its read markers, its stars, its
+ * drafts, its saved messages and its reminders. Before the memberships decided the access of agents, the
+ * account scopes decided them, and they still do.
+ */
+const ACCOUNT_DECIDED: ReadonlySet<string> = new Set([
+	// The personal state of the caller for a room. The room checks only that the caller is a member.
+	"chat.mark_read",
+	"chat.star_room",
+	"chat.follow_thread",
+	"chat.mark_thread_read",
+	"chat.set_room_section",
+	"chat.set_room_notification_level",
+	"chat.save_message",
+	"chat.create_reminder",
+	"chat.save_draft",
+	// The personal state of the caller that no room checks.
+	"chat.unsave_message",
+	"chat.list_drafts",
+	"chat.delete_draft",
+	"chat.list_scheduled_messages",
+	// A command runs a different operation. The room checks only that the caller is a member.
+	"chat.invoke_slash_command",
+	// A caller that joins is not a member, so no membership decides the call.
+	"chat.join_room",
+	// The stars of the caller are in its own drive, also for an item of a different drive.
+	"drive.star_items",
+]);
+
+/**
+ * The operations where a caller removes itself, and the input field that names the principal. A member leaves
+ * a room, and a principal removes its own share, without the scope of the operation in the membership or the
+ * share. So the account scopes decide a call that names the caller.
+ */
+const SELF_REMOVALS: Readonly<Record<string, string>> = {
+	"chat.remove_member": "principal_id",
+	"drive.unshare_item": "principal_id",
+};
+
+/** True when a membership or a share can decide a call of this operation by an agent or a service account. */
+function isResourceDecided(operation: Pick<Operation, "name" | "callers">): boolean {
+	if (ACCOUNT_DECIDED.has(operation.name)) return false;
+	return operation.callers.includes("agent") || operation.callers.includes("service");
+}
+
 /** The product of an operation whose resources have members or shares, or null. */
 function domainOf(operation: Pick<Operation, "name">): ResourceDomain | null {
 	const prefix = operation.name.slice(0, operation.name.indexOf("."));
@@ -71,9 +118,9 @@ export function inputFields(operation: Pick<Operation, "input">): string[] {
  * such resources. MCP uses this to list a tool for an agent whose account scopes do not hold the scope of
  * the tool: a membership can still give it.
  */
-export function canTargetSharedResource(operation: Pick<Operation, "name" | "scopes" | "input">): boolean {
+export function canTargetSharedResource(operation: Pick<Operation, "name" | "scopes" | "input" | "callers">): boolean {
 	const domain = domainOf(operation);
-	if (!domain || domainScopes(operation, domain).length === 0) return false;
+	if (!domain || !isResourceDecided(operation) || domainScopes(operation, domain).length === 0) return false;
 	if (Object.hasOwn(MEMBER_LISTS, operation.name)) return true;
 	const fields = inputFields(operation);
 	return TARGET_FIELDS[domain].some((field) => fields.includes(field));
@@ -105,19 +152,24 @@ function isSharedTarget(domain: ResourceDomain, field: string, value: unknown, c
  * The check reads the raw input and fails closed: a field that is absent names the own mailbox or the own
  * drive, and a value that is not a string names nothing. For a call that names more than one drive, each one
  * must be a drive with members or shares.
+ *
+ * The account scopes also decide each operation in `ACCOUNT_DECIDED`, each operation that only a person can
+ * call, and a call where the caller removes itself (`SELF_REMOVALS`).
  */
 export function resourceDecidedScopes(
-	operation: Pick<Operation, "name" | "scopes" | "input">,
+	operation: Pick<Operation, "name" | "scopes" | "input" | "callers">,
 	rawInput: unknown,
 	callerId: string,
 ): Scope[] {
 	const domain = domainOf(operation);
-	if (!domain) return [];
+	if (!domain || !isResourceDecided(operation)) return [];
 	const scopes = domainScopes(operation, domain);
 	if (scopes.length === 0) return [];
 	const input = typeof rawInput === "object" && rawInput !== null ? (rawInput as Record<string, unknown>) : {};
 	const list = Object.hasOwn(MEMBER_LISTS, operation.name) ? MEMBER_LISTS[operation.name] : undefined;
 	if (list) return list(input) ? scopes : [];
+	const selfField = Object.hasOwn(SELF_REMOVALS, operation.name) ? SELF_REMOVALS[operation.name] : undefined;
+	if (selfField !== undefined && input[selfField] === callerId) return [];
 	const fields = inputFields(operation).filter((field) => TARGET_FIELDS[domain].includes(field));
 	if (fields.length === 0) return [];
 	if (domain === "drive") {

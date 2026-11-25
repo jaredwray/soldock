@@ -18,6 +18,98 @@ const TEAM = "tmb_01JD0000000000000000000000";
 const DRIVE = "drv_01JD0000000000000000000000";
 const ROOM = "rm_01JD0000000000000000000000";
 
+/** Each operation that a membership or a share can decide, in the order of the names. */
+const RESOURCE_DECIDED: string[] = [
+	"chat.add_members",
+	"chat.add_reaction",
+	"chat.archive_room",
+	"chat.delete_message",
+	"chat.download_file",
+	"chat.download_link_image",
+	"chat.edit_message",
+	"chat.forward_message",
+	"chat.get_room",
+	"chat.list_card_actions",
+	"chat.list_messages",
+	"chat.list_pins",
+	"chat.list_replies",
+	"chat.list_rooms",
+	"chat.pin_message",
+	"chat.post_message",
+	"chat.remove_link_preview",
+	"chat.remove_member",
+	"chat.remove_reaction",
+	"chat.request_member",
+	"chat.schedule_message",
+	"chat.search_messages",
+	"chat.set_member_scopes",
+	"chat.set_posting_rules",
+	"chat.set_room_retention",
+	"chat.trigger_card_action",
+	"chat.unarchive_room",
+	"chat.unpin_message",
+	"chat.update_room",
+	"docs.copy_image",
+	"docs.create",
+	"docs.get",
+	"docs.get_image",
+	"docs.import_image",
+	"docs.update",
+	"docs.upload_image",
+	"drive.abort_upload",
+	"drive.complete_upload",
+	"drive.copy_item",
+	"drive.create_folder",
+	"drive.create_upload",
+	"drive.delete_items",
+	"drive.download_file",
+	"drive.empty_trash",
+	"drive.get_about",
+	"drive.get_item",
+	"drive.get_shared_drive",
+	"drive.get_upload",
+	"drive.list_items",
+	"drive.list_permissions",
+	"drive.list_shared_drives",
+	"drive.list_versions",
+	"drive.move_items",
+	"drive.move_to_drive",
+	"drive.rename_item",
+	"drive.restore_items",
+	"drive.restore_version",
+	"drive.set_preview",
+	"drive.share_item",
+	"drive.trash_items",
+	"drive.unshare_item",
+	"drive.upload_file",
+	"drive.upload_part",
+	"drive.upload_version",
+	"mail.create_label",
+	"mail.delete_label",
+	"mail.get_attachment",
+	"mail.get_auto_labels",
+	"mail.get_mailbox_settings",
+	"mail.get_message",
+	"mail.get_profile",
+	"mail.get_thread",
+	"mail.list_labels",
+	"mail.list_mailboxes",
+	"mail.list_threads",
+	"mail.modify_threads",
+	"mail.send",
+	"mail.suggest_recipients",
+	"mail.update_mailbox_settings",
+	"sheets.add_tab",
+	"sheets.create",
+	"sheets.delete_tab",
+	"sheets.duplicate_tab",
+	"sheets.format_cells",
+	"sheets.get",
+	"sheets.move_tab",
+	"sheets.rename_tab",
+	"sheets.update_cells",
+];
+
 describe("the scopes that a resource decides", () => {
 	it("decides the mail scopes in a team mailbox, and none in the own mailbox", () => {
 		expect(resourceDecidedScopes(operations["mail.send"], { mailbox_id: TEAM }, ME)).toEqual(["mail.send"]);
@@ -77,6 +169,51 @@ describe("the scopes that a resource decides", () => {
 		expect(resourceDecidedScopes(operations["chat.list_rooms"], { view: "public" }, ME)).toEqual([]);
 		expect(resourceDecidedScopes(operations["drive.list_shared_drives"], {}, ME)).toEqual(["drive.read"]);
 		expect(resourceDecidedScopes(operations["drive.list_shared_drives"], { all: "true" }, ME)).toEqual([]);
+	});
+
+	// The object of the resource does not check the scope of these calls in the membership or the share. So
+	// the account scopes decide them, as before the memberships decided the access of agents.
+	it("leaves the personal state of the caller, and a caller that removes itself, to the account scopes", () => {
+		expect(resourceDecidedScopes(operations["chat.mark_read"], { room_id: ROOM }, ME)).toEqual([]);
+		expect(resourceDecidedScopes(operations["chat.list_drafts"], { room_id: ROOM }, ME)).toEqual([]);
+		expect(resourceDecidedScopes(operations["drive.star_items"], { space_id: DRIVE }, ME)).toEqual([]);
+		expect(canTargetSharedResource(operations["chat.save_draft"])).toBe(false);
+		const leave = operations["chat.remove_member"];
+		expect(resourceDecidedScopes(leave, { room_id: ROOM, principal_id: ME }, ME)).toEqual([]);
+		expect(resourceDecidedScopes(leave, { room_id: ROOM, principal_id: OTHER }, ME)).toEqual(["chat.write"]);
+		const unshare = operations["drive.unshare_item"];
+		expect(resourceDecidedScopes(unshare, { space_id: OTHER, item_id: "itm_x", principal_id: ME }, ME)).toEqual([]);
+		expect(resourceDecidedScopes(unshare, { space_id: DRIVE, item_id: "itm_x", principal_id: OTHER }, ME)).toEqual([
+			"drive.share",
+		]);
+		// Only a person calls this operation, so no membership of an agent decides it.
+		expect(resourceDecidedScopes(operations["chat.delete_room"], { room_id: ROOM }, ME)).toEqual([]);
+	});
+
+	// A new operation with a field that names a mailbox, a room or a drive is not in this list, so this test
+	// fails. Add the operation here only when its handler or its object checks the scope of the operation in
+	// the membership or the share. If it does not, add it to `ACCOUNT_DECIDED`.
+	it("lets a resource decide only the operations of this list", () => {
+		const everyTarget = {
+			mailbox_id: TEAM,
+			room_id: ROOM,
+			target_room_id: ROOM,
+			space_id: DRIVE,
+			target_space_id: DRIVE,
+			from_space_id: DRIVE,
+			drive_id: DRIVE,
+		};
+		const decided = operationList
+			.filter((operation) => resourceDecidedScopes(operation, everyTarget, ME).length > 0)
+			.map((operation) => operation.name)
+			.sort();
+		expect(decided).toEqual(RESOURCE_DECIDED);
+		expect(
+			operationList
+				.filter(canTargetSharedResource)
+				.map((operation) => operation.name)
+				.sort(),
+		).toEqual(RESOURCE_DECIDED);
 	});
 
 	it("decides only membership scopes, only for the operations that can name a shared resource", () => {

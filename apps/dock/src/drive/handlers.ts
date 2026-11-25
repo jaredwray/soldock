@@ -26,6 +26,7 @@ import {
 import { loseDriveAccess } from "../webhooks/store.ts";
 import {
 	accept,
+	actorOf,
 	auditOk,
 	blobKeyFor,
 	idempotencyOf,
@@ -42,6 +43,7 @@ import {
 import { setPreview, toVersion } from "./preview.ts";
 import { chatFolderFor } from "./rooms.ts";
 import { listSharedDriveRows, serviceMembersOfDrive, sharedDriveState } from "./shared-index.ts";
+import { sharedDriveRolesOf } from "./shared-items.ts";
 import {
 	type ItemRecord,
 	type ItemRef,
@@ -268,14 +270,15 @@ async function confirmedDrives<T extends { id: string; role: string | null }>(
 	rows: readonly T[],
 ): Promise<T[]> {
 	if (call.caller.principal.kind !== "agent" || call.caller.scopes.has("drive.read")) return [...rows];
-	const answers = await Promise.all(
-		rows.map(async (row): Promise<T | null> => {
-			const opened = spaceOf(call, row.id);
-			const record = await opened.space.sharedDrive(opened.ctx);
-			return "error" in record || record.role === null ? null : { ...row, role: record.role };
-		}),
+	const roles = await sharedDriveRolesOf(
+		call.env,
+		actorOf(call),
+		rows.map((row) => row.id),
 	);
-	return answers.filter((row) => row !== null);
+	return rows.flatMap((row) => {
+		const role = roles.get(row.id);
+		return role === undefined ? [] : [{ ...row, role }];
+	});
 }
 
 export const driveHandlers: Pick<HandlerMap<CallContext>, DriveOperation> = {

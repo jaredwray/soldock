@@ -561,7 +561,7 @@ export function conflictOf(error: unknown): OperationError | null {
 
 export interface NewApiKey {
 	label: string;
-	/** The scopes of the key of a person. Empty for a key of an agent, which has the scopes of its agent. */
+	/** The scopes of the key of a person. Empty for a key of an agent: that key only proves the identity. */
 	scopes: readonly Scope[];
 	created_by: string | null;
 	description?: string | null;

@@ -174,6 +174,17 @@ describe("MCP resources", () => {
 		await own.cancel();
 	});
 
+	// The list of the Drive items names the own drive, where the account scopes decide. An agent from before
+	// migration 0031 without drive.read has no such list. Each other kind still shows.
+	it("lists the other resources of an agent whose account cannot read its own drive", async () => {
+		const { bot } = await seedOrg();
+		await setLegacyScopes(bot.id, ["account.read", "mail.read", "chat.read"]);
+		const listed = await modern(bot.key, "resources/list");
+		expect(listed.body?.error).toBeUndefined();
+		const result = listed.body?.result as { resources: { uri: string }[] };
+		expect(result.resources.map((resource) => resource.uri)).toEqual(expect.arrayContaining([inbox(bot.id), ROOMS]));
+	});
+
 	it("lists the rooms of the caller, and reads the messages of one with the data of REST", async () => {
 		const { ada, bot } = await seedOrg();
 		const { room } = await ada.call("chat.create_room", { kind: "private", name: "Launch", member_ids: [bot.id] });

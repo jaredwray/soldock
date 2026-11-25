@@ -691,11 +691,11 @@ export const identityHandlers: Pick<HandlerMap<CallContext>, IdentityOperation |
 		const target = await credentialOwner(call, input.principal_id);
 		let scopes: Scope[];
 		if (target.kind === "agent") {
-			// A key of an agent or a service account is only a credential of the agent. It has no scopes of its own.
+			// A key of an agent or a service account only proves the identity of the agent. It has no scopes of its own.
 			if (input.scopes !== undefined) {
 				throw new OperationError(
 					"invalid",
-					"A key of an agent or a service account has the scopes of its agent. Do not send scopes. Change them with directory.set_agent_access.",
+					"Do not send scopes for a key of an agent or a token of a service account: the key only proves the identity. The memberships of the agent and its account scopes decide what it can do.",
 				);
 			}
 			// The secret gives each scope of the agent. So the credential of the call must hold each one.

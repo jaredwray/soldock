@@ -906,8 +906,6 @@ describe("OAuth connections follow their agent", () => {
 		expect(await codeOf(read(grace.call))).toBe("forbidden");
 		expect((await read(ada.call)).principal_id).toBe(bot.id);
 		expect((await read(owner.call)).principal_id).toBe(bot.id);
-		// The scope editor of an account is gone: no operation changes the access of an agent.
-		expect(toolNames((await mcp(owner.key, "tools/list")).body)).not.toContain("directory_set_agent_access");
 	});
 });
 

@@ -366,8 +366,14 @@ describe("the scopes of a member of a team mailbox", () => {
 			display_name: "Odd",
 			address: "odd@dock.test",
 		});
+		const agentId = async (name: string) => {
+			const input = { kind: "agent", display_name: name, address: `${name.toLowerCase()}@dock.test` } as const;
+			return (await owner.call("directory.create_principal", input)).principal.id;
+		};
+		const keyed = await agentId("Keyed");
+		const mapped = await agentId("Mapped");
 		const support = await createSupport([ada, bot]);
-		for (const id of [service.id, odd.principal.id]) {
+		for (const id of [service.id, odd.principal.id, keyed, mapped]) {
 			await owner.call("directory.add_team_mailbox_member", { mailbox_id: support.id, principal_id: id });
 		}
 		await setLegacyScopes(bot.id, ["account.read", "mail.read", "mail.send"]);
@@ -375,6 +381,13 @@ describe("the scopes of a member of a team mailbox", () => {
 		// A stored list that is not valid JSON gives nothing, on the account and in the membership.
 		await env.DIRECTORY.prepare("UPDATE principals SET agent_scopes = '{bad' WHERE id = ?")
 			.bind(odd.principal.id)
+			.run();
+		// A JSON object is not a list of scopes. Its values give nothing, on the account and in the membership.
+		await env.DIRECTORY.prepare(`UPDATE principals SET agent_scopes = '{"a":"mail.read"}' WHERE id = ?`)
+			.bind(keyed)
+			.run();
+		await env.DIRECTORY.prepare(`UPDATE team_mailbox_members SET scopes = '{"a":"mail.read"}' WHERE principal_id = ?`)
+			.bind(mapped)
 			.run();
 		await env.DIRECTORY.prepare("UPDATE team_mailbox_members SET scopes = 'all' WHERE principal_id = ?")
 			.bind(ada.id)
@@ -392,6 +405,8 @@ describe("the scopes of a member of a team mailbox", () => {
 			[bot.id]: ["mail.read", "mail.send"],
 			[service.id]: [],
 			[odd.principal.id]: [],
+			[keyed]: [],
+			[mapped]: [],
 		});
 		const stored = await env.DIRECTORY.prepare("SELECT scopes FROM team_mailbox_members WHERE principal_id = ?")
 			.bind(ada.id)
@@ -401,21 +416,31 @@ describe("the scopes of a member of a team mailbox", () => {
 	});
 });
 
-describe("an agent in a team mailbox", () => {
+describe("an agent or a service account in a team mailbox", () => {
 	/**
-	 * A new agent of Ada with its first key. It is a member of no team mailbox. `legacy` gives it the narrow
-	 * account scopes that an agent from before migration 0031 can have.
+	 * A new agent of Ada with its first key, or a new service account with a token. It is a member of no team
+	 * mailbox. `legacy` gives it the narrow account scopes that an account from before migration 0031 can have.
 	 */
-	async function newAgent(legacy?: readonly string[]) {
-		const created = await owner.call("directory.create_principal", {
-			kind: "agent",
-			display_name: "Helper",
-			address: "helper@dock.test",
-			sponsor_id: ada.id,
-		});
-		if (legacy) await setLegacyScopes(created.principal.id, legacy);
-		const key = created.api_key?.secret ?? "";
-		return { id: created.principal.id, address: created.principal.address, key, call: api(key) };
+	async function newAccount(kind: "agent" | "service", legacy?: readonly string[]) {
+		const address = "helper@dock.test";
+		let id: string;
+		let key: string;
+		if (kind === "agent") {
+			const created = await owner.call("directory.create_principal", {
+				kind: "agent",
+				display_name: "Helper",
+				address,
+				sponsor_id: ada.id,
+			});
+			id = created.principal.id;
+			key = created.api_key?.secret ?? "";
+		} else {
+			const created = await owner.call("directory.create_service_account", { display_name: "Helper", address });
+			id = created.principal.id;
+			key = (await owner.call("account.create_api_key", { principal_id: id, label: "CI" })).api_key.secret;
+		}
+		if (legacy) await setLegacyScopes(id, legacy);
+		return { id, address, key, call: api(key) };
 	}
 	const access = (id: string) => owner.call("directory.get_agent_access", { principal_id: id });
 	const team = async (display_name: string, address: string) =>
@@ -428,77 +453,83 @@ describe("an agent in a team mailbox", () => {
 	// Billing. The key that the agent had before acts at once, as the memberships say, and the end of a
 	// membership ends that access at once. No member setting and no credential changes. An agent from before
 	// migration 0031 with narrow account scopes gets the same: its account scopes limit only its own mailbox.
+	// A service account and its token get the same as an agent and its key.
 	it.each([
-		["a new agent", undefined],
-		["an agent from before migration 0031", ["account.read", "chat.read"]],
-	] as const)("lets %s use each team mailbox as its membership says, at once, with its key", async (_name, legacy) => {
-		const agent = await newAgent(legacy);
-		const before = await access(agent.id);
-		const support = await team("Support", "support@dock.test");
-		const billing = await team("Billing", "billing@dock.test");
-		const send = (mailbox_id: string, subject: string) =>
-			agent.call("mail.send", { mailbox_id, to: ["owner@dock.test"], subject, text: "Hi" });
-		expect(await code(send(support.id, "Early"))).toBe("forbidden");
-		expect(await code(agent.call("mail.list_threads", { mailbox_id: billing.id }))).toBe("forbidden");
+		["a new agent", "agent", undefined],
+		["an agent from before migration 0031", "agent", ["account.read", "chat.read"]],
+		["a new service account", "service", undefined],
+		["a service account from before migration 0031", "service", ["chat.read"]],
+	] as const)(
+		"lets %s use each team mailbox as its membership says, at once, with its key",
+		async (_name, kind, legacy) => {
+			const agent = await newAccount(kind, legacy);
+			const before = await access(agent.id);
+			const support = await team("Support", "support@dock.test");
+			const billing = await team("Billing", "billing@dock.test");
+			const send = (mailbox_id: string, subject: string) =>
+				agent.call("mail.send", { mailbox_id, to: ["owner@dock.test"], subject, text: "Hi" });
+			expect(await code(send(support.id, "Early"))).toBe("forbidden");
+			expect(await code(agent.call("mail.list_threads", { mailbox_id: billing.id }))).toBe("forbidden");
 
-		await owner.call("directory.add_team_mailbox_member", {
-			mailbox_id: support.id,
-			principal_id: agent.id,
-			scopes: ["mail.read", "mail.send"],
-		});
-		await owner.call("directory.add_team_mailbox_member", {
-			mailbox_id: billing.id,
-			principal_id: agent.id,
-			scopes: ["mail.read"],
-		});
-		// The grants changed nothing on the agent: not its account, and not its keys.
-		const after = await access(agent.id);
-		expect(after.scopes).toEqual(before.scopes);
-		expect(after.tokens).toEqual(before.tokens);
-		expect(after.team_mailboxes.map((mailbox) => [mailbox.id, mailbox.scopes])).toEqual([
-			[billing.id, ["mail.read"]],
-			[support.id, ["mail.read", "mail.send"]],
-		]);
+			await owner.call("directory.add_team_mailbox_member", {
+				mailbox_id: support.id,
+				principal_id: agent.id,
+				scopes: ["mail.read", "mail.send"],
+			});
+			await owner.call("directory.add_team_mailbox_member", {
+				mailbox_id: billing.id,
+				principal_id: agent.id,
+				scopes: ["mail.read"],
+			});
+			// The grants changed nothing on the agent: not its account, and not its keys.
+			const after = await access(agent.id);
+			expect(after.scopes).toEqual(before.scopes);
+			expect(after.tokens).toEqual(before.tokens);
+			expect(after.team_mailboxes.map((mailbox) => [mailbox.id, mailbox.scopes])).toEqual([
+				[billing.id, ["mail.read"]],
+				[support.id, ["mail.read", "mail.send"]],
+			]);
 
-		// REST: the agent sends from Support with its key from before, and can only read Billing.
-		expect((await send(support.id, "Order 42")).message_id).toEqual(expect.any(String));
-		expect(await subjects(agent, support.id, "in:sent")).toEqual(["Order 42"]);
-		expect(await subjects(agent, billing.id)).toEqual([]);
-		expect(await code(send(billing.id, "Refund"))).toBe("forbidden");
-		expect(await code(agent.call("mail.create_label", { mailbox_id: billing.id, name: "Paid" }))).toBe("forbidden");
-		// Read and send does not let the agent change Support.
-		expect(await code(agent.call("mail.create_label", { mailbox_id: support.id, name: "Done" }))).toBe("forbidden");
-		const listed = (await agent.call("mail.list_mailboxes")).mailboxes.filter((mailbox) => mailbox.kind === "team");
-		expect(listed.map((mailbox) => [mailbox.id, mailbox.scopes])).toEqual([
-			[billing.id, ["mail.read"]],
-			[support.id, ["mail.read", "mail.send"]],
-		]);
+			// REST: the agent sends from Support with its key from before, and can only read Billing.
+			expect((await send(support.id, "Order 42")).message_id).toEqual(expect.any(String));
+			expect(await subjects(agent, support.id, "in:sent")).toEqual(["Order 42"]);
+			expect(await subjects(agent, billing.id)).toEqual([]);
+			expect(await code(send(billing.id, "Refund"))).toBe("forbidden");
+			expect(await code(agent.call("mail.create_label", { mailbox_id: billing.id, name: "Paid" }))).toBe("forbidden");
+			// Read and send does not let the agent change Support.
+			expect(await code(agent.call("mail.create_label", { mailbox_id: support.id, name: "Done" }))).toBe("forbidden");
+			const listed = (await agent.call("mail.list_mailboxes")).mailboxes.filter((mailbox) => mailbox.kind === "team");
+			expect(listed.map((mailbox) => [mailbox.id, mailbox.scopes])).toEqual([
+				[billing.id, ["mail.read"]],
+				[support.id, ["mail.read", "mail.send"]],
+			]);
 
-		// MCP: the same key sees the tools, and each call gets the same answer as REST.
-		const { body } = await mcp(agent.key, "tools/list");
-		const toolList = (body?.result ?? { tools: [] }) as { tools: { name: string }[] };
-		const tools = toolList.tools.map((tool) => tool.name);
-		expect(tools).toEqual(expect.arrayContaining(["mail_send", "mail_list_threads", "mail_create_label"]));
-		const sendTool = (mailbox_id: string) =>
-			callTool(agent.key, "mail_send", { mailbox_id, to: ["owner@dock.test"], subject: "MCP", text: "Hi" });
-		expect(toolCode(await sendTool(support.id))).toBe("ok");
-		expect(toolCode(await sendTool(billing.id))).toBe("forbidden");
-		expect(toolCode(await callTool(agent.key, "mail_list_threads", { mailbox_id: billing.id }))).toBe("ok");
+			// MCP: the same key sees the tools, and each call gets the same answer as REST.
+			const { body } = await mcp(agent.key, "tools/list");
+			const toolList = (body?.result ?? { tools: [] }) as { tools: { name: string }[] };
+			const tools = toolList.tools.map((tool) => tool.name);
+			expect(tools).toEqual(expect.arrayContaining(["mail_send", "mail_list_threads", "mail_create_label"]));
+			const sendTool = (mailbox_id: string) =>
+				callTool(agent.key, "mail_send", { mailbox_id, to: ["owner@dock.test"], subject: "MCP", text: "Hi" });
+			expect(toolCode(await sendTool(support.id))).toBe("ok");
+			expect(toolCode(await sendTool(billing.id))).toBe("forbidden");
+			expect(toolCode(await callTool(agent.key, "mail_list_threads", { mailbox_id: billing.id }))).toBe("ok");
 
-		// The end of the Support membership ends the Support access at once, on each surface. Billing stays.
-		await owner.call("directory.remove_team_mailbox_member", { mailbox_id: support.id, principal_id: agent.id });
-		expect(await code(send(support.id, "Late"))).toBe("forbidden");
-		expect(await code(agent.call("mail.list_threads", { mailbox_id: support.id }))).toBe("forbidden");
-		expect(toolCode(await sendTool(support.id))).toBe("forbidden");
-		expect(toolCode(await callTool(agent.key, "mail_list_threads", { mailbox_id: support.id }))).toBe("forbidden");
-		expect(await subjects(agent, billing.id)).toEqual([]);
-		expect((await access(agent.id)).scopes).toEqual(before.scopes);
+			// The end of the Support membership ends the Support access at once, on each surface. Billing stays.
+			await owner.call("directory.remove_team_mailbox_member", { mailbox_id: support.id, principal_id: agent.id });
+			expect(await code(send(support.id, "Late"))).toBe("forbidden");
+			expect(await code(agent.call("mail.list_threads", { mailbox_id: support.id }))).toBe("forbidden");
+			expect(toolCode(await sendTool(support.id))).toBe("forbidden");
+			expect(toolCode(await callTool(agent.key, "mail_list_threads", { mailbox_id: support.id }))).toBe("forbidden");
+			expect(await subjects(agent, billing.id)).toEqual([]);
+			expect((await access(agent.id)).scopes).toEqual(before.scopes);
 
-		// An agent from before keeps the limit of its account in its own mailbox.
-		const own = agent.call("mail.send", { to: ["owner@dock.test"], subject: "Own", text: "Hi" });
-		if (legacy) expect(await code(own)).toBe("forbidden");
-		else expect((await own).message_id).toEqual(expect.any(String));
-	});
+			// An agent from before keeps the limit of its account in its own mailbox.
+			const own = agent.call("mail.send", { to: ["owner@dock.test"], subject: "Own", text: "Hi" });
+			if (legacy) expect(await code(own)).toBe("forbidden");
+			else expect((await own).message_id).toEqual(expect.any(String));
+		},
+	);
 });
 
 describe("mail in a team mailbox", () => {

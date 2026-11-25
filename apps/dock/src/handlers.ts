@@ -5,22 +5,22 @@ import { aiHandlers } from "./ai/index.ts";
 import {
 	chatHandlers,
 	chatWatchers,
+	confirmedRoomsOfAgent,
 	invokeSlashCommand,
 	removeDeletedPrincipalFromRooms,
-	roomsOfPrincipal,
 } from "./chat/index.ts";
 import { docsHandlers } from "./docs/index.ts";
 import {
+	confirmedSharedDrivesOfAgent,
 	driveHandlers,
 	driveWatchers,
 	enableDriveEvents,
-	sharedDrivesOfPrincipal,
 	sharedItemsOfPrincipal,
 } from "./drive/index.ts";
 import { type CallContext, getPrincipal, identityHandlers } from "./identity/index.ts";
 import { closeAutoLabels, enableMailEvents, mailHandlers, mailWatchers } from "./mail/index.ts";
 import type { EventSubscriptions, HandlerMap, WatcherMap } from "./platform/index.ts";
-import { log } from "./platform/index.ts";
+import { log, OperationError } from "./platform/index.ts";
 import { sheetsHandlers } from "./sheets/index.ts";
 import { createEventSubscriptions, endpointHandlers } from "./webhooks/index.ts";
 
@@ -43,15 +43,18 @@ export const handlers: HandlerMap<CallContext> = {
 	// The identity handler checks the access and reads the team mailboxes and the keys. The shared drives
 	// and the rooms come from the indexes of Drive and Chat. The items shared directly come from the drive of
 	// the agent, and the drive of each item checks the access of the agent again.
+	//
+	// The indexes can have a membership from before migration 0031 that its room or its drive did not narrow.
+	// Only an account without both scopes of the product can have one. For such an account, each room and each
+	// drive of the answer confirms the membership, so the answer has the narrowed roles.
 	async "directory.get_agent_access"(call, input) {
 		const result = await identityHandlers["directory.get_agent_access"](call, input);
 		const agent = await getPrincipal(call.env.DIRECTORY, result.principal_id);
+		if (!agent) throw new OperationError("not_found", "No agent has that id.");
 		const [drives, rooms, shared] = await Promise.all([
-			sharedDrivesOfPrincipal(call.env.DIRECTORY, result.principal_id),
-			roomsOfPrincipal(call.env.DIRECTORY, result.principal_id, AGENT_ACCESS_LIMITS.rooms),
-			agent
-				? sharedItemsOfPrincipal(call.env, agent, AGENT_ACCESS_LIMITS.sharedItems)
-				: { items: [], truncated: false },
+			confirmedSharedDrivesOfAgent(call.env, agent),
+			confirmedRoomsOfAgent(call.env, agent, AGENT_ACCESS_LIMITS.rooms),
+			sharedItemsOfPrincipal(call.env, agent, AGENT_ACCESS_LIMITS.sharedItems),
 		]);
 		return {
 			...result,

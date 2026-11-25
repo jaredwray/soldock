@@ -1840,13 +1840,15 @@ export class ChatRoomDO extends DurableObject<Env> {
 	 *
 	 * `removeMember` holds the room with `blockConcurrencyWhile` for this call. So the members do not change
 	 * between the read of the directory and the write of the owner, and each member is in that read.
+	 *
+	 * A member in `never` does not become the owner: `narrowAgentMembers` names the agents that it narrowed.
 	 */
-	private async settleOwner(): Promise<void> {
+	private async settleOwner(never: ReadonlySet<string> = new Set()): Promise<void> {
 		const owner = this.one<{ principal_id: string }>("SELECT principal_id FROM members WHERE role = 'owner' LIMIT 1");
 		if (!owner) return;
-		const candidates = this.all<{ principal_id: string }>(`${NEXT_OWNER_FROM} ${NEXT_OWNER_SORT}`).map(
-			(row) => row.principal_id,
-		);
+		const candidates = this.all<{ principal_id: string }>(`${NEXT_OWNER_FROM} ${NEXT_OWNER_SORT}`)
+			.map((row) => row.principal_id)
+			.filter((id) => !never.has(id));
 		let active: Set<string>;
 		try {
 			const principals = await getPrincipals(this.env.DIRECTORY, candidates);
@@ -1874,8 +1876,10 @@ export class ChatRoomDO extends DurableObject<Env> {
 	 * account needed the scope in its account too. So each agent member keeps only what it could do before:
 	 * - Without `chat.read` on its account, it could not read the room. The room removes it, because each
 	 *   member reads.
-	 * - Without `chat.write`, it could only read. It keeps `chat.read` only, and an owner becomes a member: the
-	 *   next member in the order of the owners becomes the owner.
+	 * - Without `chat.write`, it could only read. It keeps `chat.read` only, and an owner becomes a member.
+	 *
+	 * When the owner loses its role, the next member in the order of the owners becomes the owner. An agent that
+	 * this step narrowed never does: an owner has each scope. A room without such a member has no owner then.
 	 *
 	 * A room that nobody created, or that has no agent member, reads nothing. An agent that the directory does
 	 * not have does not change: it cannot authenticate. Nothing writes the account scopes after the deploy, so
@@ -1895,8 +1899,11 @@ export class ChatRoomDO extends DurableObject<Env> {
 			).map((principal) => [principal.id, principal.agent_scopes]),
 		);
 		const removed: string[] = [];
+		// Each agent that this step narrows or removes. None of them becomes the owner: an owner has each scope.
+		const narrowed = new Set<string>();
 		let newOwner = false;
 		this.ctx.storage.transactionSync(() => {
+			let ownerLeft = false;
 			for (const agent of agents) {
 				const account = accounts.get(agent.principal_id);
 				// An agent with both scopes could do each thing that its membership allows. Each other agent loses access.
@@ -1916,22 +1923,25 @@ export class ChatRoomDO extends DurableObject<Env> {
 					);
 				}
 				this.touch(`member:${agent.principal_id}`);
-				if (agent.role === "owner") {
-					const next = this.one<{ principal_id: string }>(
-						`${NEXT_OWNER_FROM} WHERE principal_id != ? ${NEXT_OWNER_ORDER}`,
-						agent.principal_id,
-					);
-					if (next) {
-						this.sql.exec("UPDATE members SET role = 'owner' WHERE principal_id = ?", next.principal_id);
-						this.touch(`member:${next.principal_id}`);
-						newOwner = true;
-					}
+				narrowed.add(agent.principal_id);
+				ownerLeft ||= agent.role === "owner";
+			}
+			// The next owner comes after each agent has its new membership, so the order of the agents does not
+			// change the result. A room where each other member is a narrowed agent has no owner.
+			if (ownerLeft) {
+				const next = this.all<{ principal_id: string }>(`${NEXT_OWNER_FROM} ${NEXT_OWNER_SORT}`).find(
+					(row) => !narrowed.has(row.principal_id),
+				);
+				if (next) {
+					this.sql.exec("UPDATE members SET role = 'owner' WHERE principal_id = ?", next.principal_id);
+					this.touch(`member:${next.principal_id}`);
+					newOwner = true;
 				}
 			}
 			if (agents.length > 0 && this.room()) this.roomChanged("system");
 			this.sql.exec("INSERT INTO meta (key, value) VALUES (?, '1') ON CONFLICT (key) DO NOTHING", AGENT_ACCESS_KEY);
 		});
-		if (newOwner) await this.settleOwner();
+		if (newOwner) await this.settleOwner(narrowed);
 		for (const principalId of removed) {
 			for (const socket of this.ctx.getWebSockets(socketTag(principalId))) {
 				this.end(socket, CHAT_SOCKET_CLOSE.ended, "You are not a member of this room now.");

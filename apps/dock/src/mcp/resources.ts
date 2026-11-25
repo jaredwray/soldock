@@ -82,6 +82,10 @@ export async function listResources(
 	for (const resource of resourceList) {
 		if (!canRead(call.caller, resource)) continue;
 		const operation = operations[resource.list.operation];
+		// `canRead` also accepts an agent that only a membership or a share lets read this kind. The list of some
+		// kinds names the own drive or the own mailbox, where the account scopes decide. Such an agent then has
+		// no list of this kind, and the other kinds still show.
+		if (!canCallWith(call.caller, operation, resource.list.input)) continue;
 		const output = await invokeOperation(operation, handlers[resource.list.operation], call, resource.list.input);
 		for (const item of resource.list.items(output as never)) {
 			listed.push({

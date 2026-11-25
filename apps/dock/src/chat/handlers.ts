@@ -67,7 +67,7 @@ import {
 	type SearchHitRecord,
 	type ThreadFollowRecord,
 } from "./room.ts";
-import { listPublicRooms } from "./room-index.ts";
+import { listPublicRooms, roomRolesOf } from "./room-index.ts";
 import { type ParsedSearch, parseSearch, type SearchFilter } from "./search.ts";
 import { type SearchHit, searchIndex } from "./search-index.ts";
 import { chatWebhookHandlers } from "./webhooks.ts";
@@ -107,14 +107,12 @@ function openRoom(call: CallContext, roomId: string): { room: ReturnType<typeof 
  */
 async function confirmedRooms<T extends { id: string }>(call: CallContext, rooms: readonly T[]): Promise<T[]> {
 	if (call.caller.principal.kind !== "agent" || call.caller.scopes.has("chat.read")) return [...rooms];
-	const answers = await Promise.all(
-		rooms.map(async (room) => {
-			const opened = openRoom(call, room.id);
-			const found = await opened.room.get(opened.ctx);
-			return "error" in found || found.room.role === null ? null : room;
-		}),
+	const roles = await roomRolesOf(
+		call.env,
+		actorOf(call),
+		rooms.map((room) => room.id),
 	);
-	return answers.filter((room): room is Awaited<T> => room !== null);
+	return rooms.filter((room) => roles.has(room.id));
 }
 
 /** Turns a refusal from an object into an OperationError, and returns any other result. */
@@ -714,6 +712,14 @@ export const chatHandlers: Pick<HandlerMap<CallContext>, ChatOperation> = {
 	async "chat.get_room"(call, input) {
 		const opened = openRoom(call, input.room_id);
 		const found = accept(await opened.room.get(opened.ctx));
+		// A membership decides the read of an agent or a service account. A public room also answers a caller
+		// that is not a member, and no membership decides that read: the account scope does, as for the public list.
+		if (found.room.role === null && call.caller.principal.kind === "agent" && !call.caller.scopes.has("chat.read")) {
+			throw new OperationError(
+				"forbidden",
+				"You are not a member of this room, and the credential does not have the scope chat.read.",
+			);
+		}
 		return {
 			room: toRoom(found.room),
 			members: found.members.map((member) => ({ ...member, joined_at: iso(member.joined_at) })),

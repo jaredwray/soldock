@@ -311,3 +311,50 @@ export async function roomsOfPrincipal(
 		.all<PrincipalRoom>();
 	return { rooms: results.slice(0, limit), truncated: results.length > limit };
 }
+
+/**
+ * The role that each room gives the principal now, for the rooms of the list where it is a member. The index
+ * and the list of a principal can have a membership from before migration 0031 that the room did not narrow
+ * (`narrowAgentMembers`): a room narrows it when it wakes. This call wakes each room, so the answer has the
+ * narrowed memberships. A room that refuses the principal, or does not have it as a member, is not in the answer.
+ */
+export async function roomRolesOf(
+	env: Pick<Env, "CHAT_ROOM">,
+	actor: ActorRecord,
+	roomIds: readonly string[],
+): Promise<Map<string, RoomRole>> {
+	const roles = new Map<string, RoomRole>();
+	await Promise.all(
+		roomIds.map(async (roomId) => {
+			const found = await env.CHAT_ROOM.get(env.CHAT_ROOM.idFromName(roomId)).get({ roomId, actor });
+			if (!("error" in found) && found.room.role !== null) roles.set(roomId, found.room.role);
+		}),
+	);
+	return roles;
+}
+
+/**
+ * The rooms of `roomsOfPrincipal` for an agent or a service account, with each room confirmed when the account
+ * scopes of the agent do not have `chat.read` and `chat.write`. Only such an account can have a membership that
+ * a room did not narrow. Each other account gets the rows of the index.
+ */
+export async function confirmedRoomsOfAgent(
+	env: Pick<Env, "CHAT_ROOM" | "DIRECTORY">,
+	agent: { id: string; display_name: string; agent_scopes: readonly string[] },
+	limit: number,
+): Promise<{ rooms: PrincipalRoom[]; truncated: boolean }> {
+	const listed = await roomsOfPrincipal(env.DIRECTORY, agent.id, limit);
+	if (agent.agent_scopes.includes("chat.read") && agent.agent_scopes.includes("chat.write")) return listed;
+	const roles = await roomRolesOf(
+		env,
+		{ principal_id: agent.id, kind: "agent", display_name: agent.display_name },
+		listed.rooms.map((room) => room.id),
+	);
+	return {
+		rooms: listed.rooms.flatMap((room) => {
+			const role = roles.get(room.id);
+			return role === undefined ? [] : [{ ...room, role }];
+		}),
+		truncated: listed.truncated,
+	};
+}

@@ -1160,6 +1160,122 @@ describe("a room from before migration 0031", () => {
 		expect((await post(blind, room.id, "I can post now.")).text).toBe("I can post now.");
 	});
 
+	// An owner has each scope. So an agent that the step narrowed or removed never becomes the owner, in each
+	// order of the agents. The members of a room are in the order of their ids.
+	it("gives the room of a narrowed owner to no agent that it narrowed", async () => {
+		const readOnly = ["account.read", "chat.read"];
+		const membersOf = async (reader: Actor, room_id: string) =>
+			(await reader.call("chat.get_room", { room_id })).members.map((member) => [member.principal_id, member.role]);
+		// The member comes before the owner. Without the rule, the member is narrowed first and then becomes the owner.
+		const early = await agentOf("early");
+		const late = await agentOf("late");
+		const [member, lead] = early.id < late.id ? [early, late] : [late, early];
+		const first = await createRoom(lead, "private", "Reports", [ada.id]);
+		await ada.call("chat.add_members", { room_id: first.id, principal_ids: [member.id] });
+		await ada.call("chat.remove_member", { room_id: first.id, principal_id: ada.id });
+		// The owner comes before a member that the step removes. Without the rule, that member becomes the owner
+		// and then leaves, and the agent that can still write does not get the room.
+		const head = await agentOf("head");
+		const blind = await agentOf("blind");
+		const writer = await agentOf("writer");
+		const second = await createRoom(head, "private", "Builds", [ada.id]);
+		await ada.call("chat.add_members", { room_id: second.id, principal_ids: [blind.id] });
+		await ada.call("chat.add_members", { room_id: second.id, principal_ids: [writer.id] });
+		await ada.call("chat.remove_member", { room_id: second.id, principal_id: ada.id });
+		for (const agent of [member, lead, head]) await setLegacyScopes(agent.id, readOnly);
+		await setLegacyScopes(blind.id, ["account.read"]);
+		for (const id of [first.id, second.id]) await wakeAsLegacy(id);
+
+		expect(new Set(await membersOf(member, first.id))).toEqual(
+			new Set([
+				[member.id, "member"],
+				[lead.id, "member"],
+			]),
+		);
+		for (const agent of [member, lead]) {
+			expect(await codeOf(agent.call("chat.post_message", { room_id: first.id, text: "Hi." }))).toBe("forbidden");
+			expect(await codeOf(agent.call("chat.update_room", { room_id: first.id, name: "Mine" }))).toBe("forbidden");
+		}
+		expect(new Set(await membersOf(writer, second.id))).toEqual(
+			new Set([
+				[head.id, "member"],
+				[writer.id, "owner"],
+			]),
+		);
+	});
+
+	// The room does not check chat.write for the personal state of a member, and a member leaves without it.
+	// So the account scopes decide these calls, as before the deploy: an agent that could only read still only reads.
+	it("refuses the personal state of a room to an agent whose account could only read", async () => {
+		const reader = await createActor(owner, {
+			kind: "agent",
+			display_name: "reader",
+			address: "reader@dock.test",
+			sponsor_id: ada.id,
+			legacyScopes: ["account.read", "chat.read"],
+		});
+		const room = await createRoom(ada, "private", "Builds");
+		await ada.call("chat.add_members", { room_id: room.id, principal_ids: [reader.id], scopes: ["chat.read"] });
+		await post(ada, room.id, "Deploy at noon.");
+		expect(await texts(reader, room.id)).toEqual(["Deploy at noon."]);
+		const refused = [
+			() => reader.call("chat.mark_read", { room_id: room.id }),
+			() => reader.call("chat.star_room", { room_id: room.id, starred: true }),
+			() => reader.call("chat.save_draft", { room_id: room.id, text: "Soon." }),
+			() => reader.call("chat.remove_member", { room_id: room.id, principal_id: reader.id }),
+		];
+		for (const call of refused) expect(await codeOf(call())).toBe("forbidden");
+		expect((await ada.call("chat.get_room", { room_id: room.id })).room.member_count).toBe(2);
+	});
+
+	// A public room answers a caller that is not a member. No membership decides that read, so an agent whose
+	// account could not read Chat still cannot read the room.
+	it("refuses the read of a public room to an agent that is not a member and whose account could not read", async () => {
+		const blind = await createActor(owner, {
+			kind: "agent",
+			display_name: "blind",
+			address: "blind@dock.test",
+			sponsor_id: ada.id,
+			legacyScopes: ["account.read"],
+		});
+		const room = await createRoom(ada, "public", "Plans");
+		expect(await codeOf(blind.call("chat.get_room", { room_id: room.id }))).toBe("forbidden");
+	});
+
+	// The Access view reads the index, and the index has the membership from before until the room wakes. So the
+	// view asks each room of such an agent, and shows the membership that the room narrowed.
+	it("shows in the access of an agent the memberships that each room narrowed", async () => {
+		const blind = await agentOf("blind");
+		const reader = await agentOf("reader");
+		// A service account is narrowed as an agent is.
+		const { principal } = await owner.call("directory.create_service_account", {
+			display_name: "CI",
+			address: "ci@dock.test",
+		});
+		const token = await owner.call("account.create_api_key", { principal_id: principal.id, label: "ci" });
+		const service: Actor = { ...principal, key: token.api_key.secret, call: api(token.api_key.secret) };
+		const room = await createRoom(ada, "private", "Builds", [blind.id, service.id]);
+		const owned = await createRoom(reader, "private", "Reports", [ada.id]);
+		const roomsOf = async (agent: Actor) =>
+			(await owner.call("directory.get_agent_access", { principal_id: agent.id })).chat_rooms.map((entry) => [
+				entry.id,
+				entry.role,
+			]);
+		await soon(async () => {
+			expect(await roomsOf(blind)).toEqual([[room.id, "member"]]);
+			expect(await roomsOf(service)).toEqual([[room.id, "member"]]);
+			expect(await roomsOf(reader)).toEqual([[owned.id, "owner"]]);
+		});
+		await setLegacyScopes(blind.id, ["account.read"]);
+		await setLegacyScopes(service.id, ["drive.read"]);
+		await setLegacyScopes(reader.id, ["account.read", "chat.read"]);
+		for (const id of [room.id, owned.id]) await wakeAsLegacy(id);
+		expect(await roomsOf(blind)).toEqual([]);
+		expect(await roomsOf(service)).toEqual([]);
+		expect(await codeOf(service.call("chat.list_messages", { room_id: room.id }))).toBe("not_found");
+		expect(await roomsOf(reader)).toEqual([[owned.id, "member"]]);
+	});
+
 	// A direct message keeps its members, so no person could add the removed agent again. A person who opens the
 	// direct message again decides that the agent can use it.
 	it("gives a direct message back to an agent that it removed when the person opens it again", async () => {

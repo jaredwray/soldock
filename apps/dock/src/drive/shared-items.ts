@@ -1,4 +1,6 @@
+import type { SharedDriveRole } from "@asterra/contracts";
 import { accept, spaceStub, unknownSpaceIds } from "./access.ts";
+import { sharedDrivesOfPrincipal } from "./shared-index.ts";
 import type { SpaceCall } from "./space.ts";
 
 /** One item that a person shared directly with a principal, as the access view of a service account shows it. */
@@ -53,4 +55,47 @@ export async function sharedItemsOfPrincipal(
 		items: page.items.flatMap((ref) => found.get(`${ref.spaceId}/${ref.itemId}`) ?? []),
 		truncated: page.nextCursor !== null,
 	};
+}
+
+/**
+ * The role that each shared drive gives the principal now, for the drives of the list where it is a member.
+ * The index can have a membership from before migration 0031 that the drive did not narrow
+ * (`narrowAgentAccess`): a drive narrows it when it wakes. This call wakes each drive, so the answer has the
+ * narrowed roles. A drive that refuses the principal, or does not have it as a member, is not in the answer.
+ */
+export async function sharedDriveRolesOf(
+	env: Pick<Env, "DRIVE_SPACE">,
+	actor: SpaceCall["actor"],
+	driveIds: readonly string[],
+): Promise<Map<string, SharedDriveRole>> {
+	const roles = new Map<string, SharedDriveRole>();
+	await Promise.all(
+		driveIds.map(async (spaceId) => {
+			const record = await spaceStub(env, spaceId).sharedDrive({ spaceId, actor, admin: false });
+			if (!("error" in record) && record.role !== null) roles.set(spaceId, record.role);
+		}),
+	);
+	return roles;
+}
+
+/**
+ * The shared drives of `sharedDrivesOfPrincipal` for an agent or a service account, with each drive confirmed
+ * when the account scopes of the agent do not have `drive.read` and `drive.write`. Only such an account can
+ * have a membership that a drive did not narrow. Each other account gets the rows of the index.
+ */
+export async function confirmedSharedDrivesOfAgent(
+	env: Pick<Env, "DRIVE_SPACE" | "DIRECTORY">,
+	agent: { id: string; display_name: string; agent_scopes: readonly string[] },
+): Promise<{ id: string; name: string; role: SharedDriveRole }[]> {
+	const listed = await sharedDrivesOfPrincipal(env.DIRECTORY, agent.id);
+	if (agent.agent_scopes.includes("drive.read") && agent.agent_scopes.includes("drive.write")) return listed;
+	const roles = await sharedDriveRolesOf(
+		env,
+		{ principal_id: agent.id, kind: "agent", display_name: agent.display_name },
+		listed.map((drive) => drive.id),
+	);
+	return listed.flatMap((drive) => {
+		const role = roles.get(drive.id);
+		return role === undefined ? [] : [{ ...drive, role }];
+	});
 }
