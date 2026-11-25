@@ -1,4 +1,4 @@
-import type { Label, Mailbox } from "@asterra/contracts";
+import type { Label, Mailbox, MailSettings } from "@asterra/contracts";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { lazyPage } from "../../lib/lazyPage.tsx";
 import { setPageTitle } from "../../lib/pageTitle.ts";
@@ -12,7 +12,7 @@ import { AutoLabelsDialog } from "./AutoLabelsDialog.tsx";
 import type { SendResult } from "./Composer.tsx";
 import { Composer, usePreloadComposer } from "./ComposerLoader.tsx";
 import { type Draft, newDraft } from "./compose.ts";
-import { useLabels, useMailboxSettings, useMailSettings, useProfilePoll } from "./data.ts";
+import { useLabels, useMailboxSettings, useProfilePoll } from "./data.ts";
 import { DeleteLabelDialog, NewLabelDialog } from "./LabelDialogs.tsx";
 import { MailPane } from "./MailPane.tsx";
 import { MailboxProvider, MailboxRightsProvider } from "./mailbox.tsx";
@@ -29,11 +29,14 @@ type MailDialog =
 	| { type: "delete-label"; label: Label }
 	| null;
 
-/** The open composer: its draft, the mailbox that sends it at first, and the signature of that mailbox. */
+/**
+ * The open composer: its draft, the mailbox that sends it at first, and the signature of that mailbox. The
+ * signature is null when it did not load yet: the composer then reads it.
+ */
 interface Composing {
 	draft: Draft;
 	from: string | null;
-	signature: string;
+	signature: string | null;
 }
 
 // The settings view is a separate chunk: a person opens it seldom.
@@ -46,6 +49,10 @@ interface MailAppProps {
 	mailboxes: readonly Mailbox[] | null;
 	/** Loads the mailboxes again, after a change of the members of a team mailbox in its settings view. */
 	onMailboxesChanged: () => void;
+	/** The mail settings of the person, from the shell: they stay when the mailbox changes. Null while they load. */
+	mailSettings: MailSettings | null;
+	/** Keeps the mail settings that the settings view saved. */
+	onMailSettingsSaved: (settings: MailSettings) => void;
 	/** The mailboxes of the sidebar that the person expanded or collapsed, from the shell: the state stays when the mailbox changes. */
 	expandedMailboxes: Readonly<Record<string, boolean>>;
 	/** Expands or collapses a mailbox in the sidebar. Null goes back to the default. */
@@ -65,6 +72,8 @@ export function MailApp({
 	route,
 	mailboxes,
 	onMailboxesChanged,
+	mailSettings,
+	onMailSettingsSaved,
 	expandedMailboxes,
 	onSetExpanded,
 	navOpen,
@@ -78,7 +87,6 @@ export function MailApp({
 	const { profile, sync } = useProfilePoll(mailboxId, bump);
 	const { labels, error: labelsError, reload: reloadLabels } = useLabels(mailboxId);
 	const { settings: mailboxSettings, set: setMailboxSettings } = useMailboxSettings(mailboxId);
-	const { settings: mailSettings, set: setMailSettings } = useMailSettings();
 	const listed = mailboxId ? (mailboxes?.find((mailbox) => mailbox.id === mailboxId) ?? null) : null;
 	const rights = useMemo(() => mailboxRights(mailboxes, mailboxId), [mailboxes, mailboxId]);
 	const [composing, setComposing] = useState<Composing | null>(null);
@@ -126,8 +134,8 @@ export function MailApp({
 	const defaultFrom = defaultFromId(mailboxId, mailSettings?.default_from ?? {}, senders, whoami.principal.id);
 	// The signature of the default From, when it is not this mailbox.
 	const { settings: fromSettings } = useMailboxSettings(defaultFrom, defaultFrom !== mailboxId);
-	const signature = mailboxSettings?.signature ?? "";
-	const fromSignature = defaultFrom === mailboxId ? signature : (fromSettings?.signature ?? "");
+	const signature = mailboxSettings?.signature ?? null;
+	const fromSignature = defaultFrom === mailboxId ? signature : (fromSettings?.signature ?? null);
 	const compose = useCallback(
 		(next?: Draft) => {
 			// Nobody sends from the mailbox of an agent except the agent.
@@ -235,7 +243,7 @@ export function MailApp({
 							senders={senders}
 							refreshKey={refreshKey}
 							onSettingsSaved={setMailboxSettings}
-							onMailSettingsSaved={setMailSettings}
+							onMailSettingsSaved={onMailSettingsSaved}
 							onMembersChanged={onMailboxesChanged}
 							onOpenAutoLabels={() => setDialog({ type: "auto-labels" })}
 							onChanged={onChanged}
