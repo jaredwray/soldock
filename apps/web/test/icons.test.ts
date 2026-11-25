@@ -66,6 +66,7 @@ const FILES: Record<IconName, string> = {
 	more: "more-vert",
 	history: "clock-rotate-right",
 	clock: "clock",
+	focus: "position",
 	info: "info-circle",
 	check: "check",
 	chevronRight: "nav-arrow-right",

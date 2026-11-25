@@ -49,7 +49,7 @@ const Screener = lazyPage(() => import("./Screener.tsx").then((module) => module
 interface MailAppProps {
 	/**
 	 * `view` is null for the settings view and the Screener view of the mailbox. `screener` is set for the
-	 * Screener view. `focus` is true for Focus & Reply in the view.
+	 * Screener view. `focus` is true for Focus in the view.
 	 */
 	route: {
 		mailboxId: string | null;
@@ -129,8 +129,8 @@ export function MailApp({
 		? (profile?.display_name ?? listed?.display_name ?? fallbackMailboxName(mailboxId))
 		: null;
 	const { view } = route;
-	// Focus & Reply works in each view with a reply and a Done (`focusMode`). Its path in a different view goes
-	// to the list of the view.
+	// Focus works in each view with a reply and a Done (`focusMode`). Its path in a different view goes to the
+	// list of the view.
 	const focus =
 		route.focus && view
 			? focusMode(view, view.kind === "label" ? (labelsById.get(view.labelId)?.name ?? null) : null)
@@ -141,7 +141,7 @@ export function MailApp({
 	}, [focusRedirect]);
 	const title = view
 		? focus
-			? `Focus & Reply: ${viewTitle(view, labels)}`
+			? `Focus: ${viewTitle(view, labels)}`
 			: viewTitle(view, labels)
 		: route.screener
 			? "Screener"
