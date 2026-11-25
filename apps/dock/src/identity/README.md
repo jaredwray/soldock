@@ -7,15 +7,17 @@
 | | |
 | --- | --- |
 | **Purpose** | Principals (humans, agents, service accounts, groups), directory, passkeys, sessions, API keys, OAuth authorization server, `client_credentials`, authorization (`authorize()`), agent policies, audit log, `PrincipalDO`. |
-| **Owns** | D1 `directory` tables, except `chat_rooms`, `chat_members`, `chat_custom_emoji`, `chat_incoming_webhooks`, `chat_slash_commands` (`chat`) and `webhooks` and `chat_webhooks` (`webhooks`). `PrincipalDO` owns the Chat state, personal Chat views (activity, sections, saved messages, drafts, scheduled messages, reminders), notification settings and events sockets of each principal. Later: R2 `audit`. |
+| **Owns** | D1 `directory` tables, except `chat_rooms`, `chat_members`, `chat_custom_emoji`, `chat_incoming_webhooks`, `chat_slash_commands`, `chat_member_requests` (`chat`) and `webhooks` and `chat_webhooks` (`webhooks`). `PrincipalDO` owns the Chat state, personal Chat views (activity, sections, saved messages, drafts, scheduled messages, reminders), notification settings and events sockets of each principal. Later: R2 `audit`. |
 | **Depends on** | `platform`. |
 | **Operations** | `chat.get_presence`, `chat.set_status`, `account.whoami`, `account.list_api_keys`, `account.create_api_key`, `account.revoke_api_key`, `account.rotate_api_key`, `account.end_api_key_rotation`, `account.set_password`, `account.create_totp_secret`, `account.enable_totp`, `account.disable_totp`, `directory.list_principals`, `directory.get_principals`, `directory.create_principal`, `directory.update_agent_policy`, `directory.update_principal`, `directory.archive_principal`, `directory.restore_principal`, `directory.delete_principal`, `directory.list_mail_domains`, `directory.add_mail_domain`, `directory.remove_mail_domain`, `directory.list_team_mailboxes`, `directory.create_team_mailbox`, `directory.update_team_mailbox`, `directory.add_team_mailbox_member`, `directory.remove_team_mailbox_member`, `directory.create_service_account`, `directory.list_service_account_activity`, `directory.get_agent_access`, `directory.set_agent_access`, `oauth.get_authorization`, `oauth.approve_authorization`, `oauth.deny_authorization`, `oauth.list_grants`, `oauth.revoke_grant` |
-| **Data inventory** | D1 `directory`: `principals` (with `password_hash`, `totp_secret`, `totp_pending_secret`, `totp_last_step`, `sign_in_failures`, `sign_in_locked_until`, `chat_online_until`, `chat_active_until`, `chat_status_json`, `archived_at`, `deleted_at`, and the name aliases of a Chat mention `alias_first`, `alias_full` and `aliases_set`, and the name in the form of a search `name_folded`, which come from the display name, and `service`, `description` and `created_by` of [service accounts](#service-accounts), and the `agent_scopes` and `access_version` of each agent and service account, see [Access of an agent](#access-of-an-agent); `agent_resources` is not used: the Worker does not read it or write it, and no migration removes it; `service_scopes` and `service_resources` are not read since migration `0027` and stay for the Worker from before it), `addresses`, `api_keys` (with `expires_at`, `description` and `revoked_by`, and for a rotation `prev_key_hash`, `prev_expires_at`, `rotation`, `rotated_at` and `rotated_by`, `expiry_notice_at` for the notice before a token ends, `scopes`, which the Worker reads only for a key of a person since migration `0027`, and `resources`, which is not read since migration `0026`), `sessions`, `setup_lock`, `mail_domains`, `team_mailboxes` (name, address, creator), `team_mailbox_members` (mailbox, principal, who added the member, and `scopes`: what the member can do in the mailbox), `oauth_clients` (registered MCP clients: name, URI, redirect URIs), `oauth_requests` (authorization requests: client, redirect URI, state, PKCE challenge, requested scopes, approval, code hash, the grant that the code made, and `granted_scopes`, which is not read since migration `0027`), `oauth_grants` (approved connections: client, principal, approver, hashes of the access token and of the current, previous and consumed refresh tokens, and `scopes`, which is not read since migration `0027`) ([`migrations/`](../../migrations/)). The TOTP secrets are stored as plain base32 in D1, because a server must read them to check a code. Unused and empty since migration `0004`, kept for the Worker from before it: `principals.sign_in_email` and `sign_in_codes`. A later migration removes them. `PrincipalDO` (one for each principal, keyed by the principal id): tables `chat_rooms`, `chat_threads`, `chat_addressed`, `chat_activity`, `chat_sections`, `chat_section_rooms`, `chat_saved_messages`, `chat_drafts`, `chat_scheduled_messages`, `chat_reminders`, `chat_notification_levels`, `chat_push_devices`, and `chat_notification_sounds` (see [The object of a principal](#the-object-of-a-principal)), table `service_activity` (the activity log of a service account: at most 10,000 calls, at most 1,000 membership changes by members, its admin changes, and 90 days, see [Service accounts](#service-accounts)), table `meta` (schema version, the owner id in `presence_principal`, `chat_seeded` after the first fill, and `chat_threads_filled` after the first fill of the threads), and the hibernatable sockets of `/ws/events` (not in the database: each keeps the reference to its credential, the time of its open and of its last check, and its latest activity report; no backup). Backups: not built yet. |
+| **Data inventory** | D1 `directory`: `principals` (with `password_hash`, `totp_secret`, `totp_pending_secret`, `totp_last_step`, `sign_in_failures`, `sign_in_locked_until`, `chat_online_until`, `chat_active_until`, `chat_status_json`, `archived_at`, `deleted_at`, and the name aliases of a Chat mention `alias_first`, `alias_full` and `aliases_set`, and the name in the form of a search `name_folded`, which come from the display name, and `service`, `description` and `created_by` of [service accounts](#service-accounts), and the `agent_scopes` and `access_version` of each agent and service account, see [Access of an agent](#access-of-an-agent); `agent_resources` is not used: the Worker does not read it or write it, and no migration removes it; `service_scopes` and `service_resources` are not read since migration `0027` and stay for the Worker from before it), `addresses`, `api_keys` (with `expires_at`, `description` and `revoked_by`, and for a rotation `prev_key_hash`, `prev_expires_at`, `rotation`, `rotated_at` and `rotated_by`, `expiry_notice_at` for the notice before a token ends, `scopes`, which the Worker reads only for a key of a person since migration `0027`, and `resources`, which is not read since migration `0026`), `sessions`, `setup_lock`, `mail_domains`, `team_mailboxes` (name, address, creator), `team_mailbox_members` (mailbox, principal, who added the member, and `scopes`: what the member can do in the mailbox), `oauth_clients` (registered MCP clients: name, URI, redirect URIs), `oauth_requests` (authorization requests: client, redirect URI, state, PKCE challenge, requested scopes, approval, code hash, the grant that the code made, and `granted_scopes`, which is not read since migration `0027`), `oauth_grants` (approved connections: client, principal, approver, hashes of the access token and of the current, previous and consumed refresh tokens, and `scopes`, which is not read since migration `0027`) ([`migrations/`](../../migrations/)). The TOTP secrets are stored as plain base32 in D1, because a server must read them to check a code. Unused and empty since migration `0004`, kept for the Worker from before it: `principals.sign_in_email` and `sign_in_codes`. A later migration removes them. `PrincipalDO` (one for each principal, keyed by the principal id): tables `chat_rooms`, `chat_threads`, `chat_addressed`, `chat_activity` (with `subject_json`: the account to add, for an item of the kind `member_request`), `chat_sections`, `chat_section_rooms`, `chat_saved_messages`, `chat_drafts`, `chat_scheduled_messages`, `chat_reminders`, `chat_notification_levels`, `chat_push_devices`, and `chat_notification_sounds` (see [The object of a principal](#the-object-of-a-principal)), table `service_activity` (the activity log of a service account: at most 10,000 calls, at most 1,000 membership changes by members, its admin changes, and 90 days, see [Service accounts](#service-accounts)), table `meta` (schema version, the owner id in `presence_principal`, `chat_seeded` after the first fill, and `chat_threads_filled` after the first fill of the threads), and the hibernatable sockets of `/ws/events` (not in the database: each keeps the reference to its credential, the time of its open and of its last check, and its latest activity report; no backup). Backups: not built yet. |
 
 Public surface: `index.ts` only. Other domains must not import files from this folder directly.
 
 The D1 database also holds `chat_rooms` and `chat_members`. They belong to the
 [`chat`](../chat/README.md) module. A fresh start of the directory drops them and makes them again.
+The same applies to `chat_member_requests` (migration `0030`): see
+[Where an agent can act](#where-an-agent-can-act).
 
 ## The object of a principal
 
@@ -47,6 +49,14 @@ to it, so a list of that state reads one object and not the directory.
   a state without the room, remove the row. A state without `addressed` (from a room on an older
   version) keeps the row. `listChatAddressed` reads the rows for `chat.list_addressed`, with the
   newest change first, in the order of the index `chat_addressed_recent`.
+- The table `chat_activity` has the activity items of the principal. `recordChatActivity` checks that
+  the principal is in the room of an item. An item of the kind `member_request` gets no such check. The
+  person who decides a [request of an agent](../chat/README.md#a-request-of-an-agent-to-add-an-agent) is
+  usually not a member of the room. The column `subject_json` has the account to add, and null for each
+  other kind.
+- `CHAT_ACTIVITY_SUBJECT_MIGRATION` (`chat-personal.ts`) makes the table `chat_activity` again with the
+  column `subject_json`, and copies each row. The new table has no `CHECK` of the kind: SQLite cannot
+  change a `CHECK`, and the contracts name the kinds.
 - `applyChatRoomStates` keeps a state only when its stamp is higher than the stamp of the kept state.
   So the order of two deliveries does not matter, and a second delivery changes nothing.
 - The object has no operation of its own. Its methods check no access: only the Worker and other
@@ -385,7 +395,8 @@ the API, with tokens. Nobody signs in as it, and it never connects through OAuth
     membership.
   - A membership change that a different principal makes for the account also adds an entry
     (`recordServiceMemberships`), with that principal as the actor: a room (create, add, remove, a new
-    direct message or group message, delete, an owner that an admin assigns), a shared drive (create,
+    direct message or group message, delete, an owner that an admin assigns, an approved request of an
+    agent to add the account), a shared drive (create,
     add, remove, delete), and the share of a Drive item (share, unshare). The room, the drive or the item
     is the resource. The surface is `admin` for an owner or an admin, and `member` for each other
     principal, for example a member who adds the account to a room. A delete reads the service accounts
@@ -643,11 +654,30 @@ account names its resources.
 - **A person who does not manage the agent can still add it.** The agent then uses the resource with the
   scopes that it holds. It gets no new scope: only a manager of the agent gives one.
 - **An agent does not join a room.** `chat.join_room` accepts people only (`callers: ["human"]`). A
-  member of the room adds an agent or a service account with `chat.add_members`.
+  person who is a member of the room adds an agent or a service account with `chat.add_members`.
+- **An agent does not add an agent.** An agent or a service account cannot make a different agent or
+  service account a member of a room. `chat.create_room` with such a member, `chat.add_members`,
+  `chat.open_dm` and `chat.open_group_dm` get `forbidden`. So two agents cannot start a direct message
+  with each other.
+- **An agent asks.** The agent calls `chat.request_member`, and a person who manages the account of the
+  request decides. An approval is the decision of a manager: the account gets the chat scopes of the
+  membership that it does not hold, as above
+  ([`chat`](../chat/README.md#a-request-of-an-agent-to-add-an-agent)).
+- **`chat.add_members` comes from a person.** An agent that owns a room cannot give this member scope to
+  a different agent or service account with `chat.set_member_scopes`. An owner that is a person can.
+- **The requests are in the directory.** The table `chat_member_requests` has one row for each request
+  that waits for a person (migration `0030`). It belongs to the [`chat`](../chat/README.md#data-inventory)
+  module. The migration only adds the table, and the Worker from before does not read it. A fresh start
+  of the directory drops the table and replays `0030` (`setup.ts`).
+- **Rollback after `0030`.** A Worker from before this change finds no message for an item of the kind
+  `member_request`, so its `chat.list_activity` removes the item as old. The table of the migration stays
+  and that Worker does not use it
+  ([Self-hosting](../../../../docs/self-hosting.md#an-agent-asks-before-it-adds-an-agent)).
 - **A remove changes nothing on the account.** After a remove from a room, a shared drive or a team
   mailbox, the agent keeps its scopes. The membership is gone, so the agent does not reach the resource.
 - **Open operations.** No operation refuses an agent because of where it acts. An agent with the scopes
-  can call `chat.create_room`, `chat.open_dm` and `chat.open_group_dm`. It can call the chat operations
+  can call `chat.create_room`, `chat.open_dm` and `chat.open_group_dm`, with people as the other
+  members. It can call the chat operations
   that read or write across rooms: threads, activity, sections, saved messages, scheduled messages,
   reminders, drafts and notification settings. It can create a chat webhook, and it can open the events
   socket `/ws/events`. The caller kind still applies: a service account calls only an operation that

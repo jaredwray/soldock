@@ -11,6 +11,7 @@ import { TargetWebhooks } from "../settings/TargetWebhooks.tsx";
 import { WEBHOOK_DOMAINS } from "../settings/webhookModel.ts";
 import { AgentAccess } from "./AgentAccess.tsx";
 import { AgentPermissions } from "./AgentPermissions.tsx";
+import { MemberRequests } from "./MemberRequests.tsx";
 import { OAuthGrants } from "./OAuthGrants.tsx";
 import {
 	draftAfterPolicyChange,
@@ -26,21 +27,23 @@ import { useAgentAccess } from "./useAgentAccess.ts";
 interface AgentDetailsProps {
 	agent: Principal;
 	sponsor: Principal | null;
+	/** The whole directory, for the name of the agent of a member request. */
+	principals: readonly Principal[];
 	/** True for an owner or an admin, who can read the mailbox of each agent. A sponsor cannot. */
 	canReadMail: boolean;
-	/** True when the card has no sponsor field. A sponsor then sees who is accountable. */
+	/** True when the page has no sponsor field. A sponsor then sees who is accountable. */
 	showSponsor: boolean;
 	onChanged: () => void;
 }
 
 /**
  * The tools of one agent, for its sponsor, an owner or an admin: its outbound policy, its permissions
- * (scopes), the apps that connected as it with OAuth, its webhooks, its API keys and what it
- * can reach. Each key and each connection has the permissions of the agent. An owner or an admin also gets
- * a link to the mailbox, which they can read. Only the sponsor can add a webhook or an event for the agent.
- * An owner or an admin can clear an event.
+ * (scopes), the apps that connected as it with OAuth, its webhooks, its API keys, the requests to add it
+ * to a room, and what it can reach. Each key and each connection has the permissions of the agent. An owner
+ * or an admin also gets a link to the mailbox, which they can read. Only the sponsor can add a webhook or an
+ * event for the agent. An owner or an admin can clear an event.
  */
-export function AgentDetails({ agent, sponsor, canReadMail, showSponsor, onChanged }: AgentDetailsProps) {
+export function AgentDetails({ agent, sponsor, principals, canReadMail, showSponsor, onChanged }: AgentDetailsProps) {
 	const { whoami } = useSession();
 	const policy = agent.outbound_policy ?? { mode: "internal-only", allowlist: [] };
 	// One read of the access gives the Permissions part its scopes, and the Access part its lists.
@@ -88,6 +91,7 @@ export function AgentDetails({ agent, sponsor, canReadMail, showSponsor, onChang
 				note={`A key lets a script or an MCP client without OAuth act as ${agent.display_name}. It has the permissions of the agent, and its own lifetime.`}
 				onChange={reload}
 			/>
+			<MemberRequests account={agent} principals={principals} onApproved={reload} />
 			<AgentAccess agent={agent} access={access} error={error} onRetry={reload} />
 		</>
 	);

@@ -13,7 +13,7 @@ import { byName, SharedMailboxPanel } from "./SharedMailboxPanel.tsx";
 /**
  * Owners and admins create shared mailboxes, change them and decide who can use each one. A shared
  * mailbox has its own address: each member, a person or an agent, reads it and sends from its address.
- * "New shared mailbox" opens a dialog. Each shared mailbox is one card, as in Members.
+ * "New shared mailbox" opens a dialog. Each shared mailbox is one card.
  */
 export function SharedMailboxesSection({ principals }: { principals: readonly Principal[] }) {
 	const [mailboxes, setMailboxes] = useState<TeamMailbox[] | null>(null);

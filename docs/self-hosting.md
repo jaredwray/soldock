@@ -455,7 +455,7 @@ Do these steps before the deploy, in the old version:
    most 200 rooms: for an account with more rooms, read the members of each room.
 3. Remove each membership that the account must not use. Do this in the settings of that mailbox, drive
    or room.
-4. Read **Shared directly in Drive** on the same card. An account with limits did not reach these items.
+4. Read **Shared directly in Drive** on the same page. An account with limits did not reach these items.
    After the upgrade, it reaches each one. Remove each grant that the account must not use
    (`drive.unshare_item`, or **Share** on the item in Drive).
 5. Each account always reaches its own mailbox and its own drive after the upgrade, with the scopes that
@@ -478,7 +478,7 @@ What changes for a script that calls the API:
 - A person who does not manage an agent can still add it to a room or a shared drive. The agent then
   uses the resource with the scopes that it holds, and gets no new scope.
 - `chat.join_room` accepts people only. An agent or a service account that calls it gets `forbidden`. A
-  member adds it with `chat.add_members`.
+  person who is a member adds it with `chat.add_members`.
 - These are now open to each agent that holds the scopes. Before, an agent with limits got `forbidden`.
   - `chat.create_room`, `chat.open_dm` and `chat.open_group_dm`
   - the chat operations across rooms: threads, activity, sections, saved messages, scheduled messages,
@@ -511,6 +511,43 @@ The new Worker does not change the old limits. So after a rollback:
   limits of each account, and remove such a room or drive.
 
 [Agents](agents.md#permissions-of-an-agent) has the rules.
+
+### An agent asks before it adds an agent
+
+An agent or a service account can no longer make a different agent or service account a member of a
+room. It asks with `chat.request_member`, and a person who manages that account approves or denies the
+request. A person adds an agent as before.
+
+Migration `0030_chat_member_requests.sql` adds the table `chat_member_requests` for the requests. Apply
+it with `wrangler d1 migrations apply`, as for each migration. The migration only adds a table, and the
+old Worker does not read it.
+
+What changes for a script that calls the API with a key of an agent or a token of a service account:
+
+- These calls get `forbidden` and change nothing when a new member is a different agent or service
+  account:
+  - `chat.create_room` with such a member in `member_ids`
+  - `chat.add_members`
+  - `chat.open_dm`
+  - `chat.open_group_dm`
+- A member from before this change stays a member. A direct message from before stays too, and
+  `chat.open_dm` returns it.
+- To add an agent or a service account to a room, the script calls `chat.request_member` with `room_id`
+  and `principal_id`. Its membership of the room needs `chat.add_members`, as for `chat.add_members`.
+- `chat.list_member_requests` returns the requests of the script that wait for an answer. After the
+  answer, the request is not in the list, and `chat.get_room` tells if the account is a member.
+- No request exists for a direct message. Two agents cannot start a direct message with each other.
+- An agent that owns a room cannot give `chat.add_members` to a different agent or service account
+  with `chat.set_member_scopes`. A person who owns the room can.
+- A script with a key of a person adds an agent as before.
+
+A person answers a request in **Chat › Activity**, or on the page of the account in **Admin › Members**.
+[Agents](agents.md#an-agent-asks-before-it-adds-an-agent) has the rules.
+
+A rollback to the Worker from before this change works. That Worker does not know the activity kind
+`member_request`. Its `chat.list_activity` finds no message for such an item, so it removes the item as old.
+The waiting requests stay in the table of the migration, and that Worker does not use them. An agent can
+then add an agent to a room again, until the next deploy of this change.
 
 ### Recover a sign-in
 

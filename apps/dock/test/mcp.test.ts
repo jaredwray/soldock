@@ -92,9 +92,14 @@ describe("the MCP endpoint", () => {
 		const { owner, bot } = await seedOrg();
 		const all = names((await mcp(owner.key, "tools/list")).body);
 		expect(all).toContain("directory_update_agent_policy");
-		expect(all).toHaveLength(204);
+		expect(all).toHaveLength(207);
+		// Only a person decides a member request, and only an agent or a service account makes one.
+		expect(all).not.toContain("chat_request_member");
 		expect(all).toEqual(
 			expect.arrayContaining([
+				"chat_list_member_requests",
+				"chat_approve_member_request",
+				"chat_deny_member_request",
 				"chat_subscribe_push",
 				"chat_unsubscribe_push",
 				"chat_admin_list_rooms",
@@ -136,6 +141,7 @@ describe("the MCP endpoint", () => {
 			"chat_list_custom_emoji",
 			"chat_list_drafts",
 			"chat_list_incoming_webhooks",
+			"chat_list_member_requests",
 			"chat_list_messages",
 			"chat_list_pins",
 			"chat_list_reminders",
@@ -157,6 +163,7 @@ describe("the MCP endpoint", () => {
 			"chat_remove_link_preview",
 			"chat_remove_member",
 			"chat_remove_reaction",
+			"chat_request_member",
 			"chat_save_draft",
 			"chat_save_message",
 			"chat_schedule_message",

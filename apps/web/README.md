@@ -307,7 +307,7 @@ MCP clients. The app has no UI-only path.
     changes and no Reply or Forward. The shortcuts `e`, `#`, `s`, `x`, `c` and `r` do nothing.
   - An open thread stays unread: the app does not mark it as read, so the agent still finds its new
     mail. The server refuses each change and each send in the mailbox of an agent.
-  - **Admin › Members** has a **Read the mail of …** link on each agent.
+  - **Admin › Members** has a **Read the mail of …** link on the page of each agent.
     Only an owner or an admin sees the link. A sponsor who is a member does not see it.
 - **Admin** (`/admin/<section>`). A side navigation selects one section at a time. Each section has
   its own path, so a deep link and a reload open the same section.
@@ -317,20 +317,29 @@ MCP clients. The app has no UI-only path.
   - `/admin/agents` redirects to `/admin/members`. People and agents share that section.
   - `/admin` shows the first section that the person can use. The page then replaces the path with
     the path of that section.
-  - The page loads the directory at the start. It loads again when a card opens, when the window
-    gets focus, and when the tab becomes visible. A failed refresh keeps the list. The directory
+  - The page loads the directory at the start. It loads again when the page of a member opens, when
+    the window gets focus, and when the tab becomes visible. A failed refresh keeps the list. The directory
     stays when the section changes. Each section starts at its top. The page has no link back to
     Mail: the rail links to each product.
   - At 900px and below, the navigation is part of the drawer of the shell, as in Mail and Drive.
   - Each section is a column of 960px at most. A section starts with a muted line of text. Its lists
     and its forms are in cards on the surface (`.panel-card`). A table in a card shows as list rows.
-  - **Members** (`members`) lists each person and each agent as a card (`AdminCard`).
-    People come first, then agents. Each group is in name order.
-    A click opens the card and shows its parts, with a line between the parts.
-    A part with a list has its title and a muted line above a box on the canvas color. The list is in the box.
-    The muted line says what the part is for.
-    The parts load their data, so the card renders them only after the first open.
-    The parts stay after the card closes, so a form keeps its text.
+  - **Members** (`members`) lists each person, agent and service account as a row in a list.
+    Each row is a link to the page of that member (`/admin/members/<prn_id>`, `MemberPage.tsx`).
+    The list and the page of a member show the same avatar and chips (`MemberIdentity.tsx`).
+    - The page of a member has its own path, so a deep link and a reload open the same member.
+      The header row shows a back link, the icon of the kind and the name. The sidebar keeps **Members** active.
+    - The page starts with a summary: the avatar, the name, the address and the chips.
+      Each part of the member follows in its own card on the surface.
+    - A part with a list has its title and a muted line above a box on the canvas color. The list is in the box.
+      The muted line says what the part is for.
+    - The page loads the directory again when it opens, and each part loads its own data.
+      The page starts at its top and gets the focus.
+    - The back link and the back button of the browser go to the list. The filter of the list stays,
+      and the row of the member gets the focus.
+    - The page shows only a member that the list shows. For a different id, for example a deleted account,
+      the page shows a notice and a link to the list.
+    - After **Delete**, the page goes back to the list.
     A policy choice that is not saved shows a status line. The chip keeps the saved policy.
     A person shows initials in the avatar. An agent shows the agent icon. A service account shows the settings icon.
     The chips show the role of a person, or **Agent** or **Service account** and the outbound policy.
@@ -357,49 +366,56 @@ MCP clients. The app has no UI-only path.
       A person also needs a first password. The admin gives the password to the person.
       An archived person cannot be a sponsor.
       The dialog shows the banner when Agent is selected.
-    - **Name and role**, or **Name and sponsor**, is the first part of an open card.
+    - **Name and role**, or **Name and sponsor**, is the first part of the page of a member.
       It saves with `directory.update_principal` and sends only the fields that changed.
       **Save** stays off while nothing changed.
       The role control is off for you and for the owner.
       An admin has no form for the owner.
-      The card says that only the owner can change that account.
-    - **Reset sign-in** is a part of the card of each other person.
+      The page says that only the owner can change that account.
+    - **Reset sign-in** is a part of the page of each other person.
       It sets a new password (`account.set_password`).
       It can also turn off two-step verification (`account.disable_totp`) after a confirmation.
       The owner and you have no **Reset sign-in** part.
-    - **Account** is a part of each card except the owner and you.
+    - **Account** is a part of the page of each member, except the owner and you (`MemberAccount.tsx`).
       **Archive** asks for a confirmation, then calls `directory.archive_principal`.
       **Restore** calls `directory.restore_principal` and needs no confirmation.
       **Delete** asks for a confirmation, then calls `directory.delete_principal`.
       The confirmation says that delete cannot be undone.
       For a person who sponsors agents, the dialog names the agents.
       It tells the admin to give each agent a different sponsor first, or to archive or delete the agent.
-    - The agent card and the service account card share two parts. An agent and a service account hold their scopes. Each API key and each OAuth connection of an agent, and each token of a service account, has them, and has none of its own.
+    - The page of an agent and the page of a service account share two parts. An agent and a service account hold their scopes. Each API key and each OAuth connection of an agent, and each token of a service account, has them, and has none of its own.
       **Permissions** (`directory.set_agent_access`, `AgentPermissions.tsx`): the scopes of the agent, and no other control.
       The scopes do not say where the agent can act. A hint under the scopes tells that the agent reaches its own mailbox and drive and each membership, and that the settings of each shared mailbox, room and shared drive change what it can do there.
       The form offers `AGENT_SCOPES` for an agent and `SERVICE_SCOPES` for a service account (`scopesFor` of `admin/permissionsDraft.ts`).
       The scope texts come from `scopeDescription`: the texts for a person for an agent, and the texts for a service account (`SERVICE_SCOPE_DESCRIPTIONS`, without "your") for a service account.
       **Save permissions** sends the full list of the selected scopes (`permissionsChange` of `admin/permissionsDraft.ts`), and is off when nothing changed. A line tells when the choices are not saved.
-      After a save, the form shows the saved values from the answer of the save at once, also when the next read of the access is slow or fails. The card ignores the answer of a read that is older than its newest read.
+      After a save, the form shows the saved values from the answer of the save at once, also when the next read of the access is slow or fails. The page ignores the answer of a read that is older than its newest read.
       **Access** (`directory.get_agent_access`, `AgentAccess.tsx`): the live API keys (**Live tokens** for a service account), the own mailbox and drive, the team mailboxes, the shared drives, the rooms with the role, and **Shared directly in Drive** (the items that a member shared with the agent).
       The agent reaches each of them. A direct message shows the name of its other member (`peer_name`, `admin/roomLabel.ts`).
       The list of live API keys of an agent does not show the apps that connect with OAuth.
-      The card reads the access one time for **Permissions** and for **Access** (`admin/useAgentAccess.ts`).
+      The page reads the access one time for **Permissions** and for **Access** (`admin/useAgentAccess.ts`).
       A create, a rotation or a revoke of a key, and a save of the permissions, load the access again.
-    - A service account card has these parts, for an owner or an admin only:
+    - The page of an agent and the page of a service account also share **Requests** (`chat.list_member_requests` with `principal_id`, `MemberRequests.tsx`), above **Access**.
+      An agent cannot add an agent or a service account to a room. It asks, and a person who manages the account decides.
+      Each row has the text "<the agent that asked> asks to add this account to <room>", what the account can do in the room after an approval, and the time.
+      Each row has **Approve** and **Deny**, with the buttons, the toasts and the rules of the Activity view of Chat (`chat/MemberRequestActions.tsx`).
+      An approval loads the access again, so **Access** shows the new room and **Permissions** shows the new scopes.
+      The part shows nothing when the account has no request. It shows a line while the requests load, and an error with **Try again**.
+    - The page of a service account has these parts, for an owner or an admin only:
       **Name, description and sponsor** (`directory.update_principal`, with `description`).
       The creation time, the creator and the sponsor.
       The outbound policy.
       **Permissions**.
       **Tokens of …**: the API key manager with the word "token", a lifetime of 90 days first, and the creator and the revoker of each token.
       The token form has a label, a description and a lifetime, and no scopes (`scopesFrom="account"`). A token row shows no scopes.
+      **Requests**, when the account has a member request.
       **Access**.
       **Activity** (`directory.list_service_account_activity`): a table of the newest entries, a filter for one token, **Refresh** and **Load more**.
       The surface `system` shows as "Asterra", for example for the notice before a token ends. The surface `member` shows as "Member change".
       A create, a rotation or a revoke of a token, and a save of the permissions, load the access and the activity again.
       Each part shows its loading, empty and error states, and an error has **Try again**.
-    - An agent card also has the outbound policy, **Permissions**, the connected apps, the webhooks, the API keys and **Access**.
-      The sponsor, an owner or an admin sees the card, and each of them can save the permissions. An agent can never change its own permissions.
+    - The page of an agent also has the outbound policy, **Permissions**, the connected apps, the webhooks, the API keys, **Requests** (when the agent has a member request) and **Access**.
+      The sponsor, an owner or an admin sees the page, and each of them can save the permissions. An agent can never change its own permissions.
       The policy sets the mail recipients and the webhook hosts (`directory.update_agent_policy`).
       **Apps connected as …** uses `oauth.list_grants` and Revoke (`oauth.revoke_grant`).
       A connection has the permissions of the agent, so a row shows no scopes.
@@ -425,7 +441,7 @@ MCP clients. The app has no UI-only path.
       An owner or an admin also gets **Read the mail of …**.
       A sponsor who is a member does not see that link.
   - **Shared mailboxes** (`shared-mailboxes`). The UI name of a team mailbox. Owners and admins see
-    one card for each shared mailbox, as each account has one in **Members**. The card shows the name,
+    one card for each shared mailbox (`AdminCard`). The card shows the name,
     the address and the number of members. A click opens the card and shows three parts:
     - **Display name**, a form that changes the name (`directory.update_team_mailbox`). The address
       cannot change. **Save name** is off while the name is the same.
@@ -512,7 +528,7 @@ MCP clients. The app has no UI-only path.
     reaches its own mailbox and its own drive, and a shared mailbox, a shared drive or a room after a
     member adds it there.
   - For an agent that exists, the page offers no scopes and sends only `agent_id`. A line tells that
-    the app gets each permission of the agent, and that the agent card in Admin › Members changes them.
+    the app gets each permission of the agent, and that the page of the agent in Admin › Members changes them.
     The page reads the selected agent (`directory.get_agent_access`) and lists each scope of the agent.
     It marks a scope as **Requested** or **Not requested**, and names the requested scopes that the agent
     does not hold (`agentGrant` in `connect.ts`). A line tells that the app reaches each mailbox, drive
@@ -1120,6 +1136,24 @@ MCP clients. The app has no UI-only path.
       each mention.
     - The open thread has the socket of its room (`useRoomWatch`), so the edits, reactions and deletes of
       other people show at once, as in the room.
+  - **The Activity view** (`/chat/activity`, `ActivityView.tsx`). "Activity" at the top of the sidebar opens it.
+    - The view shows the items of `chat.list_activity`, newest first, with **Load more**. The chips above
+      the list keep one kind, or only the unread items. **Member requests** is the chip of the kind `member_request`.
+    - An item of a message is a button. A click marks the item as read and opens the message or its thread.
+    - An item of the kind `member_request` is a request of an agent to add an agent or a service account to a room.
+      The person who manages that account gets it. The item names the agent that asked, the account with its
+      **agent** chip, the room (`#name`, or "a room") and the time.
+      The person is usually not a member of the room, so the item is not a button and opens nothing.
+      It has the buttons **Approve** (`chat.approve_member_request`) and **Deny** (`chat.deny_member_request`).
+      The id of the request is `message_id` of the item.
+    - The accessible name of each button has the account and the room. The two buttons are off while a call runs.
+    - After an approval, a toast says that the account is now a member of the room. It also tells the scopes
+      that the account got (`agent_access_changes`), or that it did not get them (`agent_access_pending`).
+      After a denial, a toast says that the account is not added. The item then goes off the list.
+    - After `not_found` or `conflict`, the server does not have the request. A toast shows the message of the
+      server, and the item goes off the list. Each other error keeps the item.
+    - The buttons (`MemberRequestActions.tsx`) and the texts (`memberRequests.ts`) are the same on the page of
+      the account in **Admin › Members**.
   - While the events socket is connected, the page reads the list each minute only, as a net for
     a lost event. While it is not connected, the page reads the list each 4 seconds while the tab
     is visible, and on window focus.
@@ -1713,9 +1747,10 @@ for each value that the user selects from a list.
   `env(safe-area-inset-*)` to its padding.
 - Toasts are at the bottom right, because the account button is at the bottom left.
 - Settings and Admin use panels: a heading (`.panel-title`), a muted line (`.panel-note`), and a
-  card on the surface (`.panel-card`) only for a list or a form. In an open Admin card, which is on the
-  surface, that card is a box on the canvas color. Sign-in, setup and Connect use one
-  card of 440px (600px for Connect) on the surface (`.auth-card`), with fields and buttons 42px high.
+  card on the surface (`.panel-card`) only for a list or a form. In an open Admin card and in a part
+  of the page of a member, which are on the surface, that card is a box on the canvas color. Sign-in,
+  setup and Connect use one card of 440px (600px for Connect) on the surface (`.auth-card`), with
+  fields and buttons 42px high.
 
 ## Uploads
 
@@ -1788,6 +1823,7 @@ dock Worker serves `index.html` for each app path, so a deep link works on reloa
 | `/mail/agent/<prn_id>/…` | The same views, threads and settings, read only, in the mailbox of an agent, for an owner or an admin. `/mail/agent/<prn_id>` goes to its inbox |
 | `/admin` | Goes to the first section of Admin that the person can use |
 | `/admin/<section>` | One section of Admin: `members`, `shared-mailboxes`, `shared-drives`, `chat` or `domains` |
+| `/admin/members/<prn_id>` | The page of one person, agent or service account in Admin › Members |
 | `/connect/<oar_id>` | The approval page of an OAuth request from an MCP client |
 | `/drive` | The root of the own drive |
 | `/drive/folders/<prn_id>/<itm_id>` | A folder, in the own drive or in the drive of somebody else |
@@ -1798,7 +1834,7 @@ dock Worker serves `index.html` for each app path, so a deep link works on reloa
 | `/chat` | Chat, without an open room |
 | `/chat/<rm_id>`, `/chat/<dm_id>` | One room, or one direct message |
 | `/chat/threads` | The Threads view: the threads that the person follows |
-| `/chat/activity` | The Activity feed: mentions, replies, reactions, pins, and fired reminders |
+| `/chat/activity` | The Activity feed: mentions, replies, reactions, pins, fired reminders, and the member requests for the agents that the person manages |
 | `/chat/saved` | Saved messages and personal reminders |
 | `/chat/drafts` | Server-synced drafts and scheduled messages |
 | `/chat/search` | Search across rooms |
@@ -1821,12 +1857,12 @@ Each view uses one search query: Inbox `in:inbox`, Starred `is:starred`, Sent `i
 | [`src/shell/`](src/shell/) | The signed-in frame: the rail, the account menu with the Appearance choice, the search box, the header row of a page, the header of a sidebar, and the sidebar of a page with sections (Admin and Settings) |
 | [`src/features/auth/`](src/features/auth/) | The sign-in page and the `/auth/*` calls |
 | [`src/features/mail/`](src/features/mail/) | Mail: data hooks, sidebar, toolbar, thread list, thread view, composer and shortcuts |
-| [`src/features/admin/`](src/features/admin/) | Admin: the side navigation, the directory, the create form, the MCP endpoint banner, the agent panels with their OAuth connections, the service account panels (details, permissions, access and activity), the sign-in help, the team mailboxes and the email domains |
+| [`src/features/admin/`](src/features/admin/) | Admin: the side navigation, the directory, the page of each member, the create form, the MCP endpoint banner, the agent panels with their OAuth connections, the service account panels (details, permissions, access and activity), the sign-in help, the team mailboxes and the email domains |
 | [`src/features/connect/`](src/features/connect/) | The OAuth approval page, and the pure rules of its first values in `connect.ts` |
 | [`src/features/drive/`](src/features/drive/) | Drive: the sidebar, the item list, the menus and dialogs (new folder, rename, move, share, versions, preview), the data hooks, the pure rules in `model.ts`, the upload queue in `uploadQueue.ts`, and the document header that the editors share |
 | [`src/features/docs/`](src/features/docs/) | Docs: the schema, the commands, the autosave, the paste of Markdown (`markdownPaste.ts`), the editor and the page. For images: the store of the images of a doc (`images.ts`), the geometry (`imageModel.ts`), the commands (`imageCommands.ts`), the view of an image (`imageView.ts`), the plugin for a drop and a paste (`imagePlugin.ts`), the toolbar and the dialogs |
 | [`src/features/sheets/`](src/features/sheets/) | Sheets: the store with the tabs and the save queue, the toolbar, the grid, the formula bar, the tab bar, and the pure modules for cell names, the selection, clipboard text, the cells of the grid, the formats of cells and the formulas of the Σ menu |
-| [`src/features/chat/`](src/features/chat/) | Chat: the sidebar, the room view, the dialogs (new room, public rooms, new direct message, members, name and topic), the message box with its toolbar, Markdown shortcuts and suggestions of a mention (`ChatComposer.tsx`, `composerSchema.ts`, `composerCommands.ts`), the files of a new message (`attachments.ts`, `ComposerFiles.tsx`, the drop in `fileDrop.ts`), the files and the link previews of a message (`MessageFiles.tsx`), the focus after the X of a chip (`focusAfterRemove.ts`), the data hooks, the pure rules in `model.ts`, the rules of mentions in `mentions.ts`, the part of the history that the page keeps in `history.ts`, the page reads in `pager.ts`, the last list of each room in `roomCache.ts`, the drafts in `drafts.ts`, the sends whose message the room has in `settle.ts`, and the sync of the open room in `sync.ts` |
+| [`src/features/chat/`](src/features/chat/) | Chat: the sidebar, the room view, the dialogs (new room, public rooms, new direct message, members, name and topic), the message box with its toolbar, Markdown shortcuts and suggestions of a mention (`ChatComposer.tsx`, `composerSchema.ts`, `composerCommands.ts`), the files of a new message (`attachments.ts`, `ComposerFiles.tsx`, the drop in `fileDrop.ts`), the files and the link previews of a message (`MessageFiles.tsx`), the focus after the X of a chip (`focusAfterRemove.ts`), the data hooks, the pure rules in `model.ts`, the rules of mentions in `mentions.ts`, the part of the history that the page keeps in `history.ts`, the page reads in `pager.ts`, the last list of each room in `roomCache.ts`, the drafts in `drafts.ts`, the sends whose message the room has in `settle.ts`, the sync of the open room in `sync.ts`, and the texts and the buttons of a member request (`memberRequests.ts`, `MemberRequestActions.tsx`) |
 | [`src/features/people/`](src/features/people/) | The profile page of a person or an agent |
 | [`src/features/settings/`](src/features/settings/) | Settings, its side navigation, the password and two-step verification cards, the TOTP setup panel, the API key manager with the lifetime of a key (`ttl.ts`), the event check boxes, the webhook list of one target, and the one-time secret dialog |
 | [`src/lib/`](src/lib/) | The API client, the router, the dialog, the select, toasts, icons (with the Iconoir files in `iconoir/`), the appearance, format helpers, the names of the kinds of principals (`principalKind.ts`), the hook for the people and agents of the organization, the page chunks with the reload after a deploy, the upload of a file to Drive (`upload.ts`), the limit of the uploads and the small pictures that run at the same time (`limiter.ts`), and the small picture of a picture or a video (`filePreview.ts`) |

@@ -44,3 +44,11 @@ export function roomAccessText(result: RoomAccessResult, nameOf: (principalId: s
 export function driveAccessText(result: RoomAccessResult, nameOf: (principalId: string) => string): string {
 	return memberAccessText(result, nameOf, "Select Try again in its row.");
 }
+
+/**
+ * `memberAccessText` for a member request that a person approved. The request is gone after the approval,
+ * so the person gives the scopes on the page of the account.
+ */
+export function requestAccessText(result: RoomAccessResult, nameOf: (principalId: string) => string): string {
+	return memberAccessText(result, nameOf, "Set its permissions on its page in Admin, Members.");
+}

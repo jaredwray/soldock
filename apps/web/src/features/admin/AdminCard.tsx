@@ -3,40 +3,32 @@ import { Icon, type IconName } from "../../lib/icons.tsx";
 
 interface AdminCardProps {
 	icon: IconName;
-	/** Shown in place of `icon`, for example the initials of a person. */
-	mark?: ReactNode;
 	name: ReactNode;
 	address: string;
-	/** True for an archived account. The name and the avatar are then muted. */
-	muted?: boolean;
 	/** The chips at the right of the summary. */
 	chips: ReactNode;
 	/** The parts of the open card. Each part is a direct child, so it gets a line above it. */
 	children: ReactNode;
-	/** Called when the card opens, so the parent can load the current record. */
-	onOpen?: () => void;
 }
 
 /**
- * One person, one agent, one shared mailbox or one shared drive in an Admin section. The card shows an
- * icon, the name, the address and chips. A click opens the card and shows its parts. The parts load
- * their own data, so the card renders them at the first open only. The parts stay after the card closes,
- * so a form keeps its text.
+ * One shared mailbox or one shared drive in an Admin section. The card shows an icon, the name, the
+ * address and chips. A click opens the card and shows its parts. The parts load their own data, so the
+ * card renders them at the first open only. The parts stay after the card closes, so a form keeps its text.
+ * Members has no such cards: each member has its own page.
  */
-export function AdminCard({ icon, mark, name, address, muted = false, chips, children, onOpen }: AdminCardProps) {
+export function AdminCard({ icon, name, address, chips, children }: AdminCardProps) {
 	const [opened, setOpened] = useState(false);
 	return (
 		<details
-			className={muted ? "admin-card admin-card-muted" : "admin-card"}
+			className="admin-card"
 			onToggle={(event) => {
-				if (!event.currentTarget.open) return;
-				setOpened(true);
-				onOpen?.();
+				if (event.currentTarget.open) setOpened(true);
 			}}
 		>
 			<summary className="admin-card-summary">
 				<span className="avatar member-avatar" aria-hidden="true">
-					{mark ?? <Icon name={icon} size={18} />}
+					<Icon name={icon} size={18} />
 				</span>
 				<span className="admin-card-text">
 					<span className="admin-card-name">{name}</span>

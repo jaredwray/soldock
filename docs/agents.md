@@ -116,7 +116,7 @@ mailbox, shared drive and room that it is a member of, exactly as a person does.
 say what it can do at all. They do not say where. The membership says where, and its role or its member
 scopes say what the agent can do there.
 
-- **Set what an agent can do in a resource** in the settings of that resource. The card of the agent has
+- **Set what an agent can do in a resource** in the settings of that resource. The page of the agent has
   no control for it.
   - A team mailbox: open the mailbox in **Admin › Shared mailboxes**, and set **Read**, **Change** and
     **Send** for the member. See [Team mailboxes](#team-mailboxes).
@@ -137,9 +137,11 @@ scopes say what the agent can do there.
   scopes that it holds. It gets no new scope: its sponsor, an owner or an admin gives one.
 - **Stop the access.** Remove the agent from the mailbox, the drive or the room. A remove changes nothing
   on the account of the agent: the agent keeps its scopes.
-- **Rooms.** An agent cannot join a public room: `chat.join_room` is for people only. A member adds it
-  with `chat.add_members`.
-- An agent with the scopes can create a room and start a direct message. It can use the personal views
+- **Rooms.** An agent cannot join a public room: `chat.join_room` is for people only. A person who is a
+  member adds it with `chat.add_members`. An agent that is a member asks a person first: see
+  [An agent asks before it adds an agent](#an-agent-asks-before-it-adds-an-agent).
+- An agent with the scopes can create a room and start a direct message with a person. It cannot start a
+  direct message with a different agent or service account. It can use the personal views
   of Chat and its notification settings. It can create a chat webhook and open `/ws/events`.
 - The create calls take no `limits`, and `directory.set_agent_access` takes no `resources`. A call that
   sends one of them gets `400` (`invalid`). `account.whoami` and `directory.get_agent_access` return no
@@ -365,7 +367,8 @@ account.
 
 - A person gets the three scopes at the start. An agent or a service account gets `chat.read` and
   `chat.write`: it adds members only after the owner of the room gives it `chat.add_members`. This also
-  applies to an agent that was a member before this rule.
+  applies to an agent that was a member before this rule. With the scope, an agent adds people. Before
+  it adds an agent or a service account, [it asks a person](#an-agent-asks-before-it-adds-an-agent).
 - Open the room, then **Members**. When you add a member, select what it can do
   (`chat.add_members` with `scopes`). You give only the scopes that your own membership has.
 - The owner of the room changes the scopes with the check boxes of a member (`chat.set_member_scopes`). An
@@ -388,11 +391,40 @@ account.
   - An agent that you do not manage uses the room with the scopes that it holds. It gets no new scope:
     its sponsor, an owner or an admin gives one.
 - An agent or a service account cannot join a public room (`chat.join_room` is for people only). A
-  member adds it with `chat.add_members`.
-- Only the owner of a room gives `chat.add_members` to an agent or a service account.
+  person who is a member adds it with `chat.add_members`.
+- Only the owner of a room gives `chat.add_members` to an agent or a service account. An owner that is an
+  agent cannot give it to a different agent or service account: only a person can.
 - A member that leaves with fewer scopes than its kind has them again when it comes back. Only the owner
   of the room gives more.
 - When an agent leaves a room, or a member removes it, its account does not change: it keeps its scopes.
+
+### An agent asks before it adds an agent
+
+An agent or a service account cannot add a different agent or service account to a room. It asks, and a
+person decides. The added account then reads each message of the room, also the messages from before. So
+a person who manages that account must agree.
+
+- **What the agent does.** The agent calls `chat.request_member` with the room and the account. Its
+  membership of the room needs **Add members** (`chat.add_members`). See [Chat](#chat) for the steps of
+  the agent.
+- **Who can answer.** The sponsor of the agent to add, an owner or an admin can answer. For a service
+  account, only an owner or an admin can answer.
+- **Where you answer.** A request shows in two places:
+  - **Chat › Activity.** One person gets the request there: the sponsor of the agent to add. For a
+    service account, its sponsor gets it when that person is an owner or an admin. If the account has no
+    such person, the owner of the organization gets it.
+  - **Admin › Members.** The page of the account shows its requests to each person who can answer.
+- **Approve** (`chat.approve_member_request`). The account becomes a member with the scopes of the
+  request: `chat.read` and `chat.write`, or only `chat.read`. A request never gives `chat.add_members`.
+  The account also gets the chat scopes that it does not hold, as when you add it yourself.
+- **Deny** (`chat.deny_member_request`). The request goes away, and the account does not become a member.
+- **A request that cannot complete.** The agent that asked must still be a member with **Add members**
+  at the time of the approval. If not, the approval gets `conflict`, and the request goes away.
+- **With an API key.** The two calls are for people only, and the key needs `chat.write`.
+  `chat.list_member_requests` returns the requests that you can answer. As above, the key needs
+  `directory.write` to change the scopes of the account, and it must hold each scope that the account gets.
+- A request stays until a person answers it. A room has at most 20 requests at the same time.
+- A direct message has no request. Two agents cannot start a direct message with each other.
 
 ## Team mailboxes
 
@@ -577,16 +609,30 @@ An agent is a member of rooms, as a person is. The `chat_*` tools are the operat
 app uses.
 
 An agent uses each room that it is a member of ([Permissions of an agent](#permissions-of-an-agent)).
-With the scopes, it can create a room and start a direct message. It can use the personal views of Chat
+With the scopes, it can create a room and start a direct message with a person. It can use the personal views of Chat
 and its notification settings. It can open `/ws/events` and create a chat webhook.
 
 - **Rooms.** `chat_list_rooms` returns your rooms and your direct messages, newest message first.
   With `view: "public"`, it returns each public room. You cannot join a room: `chat_join_room` is for
-  people only. A member must add you to a public or a private room (`chat_add_members`).
+  people only. A person who is a member must add you to a public or a private room (`chat_add_members`).
+  An agent that is a member can ask for you with `chat_request_member`: a person who manages you decides.
 - **What you can do in a room.** `chat_get_room` returns each member with its `scopes` in the room. See
   [Members of a room](#members-of-a-room).
 - **Direct messages.** `chat_open_dm` returns the room between you and one person or agent, and
-  creates it when it does not exist.
+  creates it when it does not exist. You cannot open a direct message with a different agent or service
+  account: the call gets `forbidden`. No request exists for a direct message.
+- **Add an agent to a room.** You cannot add a different agent or service account. `chat_add_members`,
+  and `chat_create_room` with such a member, get `forbidden` and change nothing. Ask a person:
+  1. Call `chat_request_member` with `room_id` and `principal_id`. Your membership of the room needs
+     `chat.add_members`: `chat_get_room` shows your `scopes`.
+  2. A person who manages that account approves or denies the request. A second call for the same room
+     and account returns the same request with `created: false`.
+  3. Call `chat_list_member_requests` to see your requests that wait. A request that is not in the list
+     has its answer. `chat_get_room` then tells if the account is a member.
+
+  Without `scopes`, the new member gets `chat.read` and `chat.write`. A request cannot give
+  `chat.add_members`. A room has at most 20 requests at the same time: the next one gets `conflict`. You
+  add a person with `chat_add_members`, as before.
 - **Read.** `chat_list_messages` returns the newest messages of a room, oldest first. Pass the
   `seq` of the first message as `before` to get older messages. To read a room from an older
   message to the newest one, pass the `seq` of the last message that you have as `after`.
@@ -775,7 +821,7 @@ and its notification settings. It can open `/ws/events` and create a chat webhoo
 - **Rate limit.** You can send 20 new or changed messages to one room at once, and then one in each
   second. A call above that gets the error `rate_limited`, with the seconds to wait. Wait, then try
   again with the same `idempotency_key`.
-- **Group direct messages.** `chat_open_group_dm` opens or creates a group direct message with 2 to 8 other principals.
+- **Group direct messages.** `chat_open_group_dm` opens or creates a group direct message with 2 to 8 other principals. You cannot open one with a different agent or service account: the call gets `forbidden`.
 - **Pins, forwarding, and cards.** Pin messages with `chat_pin_message`, unpin with `chat_unpin_message`, and list pins with `chat_list_pins`. Forward a message to another room with `chat_forward_message`. Messages can carry structured cards (`cards`) with action buttons; trigger an action with `chat_trigger_card_action` and list recorded clicks with `chat_list_card_actions`.
 - **Activity, sections, saved messages, drafts, scheduled messages, and reminders.** Read your activity feed with `chat_list_activity` and mark items read with `chat_mark_activity_read`. Organize sidebar sections with `chat_list_sections`, `chat_create_section`, `chat_update_section`, `chat_delete_section`, and `chat_set_room_section`. Manage saved messages (`chat_save_message`, `chat_unsave_message`, `chat_list_saved_messages`), synced drafts (`chat_save_draft`, `chat_delete_draft`, `chat_list_drafts`), scheduled messages (`chat_schedule_message`, `chat_list_scheduled_messages`, `chat_update_scheduled_message`, `chat_cancel_scheduled_message`), and reminders (`chat_create_reminder`, `chat_list_reminders`, `chat_complete_reminder`, `chat_delete_reminder`).
 - **Custom emoji.** List organization custom emoji with `chat_list_custom_emoji`. Use `:name:` in messages and in `chat_add_reaction` / `chat_remove_reaction`.
@@ -918,7 +964,7 @@ To set it up:
    Select the agent that the dot acts as.
 2. Give the agent the scopes of the events: `mail.webhooks`, `chat.webhooks` or `drive.webhooks`.
    Give it also the read scope of the product, such as `chat.read`, because an event has no content.
-   Select them for a new agent at the approval, or add them in **Permissions** on the agent card.
+   Select them for a new agent at the approval, or add them in **Permissions** on the page of the agent.
 3. Open the agent in **Admin › Members**, and allow the callback host of ChatGPT in its
    [outbound policy](#outbound-policy). Without this step, `events/subscribe` gets the error
    `policy_denied`, and the error message names the host. An API key of a person needs no such step.

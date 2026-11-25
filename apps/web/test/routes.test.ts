@@ -14,6 +14,7 @@ import {
 	itemPath,
 	type MailView,
 	mailSettingsPath,
+	memberPath,
 	ownMailboxPath,
 	parseRoute,
 	profilePath,
@@ -260,6 +261,20 @@ describe("routes", () => {
 		}
 		// People and agents share Members. The old Agents path opens that section.
 		expect(parseRoute("/admin/agents")).toEqual({ page: "redirect", to: "/admin/members" });
+	});
+
+	// Each member has its own page in Members, so a deep link and a reload open the same member.
+	it("parses the path of the page of a member back to that member", () => {
+		expect(memberPath(SPACE)).toBe(`/admin/members/${SPACE}`);
+		expect(parseRoute(memberPath(SPACE))).toEqual({ page: "admin", section: "members", memberId: SPACE });
+		// Only Members has a page for each item, and only a principal id names one.
+		for (const path of [
+			`/admin/shared-drives/${SPACE}`,
+			`/admin/members/${SHARED_DRIVE}`,
+			`/admin/members/${SPACE}/extra`,
+		]) {
+			expect(parseRoute(path), path).toEqual({ page: "not-found" });
+		}
 	});
 
 	// Settings has the same side navigation as Admin. A deep link and a reload open the same section.

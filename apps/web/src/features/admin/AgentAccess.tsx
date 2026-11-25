@@ -14,7 +14,7 @@ const ROOM_KINDS: Record<string, string> = {
 interface AgentAccessProps {
 	/** An agent or a service account. */
 	agent: Principal;
-	/** The access of the agent. Null until its first read. The card reads it for this part and for Permissions. */
+	/** The access of the agent. Null until its first read. The page reads it for this part and for Permissions. */
 	access: Access | null;
 	/** Why the last read failed, or null. */
 	error: string | null;

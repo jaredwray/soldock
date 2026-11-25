@@ -27,7 +27,7 @@ interface SharedMailboxPanelProps {
 }
 
 /**
- * One shared mailbox, as a card like an agent: its name, its members with what each one can do in the
+ * One shared mailbox, as a card: its name, its members with what each one can do in the
  * mailbox, and its webhooks. A member creates a webhook with the API. An owner or an admin can clear an event of one.
  */
 export function SharedMailboxPanel({ mailbox, principals, onChanged }: SharedMailboxPanelProps) {

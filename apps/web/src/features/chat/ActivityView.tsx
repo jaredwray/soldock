@@ -9,6 +9,8 @@ import { useToast } from "../../lib/toast.tsx";
 import { chatPath } from "../../routes.ts";
 import { PageHeader } from "../../shell/PageHeader.tsx";
 import { EmojiGlyph } from "./customEmoji.tsx";
+import { MemberRequestActions } from "./MemberRequestActions.tsx";
+import { requestOfActivity, requestRoomText } from "./memberRequests.ts";
 
 type ActivityFilter = "all" | "unread" | ChatActivityKind;
 
@@ -20,6 +22,7 @@ const FILTERS: { value: ActivityFilter; label: string }[] = [
 	{ value: "reaction", label: "Reactions" },
 	{ value: "reminder", label: "Reminders" },
 	{ value: "card_action", label: "Card actions" },
+	{ value: "member_request", label: "Member requests" },
 ];
 
 function describeKind(item: ChatActivityItem): string {
@@ -34,6 +37,8 @@ function describeKind(item: ChatActivityItem): string {
 			return "reminder is due";
 		case "card_action":
 			return "clicked a card button";
+		case "member_request":
+			return "asks to add";
 	}
 }
 
@@ -91,6 +96,13 @@ export function ActivityView({ tick, onReadChange }: { tick: number; onReadChang
 		}
 	}
 
+	// The server removed the item with its request, so the unread count of the sidebar can be different.
+	function removeRequest(item: ChatActivityItem) {
+		setItems((current) => current.filter((other) => other.id !== item.id));
+		if (item.read_at === null) setUnreadCount((current) => Math.max(0, current - 1));
+		onReadChange();
+	}
+
 	async function openItem(item: ChatActivityItem) {
 		if (item.read_at === null) {
 			try {
@@ -145,20 +157,39 @@ export function ActivityView({ tick, onReadChange }: { tick: number; onReadChang
 				<ul className="chat-feed-list">
 					{items.map((item) => (
 						<li key={item.id} className={item.read_at === null ? "chat-feed-item chat-feed-unread" : "chat-feed-item"}>
-							<button type="button" className="chat-feed-button" onClick={() => void openItem(item)}>
-								<div className="chat-feed-head">
-									<span className="chat-feed-actor">{item.actor.display_name}</span>{" "}
-									<span className="chat-feed-action">{describeKind(item)}</span>
-									{item.emoji && (
-										<span className="chat-feed-emoji">
-											<EmojiGlyph emoji={item.emoji} />
-										</span>
-									)}
-									{item.room_name && <span className="chat-feed-room">in #{item.room_name}</span>}
-									<span className="chat-feed-time">{shortDate(item.created_at)}</span>
+							{item.kind === "member_request" ? (
+								// The person is usually not a member of the room, and the item is not about a message. So
+								// the item is not a link: it has only the two buttons.
+								<div className="chat-feed-card">
+									<div className="chat-feed-head">
+										<span className="chat-feed-actor">{item.actor.display_name}</span>{" "}
+										<span className="chat-feed-action">{describeKind(item)}</span>{" "}
+										<span className="chat-feed-actor">{requestOfActivity(item).subjectName}</span>
+										{item.subject?.kind === "agent" && <span className="kind kind-agent">agent</span>}{" "}
+										<span className="chat-feed-action">to {requestRoomText(item.room_name)}</span>
+										<span className="chat-feed-time">{shortDate(item.created_at)}</span>
+									</div>
+									<p className="chat-feed-preview">
+										You manage this account. The agent cannot add it to the room without your approval.
+									</p>
+									<MemberRequestActions request={requestOfActivity(item)} onGone={() => removeRequest(item)} />
 								</div>
-								{item.preview && <p className="chat-feed-preview">{item.preview}</p>}
-							</button>
+							) : (
+								<button type="button" className="chat-feed-button" onClick={() => void openItem(item)}>
+									<div className="chat-feed-head">
+										<span className="chat-feed-actor">{item.actor.display_name}</span>{" "}
+										<span className="chat-feed-action">{describeKind(item)}</span>
+										{item.emoji && (
+											<span className="chat-feed-emoji">
+												<EmojiGlyph emoji={item.emoji} />
+											</span>
+										)}
+										{item.room_name && <span className="chat-feed-room">in #{item.room_name}</span>}
+										<span className="chat-feed-time">{shortDate(item.created_at)}</span>
+									</div>
+									{item.preview && <p className="chat-feed-preview">{item.preview}</p>}
+								</button>
+							)}
 						</li>
 					))}
 				</ul>

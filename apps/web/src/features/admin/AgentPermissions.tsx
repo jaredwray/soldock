@@ -12,7 +12,7 @@ interface AgentPermissionsProps {
 	access: AgentAccess | null;
 	/** True when the read of the access failed. The Access part shows the reason and "Try again". */
 	failed: boolean;
-	/** Called after a save with the saved scopes. The card shows them at once, and loads the access again. */
+	/** Called after a save with the saved scopes. The page shows them at once, and loads the access again. */
 	onSaved: (saved: OutputOf<"directory.set_agent_access">) => void;
 }
 
@@ -67,7 +67,7 @@ export function AgentPermissions({ agent, access, failed, onSaved }: AgentPermis
 		try {
 			const saved = await api.call("directory.set_agent_access", { principal_id: agent.id, scopes: change });
 			toast({ message: `Permissions of ${agent.display_name} saved.` });
-			// The card gets the saved values before the draft goes away. So the form never shows the values of
+			// The page gets the saved values before the draft goes away. So the form never shows the values of
 			// before the save, also when the next read of the access is slow or fails.
 			onSaved(saved);
 			setEdited(null);

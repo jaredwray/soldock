@@ -64,7 +64,7 @@ const KIND_HINTS: Record<Kind, string> = {
  * Each key of the agent and each token of the account has these scopes, and none of its own. A new agent or
  * service account reaches its own mailbox and its own drive, and then each shared mailbox, shared drive and
  * room that a member adds it to. The result of an agent holds a first API key, which shows once. A person gets no key: the person signs in with the
- * password and creates keys in Settings. A service account gets its tokens in its card, with a lifetime
+ * password and creates keys in Settings. A service account gets its tokens on its page, with a lifetime
  * for each.
  */
 function CreatePrincipalForm({ me, humans, onBusy, onCancel, onCreated }: CreatePrincipalFormProps) {
