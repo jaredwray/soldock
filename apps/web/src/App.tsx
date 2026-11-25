@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { endSession, onSessionChange } from "./features/auth/auth.ts";
 import { loadSession, type SessionState } from "./features/auth/boot.ts";
 import { InvitePage } from "./features/auth/InvitePage.tsx";
@@ -50,9 +50,14 @@ export function App() {
 		setState(next);
 	}, []);
 
+	// Only the newest load shows its answer. A load from before can still wait for account.whoami with an old
+	// cookie, for example the first load when a person accepts an invite link, and its answer must not come last.
+	const loadGeneration = useRef(0);
 	const load = useCallback(
 		async (showSetup = true) => {
-			show(await loadSession(showSetup));
+			const generation = ++loadGeneration.current;
+			const next = await loadSession(showSetup);
+			if (generation === loadGeneration.current) show(next);
 		},
 		[show],
 	);
@@ -109,9 +114,12 @@ export function App() {
 				<InvitePage
 					signedInAs={state.status === "signed-in" ? state.whoami.principal.address : null}
 					onSignedIn={() => {
-						// The cookie now names the person of the link. A load of the page from before can still wait for
-						// account.whoami with the old cookie, so a new page starts: no old answer can show the person from before.
-						window.location.replace("/");
+						// The cookie now names the person of the link. A person who was signed in before must not stay in the
+						// app: the page shows the boot state, with nobody signed in, until the newest load gives the new identity.
+						// Like the sign-in page, it skips the setup check.
+						show({ status: "loading" });
+						leaveInvite();
+						void load(false);
 					}}
 					onLeave={leaveInvite}
 				/>

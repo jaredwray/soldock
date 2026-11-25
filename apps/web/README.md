@@ -30,9 +30,10 @@ MCP clients. The app has no UI-only path.
     shows the address of the account. The person types a new password two times
     (`autocomplete="new-password"`, with a hidden `username` field that holds the address, for a password
     manager). `POST /auth/invite/accept` sets the password and the session cookie, and the app opens.
-  - After the sign-in, the page loads again at `/` (`location.replace`). So the address bar and the history no
-    longer hold the link, and no answer for the person from before can show in the app. Leaving the page
-    without a sign-in uses `history.replaceState`.
+  - After the sign-in, the address bar and the history no longer hold the link (`history.replaceState`). The
+    page shows the boot state until a new load, without the setup check, gives the new identity. Only the
+    newest load of `App` shows its answer, so a load from before the sign-in cannot show the person from
+    before.
   - A link that does not work shows "This invite link does not work", with **Go to sign-in**.
   - A second link in the same tab changes only the fragment, so the page starts the form again on
     `hashchange`.

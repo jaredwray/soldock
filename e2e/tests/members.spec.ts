@@ -209,3 +209,63 @@ test("a new person chooses the password from an invite link, and the link works 
 		await admin.close();
 	}
 });
+
+// A person who is signed in opens an invite link for a different account. The first load of the page asks for the
+// account with the old cookie, and its answer comes after the accept. Only the newest load shows its answer, so the
+// app opens as the person of the link, not as the person from before.
+test("an invite accepted in a signed-in browser opens the app as the new person, also after a late answer", async ({
+	browser,
+}) => {
+	const admin = await signIn(browser, "tomasz");
+	let personId: string | null = null;
+	const local = `lin-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+	try {
+		const person = unique("Lin Wei");
+		const created = await admin.request.post("/api/v1/directory/principals", {
+			headers: { origin: BASE_URL },
+			data: { kind: "human", display_name: person, address: `${local}@example.com` },
+		});
+		expect(created.ok(), await created.text()).toBe(true);
+		const body = (await created.json()) as { principal: { id: string }; invite: { url: string } };
+		personId = body.principal.id;
+		const before = await (await admin.request.get("/api/v1/account")).text();
+
+		// The first answer for the account waits until the load after the accept has its answer, and then gives the
+		// person from before. So it comes last, as a slow answer can.
+		const page = await admin.newPage();
+		let newAnswered: () => void = () => {};
+		const newAnswer = new Promise<void>((resolve) => {
+			newAnswered = resolve;
+		});
+		let staleSent: () => void = () => {};
+		const staleAnswer = new Promise<void>((resolve) => {
+			staleSent = resolve;
+		});
+		let calls = 0;
+		await page.route("**/api/v1/account", async (route) => {
+			calls += 1;
+			if (calls === 1) {
+				await newAnswer;
+				await route.fulfill({ status: 200, contentType: "application/json", body: before });
+				staleSent();
+				return;
+			}
+			await route.fulfill({ response: await route.fetch() });
+			newAnswered();
+		});
+
+		await page.goto(body.invite.url);
+		await page.getByLabel("New password").fill("lin local password");
+		await page.getByLabel("Type the password again").fill("lin local password");
+		await page.getByRole("button", { name: "Set password and sign in" }).click();
+		await staleAnswer;
+		// The page reads the late answer in its next tasks.
+		await page.evaluate(() => new Promise((resolve) => setTimeout(resolve, 200)));
+		await expect(page.getByRole("button", { name: `Account: ${person}` })).toBeVisible();
+		await expect(page.getByRole("button", { name: /^Account: Tomasz/ })).toHaveCount(0);
+	} finally {
+		if (personId)
+			await admin.request.delete(`/api/v1/directory/principals/${personId}`, { headers: { origin: BASE_URL } });
+		await admin.close();
+	}
+});
