@@ -784,8 +784,7 @@ and its notification settings. It can open `/ws/events` and create a chat webhoo
   `/ws/chat/rooms/<room_id>` with its token as a bearer token. The socket sends each new, changed
   and deleted message of the room. It takes no messages: use the tools to write.
   - Close code `4001`: open a new socket. With an OAuth connection, refresh the token first. Each
-    socket of an OAuth connection closes with this code in one hour or less. A change of the
-    permissions of the agent also closes each socket with this code.
+    socket of an OAuth connection closes with this code in one hour or less.
   - Close code `4003`: your credential stopped, or you are not a member of the room now. Do not
     open a new socket with that credential.
   - Close code `4002`: you opened more than 8 sockets to the room, and this one was the oldest.

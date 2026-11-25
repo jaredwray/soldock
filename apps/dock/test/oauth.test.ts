@@ -10,6 +10,7 @@ import {
 } from "@asterra/contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { MEMBER_DELAY_MS, SOCKET_RECHECK_MS } from "../src/chat/room.ts";
+import { type CredentialRef, checkCredentials } from "../src/identity/index.ts";
 import { EVENTS_SOCKET_RECHECK_MS } from "../src/identity/principal.ts";
 import {
 	type Actor,
@@ -856,6 +857,27 @@ describe("OAuth connections follow their agent", () => {
 		expect((await owner.call("oauth.list_grants", { principal_id: agent.id })).grants[0]?.scopes).toEqual([]);
 		const refreshed = (await (await refresh(clientId, tokens.refresh_token)).json()) as Tokens;
 		expect(refreshed.scope).toBe(AGENT_SCOPES.join(" "));
+	});
+
+	// An older Worker kept the access version of the agent in each credential reference of a key or a token
+	// (`av`). A push device stores its reference, so such a reference can come back long after a deploy. A
+	// membership decides the access now, so the reference stays live while its credential works.
+	it("keeps a stored credential reference from an older Worker live while its credential works", async () => {
+		const owner = await setupOwner();
+		const { agent, tokens } = await connectNewAgent(owner);
+		const { api_key } = await owner.call("account.create_api_key", { principal_id: agent.id, label: "ci" });
+		const { room } = await owner.call("chat.create_room", { kind: "private", name: "Runbook", member_ids: [agent.id] });
+		for (const secret of [tokens.access_token, api_key.secret]) await connectRoomSocket(room.id, bearer(secret));
+		const refs = await runInDurableObject(env.CHAT_ROOM.get(env.CHAT_ROOM.idFromName(room.id)), (_instance, state) =>
+			state
+				.getWebSockets()
+				.map((socket) => (socket.deserializeAttachment() as { credential: CredentialRef }).credential)
+				// The order of the sockets is not fixed.
+				.sort((a, b) => a.kind.localeCompare(b.kind)),
+		);
+		expect(refs.map((ref) => ref.kind)).toEqual(["api_key", "oauth"]);
+		const stored = refs.map((ref) => ({ ...ref, av: 1 }));
+		expect(await checkCredentials(env.DIRECTORY, stored)).toEqual(["live", "live"]);
 	});
 
 	// An agent from before migration 0033 can have narrow account scopes. The agent learns which tools it cannot
