@@ -1967,7 +1967,7 @@ fieldset {
 	font-size: 13px;
 }
 
-/* Reply later: the banner above its list, the pile at the end of the inbox, and Focus & Reply. */
+/* Reply later: the banner above its list, the pile at the end of the inbox, and Focus. */
 
 .reply-later-banner,
 .reply-later-pile {
@@ -2001,7 +2001,7 @@ fieldset {
 	text-decoration: underline;
 }
 
-/* The way into Focus & Reply in the header row of a list. A narrow row shows the icon only. */
+/* The way into Focus in the header row of a list. A narrow row shows the icon only. */
 .toolbar-focus {
 	flex: none;
 }
@@ -2012,8 +2012,8 @@ fieldset {
 	}
 }
 
-/* The view of Focus & Reply, after its title. The title gets shorter first. A phone has no room for the view:
-   the back button names it. */
+/* The view of Focus, after its title. The title gets shorter first. A phone has no room for the view: the back
+   button names it. */
 .focus-view-name {
 	flex: none;
 	max-width: 40%;
@@ -2024,32 +2024,17 @@ fieldset {
 	white-space: nowrap;
 }
 
-@media (max-width: 600px) {
-	.focus-view-name {
-		display: none;
-	}
-
-	/* A card on a phone has no room for three buttons with text. Later shows its icon. Its name stays for a
-	   screen reader. */
-	.focus-card-later-text {
-		position: absolute;
-		width: 1px;
-		height: 1px;
-		overflow: hidden;
-		clip: rect(0 0 0 0);
-		white-space: nowrap;
-	}
-}
-
-/* Focus & Reply. The status strip stays above the list: the progress of this visit, and the keys. */
+/* Focus. The strip under the header row: Previous, the position, Next and the count of this visit at the left,
+   the actions of the conversation at the right, and the progress bar on its border. */
 .focus-status {
 	position: relative;
 	display: flex;
 	flex: none;
+	flex-wrap: wrap;
 	align-items: center;
 	justify-content: space-between;
-	gap: 12px;
-	padding: 8px 22px;
+	gap: 6px 12px;
+	padding: 6px 22px;
 	border-bottom: 1px solid var(--border);
 	color: var(--muted-foreground);
 	font-size: 13px;
@@ -2059,28 +2044,50 @@ fieldset {
 	margin: 0;
 }
 
+.focus-nav,
+.focus-actions {
+	display: flex;
+	align-items: center;
+	gap: 4px;
+}
+
+.focus-nav {
+	min-width: 0;
+}
+
+.focus-actions {
+	flex: none;
+}
+
 .focus-status-count {
+	min-width: 64px;
 	color: var(--foreground);
 	font-weight: 600;
 	font-variant-numeric: tabular-nums;
+	text-align: center;
 }
 
-.focus-hints {
-	display: flex;
-	flex-wrap: wrap;
-	justify-content: flex-end;
-	gap: 4px 14px;
+.focus-done-count {
+	margin-left: 8px;
+	font-variant-numeric: tabular-nums;
 }
 
-.focus-hints[hidden] {
+/* Previous at the first conversation and Next at the last one keep the focus, so they are not disabled. */
+.focus-nav-button[aria-disabled="true"] {
+	opacity: 0.45;
+	cursor: default;
+}
+
+.focus-nav-button[aria-disabled="true"]:hover {
+	background: none;
+}
+
+/* A phone has the actions in a bar at the bottom. A larger screen has them in the strip. */
+.focus-actions-bar {
 	display: none;
 }
 
-.focus-hints kbd {
-	font-size: 11px;
-}
-
-/* The bar is on the bottom border of the strip. Its text form is the count. */
+/* The bar is on the bottom border of the strip. */
 .focus-progress {
 	position: absolute;
 	bottom: -1px;
@@ -2090,114 +2097,64 @@ fieldset {
 	transition: width 300ms ease;
 }
 
-/* One reading column. The space between the cards is the padding of each card, so it can close in the exit motion. */
+/* One reading column with one conversation. */
 .focus-list {
-	display: flex;
-	flex-direction: column;
 	max-width: 760px;
 	margin: 0 auto;
 	padding: 20px 22px 32px;
-	/* An answered card moves to the right when it leaves. In a narrow window, that must not make the page scroll. */
+	/* The conversation comes in from the side. In a narrow window, that must not make the page scroll. */
 	overflow-x: clip;
-	list-style: none;
 }
 
-.focus-card {
-	display: grid;
-	grid-template-rows: 1fr;
-	padding-bottom: 16px;
-	scroll-margin-top: 12px;
+/* The next conversation comes in from the right, and the previous one from the left. */
+.focus-enter-next {
+	animation: focus-enter-next 160ms ease-out;
+}
+
+.focus-enter-previous {
+	animation: focus-enter-previous 160ms ease-out;
+}
+
+@keyframes focus-enter-next {
+	from {
+		opacity: 0;
+		transform: translateX(12px);
+	}
+}
+
+@keyframes focus-enter-previous {
+	from {
+		opacity: 0;
+		transform: translateX(-12px);
+	}
 }
 
 .focus-card-body {
 	position: relative;
-	min-height: 0;
 	padding: 12px 16px 4px;
-	border: 1px solid var(--border);
+	border: 1px solid var(--input);
 	border-radius: var(--radius);
-	background: var(--surface);
-	transition:
-		box-shadow 160ms ease,
-		border-color 160ms ease,
-		background-color 160ms ease;
-}
-
-/* The active card comes forward: the color of a card, a shadow and a bar at its left. The others stay flat. */
-.focus-card-active .focus-card-body {
-	border-color: var(--input);
 	background: var(--card);
-	box-shadow: var(--shadow-menu);
-}
-
-.focus-card-active .focus-card-body::before {
-	content: "";
-	position: absolute;
-	top: 14px;
-	bottom: 14px;
-	left: -1px;
-	width: 3px;
-	border-radius: 2px;
-	background: var(--foreground);
-}
-
-/* The exit motion: an answered card moves to the right, a card that is done gets smaller. Then the place closes. */
-.focus-card-sent,
-.focus-card-done {
-	pointer-events: none;
-}
-
-.focus-card-sent .focus-card-body,
-.focus-card-done .focus-card-body {
-	overflow: hidden;
-}
-
-.focus-card-sent {
-	animation: focus-leave-sent 220ms ease forwards;
-}
-
-.focus-card-done {
-	animation: focus-leave-done 220ms ease forwards;
-}
-
-@keyframes focus-leave-sent {
-	to {
-		grid-template-rows: 0fr;
-		padding-bottom: 0;
-		opacity: 0;
-		transform: translateX(24px);
-	}
-}
-
-@keyframes focus-leave-done {
-	to {
-		grid-template-rows: 0fr;
-		padding-bottom: 0;
-		opacity: 0;
-		transform: scale(0.98);
-	}
-}
-
-.focus-card-header {
-	display: flex;
-	align-items: flex-start;
-	justify-content: space-between;
-	gap: 12px;
 }
 
 .focus-card-title {
 	min-width: 0;
 }
 
-.focus-card-actions {
-	display: flex;
-	flex: none;
-	gap: 4px;
-}
-
 .focus-card-subject {
 	font-size: 17px;
 	font-weight: 650;
 	overflow-wrap: anywhere;
+}
+
+/* The heading gets the focus after a key moves to a conversation. It shows the ring only for the keyboard. */
+.focus-card-subject:focus {
+	outline: none;
+}
+
+.focus-card-subject:focus-visible {
+	outline: 2px solid var(--focus);
+	outline-offset: 2px;
 }
 
 .focus-card-subject a {
@@ -2213,6 +2170,20 @@ fieldset {
 	margin: 2px 0 0;
 	color: var(--muted-foreground);
 	font-size: 13px;
+}
+
+/* "Show 2 more messages" looks like a link in the line of the people. */
+.focus-more {
+	padding: 0;
+	border: 0;
+	background: none;
+	color: var(--link);
+	font: inherit;
+	cursor: pointer;
+}
+
+.focus-more:hover {
+	text-decoration: underline;
 }
 
 .focus-card-state {
@@ -2293,23 +2264,87 @@ fieldset {
 	margin-top: 12px;
 }
 
+@media (max-width: 600px) {
+	.focus-view-name,
+	.focus-nav-text,
+	.focus-done-count {
+		display: none;
+	}
+
+	/* Previous and Next are icons at the two ends of the strip. Their names stay for a screen reader. */
+	.focus-nav {
+		width: 100%;
+		justify-content: space-between;
+	}
+
+	.focus-nav-button {
+		width: 44px;
+		padding: 0;
+		justify-content: center;
+	}
+
+	.focus-actions-strip {
+		display: none;
+	}
+
+	/* The actions are in a bar at the bottom, as the actions of a selection in the list. The primary keeps its
+	   text, and the others show their icon. */
+	.focus-actions-bar {
+		position: fixed;
+		right: 0;
+		bottom: 0;
+		left: 0;
+		z-index: 6;
+		display: flex;
+		justify-content: space-around;
+		gap: 8px;
+		min-height: 56px;
+		padding: 6px max(8px, env(safe-area-inset-right)) max(6px, env(safe-area-inset-bottom))
+			max(8px, env(safe-area-inset-left));
+		border-top: 1px solid var(--border);
+		background: var(--background);
+	}
+
+	.focus-actions-bar .button-ghost {
+		min-width: 44px;
+		padding: 0;
+		justify-content: center;
+	}
+
+	.focus-actions-bar .button-ghost .focus-action-text {
+		display: none;
+	}
+
+	.mail-main:not(.focus-replying):has(.focus-actions-bar) .mail-scroll {
+		padding-bottom: calc(72px + env(safe-area-inset-bottom));
+	}
+
+	/* "Show 2 more messages" gets the height of a touch target. */
+	.focus-more {
+		display: inline-flex;
+		align-items: center;
+		min-height: 44px;
+	}
+
+	/* While the reply is open, the keyboard and Send need the room. */
+	.focus-replying .focus-actions-bar {
+		display: none;
+	}
+
+	body:has(.mail-main:not(.focus-replying) .focus-actions-bar) .toasts {
+		bottom: calc(68px + env(safe-area-inset-bottom));
+	}
+}
+
 @media (prefers-reduced-motion: reduce) {
-	.focus-card-sent,
-	.focus-card-done,
+	.focus-enter-next,
+	.focus-enter-previous,
 	.focus-finish-mark {
 		animation: none;
 	}
 
-	.focus-progress,
-	.focus-card-body {
+	.focus-progress {
 		transition: none;
-	}
-}
-
-/* A touch screen has no keys, and a narrow screen has no room for the hints. */
-@media (hover: none), (max-width: 900px) {
-	.focus-hints {
-		display: none;
 	}
 }
 
@@ -3265,7 +3300,7 @@ fieldset {
 	color: var(--muted-foreground);
 }
 
-/* The composer in the page, for example in a card of Focus & Reply. */
+/* The composer in the page, for example in Focus. */
 .compose-inline {
 	border-top: 1px solid var(--border);
 }
@@ -3278,8 +3313,8 @@ fieldset {
 	padding: 16px 24px;
 }
 
-/* The reply in a card of Focus & Reply spans the full width of the card. */
-.focus-card .compose-inline {
+/* The reply in Focus spans the full width of the conversation. */
+.focus-conversation .compose-inline {
 	margin: 8px -16px 0;
 }
 
@@ -4867,7 +4902,7 @@ fieldset {
 		padding: 10px 12px 4px;
 	}
 
-	.focus-card .compose-inline {
+	.focus-conversation .compose-inline {
 		margin: 8px -12px 0;
 	}
 

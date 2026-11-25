@@ -3,22 +3,24 @@ import type { MailView } from "../../routes.ts";
 import { actionChange, type LabelChange } from "./actions.ts";
 import { showsHeldMail } from "./screener.ts";
 
-// The rules of Focus & Reply that do not need React: what Done does in each view, the order of the cards when
-// the queue refreshes, the active card, the card that comes back after Undo, and the text of the progress and of
-// the finish state.
+// The rules of Focus that do not need React: what the actions do in each view, the order of the conversations
+// when the queue refreshes, the conversation that shows next, the conversation that comes back after Undo, and
+// the text of the position and of the finish state.
 
-/** How the person cleared a card: a sent reply, Done, or a move to Reply later. */
-export type ClearKind = "answered" | "done" | "later";
+/** How the person cleared a conversation: a sent reply, Archive, Done, a move to Reply later, or Spam. */
+export type ClearKind = "answered" | "archived" | "done" | "later" | "spam";
 
-/** What Focus & Reply does in one view. */
+/** What Focus does in one view. */
 export interface FocusMode {
 	/** The label change of Done. Where a label change can, it takes the conversation out of the view. */
 	done: LabelChange;
+	/** True when Done archives: in the inbox, Sent, All mail and a search. The primary button then says Archive. */
+	doneArchives: boolean;
 	/** The toast after Done. */
 	doneNotice: string;
 	/** What Done does to the conversation with this subject, for the hidden text of the button. */
 	doneText: (subject: string) => string;
-	/** True when the card has Later, which moves the conversation to Reply later: each view but Reply later. */
+	/** True when Later shows, which moves the conversation to Reply later: each view but Reply later. */
 	later: boolean;
 	/** True when a sent reply also archives the conversation: in the inbox only. */
 	archiveOnReply: boolean;
@@ -28,15 +30,16 @@ export interface FocusMode {
 	leaves: Readonly<Record<ClearKind, boolean>>;
 }
 
-/** Done archives. A conversation that was not in the inbox does not change, and its card leaves the page only. */
+/** Done archives. A conversation that is not in the inbox does not change, and it leaves the page only. */
 const ARCHIVE_MODE: FocusMode = {
 	done: actionChange("archive"),
+	doneArchives: true,
 	doneNotice: "Conversation archived.",
 	doneText: (subject) => `archive “${subject}”`,
 	later: true,
 	archiveOnReply: false,
 	countLabel: null,
-	leaves: { answered: false, done: false, later: false },
+	leaves: { answered: false, archived: false, done: false, later: false, spam: true },
 };
 
 /** A search that names spam, trash or anywhere. The server then shows spam and trash too (`namesSpamOrTrash`). */
@@ -53,7 +56,7 @@ const LABEL_VIEWS: Readonly<Record<string, "inbox" | "reply-later" | "starred" |
 };
 
 /**
- * What Focus & Reply does in `view`, or null for a view without it. Spam and Trash have no reply, also through
+ * What Focus does in `view`, or null for a view without it. Spam and Trash have no reply, also through
  * a search or a label path. The server moves the mail that the Screener holds only when a person screens its
  * sender. `labelName` is the name of the label of a label view, or null while the labels load.
  */
@@ -68,10 +71,11 @@ export function focusMode(view: MailView, labelName: string | null = null): Focu
 		return {
 			...ARCHIVE_MODE,
 			done: actionChange({ unlabel: view.labelId }),
+			doneArchives: false,
 			doneNotice: labelName === null ? "Label removed." : `Label “${labelName}” removed.`,
 			doneText: (subject) => `remove ${name} from “${subject}”`,
 			countLabel: view.labelId,
-			leaves: { answered: false, done: true, later: false },
+			leaves: { answered: false, archived: false, done: true, later: false, spam: true },
 		};
 	}
 	switch (view.view) {
@@ -83,27 +87,29 @@ export function focusMode(view: MailView, labelName: string | null = null): Focu
 				...ARCHIVE_MODE,
 				archiveOnReply: true,
 				countLabel: "INBOX",
-				leaves: { answered: true, done: true, later: true },
+				leaves: { answered: true, archived: true, done: true, later: true, spam: true },
 			};
 		case "reply-later":
 			return {
 				done: actionChange("replyLaterDone"),
+				doneArchives: false,
 				doneNotice: "Conversation removed from Reply later.",
 				doneText: (subject) => `remove “${subject}” from Reply later`,
 				later: false,
 				// The server takes a thread out of Reply later when the mailbox replies in it.
 				archiveOnReply: false,
 				countLabel: "REPLY_LATER",
-				leaves: { answered: true, done: true, later: true },
+				leaves: { answered: true, archived: false, done: true, later: true, spam: true },
 			};
 		case "starred":
 			return {
 				...ARCHIVE_MODE,
 				done: actionChange("unstar"),
+				doneArchives: false,
 				doneNotice: "Star removed.",
 				doneText: (subject) => `remove the star from “${subject}”`,
 				countLabel: "STARRED",
-				leaves: { answered: false, done: true, later: false },
+				leaves: { answered: false, archived: false, done: true, later: false, spam: true },
 			};
 		case "sent":
 			return { ...ARCHIVE_MODE, countLabel: "SENT" };
@@ -113,11 +119,34 @@ export function focusMode(view: MailView, labelName: string | null = null): Focu
 }
 
 /**
- * The number of conversations that wait, and `more` when the number can be larger. With `complete`, the cards
- * on screen are the queue: the label count comes a moment after a change. Else the label count `total` is the
+ * What the primary button does to a conversation with these labels: "archive" when Done archives and the
+ * conversation is in the inbox, "none" when Done archives and the conversation is not in the inbox (the page only
+ * goes to the next one), else "done" (the change of Done in the view).
+ */
+export function primaryAction(mode: FocusMode, labelIds: readonly string[]): "archive" | "done" | "none" {
+	if (!mode.doneArchives) return "done";
+	return labelIds.includes("INBOX") ? "archive" : "none";
+}
+
+/**
+ * True when a second Archive shows: the conversation is in the inbox, and the primary button does a different
+ * change, for example in Reply later, Starred and a label. So two buttons never do the same change.
+ */
+export function showsArchive(mode: FocusMode, labelIds: readonly string[]): boolean {
+	return labelIds.includes("INBOX") && primaryAction(mode, labelIds) !== "archive";
+}
+
+/** The position of the conversation on screen, for example "3 of 12", or "3 of 50+" when more can come. */
+export function positionText(position: number, total: number, more: boolean): string {
+	return `${position} of ${total}${more ? "+" : ""}`;
+}
+
+/**
+ * The number of conversations that wait, and `more` when the number can be larger. With `complete`, the loaded
+ * conversations are the queue: the label count comes a moment after a change. Else the label count `total` is the
  * size of the view. It still counts the `staying` conversations that the person cleared in this visit and that
  * stay in the view, for example a starred conversation after a reply. With no label count, the number is the
- * cards on screen, and more can come with Older.
+ * loaded conversations, and more can come with the next page.
  */
 export function waitingCount(input: { complete: boolean; queued: number; total: number | null; staying: number }): {
 	left: number;
@@ -150,10 +179,10 @@ export function isGone(thread: ThreadSummary, gone: ReadonlyMap<string, number>)
 }
 
 /**
- * The cards after a refresh of the queue. The cards on screen keep their order, and new threads go after them,
- * so a card never moves under the person. A thread that left the queue goes away (`leftQueue`), except a card
- * in `keep`: a card with an open reply, so a refresh never removes typed text, or a card in its exit motion.
- * A thread in `gone` gets no new card (`isGone`). The server can still show it: a refresh that started before
+ * The conversations after a refresh of the queue. The loaded conversations keep their order, and new threads go
+ * after them, so the order never changes under the person. A thread that left the queue goes away (`leftQueue`),
+ * except a thread in `keep`: the conversation on screen, which changes only when the person acts, and a
+ * conversation that Undo put back. A thread in `gone` does not come back (`isGone`). The server can still show it: a refresh that started before
  * a Done, or a view that keeps the conversation, for example Starred after a reply.
  */
 export function mergeQueue(
@@ -173,14 +202,14 @@ export function mergeQueue(
 	return [...kept, ...fresh.filter((thread) => !known.has(thread.id) && !isGone(thread, gone))];
 }
 
-/** The card that is active after `removedId` leaves: the next card, or else the previous one, or null. */
+/** The conversation that shows after `removedId` leaves: the next one, or else the previous one, or null. */
 export function nextActive(ids: readonly string[], removedId: string): string | null {
 	const index = ids.indexOf(removedId);
 	if (index < 0) return ids[0] ?? null;
 	return ids[index + 1] ?? ids[index - 1] ?? null;
 }
 
-/** The card after (`1`) or before (`-1`) the active card. It stops at the first and the last card. */
+/** The conversation after (`1`) or before (`-1`) the one on screen. It stops at the first and the last one. */
 export function moveActive(ids: readonly string[], activeId: string | null, step: 1 | -1): string | null {
 	const index = activeId === null ? -1 : ids.indexOf(activeId);
 	if (index < 0) return ids[0] ?? null;
@@ -198,7 +227,7 @@ export function replyTarget(messages: readonly Message[]): Message | null {
 /**
  * The message that a reply or a forward quotes, or null while its body is not there. In a very large thread,
  * the server leaves out the bodies of older messages (`body.omitted`). `loaded` is the message with the body
- * that the card got for it. A draft never starts from a message without its body.
+ * that the page got for it. A draft never starts from a message without its body.
  */
 export function replySource(target: Message | null, loaded: Message | null): Message | null {
 	if (!target) return null;
@@ -206,29 +235,30 @@ export function replySource(target: Message | null, loaded: Message | null): Mes
 	return loaded && loaded.id === target.id && !loaded.body.omitted ? loaded : null;
 }
 
-/** The items with `item` at `index`, for a card that comes back after Undo. An item that is there stays as it is. */
+/** The items with `item` at `index`, for a conversation that comes back after Undo. An item there stays as it is. */
 export function restoreAt<T extends { id: string }>(items: readonly T[], item: T, index: number): T[] {
 	if (items.some((current) => current.id === item.id)) return [...items];
 	const at = Math.max(0, Math.min(index, items.length));
 	return [...items.slice(0, at), item, ...items.slice(at)];
 }
 
-/** What the page shows below the strip: the cards, the next page, the finish state, or the empty state. */
-export type QueueView = "cards" | "older" | "finished" | "empty";
+/** What the page shows below the strip: a conversation, the next page, the finish state, or the empty state. */
+export type QueueView = "conversation" | "older" | "finished" | "empty";
 
 /**
- * What the page shows for `cards` on the page, `cleared` conversations of this visit, and a queue that is
- * `complete` or has more pages. With no card and more pages, the page gets the next page ("older"). A refresh
+ * What the page shows for `loaded` conversations that wait, `cleared` conversations of this visit, and a queue
+ * that is `complete` or has more pages. With no loaded conversation and more pages, the page gets the next page
+ * ("older"). A refresh
  * does not do it: a view can keep the conversations that the person cleared, for example All mail after Done.
  * The finish state needs the full queue.
  */
-export function queueView(cards: number, cleared: number, complete: boolean): QueueView {
-	if (cards > 0) return "cards";
+export function queueView(loaded: number, cleared: number, complete: boolean): QueueView {
+	if (loaded > 0) return "conversation";
 	if (!complete) return "older";
 	return cleared > 0 ? "finished" : "empty";
 }
 
-/** A conversation that the person cleared in this visit of Focus & Reply. */
+/** A conversation that the person cleared in this visit of Focus. */
 export interface Cleared {
 	id: string;
 	subject: string;
@@ -240,36 +270,28 @@ export interface Cleared {
 }
 
 /**
- * The progress of this visit: `cleared` conversations that the person answered, marked as done or moved to
- * Reply later, and `left` conversations that still wait. With `more`, the view can have more than `left`: the
- * text then shows no total. `fraction` is the part that is done, for the progress bar.
+ * The part of this visit that is done, for the progress bar: `cleared` conversations that the person cleared, of
+ * those and the `left` conversations that still wait.
  */
-export function sessionProgress(
-	cleared: number,
-	left: number,
-	more = false,
-): { total: number; fraction: number; label: string } {
+export function progressFraction(cleared: number, left: number): number {
 	const total = cleared + left;
-	const waiting = more ? `${left}+ left` : `${left} left`;
-	if (cleared === 0) return { total, fraction: 0, label: waiting };
-	const fraction = total === 0 ? 1 : Math.min(1, Math.max(0, cleared / total));
-	// No card waits on the page, and the next page still loads.
-	if (more) return { total, fraction, label: left === 0 ? `${cleared} done` : `${cleared} done · ${waiting}` };
-	const label = left === 0 ? `${cleared} of ${total} done` : `${cleared} of ${total} done · ${waiting}`;
-	return { total, fraction, label };
+	return total === 0 ? (cleared > 0 ? 1 : 0) : cleared / total;
 }
 
 const conversations = (count: number) => (count === 1 ? "1 conversation" : `${count} conversations`);
 
 const CLEAR_TEXT: readonly { how: ClearKind; text: (what: string) => string }[] = [
 	{ how: "answered", text: (what) => `answered ${what}` },
+	{ how: "archived", text: (what) => `archived ${what}` },
 	{ how: "done", text: (what) => `marked ${what} as done` },
 	{ how: "later", text: (what) => `moved ${what} to Reply later` },
+	{ how: "spam", text: (what) => `marked ${what} as spam` },
 ];
 
 /**
- * The text of the finish state: what the person answered, marked as done and moved to Reply later in this
- * visit. The first part names the conversations, and the parts after it give only the number.
+ * The text of the finish state: what the person answered, archived, marked as done, moved to Reply later and
+ * marked as spam in this visit. The first part names the conversations, and the parts after it give only the
+ * number.
  */
 export function finishSummary(log: readonly Cleared[]): string {
 	const parts = CLEAR_TEXT.flatMap(({ how, text }) => {
