@@ -22,6 +22,7 @@ import {
 	mergeQueue,
 	moveActive,
 	nextActive,
+	replySource,
 	replyTarget,
 	restoreAt,
 	sessionProgress,
@@ -117,6 +118,11 @@ export function FocusReply(props: FocusReplyProps) {
 	const [typing, setTyping] = useState(false);
 	/** The cards that came back with Undo. They stay until the queue from the server has them again. */
 	const restoringRef = useRef(new Set<string>());
+	/**
+	 * The conversations with a Done that the server did not confirm yet. A refresh that started before the
+	 * change still has them, and must not put their cards back.
+	 */
+	const pendingRef = useRef(new Set<string>());
 	const keepRef = useRef<ReadonlySet<string>>(new Set());
 	keepRef.current = new Set([...drafts.keys(), ...leavingRef.current.keys(), ...restoringRef.current]);
 	const title = props.mailboxName ? `${props.mailboxName}: Focus & Reply` : "Focus & Reply";
@@ -137,7 +143,9 @@ export function FocusReply(props: FocusReplyProps) {
 	// came back with Undo stay, also when the conversation is not in the fresh queue.
 	useEffect(() => {
 		if (list.status !== "ready") return;
-		setItems((current) => mergeQueue(current, list.threads, keepRef.current, list.nextCursor === null));
+		setItems((current) =>
+			mergeQueue(current, list.threads, keepRef.current, list.nextCursor === null, pendingRef.current),
+		);
 		for (const id of restoringRef.current) {
 			if (list.threads.some((thread) => thread.id === id)) restoringRef.current.delete(id);
 		}
@@ -215,9 +223,18 @@ export function FocusReply(props: FocusReplyProps) {
 		});
 	}
 
+	/**
+	 * Makes a card active. A request to a different card ends. That card does not open its reply later: not
+	 * when its thread comes late, and not when it comes back with Undo.
+	 */
+	function activate(threadId: string | null) {
+		setActiveId(threadId);
+		setRequest((current) => (current && current.threadId !== threadId ? null : current));
+	}
+
 	/** Makes a card active and gives it the focus. With no card left, the page gets the focus. */
 	function moveTo(threadId: string | null) {
-		setActiveId(threadId);
+		activate(threadId);
 		setScrollToken((token) => token + 1);
 		if (threadId === null) mainRef.current?.focus();
 	}
@@ -268,7 +285,7 @@ export function FocusReply(props: FocusReplyProps) {
 			onCompose(forwardDraft(message));
 			return;
 		}
-		setActiveId(threadId);
+		activate(threadId);
 		// A new draft would mount a new composer and lose the text of the open one. The open one gets the focus.
 		if (drafts.has(threadId)) {
 			ask(threadId, mode);
@@ -294,11 +311,18 @@ export function FocusReply(props: FocusReplyProps) {
 
 	async function done(thread: ThreadSummary) {
 		if (!rights.modify) return;
+		// The Done button also shows on a card with an open reply. The person decides before the text goes.
+		if (dirtyIds.has(thread.id) && !window.confirm("Discard your reply?")) return;
 		const index = items.findIndex((item) => item.id === thread.id);
 		const undos = undoChanges([{ id: thread.id, labelIds: thread.label_ids }], doneChange);
+		pendingRef.current.add(thread.id);
 		leave(thread, "done");
 		try {
 			await modifyThreads(mailboxId, [thread.id], doneChange);
+			pendingRef.current.delete(thread.id);
+			// A refresh that started before the change can come later, with the conversation. A new refresh
+			// replaces it.
+			void list.refresh();
 			const notice = actionNotice("replyLaterDone", 1) ?? "";
 			toast(
 				undos.length > 0
@@ -306,6 +330,7 @@ export function FocusReply(props: FocusReplyProps) {
 					: { message: notice },
 			);
 		} catch (error) {
+			pendingRef.current.delete(thread.id);
 			toast({ message: `The change failed. ${errorMessage(error)}`, tone: "error" });
 			restore(thread, index);
 		}
@@ -502,7 +527,7 @@ export function FocusReply(props: FocusReplyProps) {
 									request={request?.threadId === thread.id ? request : null}
 									draft={drafts.get(thread.id) ?? null}
 									composer={props.composer}
-									onActivate={() => setActiveId(thread.id)}
+									onActivate={() => activate(thread.id)}
 									onReply={(message, mode) => reply(thread.id, message, mode)}
 									onCloseDraft={() => closeDraft(thread.id)}
 									onDirtyChange={(dirty) => setDirty(thread.id, dirty)}
@@ -659,6 +684,11 @@ function FocusCard(props: FocusCardProps) {
 	const subject = summary.subject.trim() || "(no subject)";
 	const messages = thread.thread?.messages ?? [];
 	const newest = replyTarget(messages);
+	/** The newest message with its full body, from the message of the card. */
+	const [full, setFull] = useState<Message | null>(null);
+	// A key and the step after a send start a reply from here. They wait for a body that the server left out,
+	// as the buttons of the message do.
+	const source = replySource(newest, full);
 	const earlier = (thread.thread ? messages.length : summary.message_count) - 1;
 	/** The scroll token that this card saw last. A card that mounts later starts at the current token. */
 	const scrolledRef = useRef(props.scrollToken);
@@ -699,9 +729,10 @@ function FocusCard(props: FocusCardProps) {
 			?.scrollIntoView({ block: "nearest", behavior: reducedMotion() ? "auto" : "smooth" });
 	}, [draftKey]);
 
-	// A request opens the reply when the thread is ready. A reply that is open gets the focus, and keeps its text.
+	// A request opens the reply when the message and its body are ready. A reply that is open gets the focus,
+	// and keeps its text.
 	useEffect(() => {
-		if (request === null || request.token === handledRef.current || !newest) return;
+		if (request === null || request.token === handledRef.current || !source) return;
 		handledRef.current = request.token;
 		if (draft && request.mode !== "forward") {
 			ref.current
@@ -709,8 +740,8 @@ function FocusCard(props: FocusCardProps) {
 				?.focus();
 			return;
 		}
-		onReply(newest, request.mode);
-	}, [request, newest, draft, onReply]);
+		onReply(source, request.mode);
+	}, [request, source, draft, onReply]);
 
 	function ended(event: AnimationEvent<HTMLLIElement>) {
 		if (event.target === event.currentTarget && props.leaving) props.onLeft();
@@ -777,6 +808,7 @@ function FocusCard(props: FocusCardProps) {
 							defaultExpanded
 							heading="h3"
 							onReply={onReply}
+							onFullBody={setFull}
 						/>
 					</div>
 				) : thread.status === "error" ? (

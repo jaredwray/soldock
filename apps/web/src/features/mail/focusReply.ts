@@ -18,12 +18,15 @@ export function leftQueue(thread: ThreadSummary, fresh: readonly ThreadSummary[]
  * The cards after a refresh of the queue. The cards on screen keep their order, and new threads go after them,
  * so a card never moves under the person. A thread that left the queue goes away (`leftQueue`), except a card
  * in `keep`: a card with an open reply, so a refresh never removes typed text, or a card in its exit motion.
+ * A thread in `gone` gets no new card: the person marked it as done, and a refresh that started before the
+ * server made that change still shows it.
  */
 export function mergeQueue(
 	current: readonly ThreadSummary[],
 	fresh: readonly ThreadSummary[],
 	keep: ReadonlySet<string>,
 	complete: boolean,
+	gone: ReadonlySet<string> = new Set(),
 ): ThreadSummary[] {
 	const freshById = new Map(fresh.map((thread) => [thread.id, thread]));
 	const kept = current.flatMap((thread) => {
@@ -32,7 +35,7 @@ export function mergeQueue(
 		return keep.has(thread.id) || !leftQueue(thread, fresh, complete) ? [thread] : [];
 	});
 	const known = new Set(current.map((thread) => thread.id));
-	return [...kept, ...fresh.filter((thread) => !known.has(thread.id))];
+	return [...kept, ...fresh.filter((thread) => !known.has(thread.id) && !gone.has(thread.id))];
 }
 
 /** The card that is active after `removedId` leaves: the next card, or else the previous one, or null. */
@@ -55,6 +58,17 @@ export function moveActive(ids: readonly string[], activeId: string | null, step
  */
 export function replyTarget(messages: readonly Message[]): Message | null {
 	return messages.findLast((message) => message.origin !== "sent") ?? messages.at(-1) ?? null;
+}
+
+/**
+ * The message that a reply or a forward quotes, or null while its body is not there. In a very large thread,
+ * the server leaves out the bodies of older messages (`body.omitted`). `loaded` is the message with the body
+ * that the card got for it. A draft never starts from a message without its body.
+ */
+export function replySource(target: Message | null, loaded: Message | null): Message | null {
+	if (!target) return null;
+	if (!target.body.omitted) return target;
+	return loaded && loaded.id === target.id && !loaded.body.omitted ? loaded : null;
 }
 
 /** The items with `item` at `index`, for a card that comes back after Undo. An item that is there stays as it is. */

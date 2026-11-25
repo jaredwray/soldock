@@ -2057,6 +2057,8 @@ fieldset {
 	max-width: 760px;
 	margin: 0 auto;
 	padding: 20px 22px 32px;
+	/* An answered card moves to the right when it leaves. In a narrow window, that must not make the page scroll. */
+	overflow-x: clip;
 	list-style: none;
 }
 

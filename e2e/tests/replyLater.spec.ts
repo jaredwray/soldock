@@ -94,6 +94,13 @@ test("a member puts mail in Reply later and answers it in Focus & Reply", async 
 		await expect(page.getByRole("dialog")).toHaveCount(0);
 		await thirdMessage.pressSequentially("Pizza, please.");
 
+		// Ctrl+Enter in the link dialog of the editor does not send the message. The card and its text stay.
+		await thirdReply.getByRole("button", { name: "Link" }).click();
+		const linkDialog = page.getByRole("dialog", { name: "Add link" });
+		await linkDialog.getByRole("textbox", { name: "Web address or email" }).press("Control+Enter");
+		await linkDialog.getByRole("button", { name: "Cancel" }).click({ timeout: 5000 });
+		await expect(linkDialog).toHaveCount(0);
+
 		// The app asks before it leaves the page while the reply has text. A No keeps the page and the text.
 		let question = "";
 		page.once("dialog", (dialog) => {
@@ -104,6 +111,17 @@ test("a member puts mail in Reply later and answers it in Focus & Reply", async 
 		expect(question).toBe("Discard your reply?");
 		await expect(page).toHaveURL(/\/reply-later\/focus$/);
 		await expect(thirdMessage).toContainText("Pizza, please.");
+
+		// Done on a card with text in its reply asks too. A No keeps the card and the text.
+		question = "";
+		page.once("dialog", (dialog) => {
+			question = dialog.message();
+			void dialog.dismiss();
+		});
+		await thirdCard.getByRole("button", { name: /^Done/ }).click();
+		expect(question).toBe("Discard your reply?");
+		await expect(thirdMessage).toContainText("Pizza, please.");
+		await expect(main.getByText("3 left", { exact: true })).toBeVisible();
 
 		// Ctrl+Enter sends. The card leaves, and the reply of the next card opens with the focus in the message.
 		await thirdMessage.focus();
@@ -140,6 +158,21 @@ test("a member puts mail in Reply later and answers it in Focus & Reply", async 
 		// l is Done for the active card. The last card leaves the finish state, with what the person cleared.
 		await expect(secondCard).toHaveAttribute("aria-current", "true");
 		await page.keyboard.press("l");
+		await expect(secondCard).toHaveCount(0);
+		// The reply of this card opened by itself after the send. After the exit motion, Undo makes a new card.
+		// It comes back with its reply closed.
+		await expect(cards).toHaveCount(1);
+		await page
+			.locator(".toast")
+			.filter({ hasText: "Conversation removed from Reply later." })
+			.getByRole("button", { name: "Undo" })
+			.last()
+			.click();
+		await expect(secondCard.getByText("Which venue do you like?").first()).toBeVisible();
+		await expect(cards.nth(0)).toContainText(second);
+		await expect(secondCard.getByRole("button", { name: "Reply", exact: true })).toBeEnabled();
+		await expect(secondCard.getByRole("region", { name: "Reply" })).toHaveCount(0);
+		await secondCard.getByRole("button", { name: /^Done/ }).click();
 		await expect(secondCard).toHaveCount(0);
 		await firstCard.getByRole("button", { name: /^Done/ }).click();
 		await expect(main.getByText("All caught up.")).toBeVisible();

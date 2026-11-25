@@ -1,5 +1,5 @@
 import type { Address, Label, Message } from "@asterra/contracts";
-import { useCallback, useEffect, useId, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { api, errorMessage } from "../../lib/api.ts";
 import { base64ToBytes, saveBytes } from "../../lib/base64.ts";
 import { addressName, formatBytes, fullDate, initials, sameAddress, shortDate } from "../../lib/format.ts";
@@ -21,6 +21,11 @@ interface MessageCardProps {
 	/** The heading of the message: h2 in a thread, h3 under the subject of a card in Focus & Reply. */
 	heading?: "h2" | "h3";
 	onReply: (message: Message, mode: ReplyMode) => void;
+	/**
+	 * Gets the message with its full body when that body is there. A parent that starts a reply itself, such as
+	 * a card of Focus & Reply for a key, uses it, so the reply never quotes a body that the server left out.
+	 */
+	onFullBody?: (message: Message) => void;
 }
 
 type FullBody =
@@ -64,9 +69,17 @@ export function MessageCard({
 	defaultExpanded,
 	heading: Heading = "h2",
 	onReply,
+	onFullBody,
 }: MessageCardProps) {
 	const [expanded, setExpanded] = useState(defaultExpanded);
 	const { body, full, retry } = useFullBody(message, expanded);
+	const onFullBodyRef = useRef(onFullBody);
+	useEffect(() => {
+		onFullBodyRef.current = onFullBody;
+	});
+	useEffect(() => {
+		if (body) onFullBodyRef.current?.({ ...message, body });
+	}, [message, body]);
 	const bodyId = useId();
 	// In a team mailbox, more than one person sends from the address, so the sender is not "me". In the
 	// mailbox of an agent, the sender is the agent, not the person who reads.

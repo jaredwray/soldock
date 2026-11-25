@@ -6,6 +6,7 @@ import {
 	mergeQueue,
 	moveActive,
 	nextActive,
+	replySource,
 	replyTarget,
 	restoreAt,
 	sessionProgress,
@@ -43,6 +44,18 @@ describe("mergeQueue", () => {
 		const current = [thread("a"), thread("b"), thread("c")];
 		expect(idsOf(mergeQueue(current, [thread("c")], new Set(), true))).toEqual(["c"]);
 		expect(idsOf(mergeQueue(current, [thread("c")], new Set(["b"]), true))).toEqual(["b", "c"]);
+	});
+
+	// A refresh that started before the server made a Done still has the thread. Its card left the page.
+	it("does not bring back a thread with a Done that the server did not confirm yet", () => {
+		const fresh = [thread("c"), thread("b"), thread("a")];
+		expect(idsOf(mergeQueue([thread("a")], fresh, new Set(), true, new Set(["b"])))).toEqual(["a", "c"]);
+		// A card in its exit motion stays until the motion ends.
+		expect(idsOf(mergeQueue([thread("a"), thread("b")], fresh, new Set(["b"]), true, new Set(["b"])))).toEqual([
+			"a",
+			"b",
+			"c",
+		]);
 	});
 
 	// A refresh gets one page. The person can have more cards on screen, from "Older".
@@ -89,6 +102,22 @@ describe("replyTarget", () => {
 		);
 		expect(replyTarget([message("out1", "sent"), message("out2", "sent")])?.id).toBe("out2");
 		expect(replyTarget([])).toBeNull();
+	});
+});
+
+describe("replySource", () => {
+	// In a very large thread, the server leaves out the bodies of older messages. A reply quotes the body.
+	it("gives no message while the server left out its body, then the message with the body that came", () => {
+		const message = (id: string, omitted: boolean) => ({ id, body: { omitted, text: omitted ? "" : id } }) as Message;
+		const whole = message("m1", false);
+		const cut = message("m2", true);
+		expect(replySource(whole, null)).toBe(whole);
+		expect(replySource(cut, null)).toBeNull();
+		// A body that came for a different message does not count.
+		expect(replySource(cut, message("m1", false))).toBeNull();
+		const loaded = message("m2", false);
+		expect(replySource(cut, loaded)).toBe(loaded);
+		expect(replySource(null, loaded)).toBeNull();
 	});
 });
 

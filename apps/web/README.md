@@ -169,9 +169,10 @@ MCP clients. The app has no UI-only path.
     the set of unread message ids that it marked, so it does not send the same change twice.
   - The composer is a modal dialog. It does new mail, reply, reply all and forward, with
     attachments. One idempotency key for each composed message makes a retry safe. Focus & Reply shows the
-    same composer in the page, in a card (`frame="inline"`). The inline composer gives the focus to its first
-    field, as the dialog does, and Escape closes it.
-  - Ctrl+Enter, or Cmd+Enter on a Mac, sends the message from each field of the composer.
+    same composer in the page, in a card (`frame="inline"`). The inline composer gives the focus to the same
+    field as the dialog does, and Escape closes it.
+  - Ctrl+Enter, or Cmd+Enter on a Mac, sends the message from each field of the composer. The keys do not
+    send from the link dialog of the editor.
   - Each field label of the composer ends with a colon, for example `To:` and `Subject:`. Each row
     sizes its own label, so the text field starts right after the label.
   - The first row is **From:**. In a new message and a forward, it is a list
@@ -278,7 +279,8 @@ MCP clients. The app has no UI-only path.
     same as `j`. It removes nothing.
   - Reply and Reply all open the composer in the card, under the message. The other cards stay visible. Forward
     opens the composer dialog, because a forward does not answer the conversation. `r`, `a` and `f` do the same
-    for the active card.
+    for the active card. In a very large thread, the server can leave out the body of the message. The keys and
+    the step after a send then wait until the card has the body, as the buttons do (`replySource`).
   - After a send, the card leaves the page, the next card becomes active, and its reply opens with the focus in
     the message. So the person answers one conversation after the other with no click. No toast shows for a
     send. A live region says "Reply sent." and the progress. A toast shows when the delivery to a recipient
@@ -301,7 +303,9 @@ MCP clients. The app has no UI-only path.
     label, so it counts each waiting conversation.
   - A reply from the composer removes `REPLY_LATER` on the server. After the send, the card leaves the page.
   - **Done** removes the label without a reply, with a toast and **Undo**. `l` is Done for the active card, but
-    not while its reply is open, so a key never discards text. **Undo** puts the card back at its old place.
+    not while its reply is open, so a key never discards text. The **Done** button asks "Discard your reply?"
+    when the reply of its card has text. **Undo** puts the card back at its old place, with its reply closed.
+    A refresh that started before the server made a Done does not bring the card back.
   - When the active card leaves, the focus goes to the subject of the next card. When no card stays, the focus
     goes to the page.
   - When the last card leaves, the page shows **All caught up.**, what the person answered and marked as done in
