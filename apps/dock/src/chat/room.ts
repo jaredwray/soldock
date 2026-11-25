@@ -1899,7 +1899,8 @@ export class ChatRoomDO extends DurableObject<Env> {
 		this.ctx.storage.transactionSync(() => {
 			for (const agent of agents) {
 				const account = accounts.get(agent.principal_id);
-				if (!account || account.includes("chat.write")) continue;
+				// An agent with both scopes could do each thing that its membership allows. Each other agent loses access.
+				if (!account || (account.includes("chat.read") && account.includes("chat.write"))) continue;
 				if (!account.includes("chat.read")) {
 					this.sql.exec("DELETE FROM members WHERE principal_id = ?", agent.principal_id);
 					this.sql.exec("DELETE FROM thread_follows WHERE principal_id = ?", agent.principal_id);

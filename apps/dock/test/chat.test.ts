@@ -1116,14 +1116,17 @@ describe("a room from before migration 0031", () => {
 	it("keeps for each agent member only what its account allowed before", async () => {
 		const blind = await agentOf("blind");
 		const reader = await agentOf("reader");
-		const room = await createRoom(ada, "private", "Builds", [blind.id, reader.id, bot.id]);
+		const writer = await agentOf("writer");
+		const room = await createRoom(ada, "private", "Builds", [blind.id, reader.id, writer.id, bot.id]);
 		await post(ada, room.id, "Deploy at noon.");
 		// The reader agent owns a second room. It could not change that room before, so it is not its owner now.
 		const owned = await reader.call("chat.create_room", { kind: "private", name: "Reports", member_ids: [ada.id] });
 		await soon(async () => expect((await joined(blind)).map((entry) => entry.id)).toEqual([room.id]));
-		// The account scopes from before: the blind agent holds no chat scope, and the reader holds chat.read.
+		// The account scopes from before: the blind agent holds no chat scope, the reader holds chat.read, and the
+		// writer holds chat.write only: it could post and not read, and a membership cannot say that.
 		await setLegacyScopes(blind.id, ["account.read"]);
 		await setLegacyScopes(reader.id, ["account.read", "chat.read"]);
+		await setLegacyScopes(writer.id, ["account.read", "chat.write"]);
 		for (const id of [room.id, owned.room.id]) await wakeAsLegacy(id);
 
 		// The list of the blind agent asks the room, which narrows its members before it answers.
@@ -1140,6 +1143,8 @@ describe("a room from before migration 0031", () => {
 			]),
 		);
 		expect(members.map((member) => member.principal_id)).not.toContain(blind.id);
+		expect(members.map((member) => member.principal_id)).not.toContain(writer.id);
+		expect(await codeOf(writer.call("chat.list_messages", { room_id: room.id }))).toBe("not_found");
 		const reports = (await ada.call("chat.get_room", { room_id: owned.room.id })).members;
 		expect(reports.map((member) => [member.principal_id, member.role])).toEqual(
 			expect.arrayContaining([
