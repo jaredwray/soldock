@@ -19,8 +19,9 @@ domains.
 
 The development environment is also the project's own Asterra instance: the team uses it for its mail on
 `soldock.org`. So its data stays from one deploy to the next. A D1 migration removes only a column that
-the Worker does not use, and a deploy never deletes a mailbox. Each Worker serves only its custom domain.
-`workers.dev` and Preview URLs are off, because each one is a second origin with the same data.
+the old Worker and the new Worker do not use, and a deploy never deletes a mailbox. Each Worker serves only
+its custom domain. `workers.dev` and Preview URLs are off, because each one is a second origin with the
+same data.
 
 ## Prerequisites
 
@@ -715,10 +716,17 @@ read or write them:
 The deploy applies the migration while the old Worker runs. A Worker from before
 [Access follows membership](#access-follows-membership) reads `agent_resources`. Do these steps:
 
-1. Find the version of the Worker that runs now.
-2. If that Worker is from before jaredwray/soldock#193, first deploy a version that has that change and
-   does not have migration `0034`.
-3. Deploy the version with migration `0034`.
+1. Find the commit of the Worker that runs now. The job summary of the last successful deploy run shows
+   it (**Commit**).
+2. Make sure that this commit contains jaredwray/soldock#193 (merge commit `ae220eb`):
+
+   ```sh
+   git merge-base --is-ancestor ae220eb <commit> && echo "contains #193"
+   ```
+
+3. If it does not, first deploy a version that contains jaredwray/soldock#193 and does not have migration
+   `0034`.
+4. Deploy the version with migration `0034`.
 
 What changes:
 

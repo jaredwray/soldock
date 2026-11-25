@@ -77,9 +77,10 @@ jobs:
       - name: Build the SPA (apps/web)
         run: pnpm build
 
-      # Migrations only add, so the running Worker keeps working with the new schema. On the first
-      # deploy the database does not exist yet: the deploy creates it, and the step after the deploy
-      # applies the migrations. Any other failure here stops the deploy.
+      # A migration adds, or removes only what the running Worker does not use, so the running Worker
+      # keeps working with the new schema. On the first deploy the database does not exist yet: the
+      # deploy creates it, and the step after the deploy applies the migrations. Any other failure here
+      # stops the deploy.
       - name: Apply the D1 migrations before the deploy
         working-directory: apps/dock
         env:

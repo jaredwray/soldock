@@ -658,7 +658,8 @@ in the membership. The **Read** item below also gives the rule for the access su
 - **Rollback.** A rollback to a Worker from before migration `0033` makes the account scopes limit each
   membership again. The narrowed memberships stay narrow. After migration `0034`, a rollback to a Worker
   from before the change "Access follows membership" is not supported: that Worker reads `agent_resources`.
-  A rollback to a Worker from before migration `0027` is not supported. A fresh start of the directory replays each bundled migration (`setup.ts`).
+  A rollback to a Worker from before migration `0027` is not supported. A fresh start of the directory
+  replays each bundled migration (`setup.ts`).
 
 ## Where an agent can act
 
