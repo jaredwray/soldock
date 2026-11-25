@@ -10,7 +10,6 @@ import {
 	isAdmin,
 	type PrincipalRecord,
 	recordServiceMemberships,
-	unknownPrincipalIds,
 } from "../identity/index.ts";
 import { type HandlerMap, log, OperationError } from "../platform/index.ts";
 import { accept, actorOf, auditOk, openSpace, spaceOf } from "./access.ts";
@@ -46,10 +45,8 @@ function toPermission(permission: PermissionRecord) {
 
 /** The principal of an id from a caller. An id that the directory does not have gets `not_found`. */
 async function principalOf(call: CallContext, id: string): Promise<PrincipalRecord> {
-	const principal =
-		(await unknownPrincipalIds(call.env.DIRECTORY, [id])).length > 0
-			? null
-			: await getPrincipal(call.env.DIRECTORY, id);
+	// A deleted principal has no primary address, so the directory does not return it.
+	const principal = await getPrincipal(call.env.DIRECTORY, id);
 	if (!principal) throw new OperationError("not_found", "No person or agent has the id in principal_id.");
 	return principal;
 }
@@ -219,6 +216,10 @@ export const driveShareRequestHandlers: Pick<HandlerMap<CallContext>, ShareReque
 		const requester = await getPrincipal(call.env.DIRECTORY, request.requested_by);
 		if (!requester || requester.archived_at !== null) {
 			throw new OperationError("conflict", "The agent that asked is archived or deleted. The request is gone.");
+		}
+		// The policy of the agent that asked can lose drive.share after the request. Then it cannot share the item.
+		if (!requester.agent_scopes.includes("drive.share")) {
+			throw new OperationError("conflict", "The agent that asked no longer holds drive.share. The request is gone.");
 		}
 		// The drive writes the grant as the agent that asked, so it must still be able to share the item.
 		const opened = spaceOf(call, request.space_id);

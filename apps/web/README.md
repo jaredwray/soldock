@@ -395,11 +395,13 @@ MCP clients. The app has no UI-only path.
       The list of live API keys of an agent does not show the apps that connect with OAuth.
       The page reads the access one time for **Permissions** and for **Access** (`admin/useAgentAccess.ts`).
       A create, a rotation or a revoke of a key, and a save of the permissions, load the access again.
-    - The page of an agent and the page of a service account also share **Requests** (`chat.list_member_requests` with `principal_id`, `MemberRequests.tsx`), above **Access**.
-      An agent cannot add an agent or a service account to a room. It asks, and a person who manages the account decides.
-      Each row has the text "<the agent that asked> asks to add this account to <room>", what the account can do in the room after an approval, and the time.
-      Each row has **Approve** and **Deny**, with the buttons, the toasts and the rules of the Activity view of Chat (`chat/MemberRequestActions.tsx`).
-      An approval loads the access again, so **Access** shows the new room and **Permissions** shows the new scopes.
+    - The page of an agent and the page of a service account also share **Requests** (`chat.list_member_requests` and `drive.list_share_requests`, each with `principal_id`, `AccountRequests.tsx`), above **Access**.
+      An agent cannot add an agent or a service account to a room, or share a Drive item with it. It asks, and a person who manages the account decides.
+      A row of a member request has the text "<the agent that asked> asks to add this account to <room>", what the account can do in the room after an approval, and the time.
+      A row of a share request has the text "<the agent that asked> asks to share “<item>” with this account", what the account can do with the item after an approval (view or edit), and the time.
+      The rows of member requests come first. If one of the two lists does not load, the part shows the error.
+      Each row has **Approve** and **Deny**, with the buttons, the toasts and the rules of the Activity view of Chat (`chat/RequestActions.tsx`).
+      An approval loads the access again, so **Access** shows the new room or the new item, and **Permissions** shows the new scopes.
       The part shows nothing when the account has no request. It shows a line while the requests load, and an error with **Try again**.
     - The page of a service account has these parts, for an owner or an admin only:
       **Name, description and sponsor** (`directory.update_principal`, with `description`).
@@ -408,13 +410,13 @@ MCP clients. The app has no UI-only path.
       **Permissions**.
       **Tokens of …**: the API key manager with the word "token", a lifetime of 90 days first, and the creator and the revoker of each token.
       The token form has a label, a description and a lifetime, and no scopes (`scopesFrom="account"`). A token row shows no scopes.
-      **Requests**, when the account has a member request.
+      **Requests**, when the account has a member request or a share request.
       **Access**.
       **Activity** (`directory.list_service_account_activity`): a table of the newest entries, a filter for one token, **Refresh** and **Load more**.
       The surface `system` shows as "Asterra", for example for the notice before a token ends. The surface `member` shows as "Member change".
       A create, a rotation or a revoke of a token, and a save of the permissions, load the access and the activity again.
       Each part shows its loading, empty and error states, and an error has **Try again**.
-    - The page of an agent also has the outbound policy, **Permissions**, the connected apps, the webhooks, the API keys, **Requests** (when the agent has a member request) and **Access**.
+    - The page of an agent also has the outbound policy, **Permissions**, the connected apps, the webhooks, the API keys, **Requests** (when the agent has a member request or a share request) and **Access**.
       The sponsor, an owner or an admin sees the page, and each of them can save the permissions. An agent can never change its own permissions.
       The policy sets the mail recipients and the webhook hosts (`directory.update_agent_policy`).
       **Apps connected as …** uses `oauth.list_grants` and Revoke (`oauth.revoke_grant`).
@@ -652,6 +654,10 @@ MCP clients. The app has no UI-only path.
     person or an agent as a viewer or an editor, changes a role and removes a grant. A grant from a
     folder above shows as text. "Copy link" copies the address of the item, or of the folder of a
     file. Each other person sees the list only.
+    - When the person manages the agent of a new grant or a changed role, the agent also gets the Drive
+      scopes of the role (`agent_access_changes` of `drive.share_item`). A toast then says what the agent can
+      do with the item, and names the new scopes. When the agent did not get them (`agent_access_pending`),
+      the toast says to share it again. A share without a change to an agent shows no toast: the list shows it.
   - In Shared with me, "Remove from my list" removes the own grant of the person, after a confirmation.
   - The versions dialog lists the versions of a file. Each person with access can download one. An
     owner or an editor can upload a new version and make an older version the current version.
@@ -1138,7 +1144,8 @@ MCP clients. The app has no UI-only path.
       other people show at once, as in the room.
   - **The Activity view** (`/chat/activity`, `ActivityView.tsx`). "Activity" at the top of the sidebar opens it.
     - The view shows the items of `chat.list_activity`, newest first, with **Load more**. The chips above
-      the list keep one kind, or only the unread items. **Member requests** is the chip of the kind `member_request`.
+      the list keep one kind, or only the unread items. **Member requests** is the chip of the kind `member_request`,
+      and **Share requests** is the chip of the kind `share_request`. The filter of the server takes one kind, so each kind has its own chip.
     - An item of a message is a button. A click marks the item as read and opens the message or its thread.
     - An item of the kind `member_request` is a request of an agent to add an agent or a service account to a room.
       The person who manages that account gets it. The item names the agent that asked, the account with its
@@ -1152,8 +1159,18 @@ MCP clients. The app has no UI-only path.
       After a denial, a toast says that the account is not added. The item then goes off the list.
     - After `not_found` or `conflict`, the server does not have the request. A toast shows the message of the
       server, and the item goes off the list. Each other error keeps the item.
-    - The buttons (`MemberRequestActions.tsx`) and the texts (`memberRequests.ts`) are the same on the page of
-      the account in **Admin › Members**.
+    - An item of the kind `share_request` is a request of an agent to share a Drive item with an agent or a
+      service account. The person who manages that account gets it. The item names the agent that asked, the
+      item (`item.name`), the account with its **agent** chip and the time. A line tells what the account can
+      do with the item after an approval: view or edit (`item.role`).
+      The person can have no access to the item, so the item is not a link to the file and opens nothing.
+      It has the buttons **Approve** (`drive.approve_share_request`) and **Deny** (`drive.deny_share_request`).
+      The id of the request is `message_id` of the item. The accessible name of each button has the item and the account.
+    - After an approval of a share request, a toast says what the account can now do with the item, and the
+      scopes that it got, or that it did not get them. After a denial, a toast says that the account does not
+      get access. The rules for `not_found`, `conflict` and the other errors are the same as for a member request.
+    - The buttons (`RequestActions.tsx`) and the texts (`memberRequests.ts`, `shareRequests.ts`) are the same on
+      the page of the account in **Admin › Members**.
   - While the events socket is connected, the page reads the list each minute only, as a net for
     a lost event. While it is not connected, the page reads the list each 4 seconds while the tab
     is visible, and on window focus.
@@ -1834,7 +1851,7 @@ dock Worker serves `index.html` for each app path, so a deep link works on reloa
 | `/chat` | Chat, without an open room |
 | `/chat/<rm_id>`, `/chat/<dm_id>` | One room, or one direct message |
 | `/chat/threads` | The Threads view: the threads that the person follows |
-| `/chat/activity` | The Activity feed: mentions, replies, reactions, pins, fired reminders, and the member requests for the agents that the person manages |
+| `/chat/activity` | The Activity feed: mentions, replies, reactions, pins, fired reminders, and the member requests and the share requests for the agents that the person manages |
 | `/chat/saved` | Saved messages and personal reminders |
 | `/chat/drafts` | Server-synced drafts and scheduled messages |
 | `/chat/search` | Search across rooms |
@@ -1862,7 +1879,7 @@ Each view uses one search query: Inbox `in:inbox`, Starred `is:starred`, Sent `i
 | [`src/features/drive/`](src/features/drive/) | Drive: the sidebar, the item list, the menus and dialogs (new folder, rename, move, share, versions, preview), the data hooks, the pure rules in `model.ts`, the upload queue in `uploadQueue.ts`, and the document header that the editors share |
 | [`src/features/docs/`](src/features/docs/) | Docs: the schema, the commands, the autosave, the paste of Markdown (`markdownPaste.ts`), the editor and the page. For images: the store of the images of a doc (`images.ts`), the geometry (`imageModel.ts`), the commands (`imageCommands.ts`), the view of an image (`imageView.ts`), the plugin for a drop and a paste (`imagePlugin.ts`), the toolbar and the dialogs |
 | [`src/features/sheets/`](src/features/sheets/) | Sheets: the store with the tabs and the save queue, the toolbar, the grid, the formula bar, the tab bar, and the pure modules for cell names, the selection, clipboard text, the cells of the grid, the formats of cells and the formulas of the Σ menu |
-| [`src/features/chat/`](src/features/chat/) | Chat: the sidebar, the room view, the dialogs (new room, public rooms, new direct message, members, name and topic), the message box with its toolbar, Markdown shortcuts and suggestions of a mention (`ChatComposer.tsx`, `composerSchema.ts`, `composerCommands.ts`), the files of a new message (`attachments.ts`, `ComposerFiles.tsx`, the drop in `fileDrop.ts`), the files and the link previews of a message (`MessageFiles.tsx`), the focus after the X of a chip (`focusAfterRemove.ts`), the data hooks, the pure rules in `model.ts`, the rules of mentions in `mentions.ts`, the part of the history that the page keeps in `history.ts`, the page reads in `pager.ts`, the last list of each room in `roomCache.ts`, the drafts in `drafts.ts`, the sends whose message the room has in `settle.ts`, the sync of the open room in `sync.ts`, and the texts and the buttons of a member request (`memberRequests.ts`, `MemberRequestActions.tsx`) |
+| [`src/features/chat/`](src/features/chat/) | Chat: the sidebar, the room view, the dialogs (new room, public rooms, new direct message, members, name and topic), the message box with its toolbar, Markdown shortcuts and suggestions of a mention (`ChatComposer.tsx`, `composerSchema.ts`, `composerCommands.ts`), the files of a new message (`attachments.ts`, `ComposerFiles.tsx`, the drop in `fileDrop.ts`), the files and the link previews of a message (`MessageFiles.tsx`), the focus after the X of a chip (`focusAfterRemove.ts`), the data hooks, the pure rules in `model.ts`, the rules of mentions in `mentions.ts`, the part of the history that the page keeps in `history.ts`, the page reads in `pager.ts`, the last list of each room in `roomCache.ts`, the drafts in `drafts.ts`, the sends whose message the room has in `settle.ts`, the sync of the open room in `sync.ts`, and the texts and the buttons of a member request and of a share request (`memberRequests.ts`, `shareRequests.ts`, `RequestActions.tsx`) |
 | [`src/features/people/`](src/features/people/) | The profile page of a person or an agent |
 | [`src/features/settings/`](src/features/settings/) | Settings, its side navigation, the password and two-step verification cards, the TOTP setup panel, the API key manager with the lifetime of a key (`ttl.ts`), the event check boxes, the webhook list of one target, and the one-time secret dialog |
 | [`src/lib/`](src/lib/) | The API client, the router, the dialog, the select, toasts, icons (with the Iconoir files in `iconoir/`), the appearance, format helpers, the names of the kinds of principals (`principalKind.ts`), the hook for the people and agents of the organization, the page chunks with the reload after a deploy, the upload of a file to Drive (`upload.ts`), the limit of the uploads and the small pictures that run at the same time (`limiter.ts`), and the small picture of a picture or a video (`filePreview.ts`) |

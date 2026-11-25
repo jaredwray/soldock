@@ -881,7 +881,7 @@ const AGENT_ACCESS = {
 
 /** What a grant changes on an agent or a service account, and the rule for an agent that shares. */
 const SHARE_AGENT = [
-	"When you manage the agent or the service account of principal_id, it also gets the drive scopes of the role that it does not hold: drive.read for a viewer, and also drive.write for an editor. You manage an agent when you are its sponsor, an owner or an admin, and your credential holds directory.write. Your credential must hold each scope that the agent gets.",
+	"When you manage the agent or the service account of principal_id, it also gets the drive scopes of the role that it does not hold: drive.read for a viewer, and also drive.write for an editor. You manage an agent when you are its sponsor, an owner or an admin, and your credential holds directory.write. Only an owner or an admin manages a service account. Your credential must hold each scope that the agent gets.",
 	"agent_access_changes has these changes. A grant gives no new scope to an agent that you do not manage: it uses the item with the scopes that it holds.",
 	"An agent or a service account cannot share an item with a different agent or service account: the call gets forbidden. It asks with drive.request_share, and a person who manages that account decides.",
 ].join(" ");
@@ -942,7 +942,7 @@ export const requestShare = defineOperation({
 	summary: "Ask a person to let you share an item with an agent or a service account",
 	description: [
 		"An agent or a service account cannot share an item with a different agent or service account. This call asks for it.",
-		"You must be able to share the item, as for drive.share_item: it is in your own drive, or you are a manager of its shared drive.",
+		"You must be able to share the item, as for drive.share_item: it is in your own drive.",
 		SHARE_DECIDER,
 		"That person gets the request in the activity list of Chat. After the approval, the account has the role of the request for the item.",
 		`A second call for the same item and account returns the same request, with the role of the first call. To see your requests, call drive.list_share_requests: a request that is not there is approved or denied, or its account is archived or deleted. One item has at most ${DRIVE_LIMITS.shareRequestsPerItem} requests at the same time.`,
@@ -971,7 +971,7 @@ export const listShareRequests = defineOperation({
 	summary: "List the requests to share an item with an agent or a service account",
 	description: [
 		"A request waits until a person approves or denies it. A person sees only the waiting requests for the accounts that the person manages now. Set principal_id to get the requests for one account.",
-		"An agent or a service account sees the requests that it made. A request for an account that is archived or deleted is in no list: nobody can decide it.",
+		"An agent or a service account sees the requests that it made. A request for an account that is archived or deleted is in no list: nobody can decide it. A list has at most 200 requests, the newest first.",
 	].join(" "),
 	http: { method: "GET", path: "/api/v1/drive/share-requests" },
 	scopes: ["drive.read"],
@@ -987,7 +987,7 @@ export const approveShareRequest = defineOperation({
 	summary: "Approve a request to share an item with an agent or a service account",
 	description: [
 		SHARE_DECIDER,
-		"Gives the account the role of the request for the item. The agent that asked must still be able to share the item: if not, the call gets conflict and the request goes away.",
+		"Gives the account the role of the request for the item. The agent that asked must still be able to share the item and hold drive.share: if not, the call gets conflict and the request goes away.",
 		"When your credential holds directory.write, the account also gets the drive scopes of the role that it does not hold: agent_access_changes has them. Your credential must hold each scope that the account gets.",
 		"Only one answer to a request succeeds: a call after a different answer gets not_found.",
 	].join(" "),

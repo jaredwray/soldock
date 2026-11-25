@@ -3,16 +3,16 @@
 > Status: **started**. The first end-to-end layer exists: folders, files with versions, docs and
 > sheets as items, the trash, stars, search, access for people and agents with roles, shared
 > drives with members, moves between drives, uploads in parts up to 1 GiB, streamed downloads, the
-> type of a file from its first bytes, small pictures for pictures and videos, and the grants of
-> rooms of Chat. Keep
+> type of a file from its first bytes, small pictures for pictures and videos, the grants of
+> rooms of Chat, and the requests of agents to share an item with an agent. Keep
 > this README current as the module grows. It is the module's contract.
 
 | | |
 | --- | --- |
 | **Purpose** | Drive backend: spaces (My Drive and shared drives), item tree, uploads/downloads, versions, trash, permissions and inheritance, link sharing, shared-with-me fan-out, previews, search, access checks for native items. |
-| **Owns** | `DriveSpaceDO` (items, versions, permissions, the grants of rooms of Chat, uploads in parts, trash, FTS, outbox, idempotency keys, the `user_state` of the owner: stars and the shared-with-me index, the members of a shared drive, and the state of the moves between drives); file bytes and small pictures in R2 `blobs`; the index of the shared drives in D1 (`shared_drives`, `shared_drive_members`). |
+| **Owns** | `DriveSpaceDO` (items, versions, permissions, the grants of rooms of Chat, uploads in parts, trash, FTS, outbox, idempotency keys, the `user_state` of the owner: stars and the shared-with-me index, the members of a shared drive, and the state of the moves between drives); file bytes and small pictures in R2 `blobs`; the index of the shared drives in D1 (`shared_drives`, `shared_drive_members`); the requests of agents to share an item with an agent in D1 (`drive_share_requests`). |
 | **Depends on** | `platform`, `identity`, `webhooks`, `collab` (the content of a doc or a sheet, for a copy), `api` (the call of a request on `/blob/` and `/dl/`). |
-| **Operations** | `drive.get_about`, `drive.list_items`, `drive.get_item`, `drive.create_folder`, `drive.upload_file`, `drive.upload_version`, `drive.download_file`, `drive.set_preview`, `drive.create_upload`, `drive.upload_part`, `drive.get_upload`, `drive.complete_upload`, `drive.abort_upload`, `drive.list_versions`, `drive.restore_version`, `drive.rename_item`, `drive.move_items`, `drive.copy_item`, `drive.star_items`, `drive.trash_items`, `drive.restore_items`, `drive.delete_items`, `drive.empty_trash`, `drive.list_permissions`, `drive.share_item`, `drive.unshare_item`, `drive.create_shared_drive`, `drive.list_shared_drives`, `drive.get_shared_drive`, `drive.update_shared_drive`, `drive.add_shared_drive_members`, `drive.remove_shared_drive_member`, `drive.delete_shared_drive`, `drive.move_to_drive`, `drive.create_webhook_subscription`, `drive.list_webhook_subscriptions`, `drive.delete_webhook_subscription` |
+| **Operations** | `drive.get_about`, `drive.list_items`, `drive.get_item`, `drive.create_folder`, `drive.upload_file`, `drive.upload_version`, `drive.download_file`, `drive.set_preview`, `drive.create_upload`, `drive.upload_part`, `drive.get_upload`, `drive.complete_upload`, `drive.abort_upload`, `drive.list_versions`, `drive.restore_version`, `drive.rename_item`, `drive.move_items`, `drive.copy_item`, `drive.star_items`, `drive.trash_items`, `drive.restore_items`, `drive.delete_items`, `drive.empty_trash`, `drive.list_permissions`, `drive.share_item`, `drive.request_share`, `drive.list_share_requests`, `drive.approve_share_request`, `drive.deny_share_request`, `drive.unshare_item`, `drive.create_shared_drive`, `drive.list_shared_drives`, `drive.get_shared_drive`, `drive.update_shared_drive`, `drive.add_shared_drive_members`, `drive.remove_shared_drive_member`, `drive.delete_shared_drive`, `drive.move_to_drive`, `drive.create_webhook_subscription`, `drive.list_webhook_subscriptions`, `drive.delete_webhook_subscription` |
 | **Transfers** | `PUT /blob/drive/{space_id}/uploads/{upload_id}/parts/{part_number}` (the raw bytes of `drive.upload_part`) and `GET /dl/drive/{space_id}/{item_id}` (the stream of `drive.download_file`). See [Uploads in parts](#uploads-in-parts) and [Downloads](#downloads). |
 | **Data inventory** | See [Data inventory](#data-inventory). Backups: not built yet. |
 
@@ -30,6 +30,8 @@ Public surface: `index.ts` only. Other domains must not import files from this f
 | `transfer.ts` | The two paths outside the registry: the raw part of an upload (`/blob/drive/…`) and the stream of a download (`/dl/drive/…`) |
 | `preview.ts` | `drive.set_preview`: the checks of a small picture, and its bytes in R2 |
 | `rooms.ts` | What Chat asks of Drive: the facts of the files of a new message, and the bytes of a file for a member of a room |
+| `share-request-handlers.ts` | `drive.share_item` and the requests of agents to share an item with an agent or a service account: the handlers in the Worker |
+| `share-requests.ts` | The reads and the writes of the table `drive_share_requests` in D1, and `liveShareRequestIds` for the activity list of Chat |
 
 ## Drives
 
@@ -286,6 +288,104 @@ This table is for a personal drive. A shared drive has no `owner`. Its roles are
   else. Nobody else sees it. A star can go away after the access ended.
 - A page of the `shared` or `starred` view can have fewer items than `limit`, because a pointer
   can give no item. `next_cursor` is still correct.
+
+### A grant for an agent
+
+`drive.share_item` gives a grant to a person, an agent or a service account. Two more rules apply when
+the grant is for an agent or a service account (`share-request-handlers.ts`).
+
+- **An agent does not share with an agent.** The caller is an agent or a service account, and the grant
+  is for a different agent or service account (`agentToAgent`). Then the call gets `forbidden`, and the
+  drive writes no grant. The agent asks with `drive.request_share`: see
+  [A request of an agent to share an item](#a-request-of-an-agent-to-share-an-item). An agent shares with
+  a person as before. A grant from before this rule stays.
+- **A manager of the agent gives the scopes.** A person who manages the agent gives it the drive scopes of
+  the role that it does not hold (`giveMemberAccess`). A viewer needs `drive.read`. An editor also needs
+  `drive.write` (`SHARED_DRIVE_ROLE_SCOPES` of the contracts). The rules of
+  [an agent as a member](#an-agent-as-a-member) apply:
+  - The caller is the sponsor of the agent, an owner or an admin (`canManageAgent`). Only an owner or an
+    admin manages a service account. The credential must hold `directory.write`.
+  - The credential must hold each scope that the agent gets (`assertMemberGrants`). If it does not, the
+    call gets `forbidden` before the drive writes the grant.
+  - The result has each change in `agent_access_changes`, and `agent_access_pending` names an agent that
+    did not get its scopes. A second call with the same role completes the scopes.
+- **A person who does not manage the agent** can give it a grant too. The agent gets no new scope. It
+  uses the item with the scopes that it holds.
+- **The order.** The handler finds the drive first (`openSpace`), and then the principal. An unknown
+  principal gets `not_found`. Then come the rule for an agent and the check of the scopes. The drive
+  writes the grant, and then the directory writes the scopes. The two writes are not one transaction.
+- **A lower role, and a remove.** The owner changes a grant from editor to viewer, or removes it with
+  `drive.unshare_item`. The account of the agent does not change in the two cases: it keeps its scopes.
+
+### A request of an agent to share an item
+
+An agent or a service account asks a person before it shares an item with a different agent or service
+account. The account that gets the grant reads the item, and all that a folder holds. So a person who
+manages that account must agree. The directory has the requests, as it has the
+[requests of the rooms of Chat](../chat/README.md#a-request-of-an-agent-to-add-an-agent). A request is
+about the access of an account, and its list goes across drives. The drive object still decides the
+grant.
+
+- **The request.** `drive.request_share` takes `space_id`, `item_id`, `principal_id` and `role`. Only an
+  agent or a service account calls it, with `drive.share` in its credential. The caller must be able to
+  share the item, as for `drive.share_item`, and the item must not be in the trash (`checkShare`).
+- **The order of the refusals.** The drive checks the item first. So a caller that cannot share the item
+  gets the same answer for each principal id. Then the handler checks the account.
+- **The account.** The account of the request is a different agent or service account that is not
+  archived. A request for a person, or for the caller itself, gets `invalid`: the caller uses
+  `drive.share_item` for them.
+- **One request.** An item has one request for one account (`drive_share_requests` in D1). A second call
+  for the same item and account returns that request with `created: false`. The request keeps the role
+  of the first call. An item has at most 20 requests that wait for an answer
+  (`DRIVE_LIMITS.shareRequestsPerItem`). The next one gets `conflict`. A new request first removes the
+  requests of the item for an account that is archived or deleted: nobody can decide them, so they must
+  not use a place.
+- **The name of the item.** `item_name` is the name of the item at the time of the request. A later
+  rename does not change it.
+- **The lists.** `drive.list_share_requests` returns the requests that wait, the newest first, at most
+  200. `principal_id` keeps the requests for one account.
+  - The sponsor of an agent gets the requests for that agent.
+  - An owner or an admin gets the requests for each agent and each service account.
+  - Only an owner or an admin gets the requests for a service account.
+  - An agent or a service account gets the requests that it made.
+  - A request for an account that is archived or deleted is in no list.
+- **Who decides.** `drive.approve_share_request` and `drive.deny_share_request` accept people only, with
+  `drive.share` in the credential. The caller must manage the account (`canManageAgent`): its sponsor, an
+  owner or an admin. Only an owner or an admin manages a service account. Each other caller gets
+  `not_found`.
+- **One answer.** The delete of the request is the decision. An approval and a denial each delete the
+  request first, and only the call that deletes it continues. A different answer at the same time gets
+  `not_found`. So a denied account never gets the grant.
+- **An approval.** After the delete, the drive writes the grant with the role of the request. The drive
+  writes it as the agent that asked, so the checks of a share by that agent apply. The agent that asked
+  must not be archived or deleted, its policy must still hold `drive.share`, and it must still be able
+  to share the item. If not, the call gets `conflict`, and the request is gone. For example, the item is
+  in the trash.
+- **The access of the account.** After the grant, `giveMemberAccess` gives the account the drive scopes of
+  the role that it does not hold, as for `drive.share_item`. The credential must hold `directory.write` for
+  that. The result has `agent_access_changes` and `agent_access_pending`. `assertMemberGrants` refuses
+  the call before the delete when the credential cannot give a scope.
+- **A failed write.** The drive or the directory can fail after the delete. Then the request is gone, and
+  the account can be without the grant or without its scopes. The agent asks again, or a person who
+  manages the account shares the item or sets its scopes.
+- **A denial.** `drive.deny_share_request` deletes the request. The account gets no grant.
+- **The activity item.** One person gets an item of the kind `share_request` in `chat.list_activity`
+  (`deciderOf` of `identity`). For an agent, that person is its sponsor. For a service account, that
+  person is its sponsor when the sponsor is an owner or an admin. If the account has no such person, the
+  owner of the organization gets the item.
+- **The fields of the item.** `room_id` is empty and `room_name` is null: the item is not about a room.
+  `message_id` has the id of the request, for the two answers. `actor` has the agent that asked,
+  `subject` has the account, and `item` has the drive, the item, the name of the item and the role. An
+  agent chose the name of the item and the name of each account, so the item has `untrusted: true`.
+- **The end of the item.** `chat.list_activity` keeps the item only while the request waits and the
+  person can still decide it (`liveShareRequestIds`). So the item goes away when the account is archived
+  or deleted, or when its sponsor changes. An approval and a denial delete the item. Each call of
+  `drive.request_share` sends the item again, to the person who decides now.
+- **A service account.** A grant for a service account goes into its activity log, from
+  `drive.share_item` and from `drive.approve_share_request`.
+- **Audit.** `drive.request_share` and `drive.approve_share_request` write an audit line with the target
+  `<item id>:<account id>:<role>`. `drive.deny_share_request` writes the target `<item id>:<account id>`.
+  A second call of `drive.request_share` for the same request writes no line.
 
 ## Shared drives
 
@@ -646,6 +746,8 @@ See the [webhook module](../webhooks/README.md).
   content from outside yet, so no output has `untrusted: true`. When mail attachments can go to
   Drive, such items must get the mark. `docs.copy_image` must then give the mark to the image that
   it makes from such a file.
+- The activity item of a [request to share an item](#a-request-of-an-agent-to-share-an-item) is output of
+  Chat, and it has `untrusted: true`: an agent chose the name of the item.
 - The images of a doc are not items of Drive. A doc can hold an image from a web address, which
   has the mark ([`docs`](../docs/README.md#an-image-from-a-web-address)).
 
@@ -675,6 +777,7 @@ See the [webhook module](../webhooks/README.md).
 | Where a moved item went | `DriveSpaceDO` table `moved`, in the source drive | The item id, the target drive and the time. Kept 30 days |
 | Items of a move that the target did not commit yet | `DriveSpaceDO` table `imports`, in the target drive | A copy of rows of the source, without the text for the search index. Deleted at the commit, at a refusal, when the source stops the move, or after 30 days. The record of a commit (`seq` -1) is kept 30 days |
 | Index of the shared drives (a copy for the lists) | D1 `DIRECTORY`, tables `shared_drives` and `shared_drive_members` | Rebuildable from the objects. Migration `0012_shared_drives.sql` |
+| The requests of agents to share an item with an agent or a service account | D1 `DIRECTORY` table `drive_share_requests` | One row for each request that waits for a person: the id (`srq_…`), the drive (`space_id`), the item, the name of the item at the time of the request, the account that gets the grant (`principal_id`), the agent that asked (`requested_by`), the role, the person who got the activity item (`notified_id`, or null) and the time. One row for each item and account. An approval and a denial delete the row. Not rebuildable: no other store has a request. Migration `0031_drive_share_requests.sql` |
 | File bytes | R2 `blobs`, key `drive/<space id>/<item id>/<version id>` | One owner for each object: the version in its key. An upload in parts writes the same key |
 
 Blob reference counts: each object has exactly one owner, the version row with its key. A copy
@@ -691,7 +794,8 @@ in case R2 joined the parts before the drive refused the file.
 
 A directory reset gives each new account a new principal id, and thus a new, empty drive. The
 drives of the old accounts stay in storage. No account can open them. The reset also drops the
-index of the shared drives, so no account can open a shared drive from before.
+index of the shared drives, so no account can open a shared drive from before. It also drops
+`drive_share_requests` and makes it again, empty: the requests name the principals from before.
 
 Backups: not built yet. Originals also come with Takeout.
 
@@ -712,6 +816,7 @@ Backups: not built yet. Originals also come with Takeout.
 | Page size | 100 (default 50) | |
 | Search query | 500 characters, 20 words | |
 | Members of one shared drive | 100 | `SHARED_DRIVE_LIMITS.members` |
+| Requests to share one item that wait for an answer | 20 | `DRIVE_LIMITS.shareRequestsPerItem` |
 | Name of a shared drive | 100 characters, no control characters | |
 | Items in one move between drives | 1,000 | `SHARED_DRIVE_LIMITS.moveItems` |
 | One run of a move between drives | 20 seconds, 400 calls to R2 and to the target | The subrequest limit of one invocation. The alarm continues |

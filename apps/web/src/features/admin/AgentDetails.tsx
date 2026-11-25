@@ -9,9 +9,9 @@ import { useSession } from "../auth/session.tsx";
 import { ApiKeyManager } from "../settings/ApiKeys.tsx";
 import { TargetWebhooks } from "../settings/TargetWebhooks.tsx";
 import { WEBHOOK_DOMAINS } from "../settings/webhookModel.ts";
+import { AccountRequests } from "./AccountRequests.tsx";
 import { AgentAccess } from "./AgentAccess.tsx";
 import { AgentPermissions } from "./AgentPermissions.tsx";
-import { MemberRequests } from "./MemberRequests.tsx";
 import { OAuthGrants } from "./OAuthGrants.tsx";
 import {
 	draftAfterPolicyChange,
@@ -91,7 +91,7 @@ export function AgentDetails({ agent, sponsor, principals, canReadMail, showSpon
 				note={`A key lets a script or an MCP client without OAuth act as ${agent.display_name}. It has the permissions of the agent, and its own lifetime.`}
 				onChange={reload}
 			/>
-			<MemberRequests account={agent} principals={principals} onApproved={reload} />
+			<AccountRequests account={agent} principals={principals} onApproved={reload} />
 			<AgentAccess agent={agent} access={access} error={error} onRetry={reload} />
 		</>
 	);

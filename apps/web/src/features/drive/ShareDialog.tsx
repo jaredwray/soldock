@@ -1,14 +1,17 @@
 import type { DriveItem, Permission, Principal } from "@asterra/contracts";
 import { type FormEvent, type ReactNode, useCallback, useEffect, useId, useMemo, useState } from "react";
+import { shareAccessText } from "../../lib/accessChange.ts";
 import { api, errorMessage } from "../../lib/api.ts";
 import { Dialog } from "../../lib/Dialog.tsx";
 import { initials } from "../../lib/format.ts";
 import { Icon } from "../../lib/icons.tsx";
 import { kindTag } from "../../lib/principalKind.ts";
 import { Select } from "../../lib/Select.tsx";
+import { useToast } from "../../lib/toast.tsx";
 import { principalOption } from "../../lib/usePrincipals.ts";
 import { isSharedDriveId } from "../../routes.ts";
 import { useSession } from "../auth/session.tsx";
+import { shareRoleVerb } from "../chat/shareRequests.ts";
 import { usePrincipals } from "./data.ts";
 import { canShare, linkPath, SHARED_DRIVE_ICON, spaceInput } from "./model.ts";
 
@@ -44,6 +47,7 @@ interface Access {
 export function ShareDialog({ item, onClose, onChanged }: ShareDialogProps) {
 	const ownId = useSession().whoami.principal.id;
 	const principals = usePrincipals();
+	const toast = useToast();
 	const [access, setAccess] = useState<Access | null>(null);
 	const [loadError, setLoadError] = useState<string | null>(null);
 	const [error, setError] = useState<string | null>(null);
@@ -100,6 +104,22 @@ export function ShareDialog({ item, onClose, onChanged }: ShareDialogProps) {
 		}
 	}
 
+	/**
+	 * Gives a principal a role on the item. An agent that the person manages also gets the Drive scopes of the
+	 * role that it does not hold. A toast tells these scopes, because they apply to the whole account.
+	 */
+	async function share(targetId: string, newRole: GrantRole) {
+		const result = await api.call("drive.share_item", {
+			...space,
+			item_id: item.id,
+			principal_id: targetId,
+			role: newRole,
+		});
+		const name = byId.get(targetId)?.display_name ?? "The agent";
+		const access = shareAccessText(result, () => name, "Share it again.");
+		if (access) toast({ message: `${name} can now ${shareRoleVerb(newRole)} “${item.name}”.${access}` });
+	}
+
 	function add(event: FormEvent<HTMLFormElement>) {
 		event.preventDefault();
 		if (!principalId) {
@@ -107,7 +127,7 @@ export function ShareDialog({ item, onClose, onChanged }: ShareDialogProps) {
 			return;
 		}
 		void change(async () => {
-			await api.call("drive.share_item", { ...space, item_id: item.id, principal_id: principalId, role });
+			await share(principalId, role);
 			setPrincipalId("");
 		});
 	}
@@ -227,16 +247,7 @@ export function ShareDialog({ item, onClose, onChanged }: ShareDialogProps) {
 												value={permission.role}
 												options={ROLE_OPTIONS}
 												disabled={busy}
-												onChange={(role) =>
-													void change(() =>
-														api.call("drive.share_item", {
-															...space,
-															item_id: item.id,
-															principal_id: permission.principal_id,
-															role,
-														}),
-													)
-												}
+												onChange={(role) => void change(() => share(permission.principal_id, role))}
 											/>
 											<button
 												type="button"

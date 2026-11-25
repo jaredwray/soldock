@@ -16,7 +16,7 @@ runtime-agnostic (no Workers, DOM or Node APIs).
 | `src/mcp-events.ts` | The events of MCP Events: `mcpEventList` has, for each webhook event, its description, the schema of its arguments and the schema of its `data`. Also `MCP_EVENT_LIMITS`. `events/subscribe` is a method of the MCP protocol, so it is not an operation |
 | `src/mail.ts`, `src/directory.ts` | The operations of each domain, with their schemas and limits (`MAIL_LIMITS`). `mail.ts` also has the mail subscription operations |
 | `src/team-mailboxes.ts` | The team mailbox operations, and the scopes of a member in a team mailbox (`MAILBOX_MEMBER_SCOPES`, `mailboxMemberScopes`) |
-| `src/drive.ts` | The Drive operations, also for shared drives; the item, permission, version, shared drive and member schemas; the roles; `DRIVE_LIMITS` and `SHARED_DRIVE_LIMITS` |
+| `src/drive.ts` | The Drive operations, also for shared drives; the item, permission, version, shared drive and member schemas; the roles; the request of an agent to share an item with an agent or a service account (`DriveShareRequest`); `DRIVE_LIMITS` and `SHARED_DRIVE_LIMITS` |
 | `src/docs.ts` | The Docs operations, and `DocContent`: the block tree of a doc, with its limits (`DOC_LIMITS`) |
 | `src/markdown.ts` | `markdownToDoc` and `docToMarkdown`: the Markdown form of `DocContent`. The server reads and writes Markdown with it for Docs and Chat, and the web app reads pasted Markdown with it. [`docs`](../../apps/dock/src/docs/README.md#markdown) describes the Markdown, and has the tests |
 | `src/sheets.ts` | The Sheets operations, the cell, format and tab schemas, the rules for a format patch and the text of a formatted number, the error values and `SHEET_LIMITS` |
@@ -25,7 +25,7 @@ runtime-agnostic (no Workers, DOM or Node APIs).
 | `src/oauth.ts` | The OAuth approval and connection operations, `OAuthAuthorization`, `OAuthGrant` and `OAUTH_LIMITS`. The `/oauth/*` routes create credentials for a client without one, so they are not operations |
 | `src/errors.ts` | The error catalogue: code → HTTP status and title |
 | `src/scopes.ts` | The scope catalogue, and `AGENT_SCOPES`, the most that an agent can hold. Each API key and each OAuth connection of an agent has the scopes of the agent |
-| `src/agent-access.ts` | `AgentAccessChange`: the scopes that a membership gave to an agent or a service account (`principal_id`, `scopes_added`) |
+| `src/agent-access.ts` | `AgentAccessChange`: the scopes that a membership or a grant on a Drive item gave to an agent or a service account (`principal_id`, `scopes_added`) |
 | `src/domains.ts` | The domain schema and admin operations to list, add, and remove mail domains |
 | `src/setup.ts` | The schemas of setup (`/auth/setup`), including the first `mail_domain`. Token verification (`POST /auth/setup/verify`) returns `SetupVerifyResult`, the directory state. Setup creates a credential, so it is not an operation |
 | `src/signin.ts` | The schemas and limits of sign-in with a password and an optional TOTP code (`/auth/session`): `Password`, `TotpCode`, `SignInInput`, `SignInResult`. Sign-in creates a credential, so it is not an operation |

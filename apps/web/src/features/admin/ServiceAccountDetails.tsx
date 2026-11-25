@@ -2,10 +2,10 @@ import type { Principal } from "@asterra/contracts";
 import { useState } from "react";
 import { fullDate, shortDate } from "../../lib/format.ts";
 import { ApiKeyManager } from "../settings/ApiKeys.tsx";
+import { AccountRequests } from "./AccountRequests.tsx";
 import { AgentAccess } from "./AgentAccess.tsx";
 import { PolicyForm } from "./AgentDetails.tsx";
 import { AgentPermissions } from "./AgentPermissions.tsx";
-import { MemberRequests } from "./MemberRequests.tsx";
 import { ServiceAccountActivity } from "./ServiceAccountActivity.tsx";
 import { useAgentAccess } from "./useAgentAccess.ts";
 
@@ -73,7 +73,7 @@ export function ServiceAccountDetails({ account, principals, onChanged }: Servic
 				people={principals}
 				onChange={changed}
 			/>
-			<MemberRequests account={account} principals={principals} onApproved={changed} />
+			<AccountRequests account={account} principals={principals} onApproved={changed} />
 			<AgentAccess agent={account} access={access} error={error} onRetry={reload} />
 			<ServiceAccountActivity account={account} principals={principals} version={version} />
 		</>
