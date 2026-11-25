@@ -5,6 +5,7 @@ import {
 	type AuthContext,
 	authenticate,
 	credentialRef,
+	holdsForResource,
 	isSameOrigin,
 	recordSocketOpen,
 	refusedOutcome,
@@ -43,7 +44,8 @@ export async function openRoomSocket(
 		},
 		credential: credentialRef(caller),
 		feed: options.feed,
-		canType: caller.scopes.has("chat.write"),
+		// The room also checks the membership of the caller: a member without chat.write never types.
+		canType: holdsForResource(caller, "chat.write", true),
 	};
 	const response = await env.CHAT_ROOM.get(env.CHAT_ROOM.idFromName(roomId)).fetch("https://room.internal/socket", {
 		headers: { upgrade: "websocket", [SOCKET_HEADER]: encodeURIComponent(JSON.stringify(open)) },
@@ -82,7 +84,8 @@ export function mountChatSocket(app: Hono<SocketEnv>): void {
 			if (!READ_OPERATION.callers.includes(caller.kind)) {
 				throw new OperationError("forbidden", `${CALLER_NAMES[caller.kind]} cannot open a room socket.`);
 			}
-			const missing = READ_OPERATION.scopes.filter((scope) => !caller.scopes.has(scope));
+			// For an agent, the membership of the room decides: the object of the room checks it.
+			const missing = READ_OPERATION.scopes.filter((scope) => !holdsForResource(caller, scope, true));
 			if (missing.length > 0) {
 				throw new OperationError("forbidden", `The credential does not have the scope ${missing.join(", ")}.`);
 			}

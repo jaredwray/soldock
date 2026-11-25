@@ -7,7 +7,6 @@ import {
 } from "cloudflare:test";
 import { env, exports } from "cloudflare:workers";
 import {
-	AGENT_SCOPES,
 	ALL_SCOPES,
 	ApiError,
 	CHAT_SOCKET_PROTOCOL,
@@ -144,18 +143,29 @@ export async function setupOwner(address = "owner@dock.test"): Promise<Actor> {
 }
 
 /**
- * Creates a principal as `admin` and returns it with a key. An agent gets its first key, and each agent scope
- * when the input names no scopes. A person gets no key at creation, so `admin` then creates a key with every
+ * Sets the account scopes of an agent or a service account in the directory, as an account from before
+ * migration 0033 can have them: nothing in Asterra writes them after the creation of an account. They limit its
+ * own mailbox, its own drive and the actions without a resource.
+ */
+export async function setLegacyScopes(principalId: string, scopes: readonly string[]): Promise<void> {
+	const result = await env.DIRECTORY.prepare("UPDATE principals SET agent_scopes = ? WHERE id = ? AND kind = 'agent'")
+		.bind(JSON.stringify(scopes), principalId)
+		.run();
+	if (result.meta.changes !== 1) throw new Error(`no agent ${principalId}`);
+}
+
+/**
+ * Creates a principal as `admin` and returns it with a key. An agent gets its first key and each scope of its
+ * kind, as each new agent does. `legacyScopes` then gives it the narrower account scopes of an agent from before
+ * migration 0033 (`setLegacyScopes`). A person gets no key at creation, so `admin` then creates a key with every
  * human scope for the person.
  */
 export async function createActor(
 	admin: Actor,
-	input: InputOf<"directory.create_principal">,
+	{ legacyScopes, ...input }: InputOf<"directory.create_principal"> & { legacyScopes?: readonly string[] },
 ): Promise<Actor & { sponsorId: string | null }> {
-	const { principal, api_key: firstKey } = await admin.call(
-		"directory.create_principal",
-		input.kind === "agent" ? { ...input, scopes: input.scopes ?? [...AGENT_SCOPES] } : input,
-	);
+	const { principal, api_key: firstKey } = await admin.call("directory.create_principal", input);
+	if (legacyScopes) await setLegacyScopes(principal.id, legacyScopes);
 	const secret =
 		firstKey?.secret ??
 		(

@@ -53,7 +53,7 @@ import {
 	soundListeners,
 	viewsRoom,
 } from "./socket-presence.ts";
-import { getPrincipal, type PrincipalRecord } from "./store.ts";
+import { getPrincipal } from "./store.ts";
 
 // Each person, agent and service account has one PrincipalDO. It holds their room state, notification
 // settings, registered push devices and events sockets, and the activity log of a service account. Its
@@ -220,11 +220,7 @@ export interface EventsSocketOpen {
 export const EVENTS_SOCKET_HEADER = "x-soldock-events-socket";
 
 /** A credential that stopped: a session or a key by its id, or each token of an OAuth connection. */
-export type EndedCredential =
-	| { kind: CredentialRef["kind"]; id: string }
-	| { grantId: string }
-	/** Each API key and each OAuth token of the principal: the scopes of an agent changed. */
-	| { agentAccess: true };
+export type EndedCredential = { kind: CredentialRef["kind"]; id: string } | { grantId: string };
 
 /**
  * Tells the object of a principal that a credential stopped, so its events sockets close at once. A
@@ -242,15 +238,6 @@ export async function endEventSockets(
 			error: error instanceof Error ? error.message : String(error),
 		});
 	}
-}
-
-/**
- * True when an agent lost the access to post a scheduled message: the scopes of an agent can change after it
- * scheduled the message. The send needs the scope that a new schedule needs now: `chat.write`. A person
- * keeps the access.
- */
-function lostScheduleAccess(principal: PrincipalRecord): boolean {
-	return principal.kind === "agent" && !principal.agent_scopes.includes("chat.write");
 }
 
 /** The object checks the credential of a socket again when its last check is this old. */
@@ -1002,21 +989,13 @@ export class PrincipalDO extends DurableObject<Env> {
 
 	/**
 	 * Closes each socket of a credential that stopped, with `ended`: a session that signed out, a
-	 * revoked key, or each token of a revoked OAuth connection. For an agent whose scopes or limits changed,
-	 * it closes each socket of a key or an OAuth token with `reconnect`: the credential still works, and the
-	 * client opens a new socket with the new access. Returns the number of closed sockets.
+	 * revoked key, or each token of a revoked OAuth connection. Returns the number of closed sockets.
 	 */
 	endSockets(match: EndedCredential): number {
 		let ended = 0;
 		for (const socket of this.ctx.getWebSockets()) {
 			const credential = (socket.deserializeAttachment() as EventsSocketState | null)?.credential;
 			if (!credential) continue;
-			if ("agentAccess" in match) {
-				if (credential.kind !== "api_key" && credential.kind !== "oauth") continue;
-				this.end(socket, EVENTS_SOCKET_CLOSE.reconnect, "The access of the agent changed. Open a new socket.");
-				ended += 1;
-				continue;
-			}
 			const hit =
 				"grantId" in match
 					? credential.grantId === match.grantId
@@ -1309,13 +1288,8 @@ export class PrincipalDO extends DurableObject<Env> {
 					}
 					continue;
 				}
-				if (lostScheduleAccess(checked.principal)) {
-					if (this.personal.claimScheduledForSend(item.id, item.send_at, item.text, item.body_json, now)) {
-						this.personal.markScheduledFailed(item.id, "The agent no longer has the access to post this message.");
-						events.push({ type: "chat.scheduled", scheduled_id: item.id, room_id: item.room_id });
-					}
-					continue;
-				}
+				// The room checks the membership of the sender when it posts: a member without chat.write gets
+				// forbidden, and the message fails.
 				actor = {
 					principal_id: checked.principal.id,
 					kind: checked.principal.kind,
@@ -1325,14 +1299,9 @@ export class PrincipalDO extends DurableObject<Env> {
 				// A message from before the credential binding. A deleted principal has no record.
 				const found = await getPrincipal(this.env.DIRECTORY, item.principal_id);
 				const principal = found?.archived_at === null ? found : null;
-				if (!principal || lostScheduleAccess(principal)) {
+				if (!principal) {
 					if (this.personal.claimScheduledForSend(item.id, item.send_at, item.text, item.body_json, now)) {
-						this.personal.markScheduledFailed(
-							item.id,
-							principal
-								? "The agent no longer has the access to post this message."
-								: "Principal is archived or deleted.",
-						);
+						this.personal.markScheduledFailed(item.id, "Principal is archived or deleted.");
 						events.push({ type: "chat.scheduled", scheduled_id: item.id, room_id: item.room_id });
 					}
 					continue;

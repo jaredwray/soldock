@@ -374,14 +374,10 @@ describe("a room socket", () => {
 	});
 
 	it("requires write access to announce typing and checks the sender again after revocation", async () => {
-		// The scopes are on the agent: a reader agent holds only chat.read.
-		const reader = await createActor(owner, {
-			kind: "agent",
-			display_name: "Reader",
-			address: "reader@dock.test",
-			scopes: ["chat.read"],
-		});
+		// The membership of the room decides: a reader agent has only chat.read in the room.
+		const reader = await createActor(owner, { kind: "agent", display_name: "Reader", address: "reader@dock.test" });
 		const room = await privateRoom(ada, [bot.id, reader.id]);
+		await ada.call("chat.set_member_scopes", { room_id: room.id, principal_id: reader.id, scopes: ["chat.read"] });
 		const { api_key: writer } = await ada.call("account.create_api_key", { principal_id: bot.id, label: "Write" });
 		vi.useFakeTimers({ toFake: ["Date"] });
 		const viewer = await connect(room.id, bearer(ada.key));

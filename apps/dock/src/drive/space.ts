@@ -674,6 +674,20 @@ const MIGRATIONS: string[][] = [
 	["ALTER TABLE permissions ADD COLUMN resource INTEGER NOT NULL DEFAULT 0"],
 ];
 
+/** The key in `meta` of the one-time step `narrowAgentAccess`. */
+const AGENT_ACCESS_KEY = "agent_access_narrowed";
+
+/** The account scopes of an agent from the directory. A value that is not a list of strings gives no scope. */
+function parseScopeList(stored: string | null): string[] {
+	if (stored === null) return [];
+	try {
+		const list: unknown = JSON.parse(stored);
+		return Array.isArray(list) ? list.filter((entry): entry is string => typeof entry === "string") : [];
+	} catch {
+		return [];
+	}
+}
+
 const OUTBOX_MAX_ATTEMPTS = 8;
 const OUTBOX_BATCH = 50;
 const IDEMPOTENCY_TTL_MS = 24 * 60 * 60 * 1000;
@@ -849,6 +863,8 @@ export class DriveSpaceDO extends DurableObject<Env> {
 		this.sql = ctx.storage.sql;
 		ctx.blockConcurrencyWhile(async () => {
 			this.migrate();
+			// Before the first call after the deploy that made the memberships decide the access of agents.
+			await this.narrowAgentAccess();
 			// A change sets the alarm after its transaction commits. If the object stopped between the
 			// two, the outbox has rows and no alarm: set one now. A move that is not complete also needs one.
 			const pending =
@@ -864,6 +880,8 @@ export class DriveSpaceDO extends DurableObject<Env> {
 	private migrate(): void {
 		this.sql.exec("CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)");
 		const current = Number(this.meta("schema_version") ?? 0);
+		// A new drive has each membership and share from after the deploy of `narrowAgentAccess`.
+		if (current === 0) this.setMeta(AGENT_ACCESS_KEY, "1");
 		for (let version = current; version < MIGRATIONS.length; version++) {
 			this.ctx.storage.transactionSync(() => {
 				for (const statement of MIGRATIONS[version] ?? []) this.sql.exec(statement);
@@ -871,6 +889,70 @@ export class DriveSpaceDO extends DurableObject<Env> {
 				if (version === 0) this.setMeta("version", "0");
 			});
 		}
+	}
+
+	/**
+	 * A step that runs one time in each drive, before its first call after the deploy that made the memberships
+	 * and the shares decide the access of agents (D1 migration 0033). Before that deploy, a call of an agent or a
+	 * service account needed the drive scope in its account too. So each agent keeps only what it could do
+	 * before, in the members of a shared drive and in the grants of items:
+	 * - Without `drive.read` on its account, it could not read the drive. Its membership and its grants go,
+	 *   because each role reads.
+	 * - Without `drive.write`, it could only read. An editor becomes a viewer.
+	 *
+	 * A grant for a single item (`resource = 1`) stays as it is. A person gave it under the rules of single items,
+	 * and it opened the item without the drive scopes before this step. Only a grant from before has `resource = 0`.
+	 *
+	 * An agent is never a manager. A drive without members or grants reads nothing. Nothing writes the account
+	 * scopes after the deploy, so a drive that wakes later gets the same result. A failed read of the directory
+	 * throws: the drive then does not serve, and the next call tries again.
+	 */
+	private async narrowAgentAccess(): Promise<void> {
+		if (this.meta(AGENT_ACCESS_KEY) !== null) return;
+		const ids = this.all<{ principal_id: string }>(
+			"SELECT principal_id FROM members UNION SELECT principal_id FROM permissions",
+		).map((row) => row.principal_id);
+		const accounts = new Map<string, string[]>();
+		if (ids.length > 0) {
+			const { results } = await this.env.DIRECTORY.prepare(
+				`SELECT p.id, p.agent_scopes FROM principals p JOIN json_each(?) wanted ON wanted.value = p.id
+				WHERE p.kind = 'agent'`,
+			)
+				.bind(JSON.stringify(ids))
+				.all<{ id: string; agent_scopes: string | null }>();
+			for (const row of results) accounts.set(row.id, parseScopeList(row.agent_scopes));
+		}
+		this.ctx.storage.transactionSync(() => {
+			let changed = false;
+			for (const [principalId, scopes] of accounts) {
+				if (scopes.includes("drive.read") && scopes.includes("drive.write")) continue;
+				const grants = this.all<{ item_id: string; role: string; created_at: number }>(
+					"SELECT item_id, role, created_at FROM permissions WHERE principal_id = ? AND resource = 0",
+					principalId,
+				);
+				const member = this.memberRole(principalId);
+				if (!scopes.includes("drive.read")) {
+					this.sql.exec("DELETE FROM permissions WHERE principal_id = ? AND resource = 0", principalId);
+					for (const grant of grants) this.enqueue("unshare", principalId, { itemId: grant.item_id });
+					if (member !== null) {
+						this.sql.exec("DELETE FROM members WHERE principal_id = ?", principalId);
+						this.touch(`member:${principalId}`);
+					}
+				} else {
+					this.sql.exec("UPDATE permissions SET role = 'viewer' WHERE principal_id = ? AND resource = 0", principalId);
+					for (const grant of grants.filter((entry) => entry.role !== "viewer")) {
+						this.enqueue("share", principalId, { itemId: grant.item_id, role: "viewer", sharedAt: grant.created_at });
+					}
+					if (member !== null && member !== "viewer") {
+						this.sql.exec("UPDATE members SET role = 'viewer' WHERE principal_id = ?", principalId);
+						this.touch(`member:${principalId}`);
+					}
+				}
+				changed ||= grants.length > 0 || member !== null;
+			}
+			if (changed) this.bump();
+			this.setMeta(AGENT_ACCESS_KEY, "1");
+		});
 	}
 
 	private meta(key: string): string | null {
@@ -970,8 +1052,8 @@ export class DriveSpaceDO extends DurableObject<Env> {
 			return { role: member, parentVisible: true, visibleDepth: WALK_LIMIT };
 		}
 		if (item.trash_root !== null) return null;
-		// A call with `grantOnly` counts only the grants for single items. A grant from before them stays as it was:
-		// it works only for a caller that holds the drive scopes.
+		// A call with `grantOnly` counts only the grants for single items. Each other call also counts a grant from
+		// before them: `narrowAgentAccess` kept such a grant of an agent only as far as its drive scopes reached.
 		const grants = this.all<{ role: "editor" | "viewer"; depth: number }>(
 			`${UP} SELECT p.role AS role, up.depth AS depth FROM up JOIN permissions p ON p.item_id = up.id
 			WHERE p.principal_id = ?2 AND (?3 = 0 OR p.resource = 1)`,

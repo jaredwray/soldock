@@ -15,6 +15,7 @@ import {
 	racing,
 	request,
 	seedOrg,
+	setLegacyScopes,
 	withEnv,
 } from "./helpers.ts";
 
@@ -36,14 +37,17 @@ const UNKNOWN_PRINCIPAL = "prn_01JD0000000000000000000000";
 const UNKNOWN_REQUEST = "srq_01JD0000000000000000000000";
 const DRIVE_AGENT: Scope[] = ["account.read", "drive.read", "drive.write", "drive.share"];
 
-/** A new agent that Ada sponsors. Without `scopes`, it holds no drive scope. */
+/**
+ * A new agent that Ada sponsors, with the account scopes of an agent from before the memberships decided
+ * (`setLegacyScopes`). Without `scopes`, it holds no drive scope, so only a grant or a membership opens an item.
+ */
 const newAgent = (name: string, scopes: Scope[] = ["account.read"]) =>
 	createActor(owner, {
 		kind: "agent",
 		display_name: name,
 		address: `${name.toLowerCase()}@dock.test`,
 		sponsor_id: ada.id,
-		scopes: scopes as never,
+		legacyScopes: scopes,
 	});
 
 const newPerson = (name: string, role: "member" | "admin" = "member") =>
@@ -61,8 +65,8 @@ async function newService(name: string, sponsor: Actor = owner, scopes: Scope[] 
 		display_name: name,
 		address: `${name.toLowerCase()}@dock.test`,
 		sponsor_id: sponsor.id,
-		scopes: scopes as never,
 	});
+	await setLegacyScopes(principal.id, scopes);
 	const { api_key } = await owner.call("account.create_api_key", { principal_id: principal.id, label: name });
 	return { id: principal.id, address: principal.address, key: api_key.secret, call: api(api_key.secret) };
 }
@@ -216,15 +220,20 @@ describe("drive.share_item with an agent", () => {
 	});
 
 	// A grant from before the grants for single items worked only for an agent that held the drive scopes. The
-	// change must not open such a grant for an agent without them. A grant that worked must keep working.
-	it("keeps a grant from before the grants for single items as it was, until a person shares the item again", async () => {
+	// change must not open such a grant for an agent without them. A grant that worked must keep working. A drive
+	// from before also runs the step that narrows the access of agents (`narrowAgentAccess`), and a grant for a
+	// single item stays as it is.
+	it("keeps a grant from before the grants for single items only as far as it worked, until a person shares the item again", async () => {
 		const helper = await newAgent("Helper");
 		const worker = await newAgent("Worker", ["account.read", "drive.read", "drive.write"]);
+		const reader = await newAgent("Reader");
 		const file = await upload(ada, "budget.txt");
+		const kept = await upload(ada, "kept.txt");
 		for (const account of [helper, worker]) {
 			await ada.call("drive.share_item", { item_id: file.id, principal_id: account.id, role: "editor" });
 		}
-		// Back to the schema before the column: the migration then gives each grant `resource = 0`, as at the deploy.
+		// Back to the schema before the column, and before the step: the migration then gives each grant
+		// `resource = 0`, as at the deploy, and the step runs.
 		const drive = env.DRIVE_SPACE.get(env.DRIVE_SPACE.idFromName(ada.id));
 		await runInDurableObject(drive, (_instance, state) => {
 			const version = state.storage.sql
@@ -235,24 +244,29 @@ describe("drive.share_item with an agent", () => {
 				"UPDATE meta SET value = ? WHERE key = 'schema_version'",
 				String(Number(version.value) - 1),
 			);
+			state.storage.sql.exec("DELETE FROM meta WHERE key = 'agent_access_narrowed'");
+		});
+		await evictDurableObject(drive);
+		// A grant for a single item from after the column, before the step: the step keeps it.
+		await ada.call("drive.share_item", { item_id: kept.id, principal_id: reader.id, role: "editor" });
+		await runInDurableObject(drive, (_instance, state) => {
+			state.storage.sql.exec("DELETE FROM meta WHERE key = 'agent_access_narrowed'");
 		});
 		await evictDurableObject(drive);
 		const at = { space_id: ada.id, item_id: file.id };
-		const write = (account: Actor, text: string) =>
-			account.call("drive.upload_version", { ...at, content_base64: base64(text) });
+		const write = (account: Actor, text: string, item = at) =>
+			account.call("drive.upload_version", { ...item, content_base64: base64(text) });
 
-		// The agent without drive scopes cannot use the old grant. The grant stays, and its role stays.
+		// The agent without drive scopes could not use the old grant, so the step removes it.
 		expect(await codeOf(helper.call("drive.get_item", at))).toBe("not_found");
 		expect(await codeOf(write(helper, "v2"))).toBe("not_found");
-		expect(new Set(await grantsOf(ada, file.id))).toEqual(
-			new Set([
-				[helper.id, "editor"],
-				[worker.id, "editor"],
-			]),
-		);
+		expect(await grantsOf(ada, file.id)).toEqual([[worker.id, "editor"]]);
 		// The agent with the drive scopes uses its old grant as before.
 		expect((await worker.call("drive.get_item", at)).item).toMatchObject({ role: "editor" });
 		await write(worker, "v2");
+		// The grant for a single item stays, with its role.
+		await write(reader, "k2", { space_id: ada.id, item_id: kept.id });
+		expect(await grantsOf(ada, kept.id)).toEqual([[reader.id, "editor"]]);
 
 		// A person shares the item again: the grant is now for this item, and it opens the item.
 		await ada.call("drive.share_item", { item_id: file.id, principal_id: helper.id, role: "editor" });
@@ -622,8 +636,11 @@ describe("a request of an agent to share an item with an agent", () => {
 			[
 				"the agent that asked loses drive.share",
 				async () => {
-					const scopes = (await scopesOf(bot.id)).filter((scope): scope is Scope => scope !== "drive.share");
-					await owner.call("directory.set_agent_access", { principal_id: bot.id, scopes });
+					// Nothing changes the account scopes now. An account from before can lack drive.share.
+					await setLegacyScopes(
+						bot.id,
+						(await scopesOf(bot.id)).filter((scope) => scope !== "drive.share"),
+					);
 				},
 			],
 			// The last stop: the bot makes no request after it.

@@ -2,17 +2,13 @@ import {
 	DRIVE_LIMITS,
 	driveDownloadPath,
 	type OperationName,
-	SHARED_DRIVE_ROLE_SCOPES,
 	type SharedDrive,
 	type SharedDriveMember,
 } from "@asterra/contracts";
 import { type AttachmentRecord, attachmentKey, documentStub } from "../collab/index.ts";
 import {
-	accessOutput,
-	assertMemberGrants,
 	type CallContext,
 	getPrincipals,
-	giveMemberAccess,
 	isAdmin,
 	recordServiceMemberships,
 	unknownPrincipalIds,
@@ -30,6 +26,7 @@ import {
 import { loseDriveAccess } from "../webhooks/store.ts";
 import {
 	accept,
+	actorOf,
 	auditOk,
 	blobKeyFor,
 	idempotencyOf,
@@ -47,6 +44,7 @@ import { setPreview, toVersion } from "./preview.ts";
 import { chatFolderFor } from "./rooms.ts";
 import { driveShareRequestHandlers } from "./share-request-handlers.ts";
 import { listSharedDriveRows, serviceMembersOfDrive, sharedDriveState } from "./shared-index.ts";
+import { sharedDriveRolesOf } from "./shared-items.ts";
 import {
 	type ItemRecord,
 	type ItemRef,
@@ -232,16 +230,12 @@ async function toSharedDrive(
 	};
 }
 
-/** The result fields of a call that changed no agent. */
-const NO_ACCESS_CHANGE = accessOutput({ changes: [], pending: [] });
-
 /** A member of an input: the principal and its role. */
 type MemberRole = { principal_id: string; role: MemberInput["role"] };
 
 /**
  * The members of an input, with the kind of each principal from the directory. The object of the drive
  * needs the kind, because an agent cannot be a manager. The call refuses a list that the rules do not allow,
- * and a role that gives an agent an access that the credential of the call cannot give. Both checks come
  * before the write of the drive. `driveId` is undefined for the members of a new drive.
  */
 async function memberInputs(
@@ -262,22 +256,30 @@ async function memberInputs(
 	}));
 	const bad = memberRefusal(inputs, driveId === undefined);
 	if (bad) accept(bad);
-	const roles = new Map(members.map((member) => [member.principal_id, member.role]));
-	assertMemberGrants(call, principals, (principal) => SHARED_DRIVE_ROLE_SCOPES[roles.get(principal.id) ?? "viewer"]);
 	return inputs;
 }
 
 /**
- * A shared drive for the output of a call that gave `members` their roles in this call. Each agent of them
- * that the caller manages gets the drive scopes of its role that it does not hold (`giveMemberAccess`).
+ * The rows of the list that each drive confirms, for an agent or a service account without drive.read on its
+ * account. Such an account could not read a shared drive before the memberships decided the access of agents,
+ * and a drive that did not wake since then still has its membership from before in the index. Each drive
+ * narrows that membership when it wakes (`narrowAgentAccess`), so the list asks each drive and shows its
+ * answer. Each other caller gets the rows of the index as they are.
  */
-async function withAgentAccess(call: CallContext, record: SharedDriveRecord, members: MemberRole[]) {
-	const memberships = members.map((member) => ({
-		principal_id: member.principal_id,
-		scopes: SHARED_DRIVE_ROLE_SCOPES[member.role],
-	}));
-	const access = await giveMemberAccess(call, memberships);
-	return { ...(await toSharedDrive(call, record)), ...accessOutput(access) };
+async function confirmedDrives<T extends { id: string; role: string | null }>(
+	call: CallContext,
+	rows: readonly T[],
+): Promise<T[]> {
+	if (call.caller.principal.kind !== "agent" || call.caller.scopes.has("drive.read")) return [...rows];
+	const roles = await sharedDriveRolesOf(
+		call.env,
+		actorOf(call),
+		rows.map((row) => row.id),
+	);
+	return rows.flatMap((row) => {
+		const role = roles.get(row.id);
+		return role === undefined ? [] : [{ ...row, role }];
+	});
 }
 
 export const driveHandlers: Pick<HandlerMap<CallContext>, DriveOperation> = {
@@ -688,7 +690,7 @@ export const driveHandlers: Pick<HandlerMap<CallContext>, DriveOperation> = {
 			if (earlier !== null) {
 				const first = spaceOf(call, accept(earlier).id);
 				const drive = await first.space.createdSharedDrive(first.ctx);
-				if (drive !== null) return { ...(await toSharedDrive(call, accept(drive))), ...NO_ACCESS_CHANGE };
+				if (drive !== null) return toSharedDrive(call, accept(drive));
 			}
 		}
 		// The check of the members comes before the id and the object of a new drive, so a refused call
@@ -714,8 +716,7 @@ export const driveHandlers: Pick<HandlerMap<CallContext>, DriveOperation> = {
 		}
 		// A retry changes no agent. The members can be different now: a person who does not manage an agent
 		// can be the one who made it a member again. `drive.add_shared_drive_members` completes an access.
-		if (created.duplicate) return { ...(await toSharedDrive(call, created.drive)), ...NO_ACCESS_CHANGE };
-		return withAgentAccess(call, created.drive, input.members);
+		return toSharedDrive(call, created.drive);
 	},
 
 	async "drive.list_shared_drives"(call, input) {
@@ -731,8 +732,9 @@ export const driveHandlers: Pick<HandlerMap<CallContext>, DriveOperation> = {
 		});
 		const page = rows.slice(0, limit);
 		const last = page[page.length - 1];
+		const shown = await confirmedDrives(call, page);
 		return {
-			shared_drives: page.map((row) => ({
+			shared_drives: shown.map((row) => ({
 				id: row.id,
 				name: row.name,
 				role: row.role,
@@ -773,7 +775,7 @@ export const driveHandlers: Pick<HandlerMap<CallContext>, DriveOperation> = {
 		);
 		// Each named agent that the caller manages gets the access of its membership, also a member from
 		// before. So a second call completes a write that failed.
-		return withAgentAccess(call, result.drive, input.members);
+		return toSharedDrive(call, result.drive);
 	},
 
 	async "drive.remove_shared_drive_member"(call, input) {

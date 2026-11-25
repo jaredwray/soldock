@@ -561,7 +561,7 @@ export function conflictOf(error: unknown): OperationError | null {
 
 export interface NewApiKey {
 	label: string;
-	/** The scopes of the key of a person. Empty for a key of an agent, which has the scopes of its agent. */
+	/** The scopes of the key of a person. Empty for a key of an agent: that key only proves the identity. */
 	scopes: readonly Scope[];
 	created_by: string | null;
 	description?: string | null;
@@ -765,85 +765,6 @@ export async function updateOutboundPolicy(
 	const previousMode = prior?.results[0]?.outbound_mode;
 	if (!previousMode || updated?.meta.changes !== 1) return null;
 	return previousMode;
-}
-
-/**
- * Sets the scopes of an agent or a service account. Scopes outside the ceiling of the kind are left out.
- * Each write adds one to `access_version`, so each live connection of the agent stops at its next check.
- * With `sponsorId`, the write matches only while that person still sponsors the agent, so a sponsor that a
- * parallel change replaced cannot change the access. Returns the new record, or null when no live agent with
- * that id (and that sponsor) exists.
- */
-export async function setAgentAccess(
-	db: D1Database,
-	target: Pick<PrincipalRecord, "id" | "service">,
-	scopes: readonly Scope[],
-	sponsorId: string | null = null,
-): Promise<PrincipalRecord | null> {
-	const ceiling = scopeCeiling({ kind: "agent", service: target.service });
-	// The kind and the service flag of the read must still hold, so the ceiling of the scopes is right.
-	const result = await db
-		.prepare(
-			`UPDATE principals SET agent_scopes = ?2, access_version = access_version + 1
-			WHERE id = ?1 AND kind = 'agent' AND service = ?3 AND deleted_at IS NULL AND (?4 IS NULL OR sponsor_id = ?4)`,
-		)
-		.bind(target.id, JSON.stringify(ceiling.filter((s) => scopes.includes(s))), target.service ? 1 : 0, sponsorId)
-		.run();
-	if (result.meta.changes !== 1) return null;
-	return getPrincipal(db, target.id);
-}
-
-/** The scopes of an agent after a membership gave it the scopes that it did not hold. */
-export interface AgentWidening {
-	/** The agent as the caller read it. The write matches only while the agent has this `access_version`. */
-	agent: Pick<PrincipalRecord, "id" | "service" | "access_version">;
-	/** Each scope of the agent after the write. */
-	scopes: readonly Scope[];
-	/** For a sponsor who is not an admin: the write matches only while the agent still has this sponsor. */
-	sponsorId?: string | null;
-}
-
-/**
- * The statement that writes the scopes that a membership gives to an agent. It matches only while the access
- * of the agent is the access of the read (`access_version`), so a parallel change of the access is never
- * lost.
- *
- * With `mailboxId`, the statement goes into the batch that writes the membership of a team mailbox, so the
- * two writes are one transaction. It then matches only when the batch wrote the membership: an agent never
- * gets the scopes without it.
- */
-export function widenAgentAccessStatement(
-	db: D1Database,
-	widening: AgentWidening,
-	mailboxId: string | null,
-): D1PreparedStatement {
-	const { agent } = widening;
-	const ceiling = scopeCeiling({ kind: "agent", service: agent.service });
-	return db
-		.prepare(
-			`UPDATE principals SET agent_scopes = ?2, access_version = access_version + 1
-			WHERE id = ?1 AND kind = 'agent' AND service = ?3 AND deleted_at IS NULL AND access_version = ?4
-			AND (?5 IS NULL OR EXISTS (SELECT 1 FROM team_mailbox_members WHERE mailbox_id = ?5 AND principal_id = ?1))
-			AND (?6 IS NULL OR sponsor_id = ?6)`,
-		)
-		.bind(
-			agent.id,
-			JSON.stringify(ceiling.filter((scope) => widening.scopes.includes(scope))),
-			agent.service ? 1 : 0,
-			agent.access_version,
-			mailboxId,
-			widening.sponsorId ?? null,
-		);
-}
-
-/**
- * Writes the scopes that a membership of a room or a shared drive gives to an agent. The object of the
- * room or the drive owns the membership, so this write is not in a transaction with it. Returns false when
- * a parallel change of the access came first: the caller reads the agent again.
- */
-export async function widenAgentAccess(db: D1Database, widening: AgentWidening): Promise<boolean> {
-	const result = await widenAgentAccessStatement(db, widening, null).run();
-	return result.meta.changes === 1;
 }
 
 /** The changes of `updatePrincipal`. A field that is undefined does not change. */

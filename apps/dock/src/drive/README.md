@@ -281,7 +281,7 @@ This table is for a personal drive. A shared drive has no `owner`. Its roles are
 - The handler does not ask the drive of a deleted principal (`directory.delete_principal`). That
   drive stays in storage, but nobody can open it, so its items leave the lists.
 - `sharedItemsOfPrincipal` reads the `shared` pointers of a principal with the same rules, for the access
-  view of an agent or a service account (`directory.get_agent_access`). It acts as that principal, so each
+  view of a member (`directory.get_member_access`). It acts as that principal, so each
   drive checks the access of the principal, not of the person who asks. It checks no access of the caller:
   the identity handler does that first.
 - An agent or a service account gets these views as a person does. No list on its account names its
@@ -303,7 +303,7 @@ grant is for an agent or a service account (`share-request-handlers.ts`).
   a person as before. A grant from before this rule stays.
 - **The grant is for the item only.** The grant gives the role on the item, and on all that a folder
   holds. It changes no scope of the account. `directory.write` has no part in it. The result has
-  `permission` only, with no `agent_access_changes`.
+  `permission` only.
 - **The account uses the item without the drive scopes.** The role of the grant is enough for the marked
   item operations: see [A grant for a single item](#a-grant-for-a-single-item).
 - **Each person who can share decides.** The owner of the item, or a manager of its shared drive, can
@@ -331,6 +331,12 @@ does not hold `drive.read` or `drive.write`. The grant on the item is the decisi
   (`callableWithItemGrant`). The handler then gets `grantOnly: true` in the call context. A person always
   needs the scopes. An operation without the mark always needs its scopes.
 - **MCP.** `canCall` lists a marked tool for an agent or a service account without its scopes.
+- **With the memberships and the shares.** A call of an agent that names the drive of a different principal
+  or a shared drive is decided by the membership or the share first (`resourceDecidedScopes` of
+  [contracts](../../../../packages/contracts/README.md), [identity](../identity/README.md#access-of-an-agent)).
+  Such a call gets no `grantOnly`: the drive counts each grant and each membership, as for a person.
+  `grantOnly` applies only to a marked call that no membership or share decides, for example a call without
+  `space_id`.
 - **The drive object.** `spaceCall` gives `grantOnly` to the drive object (`SpaceCall.grantOnly`). In such
   a call:
   - The caller is not the owner of a drive (`isOwner`), also not of its own drive.
@@ -345,8 +351,9 @@ does not hold `drive.read` or `drive.write`. The grant on the item is the decisi
 - **No new items.** `drive.create_folder`, `drive.upload_file`, the uploads in parts and `drive.copy_item`
   have no mark. So an editor grant on a folder adds no item in such a call.
 - **A grant from before.** The column `resource` has the default 0, so each grant from before the column
-  has 0. A grant that did not work for an agent without the drive scopes does not start to work. A
-  caller that holds the drive scopes uses each grant, as before: the normal path counts all grants.
+  has 0. A grant that did not work for an agent without the drive scopes does not start to work:
+  `narrowAgentAccess` keeps such a grant of an agent only as far as its account drive scopes reach. It does
+  not change a grant with `resource = 1`. A caller that holds the drive scopes uses each grant, as before.
 - **A new grant.** Each `share` writes `resource = 1`: a direct share and an approval. The upsert also sets
   it on a grant that exists. So a person shares the item again to make an old grant work in such a call.
 - **A move.** A move to a different drive keeps `resource` with each grant. A staged item from an older
@@ -488,39 +495,37 @@ count for the drive. No principal is the owner of an item.
 
 ### An agent as a member
 
-The role says what the agent can do in the drive. The agent also needs the drive scopes on its account
-([`identity`](../identity/README.md#access-of-an-agent)). The agent reaches the drive because it is a
-member, as a person does ([`identity`](../identity/README.md#where-an-agent-can-act)).
+The role alone decides what an agent or a service account can do in the drive, as for a person, and a grant
+decides for an item ([`identity`](../identity/README.md#access-of-an-agent)). The agent uses the drive at
+once, with each of its keys, and nothing changes on its account.
 
-- **Who.** A person who can change the access of the agent: its sponsor, an owner or an admin
-  (`canManageAgent`). The credential must hold `directory.write`, as `directory.set_agent_access` needs
-  it (`managedAgents` of `identity`). A manager of the drive who does not manage the agent can add it.
-  The agent then uses the drive with the scopes that it holds. That membership gives the agent no new
-  scope.
-- **What.** A manager of the agent who gives it a role decided that the agent can use the drive. That
-  call gives the agent the scopes of its role that it does not hold
-  (`giveMemberAccess`). A viewer needs `drive.read`. An editor also needs `drive.write`
-  (`SHARED_DRIVE_ROLE_SCOPES` of the contracts). The result has each change in `agent_access_changes`.
-  An entry is `{ principal_id, scopes_added }`.
-- **No escalation.** The credential of the call must hold each scope that the agent gets
-  (`assertMemberGrants`, before the drive writes the member). If it does not, the call gets `forbidden`.
-  A refused call changes no member.
-- **Two stores.** The drive object owns the members, and the directory owns the access of an agent, so
-  the two writes are not one transaction. The member comes first. The write of the access is idempotent.
-  The write matches only while `access_version` is the one of the read, and the handler tries three
-  times. When a parallel change of the access of the agent defeats each try, the result names the agent
-  in `agent_access_pending`. A later
-  `drive.add_shared_drive_members` call with the same role completes it. A retry of
-  `drive.create_shared_drive` with its idempotency key changes no agent: the members can be different
-  at that time.
+- **Who.** Each manager of the drive adds an agent, as a viewer or an editor. An agent is never a manager.
+  Nobody needs to manage the agent.
+- **The account scopes.** The drive decides a call of an agent where each drive is a shared drive or the
+  drive of a different principal. The invoker does not check the drive scopes of the account for such a
+  call. The account scopes still decide the own drive of the agent and its list of the items that others
+  shared with it. They also decide `drive.star_items`, because the stars of the agent are in its own
+  drive, and `drive.unshare_item` when the agent removes its own share.
 - **The order of the refusals.** `drive.add_shared_drive_members` asks the drive first if the caller can
   change its members (`checkSetMembers`). Then it reads the directory and checks the list. So a caller
   without access to the drive gets `not_found` for each list.
-- **A lower role.** A change from editor to viewer does not take `drive.write` from the account of the
-  agent: the scope also applies to its own drive. The role still limits what it does in this drive.
-- **A remove.** `drive.remove_shared_drive_member` changes nothing on the account of the agent: the agent
-  keeps its scopes. The membership is gone, so the agent does not reach the drive. A grant for one item
+- **A remove.** `drive.remove_shared_drive_member` ends the access at the next call. A grant for one item
   stays until `drive.unshare_item` removes it.
+- **Drives from before.** Before migration `0033`, a call of an agent in a drive needed the drive scope on
+  its account too. Each drive narrows its agents one time, before its first call after the deploy
+  (`narrowAgentAccess`, in `blockConcurrencyWhile` of the constructor). It reads the account scopes of each
+  agent member and each agent grantee from the directory:
+  - An agent without `drive.read` loses its role and each grant, because each role reads. The drive queues
+    an `unshare` for each grant, so the list of the agent follows.
+  - An agent without `drive.write` becomes a viewer, as a member and in each grant. The drive queues a
+    `share` with the new role for each grant.
+  - The key `agent_access_narrowed` of `meta` records the step. A new drive writes it at its first
+    migration, so the step never narrows a role from after the deploy. A failed read of the directory
+    throws, and the drive serves no call until the step succeeds.
+  - For an agent without `drive.read` on its account, `drive.list_shared_drives` asks each drive of its
+    page (`sharedDriveRolesOf`). So a drive that did not narrow never shows in the list.
+    `directory.get_member_access` asks each shared drive of an agent without `drive.read` or `drive.write`
+    (`confirmedSharedDrivesOf`).
 
 ### The index in D1
 
@@ -811,6 +816,7 @@ See the [webhook module](../webhooks/README.md).
 | Webhook events | `DriveSpaceDO` table `webhook_outbox` | The event type, the item id, the time, the member ids and the subscription sequence. No file content. The alarm deletes a row after the queue accepts it |
 | Idempotency keys | `DriveSpaceDO` table `idempotency` | Kept 24 hours, with the SHA-256 hash of the request |
 | Change counter and space id | `DriveSpaceDO` table `meta` | |
+| The one-time narrow of agents | `DriveSpaceDO` table `meta`, key `agent_access_narrowed` | Set when the drive narrowed its agent members and grants after migration `0033`, or at the first migration of a new drive. A restore keeps it |
 | Name, creator, time of creation and `deleted_at` of a shared drive | `DriveSpaceDO` table `meta`, row `drive` | A personal drive has no such row |
 | Members of a shared drive | `DriveSpaceDO` table `members` | The principal, the role, and who added it. The source of the access. The column `added_version` and the table `limit_drops` are from the time when an agent had resource limits. Nothing uses them now. They stay, so a Worker from before that change still works after a rollback |
 | Rows of the D1 index that are behind | `DriveSpaceDO` table `index_outbox` | Rows are deleted after the write to D1 |

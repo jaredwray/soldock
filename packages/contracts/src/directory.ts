@@ -1,18 +1,12 @@
 import { EmailAddress, ID_CHARS, prefixedId, Timestamp } from "./common.ts";
 import { defineOperation } from "./operation.ts";
-import { AGENT_SCOPES, ALL_SCOPES, type Scope, SERVICE_SCOPES, type ServiceScope } from "./scopes.ts";
+import { ALL_SCOPES, type Scope } from "./scopes.ts";
 import { PASSWORD_MAX_LENGTH, Password, TotpCode } from "./signin.ts";
 import { z } from "./zod.ts";
 
 const PrincipalId = prefixedId("prn");
 
 const ScopeName = z.enum(ALL_SCOPES as [Scope, ...Scope[]]);
-
-/** A scope that an agent can hold. A service account holds fewer: the handler checks its ceiling. */
-const AgentScopeName = z.enum(AGENT_SCOPES as [Scope, ...Scope[]]);
-
-/** A scope that a service account can hold. */
-const ServiceScopeName = z.enum(SERVICE_SCOPES as [ServiceScope, ...ServiceScope[]]);
 
 /** A display name that is safe in a From header and in agent instructions. */
 export const DisplayName = z
@@ -109,8 +103,8 @@ export const ApiKey = z.object({
 	/** What the key is for. Null when nobody wrote one. */
 	description: z.string().nullable(),
 	/**
-	 * The scopes that the key gives. A key of an agent or a service account has no scopes of its own: this is
-	 * the list of its agent now.
+	 * The scopes that a key of a person gives. A key of an agent or a service account has no scopes: it only
+	 * proves the identity, so this list is empty.
 	 */
 	scopes: z.array(z.string()),
 	/** The principal who created the key. */
@@ -146,8 +140,8 @@ export const whoami = defineOperation({
 	description: [
 		"Returns who you are (a human, an agent or a service account), your address, and the scopes that the current credential holds.",
 		"missing_scopes lists the scopes that the credential does not hold, with the operations that need each one.",
-		"An API key and an OAuth connection of an agent have the scopes of the agent. The sponsor of the agent, an owner or an admin changes them (directory.set_agent_access).",
-		"A token of a service account has the scopes of its account. Only an owner or an admin changes them and creates its tokens.",
+		"An API key and an OAuth connection of an agent or a service account only prove its identity. Its scopes are the account scopes: they apply to its own mailbox, its own drive and the actions that have no mailbox, room or drive.",
+		"In a team mailbox, a room and a shared drive, the membership decides what an agent can do, and it needs no scope on its account. An item that a person shares with it works in the same way.",
 		"The scopes of an API key of a person do not change: get a new key.",
 	].join(" "),
 	http: { method: "GET", path: "/api/v1/account" },
@@ -303,9 +297,8 @@ export const createPrincipal = defineOperation({
 		"Owners and admins only. Creates a human or an agent with an address on one of the mail domains of the deployment.",
 		"A human needs a first password and signs in with the address and the password. Give the password to the person, who can change it in Settings. An agent has no password.",
 		"A human gets no API key. The person can create keys in Settings after the sign-in.",
-		"An agent gets a sponsor (the caller by default), the internal-only outbound policy, and the scopes of the call. scopes is necessary for an agent, and the credential of the call must hold each one.",
-		"Each API key and each OAuth connection of the agent has the scopes of the agent. Change them with directory.set_agent_access.",
-		"A new agent reaches its own mailbox and its own drive. It reaches a team mailbox, a shared drive and a room when it is a member, as a person does. Its membership says what it can do there. A person who manages the agent and makes it a member also gives it the scopes of the membership that it does not hold.",
+		"An agent gets a sponsor (the caller by default), the internal-only outbound policy, and each agent scope for its own mailbox, its own drive and the actions that have no mailbox, room or drive.",
+		"A new agent reaches its own mailbox and its own drive. It reaches a team mailbox, a shared drive and a room when it is a member, as a person does. Its membership says what it can do there. Change a membership in the settings of that mailbox, drive or room. An API key and an OAuth connection of the agent only prove its identity.",
 		"The result of an agent holds a first API key. Its secret is shown only once.",
 	].join(" "),
 	http: { method: "POST", path: "/api/v1/directory/principals" },
@@ -321,8 +314,6 @@ export const createPrincipal = defineOperation({
 			sponsor_id: PrincipalId.optional(),
 			/** The first password. Required for a human. An agent has none. */
 			password: Password.optional(),
-			/** What an agent can do. Each API key and OAuth connection of the agent has these scopes. Not for a human. */
-			scopes: z.array(AgentScopeName).min(1).optional(),
 		})
 		.refine((input) => input.kind !== "human" || input.password !== undefined, {
 			message: "a human needs a password",
@@ -331,14 +322,6 @@ export const createPrincipal = defineOperation({
 		.refine((input) => input.kind !== "agent" || input.password === undefined, {
 			message: "an agent has no password",
 			path: ["password"],
-		})
-		.refine((input) => input.kind !== "agent" || input.scopes !== undefined, {
-			message: "an agent needs scopes",
-			path: ["scopes"],
-		})
-		.refine((input) => input.kind !== "human" || input.scopes === undefined, {
-			message: "a human has no scopes of its own: the scopes are on each key",
-			path: ["scopes"],
 		}),
 	output: z.object({
 		principal: Principal,
@@ -478,7 +461,7 @@ export const createApiKey = defineOperation({
 	description: [
 		"Creates an API key for yourself, or for an agent that you sponsor. Owners and admins can create a key for anyone except the owner, and they alone create the tokens of a service account.",
 		"scopes is necessary for a key of a person. The secret is shown only once.",
-		"Do not send scopes for a key of an agent or a token of a service account: each key has the scopes of its agent (directory.set_agent_access). The credential of the call must hold each scope of the agent.",
+		"Do not send scopes for a key of an agent or a token of a service account: the key only proves the identity. The memberships of the agent and its account scopes decide what it can do. The credential of the call must hold each account scope of the agent.",
 		`Set expires_in_days (1 to ${API_KEY_LIMITS.maxDays}), or expires_at for a custom end, to make the key stop at that time. Without them, the key has no end.`,
 	].join(" "),
 	http: { method: "POST", path: "/api/v1/account/api-keys" },
@@ -669,9 +652,9 @@ export const SERVICE_ACTIVITY_LIMITS = {
 } as const;
 
 export const AGENT_ACCESS_LIMITS = {
-	/** The chat rooms of `directory.get_agent_access`, at most. */
+	/** The chat rooms of `directory.get_member_access`, at most. */
 	rooms: 200,
-	/** The Drive items that others shared directly with the agent, at most. */
+	/** The Drive items that others shared directly with an agent or a service account, at most. */
 	sharedItems: 200,
 } as const;
 
@@ -703,7 +686,7 @@ export const ServiceActivityEntry = z.object({
 export type ServiceActivityEntry = z.infer<typeof ServiceActivityEntry>;
 
 const SERVICE_ACCOUNT_RULES =
-	"Owners and admins only. A service account gives a script or a system access through the API, with scopes and tokens that owners and admins manage.";
+	"Owners and admins only. A service account gives a script or a system access through the API, with tokens that owners and admins manage.";
 
 export const createServiceAccount = defineOperation({
 	name: "directory.create_service_account",
@@ -711,10 +694,9 @@ export const createServiceAccount = defineOperation({
 	description: [
 		SERVICE_ACCOUNT_RULES,
 		"Creates a service account with an address on one of the mail domains of the deployment, so it has a mailbox, a drive and chat, as an agent has.",
-		"It gets a sponsor (the caller by default), the internal-only outbound policy, the scopes of the call, and no token.",
-		"scopes says what the account can do. Each token of the account has these scopes. The credential of the call must hold each one.",
-		"Create its tokens with account.create_api_key and its principal_id. Change its scopes with directory.set_agent_access.",
-		"A new account reaches its own mailbox and its own drive. It reaches a team mailbox, a shared drive and a room when it is a member, as a person does. Its membership says what it can do there. An owner or an admin who makes it a member also gives it the scopes of the membership that it does not hold.",
+		"It gets a sponsor (the caller by default), the internal-only outbound policy, each service account scope for its own mailbox, its own drive and the actions that have no mailbox, room or drive, and no token.",
+		"Create its tokens with account.create_api_key and its principal_id. A token only proves the identity of the account.",
+		"A new account reaches its own mailbox and its own drive. It reaches a team mailbox, a shared drive and a room when it is a member, as a person does. Its membership says what it can do there. Change a membership in the settings of that mailbox, drive or room.",
 	].join(" "),
 	http: { method: "POST", path: "/api/v1/directory/service-accounts" },
 	scopes: ["directory.write"],
@@ -726,43 +708,14 @@ export const createServiceAccount = defineOperation({
 		description: Description.optional(),
 		/** The accountable person. The caller by default. */
 		sponsor_id: PrincipalId.optional(),
-		/** What the account can do. Each token of the account has these scopes. */
-		scopes: z.array(ServiceScopeName).min(1),
 	}),
 	output: z.object({ principal: Principal }),
 	errors: ["conflict", "not_found"],
 });
 
-/** Who manages the scopes of an agent and of a service account. */
+/** Who reads the access of an agent and of a service account. */
 const AGENT_ACCESS_RULES =
-	"The sponsor of an agent, an owner or an admin. For a service account, an owner or an admin only. An agent can never change its own access.";
-
-export const setAgentAccess = defineOperation({
-	name: "directory.set_agent_access",
-	summary: "Set the scopes of an agent or a service account",
-	description: [
-		AGENT_ACCESS_RULES,
-		"Sets what the agent can do (scopes). Each API key and each OAuth connection of the agent gets the change at its next call. A key and a connection have no scopes of their own.",
-		"scopes replaces the list of scopes: agent scopes for an agent, and service account scopes for a service account. The credential of the call must hold each scope of the new list.",
-		"The scopes do not say where the agent can act. The agent reaches its own mailbox and drive, and each team mailbox, shared drive and room that it is a member of. Change a membership in the settings of that mailbox, drive or room.",
-		"A change closes the events sockets of the agent at once, and each other live socket and feed at its next check, about one minute later. A client then opens them again. A webhook of the agent stops when the agent loses its webhook scope. A call that changes nothing closes nothing.",
-	].join(" "),
-	http: { method: "POST", path: "/api/v1/directory/agents/{principal_id}/access" },
-	scopes: ["directory.write"],
-	callers: ["human"],
-	auditDenied: true,
-	// A change can remove access that a script or an agent uses.
-	annotations: { readOnly: false, destructive: true, idempotent: true, openWorld: false },
-	input: z.strictObject({
-		principal_id: PrincipalId,
-		scopes: z.array(AgentScopeName).min(1),
-	}),
-	output: z.object({
-		principal_id: z.string(),
-		scopes: z.array(z.string()),
-	}),
-	errors: ["not_found", "conflict"],
-});
+	"The sponsor of an agent, an owner or an admin. For a service account, an owner or an admin only.";
 
 export const listServiceAccountActivity = defineOperation({
 	name: "directory.list_service_account_activity",
@@ -789,14 +742,82 @@ export const listServiceAccountActivity = defineOperation({
 	errors: ["not_found"],
 });
 
+/** What a member can reach and do: the answer of `directory.get_member_access` and `directory.get_agent_access`. */
+const MemberAccess = z.object({
+	principal_id: z.string(),
+	/** The kind of the member: `service` for a service account. */
+	kind: z.enum(["human", "agent", "service"]),
+	// `scopes` is what the member can do in the mailbox: of `MAILBOX_MEMBER_SCOPES`.
+	team_mailboxes: z.array(
+		z.object({ id: z.string(), display_name: z.string(), address: z.string(), scopes: z.array(z.string()) }),
+	),
+	shared_drives: z.array(z.object({ id: z.string(), name: z.string(), role: z.string() })),
+	// `peer_name` is the name of the other member of a direct message. It is null for each other kind. For a
+	// person, the list has the public rooms only.
+	chat_rooms: z.array(
+		z.object({
+			id: z.string(),
+			kind: z.string(),
+			name: z.string().nullable(),
+			peer_name: z.string().nullable(),
+			role: z.string(),
+		}),
+	),
+	chat_rooms_truncated: z.boolean(),
+	/**
+	 * The items that others shared directly with an agent or a service account in Drive, with its role, the newest
+	 * share first. Empty for a person.
+	 */
+	drive_shared_items: z.array(
+		z.object({ space_id: z.string(), item_id: z.string(), name: z.string(), kind: z.string(), role: z.string() }),
+	),
+	drive_shared_items_truncated: z.boolean(),
+	/**
+	 * The API keys of an agent or a service account that work now: not revoked and not expired. A key only proves
+	 * the identity of the account. Empty for a person: each key of a person has its own scopes.
+	 */
+	tokens: z.array(z.object({ key_id: z.string(), label: z.string(), expires_at: Timestamp.nullable() })),
+	/**
+	 * The account scopes of an agent or a service account: for its own mailbox, its own drive and the actions that
+	 * have no mailbox, room or drive. They never change after the account is created. Empty for a person: a
+	 * person can do each thing in the own mailbox and the own drive of the person.
+	 */
+	scopes: z.array(z.string()),
+});
+
+/** The text of the access operations about the memberships, the limits and what the call changes. */
+const ACCESS_TEXT = [
+	"Returns the team mailboxes, the shared drives and the chat rooms that the member is a member of, with its role, and the Drive items that others shared directly with it, with its role.",
+	"Each membership and share decides what the member can do there. Change it in the settings of that mailbox, drive or room, or in the sharing of the item. This call changes nothing.",
+	"For an agent or a service account, scopes has its account scopes, and tokens has its live API keys. For a person, both are empty.",
+	"For a person, the answer shows only what an owner or an admin can see in a different place: the team mailboxes, the shared drives and the public rooms. It does not show the private rooms, the direct messages or the items that others shared directly with the person.",
+	`chat_rooms has at most ${AGENT_ACCESS_LIMITS.rooms} rooms, and drive_shared_items at most ${AGENT_ACCESS_LIMITS.sharedItems} items, the newest share first. The matching _truncated field is true when the member has more.`,
+];
+
+export const getMemberAccess = defineOperation({
+	name: "directory.get_member_access",
+	summary: "Show what a person, an agent or a service account can reach and do",
+	description: [
+		"For a person: owners and admins only. For an agent: its sponsor, an owner or an admin. For a service account: owners and admins only.",
+		...ACCESS_TEXT,
+	].join(" "),
+	http: { method: "GET", path: "/api/v1/directory/members/{principal_id}/access" },
+	scopes: ["directory.read"],
+	callers: ["human"],
+	auditDenied: true,
+	annotations: READ,
+	input: z.strictObject({ principal_id: PrincipalId }),
+	output: MemberAccess,
+	errors: ["not_found"],
+});
+
 export const getAgentAccess = defineOperation({
 	name: "directory.get_agent_access",
-	summary: "Show what an agent or a service account can do and reach",
+	summary: "Show what an agent or a service account can reach and do",
 	description: [
 		AGENT_ACCESS_RULES,
-		"Returns the scopes of the agent, the team mailboxes, the shared drives and the chat rooms that it is a member of, with its role, the Drive items that others shared directly with it, with its role, and its live API keys.",
-		"It also has its own mailbox and drive.",
-		`chat_rooms has at most ${AGENT_ACCESS_LIMITS.rooms} rooms, and drive_shared_items at most ${AGENT_ACCESS_LIMITS.sharedItems} items, the newest share first. The matching _truncated field is true when the agent has more.`,
+		"The same answer as directory.get_member_access, for an agent or a service account only: a person gets not_found.",
+		...ACCESS_TEXT,
 	].join(" "),
 	http: { method: "GET", path: "/api/v1/directory/agents/{principal_id}/access" },
 	scopes: ["directory.read"],
@@ -804,34 +825,7 @@ export const getAgentAccess = defineOperation({
 	auditDenied: true,
 	annotations: READ,
 	input: z.strictObject({ principal_id: PrincipalId }),
-	output: z.object({
-		principal_id: z.string(),
-		// `scopes` is what the agent can do in the mailbox: of `MAILBOX_MEMBER_SCOPES`.
-		team_mailboxes: z.array(
-			z.object({ id: z.string(), display_name: z.string(), address: z.string(), scopes: z.array(z.string()) }),
-		),
-		shared_drives: z.array(z.object({ id: z.string(), name: z.string(), role: z.string() })),
-		// `peer_name` is the name of the other member of a direct message. It is null for each other kind.
-		chat_rooms: z.array(
-			z.object({
-				id: z.string(),
-				kind: z.string(),
-				name: z.string().nullable(),
-				peer_name: z.string().nullable(),
-				role: z.string(),
-			}),
-		),
-		chat_rooms_truncated: z.boolean(),
-		/** The items that others shared directly with the agent in Drive, with its role, the newest share first. */
-		drive_shared_items: z.array(
-			z.object({ space_id: z.string(), item_id: z.string(), name: z.string(), kind: z.string(), role: z.string() }),
-		),
-		drive_shared_items_truncated: z.boolean(),
-		/** The API keys that work now: not revoked and not expired. Each one has the scopes of the agent. */
-		tokens: z.array(z.object({ key_id: z.string(), label: z.string(), expires_at: Timestamp.nullable() })),
-		/** The scopes of the agent. */
-		scopes: z.array(z.string()),
-	}),
+	output: MemberAccess,
 	errors: ["not_found"],
 });
 
@@ -856,6 +850,6 @@ export const directoryOperations = {
 	"directory.delete_principal": deletePrincipal,
 	"directory.create_service_account": createServiceAccount,
 	"directory.list_service_account_activity": listServiceAccountActivity,
+	"directory.get_member_access": getMemberAccess,
 	"directory.get_agent_access": getAgentAccess,
-	"directory.set_agent_access": setAgentAccess,
 } as const;

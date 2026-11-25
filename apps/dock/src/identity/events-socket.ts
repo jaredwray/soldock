@@ -60,6 +60,9 @@ export function mountEventsSocket(app: Hono<SocketEnv>): void {
 			if (!READ_OPERATION.callers.includes(caller.kind)) {
 				throw new OperationError("forbidden", `${CALLER_NAMES[caller.kind]} cannot open the events socket.`);
 			}
+			// The socket also carries the personal Chat state of the caller: activity, sections, drafts, reminders
+			// and scheduled messages. That state has no room, so the account scope decides the open, also for an
+			// agent. A room socket is the way to follow one room by its membership.
 			const missing = READ_OPERATION.scopes.filter((scope) => !caller.scopes.has(scope));
 			if (missing.length > 0) {
 				throw new OperationError("forbidden", `The credential does not have the scope ${missing.join(", ")}.`);

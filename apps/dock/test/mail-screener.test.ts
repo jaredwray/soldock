@@ -260,7 +260,6 @@ describe("the Screener at delivery", () => {
 			address: "ci@dock.test",
 			description: "Posts build results",
 			sponsor_id: ada.id,
-			scopes: ["mail.read"],
 		});
 		await receive("stranger@outside.example", "For the pipeline", { to: "ci@dock.test" });
 		expect(await subjects(owner, "in:inbox", service.id)).toEqual(["For the pipeline"]);

@@ -1,7 +1,6 @@
 import "./people.css";
 import { ApiError, type DirectoryEntry, type Principal } from "@asterra/contracts";
 import { useEffect, useState } from "react";
-import { roomAccessText } from "../../lib/accessChange.ts";
 import { api, errorMessage } from "../../lib/api.ts";
 import { initials } from "../../lib/format.ts";
 import { Icon } from "../../lib/icons.tsx";
@@ -88,9 +87,6 @@ function Profile({ principalId }: ProfilePageProps) {
 		setOpening(true);
 		try {
 			const result = await api.call("chat.open_dm", { principal_id: target.id });
-			// The change is on the account of the agent, so the person who manages it must see it.
-			const changed = roomAccessText(result, () => target.display_name).trim();
-			if (changed) toast({ message: changed });
 			navigate(chatPath(result.room.id));
 		} catch (caught) {
 			toast({ message: errorMessage(caught), tone: "error" });

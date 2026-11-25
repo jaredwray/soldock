@@ -1,4 +1,3 @@
-import { AgentAccessChange } from "./agent-access.ts";
 import { prefixedId, RoomId, Timestamp } from "./common.ts";
 import { Href } from "./docs.ts";
 import { Actor, DownloadVariant, DRIVE_LIMITS, ItemId } from "./drive.ts";
@@ -757,14 +756,10 @@ const MEMBERS_ONLY = "You must be a member of the room.";
 /** The scopes that a member gets when the call names none. */
 const NEW_MEMBER_SCOPES =
 	"A new member that is a person gets chat.read, chat.write and chat.add_members. An agent or a service account gets chat.read and chat.write.";
-/** What a membership changes on an agent or a service account. */
+/** What a membership gives to an agent or a service account. */
 const AGENT_MEMBER = [
-	"The call also changes each agent and each service account that it makes a member and that you manage.",
-	"You manage an agent when you are its sponsor, an owner or an admin, and your credential holds directory.write.",
-	"The agent gets the chat scopes of its membership that it does not hold. Your credential must hold each scope that the agent gets.",
-	"agent_access_changes has these changes. agent_access_pending names each agent that did not get them.",
-	"For such an agent, call chat.add_members with the id of the room. Do not call chat.create_room again: that makes a second room.",
-	"A membership gives no new scope to an agent that you do not manage. Such an agent uses the room with the scopes that it holds. Its sponsor, an owner or an admin gives it more.",
+	"The membership alone decides what an agent or a service account can do in the room. Its account and its API keys do not change.",
+	"The agent can use the room at once with each of its keys, and it loses the room at once when it stops being a member.",
 ].join(" ");
 /** The rule for an agent that wants a different agent in a room. */
 const AGENT_ASKS =
@@ -826,13 +821,6 @@ export const createRoom = defineOperation({
 	}),
 	output: z.object({
 		room: ChatRoom,
-		agent_access_changes: z.array(AgentAccessChange).default([]),
-		/**
-		 * The agents that you manage, that are members of the room, and that did not get the access of their
-		 * membership: a different call changed their access at the same time. A later call for the member
-		 * completes it.
-		 */
-		agent_access_pending: z.array(z.string()).default([]),
 	}),
 	errors: ["not_found", "invalid"],
 });
@@ -848,13 +836,6 @@ export const openDm = defineOperation({
 	input: z.strictObject({ principal_id: PrincipalId }),
 	output: z.object({
 		room: ChatRoom,
-		agent_access_changes: z.array(AgentAccessChange).default([]),
-		/**
-		 * The agents that you manage, that are members of the room, and that did not get the access of their
-		 * membership: a different call changed their access at the same time. A later call for the member
-		 * completes it.
-		 */
-		agent_access_pending: z.array(z.string()).default([]),
 	}),
 	errors: ["not_found", "invalid"],
 });
@@ -937,14 +918,6 @@ export const addMembers = defineOperation({
 		/** The principals that the call made members. A principal that was a member already does not count. */
 		members_added: z.number().int(),
 		room: ChatRoom,
-		/** The change of each agent and each service account that you manage and that got new access. */
-		agent_access_changes: z.array(AgentAccessChange).default([]),
-		/**
-		 * The agents that you manage, that are members of the room, and that did not get the access of their
-		 * membership: a different call changed their access at the same time. A later call for the member
-		 * completes it.
-		 */
-		agent_access_pending: z.array(z.string()).default([]),
 	}),
 	errors: ["not_found", "invalid", "conflict"],
 });
@@ -967,14 +940,6 @@ export const setMemberScopes = defineOperation({
 	input: z.strictObject({ room_id: RoomId, principal_id: PrincipalId, scopes: RoomMemberScopes }),
 	output: z.object({
 		member: ChatMember,
-		/** The change of the agent or the service account, when you manage it and it got new access. */
-		agent_access_changes: z.array(AgentAccessChange).default([]),
-		/**
-		 * The agents that you manage, that are members of the room, and that did not get the access of their
-		 * membership: a different call changed their access at the same time. A later call for the member
-		 * completes it.
-		 */
-		agent_access_pending: z.array(z.string()).default([]),
 	}),
 	errors: ["not_found", "invalid"],
 });
@@ -1058,8 +1023,8 @@ export const approveMemberRequest = defineOperation({
 		REQUEST_DECIDER,
 		"Makes the account a member of the room, with the scopes of the request. The agent that asked must still be a member with chat.add_members: if not, the call gets conflict and the request goes away.",
 		"Only one answer to a request succeeds: a call after a different answer gets not_found.",
-		"When a person added the account to the room before the approval, the call succeeds and gives no scope: agent_access_changes is empty.",
-		"When your credential holds directory.write, the account also gets the chat scopes of the membership that it does not hold: agent_access_changes has them. Your credential must hold each scope that the account gets.",
+		"When a person added the account to the room before the approval, the call succeeds and changes nothing.",
+		"The membership alone decides what the account can do in the room. Its account and its API keys do not change.",
 	].join(" "),
 	http: { method: "POST", path: "/api/v1/chat/member-requests/{request_id}/approve" },
 	scopes: ["chat.write"],
@@ -1068,8 +1033,6 @@ export const approveMemberRequest = defineOperation({
 	input: z.strictObject({ request_id: MemberRequestId }),
 	output: z.object({
 		request: ChatMemberRequest,
-		agent_access_changes: z.array(AgentAccessChange).default([]),
-		agent_access_pending: z.array(z.string()).default([]),
 	}),
 	errors: ["not_found", "conflict", "forbidden"],
 });

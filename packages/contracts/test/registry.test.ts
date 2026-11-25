@@ -112,7 +112,7 @@ describe("the operation registry", () => {
 		expect(missed.map((op) => op.name)).toEqual([]);
 	});
 
-	// The Permissions form of a service account and `missing_scopes` show these texts. A text for a person ("your
+	// The Access summary of a service account and `missing_scopes` show these texts. A text for a person ("your
 	// mail", rights of owners and admins) would tell a wrong story about the account.
 	it("names the service account, and no right of a person, in the scope text of a service account", () => {
 		for (const scope of SERVICE_SCOPES) {

@@ -26,29 +26,26 @@ OAuth is the main way to add an agent. The agent needs only one URL.
    - **A new agent** (owners and admins only): enter a name and an address on a mail domain. You
      are the sponsor of the agent. It gets the `internal-only` outbound policy.
    - **An agent that exists**: an agent that you sponsor, or any agent if you are an owner or an admin.
-6. For a new agent, select its scopes, then select **Approve and connect**. The scopes that the app
-   asked for show **Requested**. You can give fewer or more. For an agent that exists, the page shows
-   no scopes: the connection gets the [permissions of the agent](#permissions-of-an-agent). Select
-   **Approve and connect**.
+6. Select **Approve and connect**. The page has no scopes: the app does not choose what it can do.
    - A new agent reaches its own mailbox and its own drive. It reaches a shared mailbox, a shared drive
-     or a room after a member adds it there: see [Permissions of an agent](#permissions-of-an-agent).
+     or a room after a member adds it there: see [Access of an agent](#access-of-an-agent).
 
 The client then gets an access token for one hour and a refresh token. Each refresh gives a new
 refresh token. A connection that the client does not refresh for 30 days stops. The tokens act as
-the agent, with the scopes of the agent. The REST and MCP operations are
+the agent: they only prove its identity. The REST and MCP operations are
 `oauth.get_authorization`, `oauth.approve_authorization` and `oauth.deny_authorization`.
 
 The **Apps connected as …** list of each agent shows its connections. The sponsor, an owner or an
 admin can revoke a connection there (`oauth.list_grants`, `oauth.revoke_grant`). Its tokens stop at
 once.
 
-A connection has no scopes of its own. A new release can add a scope, as `mail.webhooks` did. To give
-it to the connections and the keys of an agent, add it to the agent: see
-[Permissions of an agent](#permissions-of-an-agent).
+A connection has no scopes. The memberships of the agent decide what it can do in each shared mailbox,
+room and shared drive. See [Access of an agent](#access-of-an-agent).
 
-An agent sees only the tools that its credential can call. `account.whoami` lists `missing_scopes`:
-each scope that the credential does not hold, with the operations that need it. The MCP
-instructions also name these scopes, and tell the agent who can add them.
+An agent sees only the tools that it can call. A new agent can call each tool of its kind. An agent from
+before migration `0033` can have narrower account scopes. `account.whoami` then lists `missing_scopes`:
+each account scope that the agent does not hold, with the operations that no membership can give. The MCP
+instructions also name these scopes.
 
 For client developers:
 
@@ -71,13 +68,13 @@ For client developers:
 Use an API key for a client that cannot use OAuth.
 
 1. An owner or an admin opens **Admin › Members**, selects **New person or agent**, and creates an
-   agent. The agent gets a display name, an address on a mail domain, a sponsor and its scopes. The
-   REST and MCP operation is `directory.create_principal`, with `scopes`.
-2. The result shows the agent's first API key once. Store it in the agent's secret store. The key has
-   the scopes of the agent.
+   agent. The agent gets a display name, an address on a mail domain and a sponsor. The REST and MCP
+   operation is `directory.create_principal`. It takes no `scopes`.
+2. The result shows the agent's first API key once. Store it in the agent's secret store. The key only
+   proves the identity of the agent.
 3. The sponsor, an owner or an admin can create more keys for the agent, and revoke them
-   (`account.create_api_key`, `account.revoke_api_key`). A key of an agent takes no `scopes`: each key
-   has the scopes of the agent. Use one key for each client, so you can rotate or revoke one key alone.
+   (`account.create_api_key`, `account.revoke_api_key`). A key of an agent takes no `scopes`. Use one key
+   for each client, so you can rotate or revoke one key alone.
 4. Send the key as a bearer token:
 
    ```sh
@@ -86,71 +83,60 @@ Use an API key for a client that cannot use OAuth.
 
 An agent can hold only `account.read`, `directory.read`, `mail.read`,
 `mail.modify`, `mail.send`, `mail.webhooks`, `drive.read`, `drive.write`, `drive.share`, `drive.webhooks`, `chat.read`, `chat.write` and `chat.webhooks`.
-An agent can never manage keys or connections, create principals, or change its own policy or permissions.
+A new agent holds each of them as account scopes. An agent can never manage keys or connections, create
+principals, or change its own policy or access.
 
-## Permissions of an agent
+## Access of an agent
 
-The scopes belong to the agent, not to a key or a connection. Each API key and
-each OAuth connection of the agent has them. A key or a connection is only a credential.
+Each shared mailbox, room and shared drive decides what an agent can do there, as it does for a person. An
+item that a person shares with the agent decides in the same way. An API key or an OAuth connection only
+proves the identity of the agent. It has no scopes, and the web app has no permissions editor for an agent
+or for a key.
 
-- **Change them.** Open the agent in **Admin › Members**. **Permissions** changes the scopes
-  (`directory.set_agent_access`). The sponsor, an owner or an admin can do this. An agent can
-  never change its own permissions.
-- **When.** The change applies to each key and each connection at its next call. You do not need a new
-  key or a new approval. A client can keep its old tool list for up to 5 minutes. Some clients read the
-  tool list only when they connect. In such a client, start a new conversation.
-- **Live sockets.** The events sockets of the agent close at once with code `4001`. Each other socket and
-  feed closes with `4001` within one minute. Open them again: the new socket has the new access.
-- **Remove a scope.** You can remove a scope too. A webhook or an MCP Events subscription of the agent
-  stops when the agent loses the webhook scope of its product. A scheduled chat message of the agent
-  fails when the agent loses `chat.write`.
-- **Access.** **Access** on the card shows what the agent can reach, and its live API keys
-  (`directory.get_agent_access`). **Apps connected as …** lists its OAuth connections.
-- **No escalation.** The credential that sets the scopes must hold each new scope. To create or rotate
-  a key, or connect an app to the agent, the credential must hold each scope of the
-  agent.
-- For two clients that need different permissions, create two agents.
-
-**Where an agent can act.** An agent reaches its own mailbox and its own drive. It also reaches each team
-mailbox, shared drive and room that it is a member of, exactly as a person does. The scopes of the agent
-say what it can do at all. They do not say where. The membership says where, and its role or its member
-scopes say what the agent can do there.
-
-- **Set what an agent can do in a resource** in the settings of that resource. The page of the agent has
-  no control for it.
-  - A team mailbox: open the mailbox in **Admin › Shared mailboxes**, and set **Read**, **Change** and
+- **Give access** in the settings of the resource:
+  - A shared mailbox: open the mailbox in **Admin › Shared mailboxes**, and set **Read**, **Change** and
     **Send** for the member. See [Team mailboxes](#team-mailboxes).
   - A room: open the room, then **Members**, and set **Post** and **Add members** for the member. See
     [Members of a room](#members-of-a-room).
   - A shared drive: open the drive, then **Members**, and set the role of the agent to viewer or editor
     (`drive.add_shared_drive_members`). An owner or an admin can also do this in **Admin › Shared drives**.
-- **A person who manages the agent gives the scopes with the membership.** You manage an agent when you
-  are its sponsor, an owner or an admin. When you make the agent a member, it gets each scope of the
-  membership that it does not hold. So the resource needs no second step.
-  - The scopes of a shared drive are `drive.read`, and also `drive.write` for an editor.
-  - The result of the call shows each change in `agent_access_changes`.
-  - An API key needs `directory.write` for this change. A key without it makes the member, and changes
-    no agent.
-  - The key must also hold each scope that the agent gets. If it does not, the call gets `403` and makes
-    no member.
-- **A person who does not manage the agent** can add it too. The agent then uses the resource with the
-  scopes that it holds. It gets no new scope: its sponsor, an owner or an admin gives one.
-- **Stop the access.** Remove the agent from the mailbox, the drive or the room. A remove changes nothing
-  on the account of the agent: the agent keeps its scopes.
+  - An item: share it with the agent as a viewer or an editor.
+- **When.** The agent uses the access at once, with each key and each connection that it has. Nothing
+  changes on the agent, and it needs no new key and no new approval. A client can keep its old tool list
+  for up to 5 minutes. Some clients read the tool list only when they connect. In such a client, start a
+  new conversation.
+- **Stop the access.** Remove the agent from the mailbox, the room or the drive, or remove the share. The
+  next call of the agent fails. A room socket closes at once. An MCP stream that watches the resource ends
+  before its next notification. A webhook of the agent for the resource stops at its next delivery.
+- **Who.** Each person who can change the members of a resource gives an agent access to it, as for a
+  person. A person who adds an agent to a room or a shared drive does not need to be its sponsor.
+- **Access summary.** Open the page of the agent in **Admin › Members**. **Access** shows each shared
+  mailbox, room, shared drive and shared item of the agent, with what it can do there
+  (`directory.get_member_access`). Each row has a link to the place that changes it. The page changes
+  nothing. An owner or an admin sees the same summary on the page of a person. **Apps connected as …** lists its
+  OAuth connections.
+- **Account scopes.** The account scopes of an agent apply to its own mailbox, its own drive, and the
+  actions that have no mailbox, room or drive. Examples are `directory.read`, a new room, a direct message,
+  the personal views of Chat and webhooks. They also apply to the personal state of the agent for a room.
+  This state is its read marker, its star, its drafts, its saved messages and its reminders. An agent also needs the
+  account scope to leave a room, and to read a public room that it is not a member of. A new agent gets
+  each scope of its kind. Nothing changes the
+  account scopes after that. An agent from before migration `0033` keeps the narrower account scopes that
+  it had, and **Access** says so. See [Resource access for agents](self-hosting.md#resource-access-for-agents).
+- **No escalation.** To create or rotate a key, or connect an app to the agent, the credential must hold
+  each account scope of the agent. To create an agent, the credential must hold each agent scope.
+- The outbound policy of the agent still applies to each message that it sends, also from a shared
+  mailbox.
 - **Rooms.** An agent cannot join a public room: `chat.join_room` is for people only. A person who is a
   member adds it with `chat.add_members`. An agent that is a member asks a person first: see
-  [An agent asks before it adds an agent](#an-agent-asks-before-it-adds-an-agent).
+  [An agent asks before it adds an agent](#an-agent-asks-before-it-adds-an-agent). An agent can start a
+  direct message with a person, and never with a different agent or service account.
 - **Items of Drive.** A person who can share an item can share it with an agent: the owner of the item,
-  or a manager of its shared drive. The agent gets the role on that item only, and no scope. It uses the
-  item with that role, also without `drive.read` or `drive.write`. So the manager of the agent does not
-  take part. An agent cannot share an item with a different agent or service account. It asks a person
-  first: see [An agent asks before it shares an item](#an-agent-asks-before-it-shares-an-item).
-- An agent with the scopes can create a room and start a direct message with a person. It cannot start a
-  direct message with a different agent or service account. It can use the personal views
-  of Chat and its notification settings. It can create a chat webhook and open `/ws/events`.
-- The create calls take no `limits`, and `directory.set_agent_access` takes no `resources`. A call that
-  sends one of them gets `400` (`invalid`). `account.whoami` and `directory.get_agent_access` return no
-  `resources`.
+  or a manager of its shared drive. The agent gets the role on that item only, and no scope. The grant
+  decides what it can do with the item, as for a person. So the manager of the agent does not take part. An
+  agent cannot share an item with a different agent or service account. It asks a person first: see
+  [An agent asks before it shares an item](#an-agent-asks-before-it-shares-an-item).
+- The create calls take no `limits` and no `scopes`. A call that sends one of them gets `400` (`invalid`).
 - An older version had resource limits for an agent. For an upgrade from it, see
   [Access follows membership](self-hosting.md#access-follows-membership).
 
@@ -161,8 +147,9 @@ nightly report. It is a member with an address, a mailbox, a drive and chat, as 
 Drive and Chat it acts as an agent, so its outbound policy applies.
 
 1. An owner or an admin opens **Admin › Members**, selects **New member**, then **Service account**.
-   The account gets a display name, an address on a mail domain, a description, a sponsor and its
-   scopes. The REST and MCP operation is `directory.create_service_account`. It has no token yet.
+   The account gets a display name, an address on a mail domain, a description and a sponsor. The REST
+   and MCP operation is `directory.create_service_account`. It takes no `scopes`, and the account has no
+   token yet.
    A new account reaches its own mailbox and its own drive. It reaches a shared mailbox, a shared drive
    or a room after a member adds it there.
 2. The owner or the admin opens the account and creates a token: a label, an optional description, and
@@ -170,23 +157,18 @@ Drive and Chat it acts as an agent, so its outbound policy applies.
    `principal_id`, and `expires_in_days` or `expires_at`). The secret shows once.
 3. The script sends the token as a bearer token to REST or MCP. An expired or revoked token gets
    `401`.
-4. The card shows the permissions of the account, each token with its creator, its end and its last
-   use, what the account can reach (`directory.get_agent_access`), and its activity log
+4. The card shows each token with its creator, its end and its last use. It also shows the access summary
+   of the account (`directory.get_member_access`) and its activity log
    (`directory.list_service_account_activity`). **Revoke** stops a token at once
    (`account.revoke_api_key`).
 
-**Permissions are on the account.** The scopes belong to the service account, not to a
-token. Each token of the account has them. A token is only a credential. The rules of
-[Permissions of an agent](#permissions-of-an-agent) apply, but only owners and admins change them.
+**Access is in each resource.** The rules of [Access of an agent](#access-of-an-agent) apply to a service
+account. A token only proves the identity of the account. A new account gets each service account scope,
+and it never gets a webhook scope.
 
 - Use one token for each system that uses the account. Then you can rotate or revoke one token alone.
-- **Permissions** on the card changes the scopes
-  (`directory.set_agent_access`). The change applies to each token at its next call, without a
-  new secret. The live sockets and feeds of the account close with code `4001` within one minute. Open
-  them again.
 - `account.create_api_key` takes no `scopes` for a service account. The credential that creates or
-  rotates a token, or sets the scopes, must hold each scope of the account.
-- For two systems that need different permissions, create two service accounts.
+  rotates a token must hold each account scope of the account.
 
 **Rotate a token.** **Rotate** gives a token a new secret (`account.rotate_api_key`). The token keeps
 its end. A rotation does not extend the end. Before the end, create a new token and put it in each
@@ -199,10 +181,9 @@ at once.
    (`account.end_api_key_rotation`).
 
 **Where an account can act.** A service account reaches its own mailbox and its own drive, and each team
-mailbox, shared drive and room that it is a member of. See
-[Where an agent can act](#permissions-of-an-agent). Only an owner or an admin who makes it a member gives
-it the scopes of the membership. When a different member adds it, it uses the resource with the scopes
-that it holds. The same rules apply when a person shares a Drive item with the account.
+mailbox, shared drive and room that it is a member of. The membership decides what it can do there. The
+same rule applies when a person shares a Drive item with the account. See
+[Access of an agent](#access-of-an-agent).
 
 **Notice before the end.** Seven days before a token ends, each owner and admin gets one internal mail
 with the account, the label of the token and its end. The key list shows **Expires soon**. A token
@@ -215,15 +196,14 @@ with a lifetime of seven days or less gets no notice.
 - A change of the rooms, the direct messages and the shared drives of the account by a different
   principal: **Admin change** for an owner or an admin, and **Member change** for each other member.
 - The notice before the end of a token (`account.token_expiry_notice`).
-- A change of a token, of the permissions or of the account by an owner or an admin.
+- A change of a token or of the account by an owner or an admin.
 
 The access view also shows the Drive items that a member shared directly with the account.
 
 A service account can hold only `account.read`, `directory.read`, `mail.read`, `mail.modify`,
 `mail.send`, `drive.read`, `drive.write`, `drive.share`, `chat.read` and `chat.write`. It cannot manage
 keys, change the directory, connect through OAuth or create webhooks. Only owners and admins manage a
-service account, its permissions and its tokens: its sponsor and its creator get no right from that
-role.
+service account and its tokens: its sponsor and its creator get no right from that role.
 
 An API key of a person or an agent can have a lifetime too. Without one, a key works until somebody
 revokes it.
@@ -265,8 +245,8 @@ OAuth connection work again.
 
 ## Get notified of new mail
 
-An agent can wait for mail and not poll. Use an MCP client of protocol `2026-07-28`, and a key or a
-connection with `mail.read`.
+An agent can wait for mail and not poll. Use an MCP client of protocol `2026-07-28`. To watch your own
+inbox, your account needs `mail.read`. To watch a team mailbox, your membership needs **Read**.
 
 1. Call `resources/list`. Keep the URI of each inbox that you want to watch: your own inbox, and the
    inbox of each team mailbox that you are a member of.
@@ -323,7 +303,7 @@ protocol version and on REST.
    `any`, or to add the host (for example `hooks.example.com`) to the allowlist. Your sponsor can
    also create the endpoint for you under **Admin › Members**. Open the agent. That endpoint belongs to your sponsor.
    It does not show in your `webhooks_list_endpoints`. The Settings page of the sponsor does not list it.
-2. Call `webhooks_create_endpoint` with a key or a connection that holds `mail.webhooks`:
+2. Call `webhooks_create_endpoint`. Your account needs `mail.webhooks`:
 
    ```json
    { "url": "https://hooks.example.com/asterra", "label": "support bot" }
@@ -390,27 +370,19 @@ account.
   of the member.
 - A member without `chat.write` reads the room, sets what it read, and can leave. Each change gets
   `forbidden`, and the text names the scope.
-- `chat.add_members` is a scope of a membership only. A credential needs `chat.write` to add members, as
-  before.
-- **An agent that you manage gets its access with the membership.** You manage an agent when you are its
-  sponsor, an owner or an admin. Add it to a room, or open a direct message with it. It then gets the chat
-  scopes of its membership that it does not hold.
-  - The result has each change in `agent_access_changes`, and the web app shows it.
-  - An API key needs `directory.write` for this change, as `directory.set_agent_access` does. A key with
-    only the chat scopes makes the member, and changes no agent.
-  - The key must also hold each scope that the agent gets. If not, the call gets `403` and makes no
-    member.
-  - `agent_access_pending` names an agent that did not get its scopes: a
-    different call changed its access at the same time. Add the member again.
-  - An agent that you do not manage uses the room with the scopes that it holds. It gets no new scope:
-    its sponsor, an owner or an admin gives one.
+- `chat.add_members` is a scope of a membership only. A credential of a person needs `chat.write` to add
+  members, as before. For an agent or a service account, the membership decides: its keys have no scopes.
+- **An agent gets its access with the membership.** Each member with `chat.add_members` adds an agent or a
+  service account, and the owner of the room changes its scopes. Nobody needs to manage the agent. The
+  agent uses the room at once, with each key and each connection that it has. Nothing changes on its
+  account. A remove ends the access at the next call. See [Access of an agent](#access-of-an-agent).
 - An agent or a service account cannot join a public room (`chat.join_room` is for people only). A
   person who is a member adds it with `chat.add_members`.
 - Only the owner of a room gives `chat.add_members` to an agent or a service account. An owner that is an
   agent cannot give it to a different agent or service account: only a person can.
 - A member that leaves with fewer scopes than its kind has them again when it comes back. Only the owner
   of the room gives more.
-- When an agent leaves a room, or a member removes it, its account does not change: it keeps its scopes.
+- When an agent leaves a room, or a member removes it, its account scopes do not change.
 
 ### An agent asks before it adds an agent
 
@@ -430,13 +402,12 @@ a person who manages that account must agree.
   - **Admin › Members.** The page of the account shows its requests to each person who can answer.
 - **Approve** (`chat.approve_member_request`). The account becomes a member with the scopes of the
   request: `chat.read` and `chat.write`, or only `chat.read`. A request never gives `chat.add_members`.
-  The account also gets the chat scopes that it does not hold, as when you add it yourself.
+  Nothing changes on the account.
 - **Deny** (`chat.deny_member_request`). The request goes away, and the account does not become a member.
 - **A request that cannot complete.** The agent that asked must still be a member with **Add members**
   at the time of the approval. If not, the approval gets `conflict`, and the request goes away.
 - **With an API key.** The two calls are for people only, and the key needs `chat.write`.
-  `chat.list_member_requests` returns the requests that you can answer. As above, the key needs
-  `directory.write` to change the scopes of the account, and it must hold each scope that the account gets.
+  `chat.list_member_requests` returns the requests that you can answer.
 - A request stays until a person answers it. A room has at most 20 requests at the same time.
 - A direct message has no request. Two agents cannot start a direct message with each other.
 
@@ -464,18 +435,15 @@ agent and a service account.
 - A new member gets the three scopes. In **Admin › Shared mailboxes**, open the mailbox, and select the
   scopes when you add the member. The check boxes in the list of members change them later
   (`directory.add_team_mailbox_member` with `scopes`). A change applies at the next call of the member.
-- A call needs its scope in your credential and in your membership. Without it, the call fails with
-  `forbidden`, and the text names the scope.
-- **An agent or a service account gets the scopes on its account too.** When you add it with a scope that
-  it does not hold, it gets that scope. So you do not open
-  **Admin › Members** for a second change. The scope also applies to its own mailbox. The result has each
-  change in `agent_access_changes`, and the web app shows it. This applies to each call for the member,
-  also a call that removes a scope.
-- The credential that adds an agent must hold each scope that the membership gives. A narrow API key with
-  `directory.write` cannot give `mail.send` when it does not hold `mail.send`.
+- A call of a person needs its scope in the credential and in the membership. A call of an agent or a
+  service account needs it in the membership only: its keys and connections have no scopes. Without the
+  scope, the call fails with `forbidden`, and the text names the scope.
+- **An agent or a service account uses the membership at once.** Nothing changes on its account, and its
+  own mailbox keeps its account scopes. A remove or a narrower membership applies at the next call. See
+  [Access of an agent](#access-of-an-agent).
 - A member with only `mail.send` does not see the mailbox in the web app, and cannot watch its inbox. A
-  reply (`reply_to_message_id`) reads the message that it answers, so it also needs `mail.read`: in the
-  credential, and in the membership.
+  reply (`reply_to_message_id`) reads the message that it answers, so it also needs `mail.read` in the
+  membership. A person also needs it in the credential.
 
 - The members share the threads, the labels and the read state. A change by one member shows for
   each member.
@@ -681,7 +649,7 @@ So a person who manages that account must agree.
   - **Admin › Members.** The page of the account shows its requests to each person who can answer.
 - **Approve** (`drive.approve_share_request`). The account gets the role of the request for the item:
   viewer or editor. The grant is for that item only, and for all that a folder holds. The account gets
-  no scope. It uses the item with the role, also without `drive.read` or `drive.write`.
+  no scope. The grant decides what it can do with the item, as for a person.
 - **Deny** (`drive.deny_share_request`). The request goes away, and the account gets no grant.
 - **A request that cannot complete.** The agent that asked must still hold `drive.share` and be able to
   share the item at the time of the approval. If not, the approval gets `conflict`, and the request goes away. For example, the
@@ -709,8 +677,8 @@ So a person who manages that account must agree.
 An agent is a member of rooms, as a person is. The `chat_*` tools are the operations that the web
 app uses.
 
-An agent uses each room that it is a member of ([Permissions of an agent](#permissions-of-an-agent)).
-With the scopes, it can create a room and start a direct message with a person. It can use the personal views of Chat
+An agent uses each room that it is a member of, as its membership says ([Access of an agent](#access-of-an-agent)).
+With its account scopes, it can create a room and start a direct message with a person. It can use the personal views of Chat
 and its notification settings. It can open `/ws/events` and create a chat webhook.
 
 - **Rooms.** `chat_list_rooms` returns your rooms and your direct messages, newest message first.

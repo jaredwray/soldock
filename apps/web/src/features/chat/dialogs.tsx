@@ -10,7 +10,6 @@ import {
 	useRef,
 	useState,
 } from "react";
-import { type RoomAccessResult, roomAccessText } from "../../lib/accessChange.ts";
 import { accountChangeCount } from "../../lib/account.ts";
 import { api, errorMessage } from "../../lib/api.ts";
 import { useNotificationSettings } from "../../lib/chatNotificationSettings.tsx";
@@ -295,7 +294,6 @@ export function BrowseRoomsDialog({ onClose, onOpen }: { onClose: () => void; on
 /** Opens a 1:1 direct message or a group direct message with people or agents. */
 export function NewDmDialog({ onClose, onOpened }: { onClose: () => void; onOpened: (room: ChatRoom) => void }) {
 	const ownId = useSession().whoami.principal.id;
-	const toast = useToast();
 	const principals = usePrincipals();
 	const [filter, setFilter] = useState("");
 	const [selectedIds, setSelectedIds] = useState<string[]>([]);
@@ -319,13 +317,6 @@ export function NewDmDialog({ onClose, onOpened }: { onClose: () => void; onOpen
 		});
 	}
 
-	/** Tells the person what the call changed on an agent that the person manages: the change is on its account. */
-	function announce(result: RoomAccessResult) {
-		const nameOf = (id: string) => principals?.find((principal) => principal.id === id)?.display_name ?? "An agent";
-		const text = roomAccessText(result, nameOf).trim();
-		if (text) toast({ message: text });
-	}
-
 	async function openSelected() {
 		if (selectedIds.length === 0 || busy) return;
 		setBusy(true);
@@ -334,11 +325,9 @@ export function NewDmDialog({ onClose, onOpened }: { onClose: () => void; onOpen
 			const first = selectedIds[0];
 			if (selectedIds.length === 1 && first) {
 				const result = await api.call("chat.open_dm", { principal_id: first });
-				announce(result);
 				onOpened(result.room);
 			} else {
 				const result = await api.call("chat.open_group_dm", { principal_ids: selectedIds });
-				announce(result);
 				onOpened(result.room);
 			}
 		} catch (caught) {
@@ -490,14 +479,12 @@ export function MembersDialog({ room, onClose, onChanged, onLeft }: MembersDialo
 		event.preventDefault();
 		if (!candidate) return;
 		void run(async () => {
-			const result = await api.call("chat.add_members", {
+			await api.call("chat.add_members", {
 				room_id: room.id,
 				principal_ids: [candidate.id],
 				scopes: scopesOf(rights),
 			});
-			toast({
-				message: `${candidate.display_name} can now ${rightsText(rights)} in ${roomTitle(room)}.${roomAccessText(result, () => candidate.display_name)}`,
-			});
+			toast({ message: `${candidate.display_name} can now ${rightsText(rights)} in ${roomTitle(room)}.` });
 			setPrincipalId("");
 			setChosen(null);
 			await load();
@@ -508,14 +495,12 @@ export function MembersDialog({ room, onClose, onChanged, onLeft }: MembersDialo
 	/** Sets what a member can do in the room. The change applies at the next call of the member. */
 	const setRights = (member: ChatMember, next: MemberRights) =>
 		run(async () => {
-			const result = await api.call("chat.set_member_scopes", {
+			await api.call("chat.set_member_scopes", {
 				room_id: room.id,
 				principal_id: member.principal_id,
 				scopes: scopesOf(next),
 			});
-			toast({
-				message: `${member.display_name} can now ${rightsText(next)} in ${roomTitle(room)}.${roomAccessText(result, () => member.display_name)}`,
-			});
+			toast({ message: `${member.display_name} can now ${rightsText(next)} in ${roomTitle(room)}.` });
 			await load();
 			onChanged();
 		});
@@ -585,8 +570,8 @@ export function MembersDialog({ room, onClose, onChanged, onLeft }: MembersDialo
 							</label>
 							{isAutomated(candidate.kind) && (
 								<p className="field-hint">
-									When you manage this agent, it also gets these chat scopes on its account, so it can use the room at
-									once.
+									The membership alone decides what the agent can do in this room. It can use the room at once with its
+									key.
 								</p>
 							)}
 						</fieldset>

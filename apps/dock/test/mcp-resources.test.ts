@@ -24,6 +24,7 @@ import {
 	request,
 	seedOrg,
 	sendMemberStates,
+	setLegacyScopes,
 	upgradeRoomSocket,
 } from "./helpers.ts";
 
@@ -151,31 +152,37 @@ describe("MCP resources", () => {
 			code: -32002,
 		});
 
-		// A credential without mail.read sees no inbox. It still sees the drive templates of drive.read.
-		await owner.call("directory.set_agent_access", { principal_id: bot.id, scopes: ["drive.read"] });
+		// An agent from before migration 0033 without mail.read on its account cannot read its own inbox. A
+		// membership of a team mailbox can still give it an inbox, so the template stays.
+		await setLegacyScopes(bot.id, ["drive.read"]);
+		await owner.call("directory.remove_team_mailbox_member", { mailbox_id: support.id, principal_id: bot.id });
 		const api_key = { secret: bot.key };
-		expect((await modern(api_key.secret, "resources/list")).body?.result).toMatchObject({ resources: [] });
-		expect((await modern(api_key.secret, "resources/templates/list")).body?.result).toMatchObject({
-			resourceTemplates: [
-				expect.objectContaining({ name: "drive.item" }),
-				expect.objectContaining({ name: "drive.space" }),
-			],
-		});
+		// The list of the rooms of the caller stays: each room decides by its membership.
+		const resources = (await modern(api_key.secret, "resources/list")).body?.result as { resources: { uri: string }[] };
+		expect(resources.resources.map((resource) => resource.uri)).toEqual([ROOMS]);
+		const legacy = (await modern(api_key.secret, "resources/templates/list")).body?.result as {
+			resourceTemplates: { name: string }[];
+		};
+		expect(legacy.resourceTemplates.map((template) => template.name)).toEqual(
+			expect.arrayContaining(["mail.inbox", "drive.item", "drive.space"]),
+		);
 		expect((await modern(api_key.secret, "resources/read", { uri: inbox(bot.id) })).body?.error).toMatchObject({
 			code: -32602,
 		});
+		const own = await listen(api_key.secret, [inbox(bot.id)]);
+		expect(await own.next()).toMatchObject({ params: { notifications: { resourceSubscriptions: [] } } });
+		await own.cancel();
+	});
 
-		// A credential without drive.read can call the item tools of a grant (`itemGrant`), but a resource kind lists
-		// and watches the own data of the caller. So it sees no drive template, and the list still works.
-		await owner.call("directory.set_agent_access", { principal_id: bot.id, scopes: ["mail.read"] });
-		const mailOnly = await modern(bot.key, "resources/list");
-		expect(mailOnly.body?.error).toBeUndefined();
-		const mailResult = mailOnly.body?.result as { resources: { uri: string }[] } | undefined;
-		expect(mailResult?.resources.map((resource) => resource.uri)).toContain(inbox(bot.id));
-		const mailTemplates = (await modern(bot.key, "resources/templates/list")).body?.result as {
-			resourceTemplates: { name: string }[];
-		};
-		expect(mailTemplates.resourceTemplates.map((template) => template.name)).not.toContain("drive.item");
+	// The list of the Drive items names the own drive, where the account scopes decide. An agent from before
+	// migration 0033 without drive.read has no such list. Each other kind still shows.
+	it("lists the other resources of an agent whose account cannot read its own drive", async () => {
+		const { bot } = await seedOrg();
+		await setLegacyScopes(bot.id, ["account.read", "mail.read", "chat.read"]);
+		const listed = await modern(bot.key, "resources/list");
+		expect(listed.body?.error).toBeUndefined();
+		const result = listed.body?.result as { resources: { uri: string }[] };
+		expect(result.resources.map((resource) => resource.uri)).toEqual(expect.arrayContaining([inbox(bot.id), ROOMS]));
 	});
 
 	it("lists the rooms of the caller, and reads the messages of one with the data of REST", async () => {
@@ -658,38 +665,30 @@ describe("MCP subscriptions/listen", () => {
 		await vi.waitFor(async () => expect(await watchSockets(bot.id)).toBe(0));
 	});
 
-	// An admin can change the scopes of a service account while a stream is open. The stream must not keep
-	// the access of its open.
-	it("ends when its service account loses the scope of a watched inbox", async () => {
-		const { owner } = await seedOrg();
-		const account = async (local: string) => {
-			const { principal } = await owner.call("directory.create_service_account", {
-				display_name: local,
-				address: `${local}@dock.test`,
-				scopes: ["account.read", "mail.read"],
+	// A membership decides the access of an agent, and it can end at any time. A stream on a team mailbox checks
+	// its access before each notification, so no notification follows the end, also within RECHECK_MS.
+	it.each([
+		["the membership ends", { remove: true }],
+		["the membership loses mail.read", { remove: false }],
+	] as const)("sends no notification of a team mailbox after %s", async (_name, { remove }) => {
+		const { owner, bot, support } = await seedTeams();
+		const stream = await listen(bot.key, [inbox(support.id)]);
+		expect(await stream.next()).toMatchObject({ method: "notifications/subscriptions/acknowledged" });
+		const mail = (subject: string) =>
+			inject(rawMessage({ from: "x@internet.example", to: "support@dock.test", subject }), "support@dock.test");
+		await mail("First");
+		expect(await stream.next()).toEqual(updated(inbox(support.id)));
+		if (remove) {
+			await owner.call("directory.remove_team_mailbox_member", { mailbox_id: support.id, principal_id: bot.id });
+		} else {
+			await owner.call("directory.add_team_mailbox_member", {
+				mailbox_id: support.id,
+				principal_id: bot.id,
+				scopes: ["mail.send"],
 			});
-			const { api_key } = await owner.call("account.create_api_key", { principal_id: principal.id, label: "feed" });
-			return { id: principal.id, key: api_key.secret, address: `${local}@dock.test` };
-		};
-		const [unscoped, steady] = [await account("unscoped"), await account("steady")];
-		vi.useFakeTimers({ toFake: ["Date"] });
-		const streams = await Promise.all([unscoped, steady].map((service) => listen(service.key, [inbox(service.id)])));
-		for (const stream of streams) {
-			expect(await stream.next()).toMatchObject({ method: "notifications/subscriptions/acknowledged" });
 		}
-		// The first account loses mail.read. The second gets one more scope, which takes nothing away.
-		const set = (input: Parameters<typeof owner.call<"directory.set_agent_access">>[1]) =>
-			owner.call("directory.set_agent_access", input);
-		await set({ principal_id: unscoped.id, scopes: ["account.read"] });
-		await set({ principal_id: steady.id, scopes: ["account.read", "mail.read", "chat.read"] });
-		// The next change after RECHECK_MS makes each stream check its access first.
-		vi.setSystemTime(Date.now() + RECHECK_MS);
-		for (const service of [unscoped, steady]) {
-			await inject(rawMessage({ from: "x@internet.example", to: service.address, subject: "Hello" }), service.address);
-		}
-		const [first, second] = streams;
-		expect(await first?.next()).toBe("closed");
-		expect(await second?.next()).toEqual(updated(inbox(steady.id)));
-		await second?.cancel();
+		await mail("Second");
+		expect(await stream.next()).toBe("closed");
+		await vi.waitFor(async () => expect(await watchSockets(support.id)).toBe(0));
 	});
 });

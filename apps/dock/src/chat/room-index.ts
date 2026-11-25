@@ -293,21 +293,74 @@ interface PrincipalRoom {
 /**
  * The rooms that the index has the principal as a member of, with its role: the named rooms first, in the
  * order of their names, then the direct messages. At most `limit` rooms. `truncated` is true when the
- * principal has more. The access view of a service account reads it. The index can be a moment behind a
- * room, and the room object still decides each access.
+ * principal has more. With `publicOnly`, only the public rooms. The access view of a member reads it. The
+ * index can be a moment behind a room, and the room object still decides each access.
  */
 export async function roomsOfPrincipal(
 	db: D1Database,
 	principalId: string,
 	limit: number,
+	publicOnly = false,
 ): Promise<{ rooms: PrincipalRoom[]; truncated: boolean }> {
 	const { results } = await db
 		.prepare(
 			`SELECT r.id, r.kind, r.name, json_extract(m.peer_json, '$.display_name') AS peer_name, m.role
 			FROM chat_members m JOIN chat_rooms r ON r.id = m.room_id
-			WHERE m.principal_id = ?1 ORDER BY r.name_key IS NULL, r.name_key, r.id LIMIT ?2`,
+			WHERE m.principal_id = ?1 AND (?3 = 0 OR r.kind = 'public')
+			ORDER BY r.name_key IS NULL, r.name_key, r.id LIMIT ?2`,
 		)
-		.bind(principalId, limit + 1)
+		.bind(principalId, limit + 1, publicOnly ? 1 : 0)
 		.all<PrincipalRoom>();
 	return { rooms: results.slice(0, limit), truncated: results.length > limit };
+}
+
+/**
+ * The role that each room gives the principal now, for the rooms of the list where it is a member. The index
+ * and the list of a principal can have a membership from before migration 0033 that the room did not narrow
+ * (`narrowAgentMembers`): a room narrows it when it wakes. This call wakes each room, so the answer has the
+ * narrowed memberships. A room that refuses the principal, or does not have it as a member, is not in the answer.
+ */
+export async function roomRolesOf(
+	env: Pick<Env, "CHAT_ROOM">,
+	actor: ActorRecord,
+	roomIds: readonly string[],
+): Promise<Map<string, RoomRole>> {
+	const roles = new Map<string, RoomRole>();
+	await Promise.all(
+		roomIds.map(async (roomId) => {
+			const found = await env.CHAT_ROOM.get(env.CHAT_ROOM.idFromName(roomId)).get({ roomId, actor });
+			if (!("error" in found) && found.room.role !== null) roles.set(roomId, found.room.role);
+		}),
+	);
+	return roles;
+}
+
+/**
+ * The rooms of `roomsOfPrincipal` for the access view of a member.
+ * - A person gets the public rooms only. An owner or an admin reads the access of a person, and the private
+ *   rooms and the direct messages of a person stay private.
+ * - An agent or a service account whose account scopes do not have `chat.read` and `chat.write` gets each room
+ *   confirmed. Only such an account can have a membership that a room did not narrow.
+ * - Each other account gets the rows of the index.
+ */
+export async function confirmedRoomsOf(
+	env: Pick<Env, "CHAT_ROOM" | "DIRECTORY">,
+	member: { id: string; kind: "human" | "agent"; display_name: string; agent_scopes: readonly string[] },
+	limit: number,
+): Promise<{ rooms: PrincipalRoom[]; truncated: boolean }> {
+	const listed = await roomsOfPrincipal(env.DIRECTORY, member.id, limit, member.kind === "human");
+	if (member.kind !== "agent") return listed;
+	if (member.agent_scopes.includes("chat.read") && member.agent_scopes.includes("chat.write")) return listed;
+	const roles = await roomRolesOf(
+		env,
+		{ principal_id: member.id, kind: "agent", display_name: member.display_name },
+		listed.rooms.map((room) => room.id),
+	);
+	return {
+		rooms: listed.rooms.flatMap((room) => {
+			const role = roles.get(room.id);
+			return role === undefined ? [] : [{ ...room, role }];
+		}),
+		truncated: listed.truncated,
+	};
 }

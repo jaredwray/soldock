@@ -311,7 +311,6 @@ describe("the settings of a mailbox", () => {
 			address: "ci@dock.test",
 			description: "Posts build results",
 			sponsor_id: ada.id,
-			scopes: ["mail.read", "mail.modify"],
 		});
 		const { api_key } = await owner.call("account.create_api_key", { principal_id: principal.id, label: "ci" });
 		const service = api(api_key.secret);

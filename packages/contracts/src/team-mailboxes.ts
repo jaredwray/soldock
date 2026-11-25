@@ -1,4 +1,3 @@
-import { AgentAccessChange } from "./agent-access.ts";
 import { EmailAddress, prefixedId, Timestamp } from "./common.ts";
 import { DisplayName } from "./directory.ts";
 import { defineOperation } from "./operation.ts";
@@ -58,9 +57,9 @@ export type TeamMailbox = z.infer<typeof TeamMailbox>;
 
 const ADMIN_ONLY = "Owners and admins only.";
 
-/** What a membership changes on an agent or a service account. */
+/** What a membership gives to an agent or a service account. */
 const AGENT_MEMBER =
-	"An agent or a service account also gets each scope of its membership that it does not hold. So it can use the mailbox at once. agent_access_changes has these changes. Your credential must hold each scope of the membership of an agent.";
+	"The membership alone decides what an agent or a service account can do in the mailbox. Its account and its API keys do not change, and it can use the mailbox at once with each key.";
 
 export const listTeamMailboxes = defineOperation({
 	name: "directory.list_team_mailboxes",
@@ -96,11 +95,7 @@ export const createTeamMailbox = defineOperation({
 		address: EmailAddress,
 		member_ids: z.array(PrincipalId).max(TEAM_MAILBOX_LIMITS.members).default([]),
 	}),
-	output: z.object({
-		team_mailbox: TeamMailbox,
-		/** The change of each agent and each service account of the first members that got new access. */
-		agent_access_changes: z.array(AgentAccessChange),
-	}),
+	output: z.object({ team_mailbox: TeamMailbox }),
 	errors: ["conflict", "not_found"],
 });
 
@@ -128,8 +123,7 @@ export const addTeamMailboxMember = defineOperation({
 		ADMIN_ONLY,
 		"scopes says what the member can do in this mailbox: mail.read, mail.modify and mail.send. A new member without scopes gets the three.",
 		"For a principal that is a member, scopes replaces the scopes of the membership. Without scopes, the membership does not change.",
-		"Each call for an agent is the decision that the agent can use the mailbox with the scopes of its membership, also a call that removes a scope.",
-		"The member can use the mailbox at once, with each credential that holds the scopes.",
+		"The member can use the mailbox at once. A person uses it with each credential that holds the scopes. An agent uses it with each of its keys.",
 		AGENT_MEMBER,
 		"An agent can never add itself. The outbound policy of an agent also applies to mail that it sends from a team mailbox.",
 	].join(" "),
@@ -143,11 +137,7 @@ export const addTeamMailboxMember = defineOperation({
 		/** What the member can do in the mailbox. The default for a new member is each scope. */
 		scopes: MemberScopes.optional(),
 	}),
-	output: z.object({
-		team_mailbox: TeamMailbox,
-		/** The change of the agent or the service account. Empty for a person, and when the agent had the access. */
-		agent_access_changes: z.array(AgentAccessChange),
-	}),
+	output: z.object({ team_mailbox: TeamMailbox }),
 	errors: ["not_found"],
 });
 

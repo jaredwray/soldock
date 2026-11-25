@@ -1,6 +1,5 @@
 import { EmailAddress, type Principal, type TeamMailbox } from "@asterra/contracts";
 import { type FormEvent, useCallback, useEffect, useId, useState } from "react";
-import { accessChangeText } from "../../lib/accessChange.ts";
 import { api, errorMessage } from "../../lib/api.ts";
 import { Dialog } from "../../lib/Dialog.tsx";
 import { Icon } from "../../lib/icons.tsx";
@@ -138,14 +137,7 @@ function CreateSharedMailboxDialog({ principals, onClose, onCreated }: CreatePro
 				member_ids: [...memberIds],
 			});
 			onCreated(result.team_mailbox);
-			// The toast names each agent that got scopes on its account: they also apply to its own mailbox.
-			const changed = result.agent_access_changes
-				.map((change) => {
-					const agent = principals.find((principal) => principal.id === change.principal_id);
-					return accessChangeText(agent?.display_name ?? "An agent", [change]);
-				})
-				.join("");
-			toast({ message: `Shared mailbox ${result.team_mailbox.display_name} created.${changed}` });
+			toast({ message: `Shared mailbox ${result.team_mailbox.display_name} created.` });
 		} catch (caught) {
 			setError(errorMessage(caught));
 			setBusy(false);
@@ -209,8 +201,8 @@ function CreateSharedMailboxDialog({ principals, onClose, onCreated }: CreatePro
 							</label>
 						))}
 						<p className="field-hint">
-							Each member can read the mailbox, change it and send from it. An agent or a service account also gets
-							these scopes on its account. You can change what a member can do, and add and remove members, later.
+							Each member can read the mailbox, change it and send from it. For an agent or a service account too, the
+							membership alone decides. You can change what a member can do, and add and remove members, later.
 						</p>
 					</fieldset>
 					{error && (

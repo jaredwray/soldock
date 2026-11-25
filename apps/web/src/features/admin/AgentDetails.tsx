@@ -5,13 +5,12 @@ import { Icon } from "../../lib/icons.tsx";
 import { Link } from "../../lib/router.tsx";
 import { useToast } from "../../lib/toast.tsx";
 import { viewPath } from "../../routes.ts";
-import { useSession } from "../auth/session.tsx";
+import { isOrgAdmin, useSession } from "../auth/session.tsx";
 import { ApiKeyManager } from "../settings/ApiKeys.tsx";
 import { TargetWebhooks } from "../settings/TargetWebhooks.tsx";
 import { WEBHOOK_DOMAINS } from "../settings/webhookModel.ts";
 import { AccountRequests } from "./AccountRequests.tsx";
-import { AgentAccess } from "./AgentAccess.tsx";
-import { AgentPermissions } from "./AgentPermissions.tsx";
+import { MemberAccess } from "./MemberAccess.tsx";
 import { OAuthGrants } from "./OAuthGrants.tsx";
 import {
 	draftAfterPolicyChange,
@@ -22,7 +21,7 @@ import {
 	policyDraftFrom,
 	sameOutboundPolicy,
 } from "./policy.ts";
-import { useAgentAccess } from "./useAgentAccess.ts";
+import { useMemberAccess } from "./useMemberAccess.ts";
 
 interface AgentDetailsProps {
 	agent: Principal;
@@ -37,17 +36,16 @@ interface AgentDetailsProps {
 }
 
 /**
- * The tools of one agent, for its sponsor, an owner or an admin: its outbound policy, its permissions
- * (scopes), the apps that connected as it with OAuth, its webhooks, its API keys, the requests to add it
- * to a room, and what it can reach. Each key and each connection has the permissions of the agent. An owner
+ * The tools of one agent, for its sponsor, an owner or an admin: its outbound policy, the apps that connected
+ * as it with OAuth, its webhooks, its API keys, the requests to add it to a room, and a read-only summary of
+ * what it can reach and do. A key and a connection only prove who the agent is. An owner
  * or an admin also gets a link to the mailbox, which they can read. Only the sponsor can add a webhook or an
  * event for the agent. An owner or an admin can clear an event.
  */
 export function AgentDetails({ agent, sponsor, principals, canReadMail, showSponsor, onChanged }: AgentDetailsProps) {
 	const { whoami } = useSession();
 	const policy = agent.outbound_policy ?? { mode: "internal-only", allowlist: [] };
-	// One read of the access gives the Permissions part its scopes, and the Access part its lists.
-	const { access, error, reload, applySaved } = useAgentAccess(agent.id);
+	const { access, error, reload } = useMemberAccess(agent.id);
 	return (
 		<>
 			<div className="admin-card-meta">
@@ -65,15 +63,6 @@ export function AgentDetails({ agent, sponsor, principals, canReadMail, showSpon
 				)}
 			</div>
 			<PolicyForm agent={agent} policy={policy} onChanged={onChanged} />
-			<AgentPermissions
-				agent={agent}
-				access={access}
-				failed={error !== null}
-				onSaved={(saved) => {
-					applySaved(saved);
-					reload();
-				}}
-			/>
 			<OAuthGrants principalId={agent.id} agentName={agent.display_name} />
 			<TargetWebhooks
 				heading={`Webhooks of ${agent.display_name}`}
@@ -88,11 +77,17 @@ export function AgentDetails({ agent, sponsor, principals, canReadMail, showSpon
 				principalId={agent.id}
 				scopesFrom="agent"
 				heading={`API keys of ${agent.display_name}`}
-				note={`A key lets a script or an MCP client without OAuth act as ${agent.display_name}. It has the permissions of the agent, and its own lifetime.`}
+				note={`A key lets a script or an MCP client without OAuth act as ${agent.display_name}. It only proves who the agent is, and it has its own lifetime. The memberships of the agent decide what it can do.`}
 				onChange={reload}
 			/>
 			<AccountRequests account={agent} principals={principals} onApproved={reload} />
-			<AgentAccess agent={agent} access={access} error={error} onRetry={reload} />
+			<MemberAccess
+				member={agent}
+				access={access}
+				error={error}
+				viewer={{ id: whoami.principal.id, admin: isOrgAdmin(whoami.principal) }}
+				onRetry={reload}
+			/>
 		</>
 	);
 }

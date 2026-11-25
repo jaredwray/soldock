@@ -32,8 +32,8 @@ const PRIVILEGED: readonly Scope[] = [
  * Where the scopes of a key come from. A key of a person has its own scopes: `allowedScopes` is the list that
  * a new key can hold, and the form offers only the ones that this session also holds, because a credential
  * cannot grant a scope that it does not hold. A key of an agent and a token of a service account have no
- * scopes of their own: each one has the scopes of its agent. `scopesFrom` is then the word for
- * the agent in the text of the form. The form offers no scopes, and a row shows none.
+ * scopes: each one only proves who the agent is. `scopesFrom` is then the word for the agent in the text of
+ * the form. The form offers no scopes, and a row shows none.
  */
 type KeyScopes =
 	| { allowedScopes: readonly Scope[]; scopesFrom?: undefined }
@@ -87,7 +87,7 @@ export function ApiKeyManager({
 	const toast = useToast();
 	const { whoami } = useSession();
 	const offeredScopes = allowedScopes.filter((scope) => whoami.scopes.includes(scope));
-	// A key of an agent or a token of a service account has the scopes of its agent, and none of its own.
+	// A key of an agent or a token of a service account only proves who the agent is: it has no scopes.
 	const ownScopes = scopesFrom === undefined;
 	const [keys, setKeys] = useState<ApiKey[] | null>(null);
 	const [error, setError] = useState<string | null>(null);
@@ -345,7 +345,7 @@ function CreateKeyForm({
 	narrowed: boolean;
 	noun: "key" | "token";
 	defaultTtl: TtlChoice;
-	/** Set for a key of an agent or a token of a service account: it has the scopes of its agent, and the form offers none. */
+	/** Set for a key of an agent or a token of a service account: it only proves who the agent is, and the form offers no scopes. */
 	scopesFrom: "agent" | "account" | undefined;
 	onCreated: (key: CreatedApiKey) => void;
 }) {
@@ -381,7 +381,7 @@ function CreateKeyForm({
 		try {
 			const result = await api.call("account.create_api_key", {
 				label: label.trim(),
-				// A key of an agent or a service account takes no scopes: it has the scopes of its agent.
+				// A key of an agent or a service account takes no scopes: it only proves who the agent is.
 				...(scopesFrom === undefined ? { scopes: allowedScopes.filter((scope) => scopes.has(scope)) } : {}),
 				...(description.trim() ? { description: description.trim() } : {}),
 				...lifetime,
@@ -473,8 +473,8 @@ function CreateKeyForm({
 			)}
 			{scopesFrom !== undefined ? (
 				<p className="field-hint">
-					The {noun} has the scopes of the {scopesFrom}. Change them under Permissions. Use one {noun} for each system,
-					so that you can rotate or revoke it alone.
+					The {noun} only proves who the {scopesFrom} is. Each mailbox, room and drive decides what the {scopesFrom} can
+					do there. Use one {noun} for each system, so that you can rotate or revoke it alone.
 				</p>
 			) : (
 				<fieldset className="scope-list">

@@ -1,6 +1,9 @@
 /**
- * The scope catalogue. A token carries scopes. An operation names the scopes that it needs. Scopes
- * only limit what a token can do: the owner's role and the resource still decide the rest.
+ * The scope catalogue. An operation names the scopes that it needs. A key of a person carries scopes, and
+ * they only limit what the key can do: the role of the person and the resource still decide the rest. An
+ * agent and a service account have account scopes for their own mailbox, their own drive and the actions
+ * that have no mailbox, room or drive. In a team mailbox, a room and a shared drive, the membership decides
+ * (`resource-access.ts`).
  */
 export const SCOPES = {
 	"chat.webhooks": "Create a webhook endpoint and choose which chat message events Asterra sends to it",
@@ -33,9 +36,9 @@ export type Scope = keyof typeof SCOPES;
 export const ALL_SCOPES = Object.keys(SCOPES) as Scope[];
 
 /**
- * The most that an agent token can hold. An agent cannot manage keys or the directory, so it can
- * never change its own policy or mint a wider token. An agent has its own drive, as it has its own mailbox.
- * An agent is a member of rooms, as a person is.
+ * The account scopes of a new agent, and the most that an agent can hold. An agent cannot manage keys or the
+ * directory, so it can never change its own policy or mint a wider token. An agent has its own drive, as it
+ * has its own mailbox. An agent is a member of rooms, as a person is.
  */
 export const AGENT_SCOPES: readonly Scope[] = [
 	"chat.webhooks",
@@ -54,10 +57,9 @@ export const AGENT_SCOPES: readonly Scope[] = [
 ];
 
 /**
- * The most that a service account can hold. An owner or an admin sets the scopes of each account, and each
- * token of the account has them. A service account gives a script or a system
- * access through the API. It cannot manage keys or the directory, so it can never widen its own access.
- * It cannot create a webhook. Its outbound policy limits its mail, as for an agent.
+ * The account scopes of a new service account, and the most that it can hold. A service account gives a
+ * script or a system access through the API. It cannot manage keys or the directory, so it can never widen
+ * its own access. It cannot create a webhook. Its outbound policy limits its mail, as for an agent.
  */
 const SERVICE_SCOPE_LIST = [
 	"account.read",
@@ -77,24 +79,22 @@ export type ServiceScope = (typeof SERVICE_SCOPE_LIST)[number];
 export const SERVICE_SCOPES: readonly Scope[] = SERVICE_SCOPE_LIST;
 
 /**
- * The text of each scope for a service account. `SCOPES` is written for a person ("your
- * mail") and names rights of owners and admins, which a service account never has. These texts name the
- * service account instead.
+ * The text of each account scope for a service account. `SCOPES` is written for a person ("your mail") and
+ * names rights of owners and admins, which a service account never has. These texts name the service account
+ * instead. In a team mailbox, a room and a shared drive, the membership decides, so these texts name only the
+ * own mailbox and the own drive of the account.
  */
 export const SERVICE_SCOPE_DESCRIPTIONS: Readonly<Record<ServiceScope, string>> = {
 	"account.read": "Read the account of the service account",
 	"directory.read": "Read the directory: the people, agents and service accounts of the organization",
-	"mail.read": "Read the mail, labels and Screener of the service account, and those of its team mailboxes",
-	"mail.modify":
-		"Change labels, archive, trash, star and mark the mail of the service account and of its team mailboxes",
-	"mail.send": "Send mail from the address of the service account and from the addresses of its team mailboxes",
-	"drive.read":
-		"Read the drive of the service account, the items that others shared with it, and the shared drives that it is a member of",
-	"drive.write":
-		"Create, change, move and delete the items of its drive and of the shared drives where its role lets it, and change the items that others let it edit",
-	"drive.share": "Give and remove access to the items of its drive",
-	"chat.read": "Read the rooms and direct messages of the service account, and find the public rooms",
-	"chat.write": "Create and join rooms, change their members, post, change and delete messages, and set what it read",
+	"mail.read": "Read the mail, labels and Screener of the own mailbox of the service account",
+	"mail.modify": "Change labels, archive, trash, star and mark the mail of the own mailbox of the service account",
+	"mail.send": "Send mail from the own address of the service account",
+	"drive.read": "Read the own drive of the service account, and list the items that others shared with it",
+	"drive.write": "Create, change, move and delete the items of the own drive of the service account",
+	"drive.share": "Give and remove access to the items of its own drive",
+	"chat.read": "Find the public rooms, and read the threads, mentions, saved messages and settings of the account",
+	"chat.write": "Create rooms, open direct messages, and change the sections, reminders and settings of the account",
 };
 
 /** The text of a scope for a caller of this kind: the service text for a service account. */

@@ -10,9 +10,9 @@ async function post<T>(context: BrowserContext, path: string, data: unknown): Pr
 	return (await response.json()) as T;
 }
 
-// A person who manages an agent gives it a role in a shared drive, in the settings of the drive. The agent
-// gets the Drive scopes of the role with the membership, so nobody opens Admin › Members for a second
-// change. A remove ends the access of the agent to the drive. The scopes stay on its account.
+// An admin gives an agent a role in a shared drive, in the settings of the drive. The role alone decides what
+// the agent can do there, and nothing changes on the account of the agent. A remove ends the access of the
+// agent to the drive.
 test("an admin gives an agent a role in a shared drive, and the agent gets and loses its access with the membership", async ({
 	browser,
 }) => {
@@ -27,12 +27,11 @@ test("an admin gives an agent a role in a shared drive, and the agent gets and l
 		const { principal: self } = (await (await admin.request.get("/api/v1/account")).json()) as {
 			principal: { id: string };
 		};
-		// A new agent holds only account.read, and it is a member of no shared drive.
+		// A new agent is a member of no shared drive.
 		const { principal: agent } = await post<{ principal: { id: string } }>(admin, "/api/v1/directory/principals", {
 			kind: "agent",
 			display_name: agentName,
 			address: `filer-${local}@example.com`,
-			scopes: ["account.read"],
 		});
 		agentId = agent.id;
 		const { shared_drive: drive } = await post<{ shared_drive: { id: string } }>(admin, "/api/v1/drive/shared-drives", {
@@ -41,34 +40,28 @@ test("an admin gives an agent a role in a shared drive, and the agent gets and l
 		});
 		driveId = drive.id;
 		const accessOf = async () =>
-			(await (await admin.request.get(`/api/v1/directory/agents/${agent.id}/access`)).json()) as unknown;
+			(await (await admin.request.get(`/api/v1/directory/agents/${agent.id}/access`)).json()) as { scopes: string[] };
+		const { scopes } = await accessOf();
 
 		const page = await admin.newPage();
 		await page.goto("/admin/shared-drives");
 		const card = page.locator("details.admin-card").filter({ hasText: name });
 		await card.locator("summary").click();
 
-		// The form tells what the role changes on the account of an agent. The role of the form is Editor.
+		// The form tells that the role alone decides for an agent. The role of the form is Editor.
 		await card.getByRole("combobox", { name: "Add a member" }).click();
 		await page.getByRole("option", { name: new RegExp(`^${agentName}`) }).click();
-		await expect(card.getByText("it also gets the Drive scopes of its role", { exact: false })).toBeVisible();
+		await expect(card.getByText("The role alone decides what this account can do", { exact: false })).toBeVisible();
 		await card.getByRole("button", { name: "Add member" }).click();
-		await expect(
-			page.getByText(`${agentName} now also holds drive.read, drive.write.`, { exact: false }),
-		).toBeVisible();
-		expect(await accessOf()).toMatchObject({
-			scopes: ["account.read", "drive.read", "drive.write"],
-			shared_drives: [{ id: drive.id, role: "editor" }],
-		});
+		await expect(page.getByText(`${agentName} is now a member of ${name}.`)).toBeVisible();
+		await expect(page.getByText("now also holds", { exact: false })).toHaveCount(0);
+		expect(await accessOf()).toMatchObject({ scopes, shared_drives: [{ id: drive.id, role: "editor" }] });
 
-		// The admin removes the agent. The membership ends. The scopes stay on the account.
+		// The admin removes the agent. The membership ends, and the account still does not change.
 		await card.getByRole("button", { name: `Remove ${agentName} from ${name}` }).click();
 		await page.getByRole("button", { name: "Remove member" }).click();
 		await expect(page.getByText(`${agentName} is no longer a member of ${name}.`)).toBeVisible();
-		expect(await accessOf()).toMatchObject({
-			scopes: ["account.read", "drive.read", "drive.write"],
-			shared_drives: [],
-		});
+		expect(await accessOf()).toMatchObject({ scopes, shared_drives: [] });
 	} finally {
 		const headers = { origin: BASE_URL };
 		if (driveId) await admin.request.delete(`/api/v1/drive/shared-drives/${driveId}`, { headers });

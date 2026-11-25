@@ -28,14 +28,9 @@ test("an agent asks to share an item with an agent, and its manager approves the
 	const secondItem = unique("Drafts");
 	const ids: string[] = [];
 	try {
-		const asker = await createAgent(admin, request, askerName, [
-			"account.read",
-			"drive.read",
-			"drive.write",
-			"drive.share",
-		]);
+		const asker = await createAgent(admin, request, askerName);
 		ids.push(asker.id);
-		const helper = await createAgent(admin, request, helperName, ["account.read"]);
+		const helper = await createAgent(admin, request, helperName);
 		ids.push(helper.id);
 
 		// The agent owns the folder, and still cannot share it with the other agent. It can ask.

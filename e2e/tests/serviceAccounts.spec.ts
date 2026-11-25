@@ -2,9 +2,10 @@ import { expect, test } from "@playwright/test";
 import { signIn, unique } from "../support/chat.ts";
 import { BASE_URL } from "../support/server.ts";
 
-// An admin makes a service account with scopes in Admin › Members, gives it a token with a lifetime, sees
-// the call of the token in the activity log, changes the permissions of the account, and revokes the token.
-test("an admin creates a service account with scopes and a 7-day token, sees its activity, rotates it, changes its permissions and revokes it", async ({
+// An admin makes a service account in Admin › Members, gives it a token with a lifetime, sees the call of the
+// token in the activity log, rotates the token, and revokes it. The account has no permissions editor: each
+// mailbox, room and drive decides what it can do, and a token only proves who it is.
+test("an admin creates a service account and a 7-day token, sees its activity, rotates it and revokes it", async ({
 	browser,
 }) => {
 	const context = await signIn(browser, "tomasz");
@@ -21,9 +22,8 @@ test("an admin creates a service account with scopes and a 7-day token, sees its
 		await dialog.getByLabel("Display name").fill(name);
 		await dialog.getByLabel("Address", { exact: true }).fill(local);
 		await dialog.getByLabel("Description").fill("Posts build results");
-		// The account starts with account.read. The admin adds a scope: the scopes are on the account.
-		await expect(dialog.getByRole("checkbox", { name: /^account\.read/ })).toBeChecked();
-		await dialog.getByRole("checkbox", { name: /^mail\.read/ }).check();
+		// The form has no scope editor.
+		await expect(dialog.getByRole("checkbox")).toHaveCount(0);
 		await dialog.getByRole("button", { name: "Create service account" }).click();
 		await expect(dialog).toBeHidden();
 
@@ -35,9 +35,8 @@ test("an admin creates a service account with scopes and a 7-day token, sees its
 		const tokens = member.getByRole("table", { name: /^Tokens of/ });
 		const activity = member.getByRole("table", { name: /^Activity of/ });
 
-		// The Permissions part shows the scopes of the account. The token form has no scopes.
-		await expect(member.getByRole("checkbox", { name: /^mail\.read/ })).toBeChecked();
-		await expect(member.getByRole("checkbox", { name: /^chat\.read/ })).not.toBeChecked();
+		// No permissions editor. The token form has no scopes.
+		await expect(member.getByRole("button", { name: "Save permissions" })).toHaveCount(0);
 		// The form selects 90 days first. Choose 7 days.
 		await member.getByLabel("New token label").fill("GitHub Actions");
 		await member.getByRole("combobox", { name: "Expires" }).click();
@@ -54,8 +53,9 @@ test("an admin creates a service account with scopes and a 7-day token, sees its
 		expect(whoami.status()).toBe(200);
 		const body = (await whoami.json()) as { principal: { id: string; kind: string }; scopes: string[] };
 		expect(body.principal.kind).toBe("service");
-		// The token has the scopes of the account.
-		expect(body.scopes).toEqual(["account.read", "mail.read"]);
+		// The token acts with each account scope of a new service account.
+		expect(body.scopes).toContain("mail.read");
+		expect(body.scopes).not.toContain("mail.webhooks");
 		accountId = body.principal.id;
 		await expect(async () => {
 			await member.getByRole("button", { name: "Refresh" }).click();
@@ -81,13 +81,6 @@ test("an admin creates a service account with scopes and a 7-day token, sees its
 		await expect(tokens.getByRole("row").filter({ hasText: "GitHub Actions" })).not.toContainText("Old secret works");
 		const old = await context.request.get("/api/v1/account", { headers: { authorization: `Bearer ${secret}` } });
 		expect(old.status()).toBe(401);
-
-		// A change of the permissions applies to the token at once, without a new secret.
-		await member.getByRole("checkbox", { name: /^chat\.read/ }).check();
-		await member.getByRole("button", { name: "Save permissions" }).click();
-		await expect(page.getByText(`Permissions of ${name} saved.`)).toBeVisible();
-		const changed = await context.request.get("/api/v1/account", { headers: { authorization: `Bearer ${rotated}` } });
-		expect(await changed.json()).toMatchObject({ scopes: ["account.read", "mail.read", "chat.read"] });
 
 		await member.getByRole("button", { name: "Revoke token GitHub Actions" }).click();
 		await page.getByRole("dialog").getByRole("button", { name: "Revoke token" }).click();

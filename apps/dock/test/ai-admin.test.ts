@@ -105,7 +105,6 @@ describe("the AI settings", () => {
 			display_name: "CI Pipeline",
 			address: "ci@dock.test",
 			sponsor_id: ada.id,
-			scopes: ["directory.read", "mail.read"],
 		});
 		const { api_key } = await owner.call("account.create_api_key", { principal_id: service.id, label: "ci" });
 		expect(await codeOf(api(api_key.secret)("ai.get_settings", {}))).toBe("forbidden");

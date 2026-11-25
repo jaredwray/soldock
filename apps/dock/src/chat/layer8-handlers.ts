@@ -9,18 +9,15 @@ import {
 	type ChatSavedMessage,
 	type ChatScheduledMessage,
 	type ChatSection,
-	defaultRoomMemberScopes,
 	type OperationName,
 } from "@asterra/contracts";
 import { liveShareRequestIds } from "../drive/index.ts";
 import {
 	type ActivityRecord,
-	assertMemberGrants,
 	type CallContext,
 	credentialBinding,
 	type DraftRecord,
 	getPrincipals,
-	giveMemberAccess,
 	isAdmin,
 	type ReminderRecord,
 	recordServiceMemberships,
@@ -737,36 +734,25 @@ export const chatLayer8Handlers: Pick<HandlerMap<CallContext>, Layer8ChatOperati
 			);
 		}
 		const peers = await actorsOf(call, uniqueOthers);
-		// An agent that the caller manages gets the access of its membership, as in `chat.open_dm`.
-		const principals = await getPrincipals(call.env.DIRECTORY, uniqueOthers);
-		const memberships = principals.map((principal) => ({
-			principal_id: principal.id,
-			scopes: defaultRoomMemberScopes(principal.kind),
-		}));
-		const scopesOf = (principal: { kind: "human" | "agent" }) => defaultRoomMemberScopes(principal.kind);
 		if (peers.length === 1) {
 			const peer = peers[0] as ActorRecord;
 			const dmId = await dmRoomId(call.caller.id, peer.principal_id);
-			assertMemberGrants(call, principals, scopesOf);
 			const opened = openRoom(call, dmId);
 			const res = accept(await opened.room.openDm(opened.ctx, peer));
 			if (res.created) {
 				auditOk(call, "chat.open_dm", res.room.id);
 				recordServiceMemberships(call, [peer.principal_id], "chat.open_dm", res.room.id);
 			}
-			const access = await giveMemberAccess(call, memberships);
-			return { room: toRoom(res.room), agent_access_changes: access.changes, agent_access_pending: access.pending };
+			return { room: toRoom(res.room) };
 		}
 		const roomId = await groupDmRoomId([call.caller.id, ...uniqueOthers]);
-		assertMemberGrants(call, principals, scopesOf);
 		const opened = openRoom(call, roomId);
 		const res = accept(await opened.room.openGroupDm(opened.ctx, peers));
 		if (res.created) {
 			auditOk(call, "chat.open_group_dm", res.room.id);
 			recordServiceMemberships(call, uniqueOthers, "chat.open_group_dm", res.room.id);
 		}
-		const access = await giveMemberAccess(call, memberships);
-		return { room: toRoom(res.room), agent_access_changes: access.changes, agent_access_pending: access.pending };
+		return { room: toRoom(res.room) };
 	},
 
 	// --- Room lifecycle, posting rules, retention -----------------------------------------------

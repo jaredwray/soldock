@@ -1,10 +1,13 @@
 import type { Principal } from "@asterra/contracts";
 import { AgentDetails } from "./AgentDetails.tsx";
+import type { AccessViewer } from "./accessSummary.ts";
+import { MemberAccess } from "./MemberAccess.tsx";
 import { MemberAccount } from "./MemberAccount.tsx";
 import { MemberAvatar, MemberChips, MemberName } from "./MemberIdentity.tsx";
 import { ProfileForm } from "./ProfileForm.tsx";
 import { ResetSignIn } from "./ResetSignIn.tsx";
 import { ServiceAccountDetails } from "./ServiceAccountDetails.tsx";
+import { useMemberAccess } from "./useMemberAccess.ts";
 
 interface MemberPageProps {
 	principal: Principal;
@@ -26,9 +29,11 @@ interface MemberPageProps {
 /**
  * The page of one person, agent or service account in Admin › Members (`/admin/members/<prn_id>`). A
  * summary with the avatar, the address and the chips comes first. Each part follows in its own card. An
- * owner or an admin changes the account here. An agent also has the policy, the permissions, the connected
- * apps, the webhooks, the API keys, the member requests and the access. A service account has the policy,
- * the permissions, the tokens, the member requests, the access and the activity.
+ * owner or an admin changes the account here. An agent also has the policy, the connected apps, the
+ * webhooks, the API keys, the member requests and a read-only summary of its access. A service account has
+ * the policy, the tokens, the member requests, the access summary and the activity. An owner or an admin also
+ * sees the access summary of a person. Each mailbox, room and drive decides what a member can do there, so the
+ * page has no permissions editor.
  */
 export function MemberPage({ principal, me, humans, principals, elevated, onChanged, onDeleted }: MemberPageProps) {
 	const isAgent = principal.kind === "agent";
@@ -57,6 +62,9 @@ export function MemberPage({ principal, me, humans, principals, elevated, onChan
 				{canEdit && <ProfileForm me={me} principal={principal} humans={humans} onChanged={onChanged} />}
 				{elevated && !canEdit && <p className="panel-note">Only the owner can change this account.</p>}
 				{canRemove && principal.kind === "human" && <ResetSignIn person={principal} />}
+				{elevated && principal.kind === "human" && (
+					<PersonAccess person={principal} viewer={{ id: me.id, admin: elevated }} />
+				)}
 				{isAgent && (
 					<AgentDetails
 						agent={principal}
@@ -76,4 +84,10 @@ export function MemberPage({ principal, me, humans, principals, elevated, onChan
 			</div>
 		</>
 	);
+}
+
+/** The read-only Access summary of a person, for an owner or an admin. */
+function PersonAccess({ person, viewer }: { person: Principal; viewer: AccessViewer }) {
+	const { access, error, reload } = useMemberAccess(person.id);
+	return <MemberAccess member={person} access={access} error={error} viewer={viewer} onRetry={reload} />;
 }

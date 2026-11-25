@@ -1,5 +1,4 @@
 import { ApiError, type ChatActivityItem, type ChatMemberRequest } from "@asterra/contracts";
-import { type RoomAccessResult, requestAccessText } from "../../lib/accessChange.ts";
 import { rightsOf, rightsText } from "./roomScopes.ts";
 
 // The texts and the rules of a member request: an agent asks to add an agent or a service account to a
@@ -48,13 +47,9 @@ export function decisionLabel(decision: "approve" | "deny", request: MemberReque
 	return `${verb} the request to add ${request.subjectName} to ${requestRoomText(request.roomName)}`;
 }
 
-/**
- * The toast after an approval. It also tells the scopes that the account got with the membership: the
- * scopes apply to the account, not only to this room.
- */
-export function approvedText(request: MemberRequestSummary, result: RoomAccessResult): string {
-	const access = requestAccessText(result, () => request.subjectName);
-	return `${request.subjectName} is now a member of ${requestRoomText(request.roomName)}.${access}`;
+/** The toast after an approval. The membership alone decides what the account can do in the room. */
+export function approvedText(request: MemberRequestSummary): string {
+	return `${request.subjectName} is now a member of ${requestRoomText(request.roomName)}.`;
 }
 
 /** The toast after a denial. */

@@ -16,6 +16,12 @@ export interface Caller {
 	kind: PrincipalKind;
 	scopes: ReadonlySet<string>;
 	credential: string;
+	/**
+	 * The scopes of this call that the resource decides and the caller scopes do not: for an agent, the
+	 * membership of a team mailbox, a room or a shared drive, or a share of an item. The object of the
+	 * resource then checks them on the call. Unset for a caller whose scopes decide each call.
+	 */
+	resourceScopes?: ((operation: Operation, rawInput: unknown) => readonly string[]) | undefined;
 }
 
 /** The name of each caller kind at the start of an error text. */
@@ -108,6 +114,16 @@ function isTooDeep(input: unknown): boolean {
 	return false;
 }
 
+/**
+ * The scopes that the caller holds for this call: its own scopes, and the scopes that the resource of the call
+ * decides. The resource check comes later, in the handler and in the object of the resource.
+ */
+function heldScopes(operation: Operation, caller: Caller, rawInput: unknown): ReadonlySet<string> {
+	const decided = caller.resourceScopes?.(operation, rawInput) ?? [];
+	if (decided.length === 0) return caller.scopes;
+	return new Set([...caller.scopes, ...decided]);
+}
+
 async function run<C extends { caller: Caller }>(
 	operation: Operation,
 	handler: AnyHandler<C>,
@@ -118,12 +134,13 @@ async function run<C extends { caller: Caller }>(
 	if (!operation.callers.includes(call.caller.kind)) {
 		throw new OperationError("forbidden", `${CALLER_NAMES[call.caller.kind]} cannot call ${operation.name}.`);
 	}
-	// An agent without the scopes of an item operation can still reach the items that a person shared with it. The
-	// handler gets `grantOnly`, and the drive then counts only such grants (`itemGrant`).
-	const grantOnly =
-		!holdsOperationScopes(operation, call.caller.scopes) && callableWithItemGrant(operation, call.caller.kind);
-	if (!grantOnly && !holdsOperationScopes(operation, call.caller.scopes)) {
-		const missing = operation.scopes.filter((scope) => !call.caller.scopes.has(scope));
+	const held = heldScopes(operation, call.caller, rawInput);
+	// A membership or a share decides a call that names a shared resource (`heldScopes`). An agent without the
+	// scopes of an item operation can still reach the items that a person shared with it in a call that no
+	// resource decides. The handler then gets `grantOnly`, and the drive counts only such grants (`itemGrant`).
+	const grantOnly = !holdsOperationScopes(operation, held) && callableWithItemGrant(operation, call.caller.kind);
+	if (!grantOnly && !holdsOperationScopes(operation, held)) {
+		const missing = operation.scopes.filter((scope) => !held.has(scope));
 		const needed = missing.length > 0 ? missing : (operation.anyOfScopes ?? []);
 		const scopeText = missing.length > 0 ? needed.join(", ") : `one of ${needed.join(", ")}`;
 		throw new OperationError("forbidden", `The credential does not have the scope ${scopeText}.`);

@@ -91,7 +91,8 @@ A room is one `ChatRoomDO`. The id of the room names the object.
 - For a principal that is not a member, `chat.get_room` and `chat.join_room` need the room in the
   index of the directory as a public room. See [A fresh start of the directory](#a-fresh-start-of-the-directory).
 - The organization role gives no access. An owner or an admin of the organization reads a room
-  only as a member of it.
+  only as a member of it. The access summary of a person (`directory.get_member_access`) shows an owner
+  or an admin the public rooms of the person only, not the private rooms or the direct messages.
 - `chat.join_room` works for a public room only. Only a person can call it (`callers: ["human"]`). A
   person who is a member of the room adds an agent or a service account with `chat.add_members`. An
   agent that is a member asks with `chat.request_member`
@@ -168,25 +169,17 @@ person, an agent and a service account. This is the model of a
 - **With the credential.** `chat.add_members` is a scope of a membership only: no credential holds it. A
   call needs `chat.read` or `chat.write` in its credential, as before, and its scope in the membership.
 - The room object stores the scopes and makes each check, in the step of the read or the change. The
-  index of the directory has no copy of them yet, so `directory.get_agent_access` shows the role only.
+  index of the directory has no copy of them yet, so `directory.get_member_access` shows the role only.
 
 ### An agent as a new member
 
-A membership says what the agent can do in the room. The agent also needs the chat scopes on its account
-([`identity`](../identity/README.md#access-of-an-agent)). The agent reaches the room because it is a
-member, as a person does ([`identity`](../identity/README.md#where-an-agent-can-act)).
+The membership alone decides what an agent or a service account can do in the room, as for a person
+([`identity`](../identity/README.md#access-of-an-agent)). The agent uses the room at once, with each of
+its keys, and nothing changes on its account. A remove ends the access at the next call, and the room
+closes the sockets of the member in the same step.
 
-- **Who.** A person who can change the access of the agent: its sponsor, an owner or an admin
-  (`canManageAgent`). The credential must hold `directory.write`, as `directory.set_agent_access` needs
-  it (`managedAgents` of `identity`). So a key of a manager with only the chat scopes changes no agent.
-- **What.** A manager who makes the agent a member decided that the agent can use the room. That call
-  gives the agent the chat scopes of its membership that it does not hold (`giveMemberAccess`). The
-  result has each change in `agent_access_changes`. An entry is `{ principal_id, scopes_added }`.
-- **Which calls.** `chat.create_room`, `chat.add_members`, `chat.set_member_scopes`, `chat.open_dm`,
-  `chat.open_group_dm` and `chat.approve_member_request`. Each call does it, also for a member from before.
-- **A person who is a member and does not manage the agent** can add it. The agent then uses the room
-  with the scopes that it holds. That membership gives the agent no new scope: its sponsor, an owner or
-  an admin gives one. An agent never changes a different agent, and it does not add one
+- **Who.** Each member with `chat.add_members` adds an agent, and the owner changes its scopes. Nobody needs
+  to manage the agent. An agent never adds a different agent
   ([A request of an agent to add an agent](#a-request-of-an-agent-to-add-an-agent)).
 - **Who joins.** `chat.join_room` accepts people only. An agent or a service account cannot join a room:
   a person who is a member adds it with `chat.add_members`.
@@ -197,24 +190,45 @@ member, as a person does ([`identity`](../identity/README.md#where-an-agent-can-
   to the next agent with no person in the decision.
 - **The next owner.** When the owner leaves, the person that joined first becomes the owner. An agent
   becomes the owner only in a room without a person (`NEXT_OWNER_ORDER`). The owner has each scope, so a
-  person comes first. The room does not know if a principal is archived or deleted. So the room reads
+  person comes first. An agent becomes the owner only when its membership has `chat.write`. An agent that
+  can only read never gets each scope with the role, and a room without such a member has no owner. The room does not know if a principal is archived or deleted. So the room reads
   its members in the directory one time, and gives itself to the first member that can act
   (`settleOwner`). The remove, that read and the write of the owner are one step of the room, so each
   member is in the read. Without this, an archived person as the owner stops each change of the room.
-- **No escalation.** The credential of the call must hold each chat scope that the agent gets
-  (`assertMemberGrants`, before the room writes the membership). If it does not, the call gets
-  `forbidden`, and the room writes nothing. A call that gives the agent nothing,
-  for example one that removes a scope, needs no scope for it. A sponsor who is not an admin changes the agent
-  only while that person is still its sponsor: the write has this condition.
-- **Two stores.** The room object owns the members, and the directory owns the access of an agent. So the
-  two writes are not one transaction: the membership comes first. The write of the access matches only
-  while `access_version` is the one of the read, and the handler tries three times.
-- **An agent that did not get its access** does not fail the call: the members are in the room, and a
-  second `chat.create_room` would make a second room. The result names the agent in
-  `agent_access_pending`. The cause is a parallel change of the access of the agent at each try
-  (`access_version`). A later call for the member completes the access.
-- **A removed agent.** `chat.remove_member` changes nothing on the account of the agent: the agent keeps
-  its scopes. The membership is gone, so the agent does not reach the room.
+- **The account scopes.** The room decides a call of an agent that names a room, when the room checks the
+  scope of the operation in the membership. The room also decides the joined and starred views of
+  `chat.list_rooms`. The invoker does not check the chat scopes of the account for these calls. The
+  account scopes still decide `chat.create_room`, `chat.open_dm`, `chat.open_group_dm` and the chat
+  operations without a room. They also decide the calls where the room does not check the scope of the
+  operation ([`identity`](../identity/README.md#access-of-an-agent)):
+  - The personal state of the caller for a room: `chat.mark_read`, `chat.star_room`, `chat.follow_thread`,
+    `chat.mark_thread_read`, `chat.set_room_section`, `chat.set_room_notification_level`, the saved
+    messages, the reminders, the drafts and the list of the scheduled messages.
+  - `chat.invoke_slash_command`, and `chat.remove_member` when an agent removes itself.
+  - `chat.get_room` of a public room for an agent that is not a member: the handler checks `chat.read` on
+    the account.
+
+  `chat.schedule_message` stays with the room. The handler refuses a member that cannot post, and the room
+  checks `chat.write` again when the message is due.
+- **Rooms from before.** Before migration `0033`, a call of an agent in a room needed the chat scope on its
+  account too. Each room narrows its agent members one time, before its first call after the deploy
+  (`narrowAgentMembers`, in `blockConcurrencyWhile` of the constructor). It reads the account scopes of the
+  agent members from the directory:
+  - An agent without `chat.read` leaves the room, because each member reads. The room ends its sockets.
+  - An agent without `chat.write` keeps `chat.read` only. An agent that owned the room becomes a member.
+  - The room gives itself a new owner after it narrowed each agent: the next member in the order of the
+    owners that the step did not narrow or remove. An owner has each scope, so a narrowed agent never
+    becomes the owner. A room without such a member has no owner, and `chat.admin_assign_owner` gives it
+    one.
+  - The key `agent_access_narrowed` of `meta` records the step. A new room writes it at its first
+    migration, so the step never narrows a membership from after the deploy. A failed read of the
+    directory throws, and the room serves no call until the step succeeds.
+  - A person who opens a direct message again gives it back to an agent that the step removed
+    (`restorePeers`). An agent never gives it back to a different agent.
+  - For an agent without `chat.read` on its account, `chat.list_rooms` asks each room of its page
+    (`roomRolesOf`). So a room that did not narrow never shows in the list. `directory.get_member_access`
+    asks each room of its answer for an agent without `chat.read` or `chat.write`
+    (`confirmedRoomsOf`).
 
 ### A request of an agent to add an agent
 
@@ -267,16 +281,12 @@ the messages from before. So a person decides that the account gets them.
 - **An approval.** After the delete, the room makes the account a member with the scopes of the request
   (`admitMember`). The agent that asked must still be a member with `chat.add_members` and each scope of
   the request. If the room refuses, the call gets `conflict`, and the request is gone. When a person
-  added the account in the meantime, the approval gives the account no scope: that membership is not the
-  one of the request. A limit from an
+  added the account in the meantime, the room keeps that membership as it is. A limit from an
   earlier membership of the account still applies (`left_scopes`, [Member scopes](#member-scopes)).
-- **The access of the account.** After the write of the room, `giveMemberAccess` gives the account the
-  chat scopes that it lacks, as for [an agent as a new member](#an-agent-as-a-new-member). The credential
-  must hold `directory.write` for that. The result has `agent_access_changes` and `agent_access_pending`.
-  `assertMemberGrants` refuses the call first when the credential cannot give a scope.
-- **A failed write.** When the room or the directory fails after the delete, the request is gone and the
-  account can be without the membership or without its scopes. The agent asks again, or a person who
-  manages the account adds it to the room or sets its scopes.
+- **The access of the account.** The membership alone decides what the account can do in the room
+  ([an agent as a new member](#an-agent-as-a-new-member)). Nothing changes on the account.
+- **A failed write.** When the room fails after the delete, the request is gone and the account is not a
+  member. The agent asks again, or a person who manages the account adds it to the room.
 - **A denial.** `chat.deny_member_request` deletes the request. The account does not become a member.
 - **The activity item.** One person gets an item of the kind `member_request` in `chat.list_activity`
   (`deciderOf`). For an agent, that person is its sponsor. For a service account, that person is its
@@ -877,10 +887,8 @@ A socket stays open after its request. It must not outlive the access that opene
 - An OAuth access token lasts one hour, so each socket of an OAuth client closes in that time. While
   the connection works, the close code is `reconnect`: the client gets a new token and opens a new
   socket. A revoked connection gets `ended`.
-- A change of the scopes of an agent (`directory.set_agent_access`) changes its
-  `access_version`. Each socket of an API key or an OAuth token of the agent then closes at its next
-  check with `reconnect`. The credential still works, and the new socket has the new access
-  ([identity](../identity/README.md#access-of-an-agent)).
+- A remove of a member closes its sockets in the same step with `ended`. A change of the scopes of a member
+  applies to its next frame: a member without `chat.write` never types.
 - If the check fails, those sockets close with the code `reconnect`. The Worker then authenticates
   each new socket.
 - A socket lives one hour at most (`SOCKET_MAX_MS`). The room closes it at the next event after
@@ -892,7 +900,7 @@ A socket stays open after its request. It must not outlive the access that opene
 
 | Close code | Meaning | What the client does |
 | --- | --- | --- |
-| `4001` (`reconnect`) | The Worker must authenticate the credential again: the socket is one hour old, the check failed, an OAuth access token stopped while its connection works, or the scopes of the agent of a key or a token changed | Opens a new socket. An OAuth client uses its new token |
+| `4001` (`reconnect`) | The Worker must authenticate the credential again: the socket is one hour old, the check failed, or an OAuth access token stopped while its connection works | Opens a new socket. An OAuth client uses its new token |
 | `4002` (`replaced`) | The member opened more than 8 sockets to the room (`CHAT_LIMITS.socketsPerMember`), and this one is the oldest | Opens no new socket for this one |
 | `4003` (`ended`) | The credential stopped and cannot be renewed, or the principal is not a member now | Opens no new socket with this credential |
 | `1008` | The client sent an unknown frame | Use the frames in [Socket events](#socket-events) |
@@ -1339,6 +1347,7 @@ Known limits:
 | Webhook event outbox | `ChatRoomDO` table `webhook_outbox` | Message ids, member ids, membership ids, the subscription sequence, event times and queue retry state. No message text. Removed after queue acceptance |
 | Chat webhook subscriptions | D1 `webhook_subscriptions`, owned by `webhooks`. The old table `chat_webhooks` stays | See the [shared data inventory](../webhooks/README.md#data-inventory) |
 | Schema version, the stamp of the states | `ChatRoomDO` table `meta` | `search_stamp` grows with each batch that the room sends to the search index. `principal_stamp` grows with each state that the room sends. A restore of a room object must not make the stamp lower: a `PrincipalDO` ignores each state with a lower stamp. Set it above the stamps from before, or clear the rows of the room in the `PrincipalDO`s |
+| The one-time narrow of agents | `ChatRoomDO` table `meta`, key `agent_access_narrowed` | Set when the room narrowed its agent members after migration `0033`, or at the first migration of a new room. A restore keeps it |
 | The joined rooms of a principal | `PrincipalDO` table `chat_rooms` | One object for each principal. Room fields, role, read marker, unread count, the star, the other member of a `dm` room, and the stamp. A room that the principal left keeps a row with `joined = 0` and no fields. Rebuildable from the room objects |
 | The changes for a principal | `PrincipalDO` table `chat_addressed` | One row for each joined room that has a change for the principal: the time, the version and the facts of the change (`addressed_json` of the member row). No message text. Rebuildable from the room objects |
 | Notification settings and unread total | `PrincipalDO` metadata and `chat_notification_levels` | One default, quiet hours, a sound setting, room overrides and the aggregate unread count |
@@ -1371,7 +1380,7 @@ reference to their bytes.
 - **Custom emoji**: org owners and admins upload raster images (PNG, JPEG, GIF, WebP; up to 256 KiB; SVG refused) with `chat.create_custom_emoji`, list them with `chat.list_custom_emoji`, and delete them with `chat.delete_custom_emoji`. Members download images at `GET /dl/chat/emoji/{name}` and use `:name:` in messages and reactions.
 - **Incoming webhooks**: room owners and org owners/admins (humans only) manage per-room incoming webhooks (`chat.create_incoming_webhook`, `chat.list_incoming_webhooks`, `chat.delete_incoming_webhook`). `POST /hooks/chat/{webhook_id}` verifies the HMAC-SHA256 signature, ±300 second timestamp window, and replay key, validates cards against `CardsInput`, posts the message, and marks it `untrusted: true`. Incoming webhooks still post when a room has `owners_only` or `allowlist` posting rules, because a room owner or org admin created the webhook for automated posts.
 - **Slash commands**: org owners and admins (humans only) manage commands (`chat.create_slash_command`, `chat.list_slash_commands`, `chat.delete_slash_command`). Commands use a strict allowlist: safe read-only `GET` operations (excluding sensitive and admin endpoints) plus `chat.post_message` pinned to the invoking room. `chat.invoke_slash_command` checks room membership, renders the template, and runs the operation under the caller's own credential.
-- **Admin tools and export**: org owners and admins list all rooms (`chat.admin_list_rooms`), assign an owner to an ownerless room (`chat.admin_assign_owner`; private rooms accept only existing members), and remove memberships of a deleted principal (`chat.admin_remove_deleted_principal`). Only org owners export room history (`chat.export_room`).
+- **Admin tools and export**: org owners and admins list all rooms (`chat.admin_list_rooms`), assign an owner to an ownerless room (`chat.admin_assign_owner`; private rooms accept only existing members), and remove memberships of a deleted principal (`chat.admin_remove_deleted_principal`). The owner has each scope of the room. So an owner or an admin who makes an agent the owner gives it each scope there, as for a person: the membership decides what an agent can do. Only org owners export room history (`chat.export_room`).
 
 ## Later layers
 

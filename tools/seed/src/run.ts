@@ -1,6 +1,6 @@
 // Fills an empty Asterra instance with the made-up organization. Each step is a call that a person or an
 // agent can make: the seed has no access to a database or to a Durable Object.
-import { AGENT_SCOPES, ALL_SCOPES, ApiError, type InputOf } from "@asterra/contracts";
+import { ALL_SCOPES, ApiError, type InputOf } from "@asterra/contracts";
 import { type SeedApi, SeedStop } from "./api.ts";
 import {
 	type ActorKey,
@@ -117,8 +117,6 @@ export async function runSeed(api: SeedApi, options: SeedOptions = {}): Promise<
 			display_name: agent.displayName,
 			address: agent.address,
 			sponsor_id: idOf(agent.sponsor),
-			// Each agent scope, so the sample agents can use each product and its webhooks.
-			scopes: [...AGENT_SCOPES],
 		});
 		if (!created.api_key) throw new Error(`The agent ${agent.displayName} got no first API key.`);
 		apiKeys.set(key, created.api_key.secret);

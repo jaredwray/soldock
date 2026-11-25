@@ -1,5 +1,5 @@
 import { DRIVE_LIMITS, isErrorCode } from "@asterra/contracts";
-import type { CallContext } from "../identity/index.ts";
+import { type CallContext, holdsForResource } from "../identity/index.ts";
 import { OperationError } from "../platform/index.ts";
 import { accept, actorOf, openSpace, spaceStub, unknownSpaceIds } from "./access.ts";
 import type { FileSnapshot, VersionRecord } from "./space.ts";
@@ -59,8 +59,9 @@ function folderNameOf(name: string): string {
  */
 export async function chatFolderFor(call: CallContext, roomId: string): Promise<string> {
 	// The name of the folder is the name of a room, and the answer tells which rooms the principal is in. That
-	// is Chat data, so the credential needs chat.read, as for a read of the room.
-	if (!call.caller.scopes.has("chat.read")) {
+	// is Chat data, so the caller needs chat.read, as for a read of the room. For an agent, the membership of the
+	// room decides, and the room checks it below.
+	if (!holdsForResource(call.caller, "chat.read", true)) {
 		throw new OperationError("forbidden", "To use room_id, the credential needs the chat.read scope.");
 	}
 	const room = call.env.CHAT_ROOM.get(call.env.CHAT_ROOM.idFromName(roomId));

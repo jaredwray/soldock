@@ -12,6 +12,7 @@ export {
 	credentialBinding,
 	credentialRef,
 	credentialState,
+	holdsForResource,
 	isAdmin,
 	type MissingScope,
 	missingScopes,
@@ -31,6 +32,7 @@ export type {
 	ScheduledRecord,
 	SectionRecord,
 } from "./chat-personal.ts";
+export { deciderOf } from "./decider.ts";
 export { mountEventsSocket, openEventsSocket } from "./events-socket.ts";
 export {
 	type DueNotice,
@@ -73,6 +75,7 @@ export {
 	normalizeAddress,
 	type OutboundMode,
 	type PrincipalRecord,
+	scopeCeiling,
 	unknownPrincipalIds,
 } from "./store.ts";
 export {
@@ -88,4 +91,3 @@ export {
 	teamMailboxFor,
 	teamMailboxMemberScopes,
 } from "./team-mailboxes.ts";
-export { accessOutput, assertMemberGrants, deciderOf, giveMemberAccess } from "./widening.ts";

@@ -1,6 +1,6 @@
 import { MAILBOX_MEMBER_SCOPES, type MailboxMemberScope, TEAM_MAILBOX_LIMITS } from "@asterra/contracts";
 import { newId, OperationError } from "../platform/index.ts";
-import { type AgentWidening, conflictOf, normalizeAddress, widenAgentAccessStatement } from "./store.ts";
+import { conflictOf, normalizeAddress } from "./store.ts";
 
 /** The prefix of a team mailbox id. A principal id starts with `prn_`, so the two never collide. */
 const TEAM_MAILBOX_PREFIX = "tmb";
@@ -100,33 +100,24 @@ export async function listTeamMailboxes(db: D1Database): Promise<TeamMailboxReco
 }
 
 /**
- * Creates a team mailbox and its first members in one transaction. `widen` gives the access that the agents
- * of the first members get with the mailbox: the same transaction writes it. Returns null, and writes
- * nothing, while a directory reset is in progress: the reset pauses the mailboxes that exist when it starts.
- * It also returns null, and writes nothing, when the access of one of these agents changed after its read.
+ * Creates a team mailbox and its first members in one transaction. Returns null, and writes nothing, while a
+ * directory reset is in progress: the reset pauses the mailboxes that exist when it starts.
  */
 export async function createTeamMailbox(
 	db: D1Database,
 	input: { display_name: string; address: string; member_ids: readonly string[]; created_by: string },
-	widen: (mailboxId: string) => AgentWidening[] = () => [],
 ): Promise<TeamMailboxRecord | null> {
 	const id = newId(TEAM_MAILBOX_PREFIX);
 	const now = new Date().toISOString();
 	const memberIds = [...new Set(input.member_ids)];
-	const widenings = widen(id);
-	const versions = widenings.map(({ agent }) => ({ id: agent.id, version: agent.access_version }));
 	try {
 		const [created] = await db.batch([
 			db
 				.prepare(
 					`INSERT INTO team_mailboxes (id, display_name, address, created_by, created_at)
-					SELECT ?1, ?2, ?3, ?4, ?5 WHERE NOT EXISTS (SELECT 1 FROM setup_lock WHERE token IS NOT NULL)
-					AND NOT EXISTS (
-						SELECT 1 FROM json_each(?6) expected JOIN principals p ON p.id = json_extract(expected.value, '$.id')
-						WHERE p.access_version != json_extract(expected.value, '$.version')
-					)`,
+					SELECT ?1, ?2, ?3, ?4, ?5 WHERE NOT EXISTS (SELECT 1 FROM setup_lock WHERE token IS NOT NULL)`,
 				)
-				.bind(id, input.display_name, normalizeAddress(input.address), input.created_by, now, JSON.stringify(versions)),
+				.bind(id, input.display_name, normalizeAddress(input.address), input.created_by, now),
 			...memberIds.map((principalId) =>
 				db
 					.prepare(
@@ -136,7 +127,6 @@ export async function createTeamMailbox(
 					)
 					.bind(id, principalId, input.created_by, now),
 			),
-			...widenings.map((widening) => widenAgentAccessStatement(db, widening, id)),
 		]);
 		if (!created?.meta.changes) return null;
 	} catch (error) {
@@ -157,10 +147,8 @@ export async function renameTeamMailbox(db: D1Database, id: string, displayName:
 /**
  * Adds a member with these scopes, or gives a member these scopes. Without `scopes`, a new member gets each
  * scope, and a member keeps its scopes: a second call changes nothing. Returns false when the mailbox has
- * the most members that it can have, or when the principal was deleted during the request.
- *
- * `widening` is the access that an agent gets with the membership. The same transaction writes it. Then the
- * call also returns false, and writes nothing, when the access of the agent changed after its read.
+ * the most members that it can have, or when the principal was deleted during the request. The membership
+ * alone decides what the member can do in the mailbox: the call changes nothing on the member itself.
  */
 export async function addTeamMailboxMember(
 	db: D1Database,
@@ -168,18 +156,15 @@ export async function addTeamMailboxMember(
 	principalId: string,
 	addedBy: string,
 	scopes?: readonly MailboxMemberScope[],
-	widening?: AgentWidening,
 ): Promise<boolean> {
 	const stored = scopes === undefined ? null : storedMemberScopes(scopes);
-	const version = widening?.agent.access_version ?? null;
-	const [updated, inserted, widened] = await db.batch([
+	const [updated, inserted] = await db.batch([
 		// A member takes no new place, so the count does not apply to a change of its scopes.
 		db
 			.prepare(
-				`UPDATE team_mailbox_members SET scopes = COALESCE(?3, scopes) WHERE mailbox_id = ?1 AND principal_id = ?2
-				AND (?4 IS NULL OR EXISTS (SELECT 1 FROM principals WHERE id = ?2 AND access_version = ?4))`,
+				"UPDATE team_mailbox_members SET scopes = COALESCE(?3, scopes) WHERE mailbox_id = ?1 AND principal_id = ?2",
 			)
-			.bind(mailboxId, principalId, stored, version),
+			.bind(mailboxId, principalId, stored),
 		// The count is in the statement, so two parallel calls cannot go past the limit. A member has a row,
 		// so the insert then changes nothing.
 		db
@@ -187,7 +172,7 @@ export async function addTeamMailboxMember(
 				`INSERT INTO team_mailbox_members (mailbox_id, principal_id, added_by, created_at, scopes)
 				SELECT ?1, ?2, ?3, ?4, ?6
 				WHERE (SELECT COUNT(*) FROM team_mailbox_members WHERE mailbox_id = ?1) < ?5
-				AND EXISTS (SELECT 1 FROM principals WHERE id = ?2 AND deleted_at IS NULL AND (?7 IS NULL OR access_version = ?7))
+				AND EXISTS (SELECT 1 FROM principals WHERE id = ?2 AND deleted_at IS NULL)
 				ON CONFLICT DO NOTHING`,
 			)
 			.bind(
@@ -197,12 +182,8 @@ export async function addTeamMailboxMember(
 				new Date().toISOString(),
 				TEAM_MAILBOX_LIMITS.members,
 				stored ?? storedMemberScopes(MAILBOX_MEMBER_SCOPES),
-				version,
 			),
-		...(widening ? [widenAgentAccessStatement(db, widening, mailboxId)] : []),
 	]);
-	// The statement of the agent matches only with the membership, so its result is the result of the three.
-	if (widening) return widened?.meta.changes === 1;
 	return updated?.meta.changes === 1 || inserted?.meta.changes === 1;
 }
 

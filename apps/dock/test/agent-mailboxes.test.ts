@@ -61,7 +61,6 @@ describe("the mailbox of an agent", () => {
 			address: "ci@dock.test",
 			description: "Posts build results",
 			sponsor_id: ada.id,
-			scopes: ["mail.read"],
 		});
 		// An owner or an admin can only read the mailbox of an agent, and its scopes say so. A service
 		// account is an agent in mail, and `service` tells its mailbox from the mailbox of an agent.

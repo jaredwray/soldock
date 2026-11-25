@@ -11,7 +11,7 @@ async function post<T>(context: BrowserContext, path: string, data: unknown): Pr
 }
 
 // The owner of a room decides what each member can do in it, in the members dialog of the room. The form
-// asks what a new member can do. An agent that its manager adds gets its chat scopes with the membership.
+// asks what a new member can do. For an agent, the membership alone decides: nothing changes on its account.
 test("the owner of a room selects what a new member can do, changes it later, and an agent gets its access with the membership", async ({
 	browser,
 }) => {
@@ -27,9 +27,11 @@ test("the owner of a room selects what a new member can do, changes it later, an
 			kind: "agent",
 			display_name: agentName,
 			address: `reporter-${local}@example.com`,
-			scopes: ["account.read"],
 		});
 		agentId = agent.id;
+		const scopesBefore = (
+			(await (await owner.request.get(`/api/v1/directory/agents/${agent.id}/access`)).json()) as { scopes: string[] }
+		).scopes;
 		const roomId = await createRoom(owner, name);
 		const page = await owner.newPage();
 		await page.goto(`/chat/${roomId}`);
@@ -48,19 +50,16 @@ test("the owner of a room selects what a new member can do, changes it later, an
 		await dialog.getByRole("button", { name: "Add", exact: true }).click();
 		await expect(page.getByText(/^Nadia .* can now only read in /)).toBeVisible();
 
-		// An agent does not add members at the start. Its manager adds it, and it gets the chat scopes on its
-		// account.
+		// An agent does not add members at the start. The membership alone decides what it can do in the room.
 		await select.click();
 		await page.getByRole("option", { name: new RegExp(`^${agentName}`) }).click();
 		await expect(fresh.getByLabel("Post")).toBeChecked();
 		await expect(fresh.getByLabel("Add members")).not.toBeChecked();
 		await dialog.getByRole("button", { name: "Add", exact: true }).click();
-		await expect(page.getByText(`${agentName} now also holds chat.read, chat.write.`, { exact: false })).toBeVisible();
+		await expect(page.getByText(new RegExp(`^${agentName} can now `))).toBeVisible();
+		await expect(page.getByText("now also holds", { exact: false })).toHaveCount(0);
 		const access = await owner.request.get(`/api/v1/directory/agents/${agent.id}/access`);
-		expect(await access.json()).toMatchObject({
-			scopes: ["account.read", "chat.read", "chat.write"],
-			chat_rooms: [{ id: roomId, role: "member" }],
-		});
+		expect(await access.json()).toMatchObject({ scopes: scopesBefore, chat_rooms: [{ id: roomId, role: "member" }] });
 
 		// Nadia reads the room, and has no box for a message.
 		const room = await nadia.newPage();

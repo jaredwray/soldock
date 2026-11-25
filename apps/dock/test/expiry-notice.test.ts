@@ -22,7 +22,6 @@ async function seed() {
 		display_name: "CI Pipeline",
 		address: "ci@dock.test",
 		sponsor_id: ada.id,
-		scopes: ["account.read", "mail.read"],
 	});
 	return { owner, admin, ada, bot, service };
 }
@@ -100,7 +99,6 @@ describe("the notice before a token ends", () => {
 		const archived = await admin.call("directory.create_service_account", {
 			display_name: "Old Job",
 			address: "old@dock.test",
-			scopes: ["account.read"],
 		});
 		const old = await token(admin, archived.principal.id, 30, "old");
 		await admin.call("directory.archive_principal", { principal_id: archived.principal.id });

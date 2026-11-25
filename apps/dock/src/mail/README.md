@@ -228,8 +228,8 @@ in the mailbox.
 | --- | --- | --- |
 | A person, in the own mailbox | `mail.read` | `mail.modify` |
 | A member of a team mailbox (a person) | `mail.read` in the credential and the membership | `mail.modify` in the credential and the membership |
-| An agent or a service account, in its own mailbox | `mail.read` | `mail.modify` |
-| An agent or a service account, in a team mailbox | `mail.read` in the credential and the membership | `forbidden` |
+| An agent or a service account, in its own mailbox | `mail.read` in the account scopes | `mail.modify` in the account scopes |
+| An agent or a service account, in a team mailbox | `mail.read` in the membership | `forbidden` |
 | An owner or an admin, in the mailbox of an agent | Yes | `forbidden` |
 | A principal who is not a member, or the id of a different person | `forbidden` | `forbidden` |
 
@@ -371,8 +371,8 @@ from outside, so each row has `untrusted: true`, and MCP adds its notice before 
 | --- | --- | --- | --- |
 | A person, in the own mailbox | `mail.read` | `mail.modify` | `mail.modify` |
 | A member of a team mailbox (a person) | `mail.read` in the credential and the membership | `mail.modify` in the credential and the membership | `mail.modify` in the credential and the membership |
-| An agent or a service account, in a team mailbox | `mail.read` in the credential and the membership | Not offered (people only) | `forbidden` |
-| An agent or a service account, in its own mailbox | `mail.read` (an empty list) | Not offered (people only) | `forbidden` |
+| An agent or a service account, in a team mailbox | `mail.read` in the membership | Not offered (people only) | `forbidden` |
+| An agent or a service account, in its own mailbox | `mail.read` in the account scopes (an empty list) | Not offered (people only) | `forbidden` |
 | An owner or an admin, in the mailbox of an agent | Yes, with an audit line | `forbidden` | `forbidden` |
 | A principal who is not a member | `forbidden` | `forbidden` | `forbidden` |
 

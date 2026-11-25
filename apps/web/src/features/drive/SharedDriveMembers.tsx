@@ -6,7 +6,6 @@ import {
 	type SharedDriveRole,
 } from "@asterra/contracts";
 import { type FormEvent, useCallback, useEffect, useId, useMemo, useState } from "react";
-import { driveAccessText } from "../../lib/accessChange.ts";
 import { api, errorMessage } from "../../lib/api.ts";
 import { ConfirmDialog } from "../../lib/ConfirmDialog.tsx";
 import { Dialog } from "../../lib/Dialog.tsx";
@@ -100,8 +99,6 @@ interface MembersPartProps {
 	selfId: string;
 	/** True for a manager of the drive, an owner or an admin. Each other member sees the list only. */
 	canManage: boolean;
-	/** The agents that did not get the access of their membership in the call that created the drive. */
-	pendingIds?: readonly string[] | undefined;
 	/** Called after each change, with the drive as it is now. */
 	onChanged: (drive: SharedDrive) => void;
 	/** Called after the person removed themselves and has no other access to the drive. */
@@ -119,7 +116,6 @@ export function SharedDriveMembersPart({
 	principals,
 	selfId,
 	canManage,
-	pendingIds,
 	onChanged,
 	onLeft,
 }: MembersPartProps) {
@@ -131,8 +127,6 @@ export function SharedDriveMembersPart({
 	const [busy, setBusy] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 	const [removing, setRemoving] = useState<Principal | null>(null);
-	// The agents that did not get the access of their membership, in a call of this part or in the create call.
-	const [pending, setPending] = useState<ReadonlySet<string>>(() => new Set(pendingIds));
 	const ids = { heading: useId(), select: useId(), role: useId(), hint: useId(), lastManager: useId() };
 	const byId = useMemo(() => new Map(principals.map((principal) => [principal.id, principal])), [principals]);
 
@@ -172,20 +166,10 @@ export function SharedDriveMembersPart({
 			});
 			setMembers(result.members);
 			onChanged(result.shared_drive);
-			setPending((current) => {
-				const next = new Set(current);
-				next.delete(principal.id);
-				for (const id of result.agent_access_pending) next.add(id);
-				return next;
-			});
-			// An agent that the person manages gets the Drive scopes of its role that it does not hold.
-			const access = driveAccessText(result, () => principal.display_name);
 			toast({
-				message: `${
-					added
-						? `${principal.display_name} is now a member of ${driveName}.`
-						: `${principal.display_name} is now ${next === "editor" ? "an" : "a"} ${next} of ${driveName}.`
-				}${access}`,
+				message: added
+					? `${principal.display_name} is now a member of ${driveName}.`
+					: `${principal.display_name} is now ${next === "editor" ? "an" : "a"} ${next} of ${driveName}.`,
 			});
 			return true;
 		} catch (caught) {
@@ -281,20 +265,6 @@ export function SharedDriveMembersPart({
 												{last && (canManage || self) && (
 													<div id={ids.lastManager} className="row-note">
 														A shared drive keeps at least one manager.
-													</div>
-												)}
-												{/* The role menu sends no call for the role that the member has. This button does. */}
-												{canManage && principal && pending.has(member.principal_id) && (
-													<div className="row-note">
-														{name} did not get the Drive scopes of its role.{" "}
-														<button
-															type="button"
-															className="link-button"
-															onClick={() => void setMemberRole(principal, member.role, false)}
-															disabled={busy}
-														>
-															Try again
-														</button>
 													</div>
 												)}
 											</td>

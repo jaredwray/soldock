@@ -1,14 +1,15 @@
 import {
+	AGENT_SCOPES,
 	ALL_SCOPES,
 	API_KEY_LIMITS,
 	commaListEntries,
 	DIRECTORY_LIMITS,
 	type DirectoryEntry,
-	MAILBOX_MEMBER_SCOPES,
 	mentionDirectory,
 	mentionHandle,
 	type Scope,
 	SERVICE_ACTIVITY_LIMITS,
+	SERVICE_SCOPES,
 	SIGN_IN_LOCK_MINUTES,
 	searchFold,
 	TEAM_MAILBOX_LIMITS,
@@ -59,7 +60,6 @@ import {
 	restorePrincipal,
 	revokeApiKey,
 	rotateApiKey,
-	setAgentAccess,
 	setPassword,
 	setPendingTotpSecret,
 	unknownPrincipalIds,
@@ -77,14 +77,6 @@ import {
 	teamMailboxesOf,
 } from "./team-mailboxes.ts";
 import { matchTotp, newTotpSecret, otpauthUri } from "./totp.ts";
-import {
-	afterWidening,
-	agentWidening,
-	assertAgentMembership,
-	type MemberWidening,
-	toAccessChange,
-	WIDENING_TRIES,
-} from "./widening.ts";
 
 type IdentityOperation =
 	| "account.whoami"
@@ -115,8 +107,8 @@ type IdentityOperation =
 	| "directory.remove_team_mailbox_member"
 	| "directory.create_service_account"
 	| "directory.list_service_account_activity"
-	| "directory.get_agent_access"
-	| "directory.set_agent_access";
+	| "directory.get_member_access"
+	| "directory.get_agent_access";
 
 /**
  * The agent or the service account whose access the caller reads or changes: its sponsor, an owner or an
@@ -135,6 +127,53 @@ async function agentToManage(call: CallContext, principalId: string, action: str
 		);
 	}
 	return target;
+}
+
+/**
+ * The member whose access the caller reads. A person: owners and admins only, because the memberships of a
+ * person say what the person reads. A person does not read the own access here. An agent or a service account:
+ * the rule of `agentToManage`. Throws `not_found` for a principal that is not in the directory, and `forbidden`
+ * for each other caller.
+ */
+async function memberToRead(call: CallContext, principalId: string): Promise<PrincipalRecord> {
+	const target = await getPrincipal(call.env.DIRECTORY, principalId);
+	if (!target) throw new OperationError("not_found", "No member has that id.");
+	if (target.kind === "agent") return agentToManage(call, principalId, "read the access");
+	if (call.caller.kind !== "human" || !isAdmin(call.caller)) {
+		throw new OperationError("forbidden", "Only an owner or an admin can read the access of a person.");
+	}
+	return target;
+}
+
+/**
+ * The access of a member that the identity module holds: its team mailboxes, and for an agent or a service
+ * account its account scopes and its live API keys. A person has no account scopes, and each key of a person
+ * has its own scopes, so both lists are empty for a person. The composition root adds the shared drives, the
+ * rooms and the items shared directly (`src/handlers.ts`).
+ */
+async function accessOf(call: CallContext, target: PrincipalRecord) {
+	const agent = target.kind === "agent";
+	const [mailboxes, keys] = await Promise.all([
+		teamMailboxesOf(call.env.DIRECTORY, target.id),
+		agent ? liveApiKeys(call.env.DIRECTORY, target.id) : [],
+	]);
+	return {
+		principal_id: target.id,
+		kind: target.service ? ("service" as const) : target.kind,
+		team_mailboxes: mailboxes.map((mailbox) => ({
+			id: mailbox.id,
+			display_name: mailbox.display_name,
+			address: mailbox.address,
+			scopes: mailbox.scopes,
+		})),
+		shared_drives: [],
+		chat_rooms: [],
+		chat_rooms_truncated: false,
+		drive_shared_items: [],
+		drive_shared_items_truncated: false,
+		tokens: keys.map((key) => ({ key_id: key.id, label: key.label, expires_at: key.expires_at })),
+		scopes: agent ? target.agent_scopes : [],
+	};
 }
 
 /**
@@ -369,12 +408,13 @@ export const identityHandlers: Pick<HandlerMap<CallContext>, IdentityOperation |
 			if (!input.password) throw new OperationError("invalid", "A person needs a password to sign in.");
 			assertFullCredential(call.caller);
 		}
-		// Each key and each OAuth connection of the agent gives these scopes. So the credential of the call must
-		// hold each one, as for a new key. The contract makes an agent send scopes.
+		// A new agent gets each agent scope for its own mailbox, its own drive and the actions that have no
+		// mailbox, room or drive. Its memberships decide the rest. A narrow key cannot make an account that does
+		// more than the key, so the credential of the call must hold each one, as for a new key.
 		const agentScopes =
-			input.kind === "agent" ? grantableScopes(call.caller, { kind: "agent", service: false }, input.scopes ?? []) : [];
+			input.kind === "agent" ? grantableScopes(call.caller, { kind: "agent", service: false }, AGENT_SCOPES) : [];
 		// A person signs in with the password and creates keys in Settings. Only an agent gets a first key, which
-		// is only a credential: it has the scopes of the agent.
+		// only proves its identity.
 		const firstKey =
 			input.kind === "agent" ? { label: "First key", scopes: [], created_by: call.caller.principal.id } : null;
 		const created = await createPrincipal(
@@ -413,9 +453,10 @@ export const identityHandlers: Pick<HandlerMap<CallContext>, IdentityOperation |
 		if (!isAdmin(call.caller)) {
 			throw new OperationError("forbidden", "Only owners and admins can create service accounts.");
 		}
-		// Each token of the account gives these scopes. So the credential of the call must hold each one, as
-		// for a new key.
-		const scopes = grantableScopes(call.caller, { kind: "agent", service: true }, input.scopes);
+		// A new service account gets each service account scope for its own mailbox, its own drive and the
+		// actions that have no mailbox, room or drive. Its memberships decide the rest. A narrow key cannot make an
+		// account that does more than the key, so the credential of the call must hold each one.
+		const scopes = grantableScopes(call.caller, { kind: "agent", service: true }, SERVICE_SCOPES);
 		const domains = await mailDomains(call.env.DIRECTORY);
 		if (!domains.has(domainOf(input.address))) {
 			throw new OperationError("invalid", "The address must use a saved mail domain. Check Admin settings.");
@@ -466,53 +507,13 @@ export const identityHandlers: Pick<HandlerMap<CallContext>, IdentityOperation |
 		return { entries: page.entries, next_cursor: page.next === null ? null : encodeCursor([page.next]) };
 	},
 
-	// The composition root adds the shared drives and the rooms (`src/handlers.ts`).
-	async "directory.get_agent_access"(call, input) {
-		const target = await agentToManage(call, input.principal_id, "read the access");
-		const [mailboxes, keys] = await Promise.all([
-			teamMailboxesOf(call.env.DIRECTORY, target.id),
-			liveApiKeys(call.env.DIRECTORY, target.id),
-		]);
-		return {
-			principal_id: target.id,
-			team_mailboxes: mailboxes.map((mailbox) => ({
-				id: mailbox.id,
-				display_name: mailbox.display_name,
-				address: mailbox.address,
-				scopes: mailbox.scopes,
-			})),
-			shared_drives: [],
-			chat_rooms: [],
-			chat_rooms_truncated: false,
-			drive_shared_items: [],
-			drive_shared_items_truncated: false,
-			tokens: keys.map((key) => ({ key_id: key.id, label: key.label, expires_at: key.expires_at })),
-			scopes: target.agent_scopes,
-		};
+	// The composition root adds the shared drives, the rooms and the items shared directly (`src/handlers.ts`).
+	async "directory.get_member_access"(call, input) {
+		return accessOf(call, await memberToRead(call, input.principal_id));
 	},
 
-	async "directory.set_agent_access"(call, input) {
-		const target = await agentToManage(call, input.principal_id, "change the access");
-		// Each key and each OAuth connection of the agent gets the new scopes. So the credential of the call must
-		// hold each one.
-		const scopes = grantableScopes(call.caller, target, input.scopes);
-		// A call that changes nothing writes nothing. So the live connections of the agent stay open, and the log
-		// gets no entry: a script can send the wanted access again and again.
-		if (sameIds(scopes, target.agent_scopes)) return { principal_id: target.id, scopes: target.agent_scopes };
-		// A sponsor who is not an admin acts only while the agent still has that sponsor, in the write itself.
-		const updated = await setAgentAccess(
-			call.env.DIRECTORY,
-			target,
-			scopes,
-			isAdmin(call.caller) ? null : call.caller.principal.id,
-		);
-		if (!updated) throw new OperationError("conflict", DIRECTORY_CHANGED);
-		// Each live connection of the agent has the access of its open. The events sockets close at once, and a
-		// room socket or a feed closes at its next check (`access_version`). A client then opens them again.
-		await endEventSockets(call.env, target.id, { agentAccess: true });
-		auditOk(call, "directory.set_agent_access", `${target.id}:${updated.agent_scopes.join(",")}`);
-		recordServiceChange(call, target, "directory.set_agent_access");
-		return { principal_id: target.id, scopes: updated.agent_scopes };
+	async "directory.get_agent_access"(call, input) {
+		return accessOf(call, await agentToManage(call, input.principal_id, "read the access"));
 	},
 
 	async "directory.update_agent_policy"(call, input) {
@@ -640,39 +641,19 @@ export const identityHandlers: Pick<HandlerMap<CallContext>, IdentityOperation |
 		assertPrimaryAddress(input.address);
 		const unknown = await unknownPrincipalIds(call.env.DIRECTORY, input.member_ids);
 		if (unknown.length > 0) throw new OperationError("not_found", `No principal has the id ${unknown.join(", ")}.`);
-		// Each first member gets each scope in the mailbox. An agent gets the scopes on itself too, in the
-		// transaction that creates the mailbox. A parallel change of the access of such an agent makes the
-		// transaction write nothing. Then read the members and try again.
+		// Each first member gets each scope in the mailbox. The membership alone decides what an agent can do in
+		// it: nothing changes on the agent.
 		const { DIRECTORY } = call.env;
-		let firstMembers = await getPrincipals(DIRECTORY, input.member_ids);
-		let widenings: MemberWidening[] = [];
-		let created: TeamMailboxRecord | null = null;
-		for (let attempt = 0; created === null && attempt < WIDENING_TRIES; attempt++) {
-			for (const member of firstMembers) assertAgentMembership(call, member, MAILBOX_MEMBER_SCOPES);
-			const members = firstMembers;
-			created = await createTeamMailbox(
-				DIRECTORY,
-				{
-					display_name: input.display_name,
-					address: input.address,
-					member_ids: input.member_ids,
-					created_by: call.caller.principal.id,
-				},
-				() => {
-					widenings = members.flatMap((member) => agentWidening(member, MAILBOX_MEMBER_SCOPES) ?? []);
-					return widenings;
-				},
-			);
-			if (created) break;
-			const again = await getPrincipals(DIRECTORY, input.member_ids);
-			const version = (id: string) => again.find((member) => member.id === id)?.access_version;
-			if (!widenings.some(({ agent }) => version(agent.id) !== agent.access_version)) {
-				throw new OperationError("conflict", "A directory reset is in progress. Try again after it completes.");
-			}
-			firstMembers = again;
+		const firstMembers = await getPrincipals(DIRECTORY, input.member_ids);
+		const mailbox = await createTeamMailbox(DIRECTORY, {
+			display_name: input.display_name,
+			address: input.address,
+			member_ids: input.member_ids,
+			created_by: call.caller.principal.id,
+		});
+		if (!mailbox) {
+			throw new OperationError("conflict", "A directory reset is in progress. Try again after it completes.");
 		}
-		if (!created) throw new OperationError("conflict", DIRECTORY_CHANGED);
-		const mailbox = created;
 		auditOk(call, "directory.create_team_mailbox", mailbox.id);
 		for (const member of mailbox.members) {
 			auditOk(
@@ -685,9 +666,7 @@ export const identityHandlers: Pick<HandlerMap<CallContext>, IdentityOperation |
 			if (mailbox.member_ids.includes(member.id))
 				recordServiceChange(call, member, "directory.add_team_mailbox_member");
 		}
-		const widened = widenings.filter(({ agent }) => mailbox.member_ids.includes(agent.id));
-		for (const widening of widened) await afterWidening(call, widening);
-		return { team_mailbox: mailbox, agent_access_changes: widened.map(toAccessChange) };
+		return { team_mailbox: mailbox };
 	},
 
 	async "directory.update_team_mailbox"(call, input) {
@@ -703,33 +682,16 @@ export const identityHandlers: Pick<HandlerMap<CallContext>, IdentityOperation |
 		const mailbox = await teamMailboxToManage(call, input.mailbox_id, "change the members of");
 		const { DIRECTORY } = call.env;
 		const current = mailbox.members.find((entry) => entry.principal_id === input.principal_id);
-		// The scopes of the membership after the call: a member keeps its scopes, and a new member gets each one.
-		const scopes = input.scopes ?? current?.scopes ?? [...MAILBOX_MEMBER_SCOPES];
-		// One transaction writes the membership and the access that an agent gets with it. A parallel change of
-		// the access of the agent makes it write nothing. Then read the agent and try again.
-		let widening: MemberWidening | null = null;
-		let written = false;
-		for (let attempt = 0; !written && attempt < WIDENING_TRIES; attempt++) {
-			const member = await getPrincipal(DIRECTORY, input.principal_id);
-			if (!member) throw new OperationError("not_found", "No principal has that id.");
-			assertAgentMembership(call, member, scopes);
-			widening = agentWidening(member, scopes);
-			written = await addTeamMailboxMember(
-				DIRECTORY,
-				mailbox.id,
-				member.id,
-				call.caller.principal.id,
-				input.scopes,
-				widening ?? undefined,
-			);
-			if (written) break;
-			const again = await getPrincipal(DIRECTORY, member.id);
-			if (!again) throw new OperationError("not_found", "No principal has that id.");
-			if (again.access_version === member.access_version) {
-				throw new OperationError("invalid", `A team mailbox can have at most ${TEAM_MAILBOX_LIMITS.members} members.`);
-			}
+		// The membership alone decides what the member can do in the mailbox. An agent uses it at once with each
+		// of its keys: nothing changes on the agent.
+		const target = await getPrincipal(DIRECTORY, input.principal_id);
+		if (!target) throw new OperationError("not_found", "No principal has that id.");
+		if (!(await addTeamMailboxMember(DIRECTORY, mailbox.id, target.id, call.caller.principal.id, input.scopes))) {
+			// A member always has a row, so only a new member can find the mailbox full, or be deleted during the call.
+			if (!(await getPrincipal(DIRECTORY, target.id)))
+				throw new OperationError("not_found", "No principal has that id.");
+			throw new OperationError("invalid", `A team mailbox can have at most ${TEAM_MAILBOX_LIMITS.members} members.`);
 		}
-		if (!written) throw new OperationError("conflict", DIRECTORY_CHANGED);
 		const after = await teamMailboxAfterChange(call, mailbox.id);
 		const stored = after.members.find((entry) => entry.principal_id === input.principal_id)?.scopes ?? [];
 		const member = await principalAfterChange(call, input.principal_id);
@@ -738,8 +700,7 @@ export const identityHandlers: Pick<HandlerMap<CallContext>, IdentityOperation |
 			auditOk(call, "directory.add_team_mailbox_member", `${mailbox.id}:${member.id}:${stored.join(",")}`);
 			recordServiceChange(call, member, "directory.add_team_mailbox_member");
 		}
-		if (widening) await afterWidening(call, widening);
-		return { team_mailbox: after, agent_access_changes: widening ? [toAccessChange(widening)] : [] };
+		return { team_mailbox: after };
 	},
 
 	async "directory.remove_team_mailbox_member"(call, input) {
@@ -762,11 +723,11 @@ export const identityHandlers: Pick<HandlerMap<CallContext>, IdentityOperation |
 		const target = await credentialOwner(call, input.principal_id);
 		let scopes: Scope[];
 		if (target.kind === "agent") {
-			// A key of an agent or a service account is only a credential of the agent. It has no scopes of its own.
+			// A key of an agent or a service account only proves the identity of the agent. It has no scopes of its own.
 			if (input.scopes !== undefined) {
 				throw new OperationError(
 					"invalid",
-					"A key of an agent or a service account has the scopes of its agent. Do not send scopes. Change them with directory.set_agent_access.",
+					"Do not send scopes for a key of an agent or a token of a service account: the key only proves the identity. The memberships of the agent and its account scopes decide what it can do.",
 				);
 			}
 			// The secret gives each scope of the agent. So the credential of the call must hold each one.

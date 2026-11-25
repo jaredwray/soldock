@@ -12,17 +12,12 @@ export interface Agent {
 	post: (path: string, data: unknown) => ReturnType<APIRequestContext["post"]>;
 }
 
-/** A new agent of the admin, with scopes. The admin is its sponsor. */
-export async function createAgent(
-	admin: BrowserContext,
-	request: APIRequestContext,
-	name: string,
-	scopes: string[],
-): Promise<Agent> {
+/** A new agent of the admin. The admin is its sponsor. Its memberships decide what it can do in a resource. */
+export async function createAgent(admin: BrowserContext, request: APIRequestContext, name: string): Promise<Agent> {
 	const local = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
 	const response = await admin.request.post("/api/v1/directory/principals", {
 		headers: JSON_HEADERS,
-		data: { kind: "agent", display_name: name, address: `bot-${local}@example.com`, scopes },
+		data: { kind: "agent", display_name: name, address: `bot-${local}@example.com` },
 	});
 	expect(response.ok(), `the new agent ${name}: ${response.status()} ${await response.text()}`).toBe(true);
 	const created = (await response.json()) as { principal: { id: string }; api_key: { secret: string } };

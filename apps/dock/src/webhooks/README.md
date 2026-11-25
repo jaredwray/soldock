@@ -155,9 +155,10 @@ Mail still joins a new event to a retry that waits. That join stays on one mail 
 An archived creator gets no POST. The endpoint stays active.
 
 When the creator is an agent, the consumer also reads the access of the agent again before each POST (`checkDelivery`).
-The scopes of the agent can change after the create.
+Nothing changes the account scopes of an agent after its creation now. An agent from before migration `0033` possibly lost a webhook scope before the deploy.
 
-- The agent must hold the webhook scope of the product (`webhookScope`). If it does not, the subscription stops with `access_lost`.
+- The agent must hold the webhook scope of the product (`webhookScope`) on its account. If it does not, the subscription stops with `access_lost`.
+- The check of the target is the check of a membership, for a person and for an agent. A team mailbox needs `mail.read` in the membership. A shared drive or a room needs the creator in its members.
 - A subscription that a person creates, also for an agent that the person sponsors, does not get this check.
 
 This check also applies to MCP Events (see [MCP Events](#mcp-events)).

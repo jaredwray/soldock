@@ -65,8 +65,8 @@ function RequestActions({ labels, approve, deny, onGone }: RequestActionsProps) 
 
 /**
  * The two buttons of a member request (`chat.approve_member_request`, `chat.deny_member_request`). The activity
- * list of Chat and the page of the account in Admin, Members use it. After an approval, the toast also tells
- * the scopes that the account got.
+ * list of Chat and the page of the account in Admin, Members use it. The membership decides what the account can
+ * do in the room, so the toast names no scope.
  */
 export function MemberRequestActions({
 	request,
@@ -78,9 +78,10 @@ export function MemberRequestActions({
 	return (
 		<RequestActions
 			labels={{ approve: decisionLabel("approve", request), deny: decisionLabel("deny", request) }}
-			approve={async () =>
-				approvedText(request, await api.call("chat.approve_member_request", { request_id: request.id }))
-			}
+			approve={async () => {
+				await api.call("chat.approve_member_request", { request_id: request.id });
+				return approvedText(request);
+			}}
 			deny={async () => {
 				await api.call("chat.deny_member_request", { request_id: request.id });
 				return deniedText(request);

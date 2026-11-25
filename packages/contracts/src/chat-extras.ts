@@ -1,4 +1,3 @@
-import { AgentAccessChange } from "./agent-access.ts";
 import {
 	CHAT_LIMITS,
 	ChatBody,
@@ -683,9 +682,6 @@ export const openGroupDm = defineOperation({
 	}),
 	output: z.object({
 		room: ChatRoom,
-		agent_access_changes: z.array(AgentAccessChange).default([]),
-		/** The agents that you manage, that are members of the room, and that did not get their access. */
-		agent_access_pending: z.array(z.string()).default([]),
 	}),
 	errors: ["not_found", "invalid"],
 });
@@ -838,7 +834,7 @@ export const adminAssignOwner = defineOperation({
 	name: "chat.admin_assign_owner",
 	summary: "Assign a room owner",
 	description:
-		"Owners and admins of the organization only. Makes principal_id an owner of room_id (adding them to the room if needed). Used to give an owner to a room without one.",
+		"Owners and admins of the organization only. Makes principal_id an owner of room_id (adding them to the room if needed). Used to give an owner to a room without one. The owner has each scope of the room, also an agent or a service account.",
 	http: { method: "POST", path: "/api/v1/chat/admin/rooms/{room_id}/owner" },
 	scopes: ["chat.write"],
 	callers: ["human"],
