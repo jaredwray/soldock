@@ -2,7 +2,7 @@ import { EVENTS_SOCKET_PATH, operations } from "@asterra/contracts";
 import type { Hono } from "hono";
 import { unauthenticatedResponse } from "../api/index.ts";
 import { CALLER_NAMES, log, OperationError, type RequestIdVariables } from "../platform/index.ts";
-import { credentialRef, holdsForResource, recordSocketOpen, refusedOutcome } from "./access.ts";
+import { credentialRef, recordSocketOpen, refusedOutcome } from "./access.ts";
 import { type AuthContext, authenticate, isSameOrigin } from "./auth.ts";
 import { EVENTS_SOCKET_HEADER, type EventsSocketOpen } from "./principal.ts";
 
@@ -60,9 +60,10 @@ export function mountEventsSocket(app: Hono<SocketEnv>): void {
 			if (!READ_OPERATION.callers.includes(caller.kind)) {
 				throw new OperationError("forbidden", `${CALLER_NAMES[caller.kind]} cannot open the events socket.`);
 			}
-			// The socket carries the events of the rooms of the caller. For an agent, each room decides by its
-			// membership, so the account scope does not decide the open.
-			const missing = READ_OPERATION.scopes.filter((scope) => !holdsForResource(caller, scope, true));
+			// The socket also carries the personal Chat state of the caller: activity, sections, drafts, reminders
+			// and scheduled messages. That state has no room, so the account scope decides the open, also for an
+			// agent. A room socket is the way to follow one room by its membership.
+			const missing = READ_OPERATION.scopes.filter((scope) => !caller.scopes.has(scope));
 			if (missing.length > 0) {
 				throw new OperationError("forbidden", `The credential does not have the scope ${missing.join(", ")}.`);
 			}

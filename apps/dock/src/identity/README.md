@@ -530,8 +530,10 @@ the membership.
   `authenticate` reads them on each call, and the ceiling of the kind applies again.
 - **Direct checks.** A handler that checks a scope itself uses `holdsForResource`: an agent in a shared
   resource passes, because the object of the resource checks the membership. This applies to the room
-  socket, the events socket, the typing of a room socket, the folder of a room in the own drive, and the
-  `mail.read` of a reply from a team mailbox.
+  socket, the typing of a room socket, the folder of a room in the own drive, and the `mail.read` of a reply
+  from a team mailbox. The events socket `/ws/events` keeps the account rule: it also carries the personal
+  Chat state of the caller (activity, sections, drafts, reminders and scheduled messages), which has no
+  room.
 - **Lists.** For an agent from before without the read scope, `chat.list_rooms` and
   `drive.list_shared_drives` ask each room or drive of the page, so a membership from before that the
   object did not narrow yet never shows. `mail.list_mailboxes` reads D1, which migration `0031` narrowed,

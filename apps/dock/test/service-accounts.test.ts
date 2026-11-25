@@ -706,12 +706,11 @@ describe("the activity log of a service account", () => {
 		expect((await mcp(expired.key, "tools/list")).status).toBe(401);
 		// A secret of no token names no account, so it adds nothing.
 		expect((await request("/api/v1/account", { headers: bearer(`sdk_${"x".repeat(43)}`) })).status).toBe(401);
-		// The events socket carries the events of the rooms of the account, so each room decides, also for an
-		// account from before migration 0031 without chat.read. A room socket of a room of which the account is not
-		// a member is refused.
+		// The events socket also carries the personal Chat state of the account, which has no room. So an account
+		// from before migration 0031 without chat.read cannot open it. A room socket of a room of which the account
+		// is not a member is refused too: the room decides.
 		const events = await request(EVENTS_SOCKET_PATH, { headers: { upgrade: "websocket", ...bearer(narrow.key) } });
-		expect(events.status).toBe(101);
-		events.webSocket?.accept();
+		expect(events.status).toBe(403);
 		const { room } = await owner.call("chat.create_room", { kind: "private", name: "secret" });
 		expect((await upgradeRoomSocket(room.id, bearer(narrow.key))).status).toBeGreaterThanOrEqual(400);
 
@@ -727,7 +726,7 @@ describe("the activity log of a service account", () => {
 			expect.arrayContaining([
 				["auth.refused_token", "denied", "revoked", "rest", revoked.keyId],
 				["auth.refused_token", "denied", "expired", "mcp", expired.keyId],
-				["events.open_socket", "ok", null, "rest", narrow.keyId],
+				["events.open_socket", "denied", "forbidden", "rest", narrow.keyId],
 			]),
 		);
 		const roomEntry = entries.find((entry) => entry.operation === "chat.open_room_socket");
