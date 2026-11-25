@@ -39,14 +39,31 @@ const ARCHIVE_MODE: FocusMode = {
 	leaves: { answered: false, done: false, later: false },
 };
 
+/** A search that names spam, trash or anywhere. The server then shows spam and trash too (`namesSpamOrTrash`). */
+const SPAM_OR_TRASH_QUERY = /(^|[\s(])-?(in|label):"?(spam|trash|anywhere)"?(?=$|[\s)])/i;
+
+/** The system labels that have a system view. Their label path gets the mode of that view. */
+const LABEL_VIEWS: Readonly<Record<string, "inbox" | "reply-later" | "starred" | "sent" | "spam" | "trash">> = {
+	INBOX: "inbox",
+	REPLY_LATER: "reply-later",
+	STARRED: "starred",
+	SENT: "sent",
+	SPAM: "spam",
+	TRASH: "trash",
+};
+
 /**
- * What Focus & Reply does in `view`, or null for a view without it. Spam and Trash have no reply. The server
- * moves the mail that the Screener holds only when a person screens its sender. `labelName` is the name of
- * the label of a label view, or null while the labels load.
+ * What Focus & Reply does in `view`, or null for a view without it. Spam and Trash have no reply, also through
+ * a search or a label path. The server moves the mail that the Screener holds only when a person screens its
+ * sender. `labelName` is the name of the label of a label view, or null while the labels load.
  */
 export function focusMode(view: MailView, labelName: string | null = null): FocusMode | null {
-	if (view.kind === "search") return showsHeldMail(view) ? null : ARCHIVE_MODE;
+	if (view.kind === "search") {
+		return showsHeldMail(view) || SPAM_OR_TRASH_QUERY.test(view.query) ? null : ARCHIVE_MODE;
+	}
 	if (view.kind === "label") {
+		const system = LABEL_VIEWS[view.labelId];
+		if (system) return focusMode({ kind: "system", view: system });
 		const name = labelName === null ? "the label" : `the label “${labelName}”`;
 		return {
 			...ARCHIVE_MODE,
@@ -123,18 +140,28 @@ export function leftQueue(thread: ThreadSummary, fresh: readonly ThreadSummary[]
 }
 
 /**
+ * True when the person cleared the thread in this visit and no message came after that. `gone` maps the id of
+ * each cleared thread to its number of messages after the clear (`Cleared.count`). A new message makes a
+ * cleared thread come back.
+ */
+export function isGone(thread: ThreadSummary, gone: ReadonlyMap<string, number>): boolean {
+	const count = gone.get(thread.id);
+	return count !== undefined && thread.message_count <= count;
+}
+
+/**
  * The cards after a refresh of the queue. The cards on screen keep their order, and new threads go after them,
  * so a card never moves under the person. A thread that left the queue goes away (`leftQueue`), except a card
  * in `keep`: a card with an open reply, so a refresh never removes typed text, or a card in its exit motion.
- * A thread in `gone` gets no new card: the person cleared it in this visit. The server can still show it: a
- * refresh that started before a Done, or a view that keeps the conversation, for example Starred after a reply.
+ * A thread in `gone` gets no new card (`isGone`). The server can still show it: a refresh that started before
+ * a Done, or a view that keeps the conversation, for example Starred after a reply.
  */
 export function mergeQueue(
 	current: readonly ThreadSummary[],
 	fresh: readonly ThreadSummary[],
 	keep: ReadonlySet<string>,
 	complete: boolean,
-	gone: ReadonlySet<string> = new Set(),
+	gone: ReadonlyMap<string, number> = new Map(),
 ): ThreadSummary[] {
 	const freshById = new Map(fresh.map((thread) => [thread.id, thread]));
 	const kept = current.flatMap((thread) => {
@@ -143,7 +170,7 @@ export function mergeQueue(
 		return keep.has(thread.id) || !leftQueue(thread, fresh, complete) ? [thread] : [];
 	});
 	const known = new Set(current.map((thread) => thread.id));
-	return [...kept, ...fresh.filter((thread) => !known.has(thread.id) && !gone.has(thread.id))];
+	return [...kept, ...fresh.filter((thread) => !known.has(thread.id) && !isGone(thread, gone))];
 }
 
 /** The card that is active after `removedId` leaves: the next card, or else the previous one, or null. */
@@ -186,11 +213,30 @@ export function restoreAt<T extends { id: string }>(items: readonly T[], item: T
 	return [...items.slice(0, at), item, ...items.slice(at)];
 }
 
+/** What the page shows below the strip: the cards, the next page, the finish state, or the empty state. */
+export type QueueView = "cards" | "older" | "finished" | "empty";
+
+/**
+ * What the page shows for `cards` on the page, `cleared` conversations of this visit, and a queue that is
+ * `complete` or has more pages. With no card and more pages, the page gets the next page ("older"). A refresh
+ * does not do it: a view can keep the conversations that the person cleared, for example All mail after Done.
+ * The finish state needs the full queue.
+ */
+export function queueView(cards: number, cleared: number, complete: boolean): QueueView {
+	if (cards > 0) return "cards";
+	if (!complete) return "older";
+	return cleared > 0 ? "finished" : "empty";
+}
+
 /** A conversation that the person cleared in this visit of Focus & Reply. */
 export interface Cleared {
 	id: string;
 	subject: string;
 	how: ClearKind;
+	/** The number of messages of the thread after the clear: one more after a reply. A new message is more. */
+	count: number;
+	/** True when the conversation stays in the view on the server, for example in Starred after a reply. */
+	stays: boolean;
 }
 
 /**
@@ -207,7 +253,8 @@ export function sessionProgress(
 	const waiting = more ? `${left}+ left` : `${left} left`;
 	if (cleared === 0) return { total, fraction: 0, label: waiting };
 	const fraction = total === 0 ? 1 : Math.min(1, Math.max(0, cleared / total));
-	if (more) return { total, fraction, label: `${cleared} done · ${waiting}` };
+	// No card waits on the page, and the next page still loads.
+	if (more) return { total, fraction, label: left === 0 ? `${cleared} done` : `${cleared} done · ${waiting}` };
 	const label = left === 0 ? `${cleared} of ${total} done` : `${cleared} of ${total} done · ${waiting}`;
 	return { total, fraction, label };
 }

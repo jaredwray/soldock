@@ -8,6 +8,7 @@ import {
 	mergeQueue,
 	moveActive,
 	nextActive,
+	queueView,
 	replySource,
 	replyTarget,
 	restoreAt,
@@ -50,15 +51,20 @@ describe("mergeQueue", () => {
 		expect(idsOf(mergeQueue(current, [thread("c")], new Set(["b"]), true))).toEqual(["b", "c"]);
 	});
 
-	// A refresh that started before the server made a Done still has the thread. Its card left the page.
-	it("does not bring back a thread with a Done that the server did not confirm yet", () => {
+	// A refresh that started before a Done still has the thread, and Starred keeps a thread after a reply. Its card
+	// left the page. A new message in the thread brings the card back.
+	it("does not bring back a cleared thread until a new message comes", () => {
 		const fresh = [thread("c"), thread("b"), thread("a")];
-		expect(idsOf(mergeQueue([thread("a")], fresh, new Set(), true, new Set(["b"])))).toEqual(["a", "c"]);
+		const gone = new Map([["b", 1]]);
+		expect(idsOf(mergeQueue([thread("a")], fresh, new Set(), true, gone))).toEqual(["a", "c"]);
 		// A card in its exit motion stays until the motion ends.
-		expect(idsOf(mergeQueue([thread("a"), thread("b")], fresh, new Set(["b"]), true, new Set(["b"])))).toEqual([
+		expect(idsOf(mergeQueue([thread("a"), thread("b")], fresh, new Set(["b"]), true, gone))).toEqual(["a", "b", "c"]);
+		// The count of a reply has the reply. A message after it is new.
+		const replied = new Map([["b", 2]]);
+		expect(idsOf(mergeQueue([thread("a")], [thread("b", 2), thread("a")], new Set(), true, replied))).toEqual(["a"]);
+		expect(idsOf(mergeQueue([thread("a")], [thread("b", 3), thread("a")], new Set(), true, replied))).toEqual([
 			"a",
 			"b",
-			"c",
 		]);
 	});
 
@@ -196,10 +202,26 @@ describe("focusMode", () => {
 	});
 
 	// Spam and Trash have no reply. The server refuses to move mail that the Screener holds.
-	it("gives no Focus & Reply to Spam, Trash and a search of held mail", () => {
-		for (const view of [system("spam"), system("trash"), { kind: "search", query: "in:screener" } as MailView]) {
-			expect(focusMode(view)).toBeNull();
+	// A search or a label path can show Spam and Trash too. Done there would archive spam, or restore from Trash.
+	it("gives no Focus & Reply to Spam, Trash and a search of held mail, also through a search or a label path", () => {
+		const search = (query: string): MailView => ({ kind: "search", query });
+		const label = (labelId: string): MailView => ({ kind: "label", labelId });
+		for (const view of [
+			system("spam"),
+			system("trash"),
+			search("in:screener"),
+			search("invoice in:spam"),
+			search('label:"Trash"'),
+			search("(in:anywhere) from:ana"),
+			label("SPAM"),
+			label("TRASH"),
+		]) {
+			expect(focusMode(view), JSON.stringify(view)).toBeNull();
 		}
+		// A word that only starts like the operator is a normal search.
+		expect(focusMode(search("in:spammy"))).not.toBeNull();
+		// The label path of a system view gets the mode of that view.
+		expect(focusMode(label("INBOX"))).toMatchObject({ archiveOnReply: true, countLabel: "INBOX" });
 	});
 
 	it("names what Done does, with the name of the label when it loaded", () => {
@@ -208,6 +230,16 @@ describe("focusMode", () => {
 		expect(focusMode(label, "Clients")?.doneNotice).toBe("Label “Clients” removed.");
 		expect(focusMode(label)?.doneText("Q3")).toBe("remove the label from “Q3”");
 		expect(focusMode(system("inbox"))?.doneText("Q3")).toBe("archive “Q3”");
+	});
+});
+
+describe("queueView", () => {
+	// All mail keeps a conversation after Done, so a refresh gives no new card. The page must get the next page.
+	it("gets the next page when each card is cleared and the queue has more pages, and finishes only at its end", () => {
+		expect(queueView(2, 5, false)).toBe("cards");
+		expect(queueView(0, 50, false)).toBe("older");
+		expect(queueView(0, 50, true)).toBe("finished");
+		expect(queueView(0, 0, true)).toBe("empty");
 	});
 });
 
@@ -231,11 +263,18 @@ describe("progress and finish text", () => {
 		// With more conversations than the page shows and no label count, the text shows no total.
 		expect(sessionProgress(0, 50, true).label).toBe("50+ left");
 		expect(sessionProgress(2, 48, true).label).toBe("2 done · 48+ left");
+		expect(sessionProgress(50, 0, true).label).toBe("50 done");
 	});
 
 	it("says what the person answered, marked as done and moved to Reply later", () => {
 		const cleared = (how: ClearKind, count: number) =>
-			Array.from({ length: count }, (_, index) => ({ id: `${how}${index}`, subject: "S", how }));
+			Array.from({ length: count }, (_, index) => ({
+				id: `${how}${index}`,
+				subject: "S",
+				how,
+				count: 1,
+				stays: false,
+			}));
 		const table: [ReturnType<typeof cleared>, string][] = [
 			[cleared("answered", 1), "You answered 1 conversation."],
 			[cleared("answered", 4), "You answered 4 conversations."],

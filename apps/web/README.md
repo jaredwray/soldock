@@ -275,13 +275,16 @@ MCP clients. The app has no UI-only path.
   in one column of 760px, in the order of the list, newest first.
   - Each list except Spam and Trash has Focus & Reply: the inbox, Reply later, Starred, Sent, All mail, each label
     and each search. A search of the mail that the Screener holds has no Focus & Reply, because the server does not
-    move that mail. The Focus & Reply path of such a list goes to the list.
+    move that mail. A search that names spam, trash or anywhere, and the label path of Spam or Trash, have no Focus
+    & Reply either. The Focus & Reply path of such a list goes to the list. The label path of a different system
+    label with a view, for example `/mail/label/INBOX/focus`, works as that view.
   - The path is the path of the list and `/focus`, for example `/mail/inbox/focus`, `/mail/label/<id>/focus` or
     `/mail/search/focus?q=…`. A team or agent mailbox has the same paths under its own path (`focusPath`).
   - The header row of a list with rows has **Focus & Reply** at its right. At 900px and below, the button shows
-    its icon only. The Reply later list also has its banner, and the inbox has its pile.
+    its icon only. The Reply later list also has its banner, and the inbox has its pile. The link of the pile has
+    the name "Focus & Reply in Reply later", because the header row of the inbox has its own Focus & Reply.
   - The header row of Focus & Reply shows the name of the list after the title. A phone does not show it: the
-    Back button names the list.
+    Back button names the list. In a search, the search box shows the query.
   - Done, Later and a reply do a different change in each list (`focusMode`):
 
     | List | Done | Later | After a reply |
@@ -316,6 +319,10 @@ MCP clients. The app has no UI-only path.
     count of the label of the list (`waitingCount`). That count also has the cleared conversations that stay in
     the list, for example a starred conversation after a reply, so the page subtracts them. All mail and a search
     have no label count. The strip then shows the cards on the page with a plus, for example "50+ left".
+  - When each card on the page is cleared and the list has more pages, the page gets the next page
+    (`queueView`). A refresh cannot do it, because a list can keep the cleared conversations, for example All mail
+    after Done. If the next page does not load, the page shows **Older**. **All caught up.** shows only at the end
+    of the list.
   - A card that leaves plays a short motion: an answered card moves to the right, and a card that is done or
     moved to Reply later gets smaller. Then its place closes. The card is inert during the motion. With
     `prefers-reduced-motion`, the card goes at once.
@@ -326,13 +333,14 @@ MCP clients. The app has no UI-only path.
     message, the card shows the newest one.
   - A card gets its conversation (`mail.get_thread`) when it comes near the visible part of the page. It gets
     the conversation again only when the list shows a new message in it.
-  - **Done** and **Later** each show a toast with **Undo**. `e` is Done for the active card. `l` is Later, as in
-    the list, and Done in Reply later. A key does nothing while the reply of the active card is open, so a key
-    never discards text. The buttons ask "Discard your reply?" when the reply of their card has text. **Undo**
+  - **Done** and **Later** each show a toast. The toast has **Undo** when the change altered the conversation.
+    `e` is Done for the active card. `l` is Later, as in the list, and Done in Reply later. A key does nothing
+    while the reply of the active card is open, so a key never discards text. The buttons ask "Discard your reply?" when the reply of their card has text. **Undo**
     puts the card back at its old place, with its reply closed.
-  - A conversation that the person cleared in this visit does not come back in this visit (`gone` in
-    `mergeQueue`). The server can still show it, for example in a refresh that started before a Done, or in
-    Starred after a reply. A new visit shows it again.
+  - A conversation that the person cleared in this visit comes back only when a new message comes in it (`isGone`,
+    used by `mergeQueue`). The log keeps the number of messages of each cleared conversation, with one more after a
+    reply. The server can still show a cleared conversation, for example in a refresh that started before a Done,
+    or in Starred after a reply. A new visit shows it again.
   - When the active card leaves, the focus goes to the subject of the next card. When no card stays, the focus
     goes to the page.
   - When the last card leaves, the page shows **All caught up.**, what the person answered, marked as done and

@@ -423,7 +423,12 @@ function ReplyLaterPile({ mailboxId, count }: { mailboxId: string | null; count:
 					answer
 				</span>
 			</Link>
-			<Link to={focusPath(REPLY_LATER_VIEW, mailboxId)} className="button button-small">
+			{/* The header row of the inbox has its own Focus & Reply. This one opens the cards of Reply later. */}
+			<Link
+				to={focusPath(REPLY_LATER_VIEW, mailboxId)}
+				className="button button-small"
+				aria-label="Focus & Reply in Reply later"
+			>
 				Focus &amp; Reply
 			</Link>
 		</section>
