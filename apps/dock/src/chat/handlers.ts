@@ -173,7 +173,7 @@ const NO_REQUEST = "No request has that id, or you cannot decide it.";
  * The person who gets a request for this account in the activity list of Chat. For an agent: its sponsor.
  * Only an owner or an admin manages a service account, so its sponsor gets the request only with one of
  * these roles. If not, the owner of the organization gets it. Each owner and admin also sees the request on
- * the card of the account in Admin, Members.
+ * the page of the account in Admin, Members.
  */
 async function deciderOf(call: CallContext, target: PrincipalRecord): Promise<string | null> {
 	const db = call.env.DIRECTORY;

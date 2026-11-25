@@ -47,8 +47,8 @@ export function driveAccessText(result: RoomAccessResult, nameOf: (principalId: 
 
 /**
  * `memberAccessText` for a member request that a person approved. The request is gone after the approval,
- * so the person gives the scopes on the card of the account.
+ * so the person gives the scopes on the page of the account.
  */
 export function requestAccessText(result: RoomAccessResult, nameOf: (principalId: string) => string): string {
-	return memberAccessText(result, nameOf, "Set its permissions on its card in Admin, Members.");
+	return memberAccessText(result, nameOf, "Set its permissions on its page in Admin, Members.");
 }

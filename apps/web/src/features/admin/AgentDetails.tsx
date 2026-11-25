@@ -31,7 +31,7 @@ interface AgentDetailsProps {
 	principals: readonly Principal[];
 	/** True for an owner or an admin, who can read the mailbox of each agent. A sponsor cannot. */
 	canReadMail: boolean;
-	/** True when the card has no sponsor field. A sponsor then sees who is accountable. */
+	/** True when the page has no sponsor field. A sponsor then sees who is accountable. */
 	showSponsor: boolean;
 	onChanged: () => void;
 }

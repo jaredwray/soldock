@@ -14,7 +14,7 @@ interface MemberRequestActionsProps {
 
 /**
  * The **Approve** button and the **Deny** button of one member request (`chat.approve_member_request`,
- * `chat.deny_member_request`). The activity list of Chat and the card of the account in Admin, Members use
+ * `chat.deny_member_request`). The activity list of Chat and the page of the account in Admin, Members use
  * it. A toast tells the result. After an approval, it also tells the scopes that the account got. When the
  * server does not have the request, a toast shows the message of the server, and the row goes away.
  */

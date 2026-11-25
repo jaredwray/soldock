@@ -28,21 +28,21 @@ test("an admin creates a service account with scopes and a 7-day token, sees its
 		await expect(dialog).toBeHidden();
 
 		await page.getByRole("button", { name: /^Service accounts/ }).click();
-		const card = page.locator("details.admin-card").filter({ hasText: name });
-		await card.locator("summary").click();
-		await expect(card.getByLabel("Description", { exact: true })).toHaveValue("Posts build results");
-		await expect(card.getByText("by Tomasz Wieczorek").first()).toBeVisible();
-		const tokens = card.getByRole("table", { name: /^Tokens of/ });
-		const activity = card.getByRole("table", { name: /^Activity of/ });
+		await page.getByRole("link", { name: new RegExp(`^${name}`) }).click();
+		const member = page.getByRole("main");
+		await expect(member.getByLabel("Description", { exact: true })).toHaveValue("Posts build results");
+		await expect(member.getByText("by Tomasz Wieczorek").first()).toBeVisible();
+		const tokens = member.getByRole("table", { name: /^Tokens of/ });
+		const activity = member.getByRole("table", { name: /^Activity of/ });
 
 		// The Permissions part shows the scopes of the account. The token form has no scopes.
-		await expect(card.getByRole("checkbox", { name: /^mail\.read/ })).toBeChecked();
-		await expect(card.getByRole("checkbox", { name: /^chat\.read/ })).not.toBeChecked();
+		await expect(member.getByRole("checkbox", { name: /^mail\.read/ })).toBeChecked();
+		await expect(member.getByRole("checkbox", { name: /^chat\.read/ })).not.toBeChecked();
 		// The form selects 90 days first. Choose 7 days.
-		await card.getByLabel("New token label").fill("GitHub Actions");
-		await card.getByRole("combobox", { name: "Expires" }).click();
+		await member.getByLabel("New token label").fill("GitHub Actions");
+		await member.getByRole("combobox", { name: "Expires" }).click();
 		await page.getByRole("option", { name: "7 days" }).click();
-		await card.getByRole("button", { name: "Create token" }).click();
+		await member.getByRole("button", { name: "Create token" }).click();
 		const secretDialog = page.getByRole("dialog", { name: "Copy the new token" });
 		await expect(secretDialog.getByText("Expires: In 7 days")).toBeVisible();
 		const secret = await secretDialog.getByLabel("API key “GitHub Actions”").inputValue();
@@ -58,13 +58,13 @@ test("an admin creates a service account with scopes and a 7-day token, sees its
 		expect(body.scopes).toEqual(["account.read", "mail.read"]);
 		accountId = body.principal.id;
 		await expect(async () => {
-			await card.getByRole("button", { name: "Refresh" }).click();
+			await member.getByRole("button", { name: "Refresh" }).click();
 			await expect(activity.getByRole("row").filter({ hasText: "account.whoami" })).toBeVisible({ timeout: 1000 });
 		}).toPass();
-		await expect(card.getByText("Live tokens")).toBeVisible();
+		await expect(member.getByText("Live tokens")).toBeVisible();
 
 		// A rotation gives a new secret. The old one works for the overlap, until somebody stops it.
-		await card.getByRole("button", { name: "Rotate token GitHub Actions" }).click();
+		await member.getByRole("button", { name: "Rotate token GitHub Actions" }).click();
 		await page.getByRole("dialog").getByRole("button", { name: "Rotate" }).click();
 		const rotatedDialog = page.getByRole("dialog", { name: "Copy the new secret of the token" });
 		await expect(rotatedDialog.getByText(/The old secret works until/)).toBeVisible();
@@ -77,19 +77,19 @@ test("an admin creates a service account with scopes and a 7-day token, sees its
 			),
 		);
 		expect(both.map((response) => response.status())).toEqual([200, 200]);
-		await card.getByRole("button", { name: "Stop the old secret of token GitHub Actions now" }).click();
+		await member.getByRole("button", { name: "Stop the old secret of token GitHub Actions now" }).click();
 		await expect(tokens.getByRole("row").filter({ hasText: "GitHub Actions" })).not.toContainText("Old secret works");
 		const old = await context.request.get("/api/v1/account", { headers: { authorization: `Bearer ${secret}` } });
 		expect(old.status()).toBe(401);
 
 		// A change of the permissions applies to the token at once, without a new secret.
-		await card.getByRole("checkbox", { name: /^chat\.read/ }).check();
-		await card.getByRole("button", { name: "Save permissions" }).click();
+		await member.getByRole("checkbox", { name: /^chat\.read/ }).check();
+		await member.getByRole("button", { name: "Save permissions" }).click();
 		await expect(page.getByText(`Permissions of ${name} saved.`)).toBeVisible();
 		const changed = await context.request.get("/api/v1/account", { headers: { authorization: `Bearer ${rotated}` } });
 		expect(await changed.json()).toMatchObject({ scopes: ["account.read", "mail.read", "chat.read"] });
 
-		await card.getByRole("button", { name: "Revoke token GitHub Actions" }).click();
+		await member.getByRole("button", { name: "Revoke token GitHub Actions" }).click();
 		await page.getByRole("dialog").getByRole("button", { name: "Revoke token" }).click();
 		await expect(tokens.getByRole("row").filter({ hasText: "GitHub Actions" })).toContainText("Revoked");
 		const after = await context.request.get("/api/v1/account", { headers: { authorization: `Bearer ${rotated}` } });

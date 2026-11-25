@@ -455,7 +455,7 @@ Do these steps before the deploy, in the old version:
    most 200 rooms: for an account with more rooms, read the members of each room.
 3. Remove each membership that the account must not use. Do this in the settings of that mailbox, drive
    or room.
-4. Read **Shared directly in Drive** on the same card. An account with limits did not reach these items.
+4. Read **Shared directly in Drive** on the same page. An account with limits did not reach these items.
    After the upgrade, it reaches each one. Remove each grant that the account must not use
    (`drive.unshare_item`, or **Share** on the item in Drive).
 5. Each account always reaches its own mailbox and its own drive after the upgrade, with the scopes that
@@ -541,7 +541,7 @@ What changes for a script that calls the API with a key of an agent or a token o
   with `chat.set_member_scopes`. A person who owns the room can.
 - A script with a key of a person adds an agent as before.
 
-A person answers a request in **Chat › Activity**, or on the card of the account in **Admin › Members**.
+A person answers a request in **Chat › Activity**, or on the page of the account in **Admin › Members**.
 [Agents](agents.md#an-agent-asks-before-it-adds-an-agent) has the rules.
 
 A rollback to the Worker from before this change works. That Worker does not know the activity kind

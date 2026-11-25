@@ -4,7 +4,7 @@ import { rightsOf, rightsText } from "./roomScopes.ts";
 
 // The texts and the rules of a member request: an agent asks to add an agent or a service account to a
 // room, and a person who manages that account approves or denies it. The activity list of Chat and the
-// card of the account in Admin, Members show a request, and use this module for the same texts. It has no
+// page of the account in Admin, Members show a request, and use this module for the same texts. It has no
 // DOM and no network, so apps/web/test checks it.
 
 /** What the two buttons of a request need: the id for the two operations, and the names for the texts. */

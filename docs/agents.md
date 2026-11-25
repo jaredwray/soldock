@@ -116,7 +116,7 @@ mailbox, shared drive and room that it is a member of, exactly as a person does.
 say what it can do at all. They do not say where. The membership says where, and its role or its member
 scopes say what the agent can do there.
 
-- **Set what an agent can do in a resource** in the settings of that resource. The card of the agent has
+- **Set what an agent can do in a resource** in the settings of that resource. The page of the agent has
   no control for it.
   - A team mailbox: open the mailbox in **Admin › Shared mailboxes**, and set **Read**, **Change** and
     **Send** for the member. See [Team mailboxes](#team-mailboxes).
@@ -413,7 +413,7 @@ a person who manages that account must agree.
   - **Chat › Activity.** One person gets the request there: the sponsor of the agent to add. For a
     service account, its sponsor gets it when that person is an owner or an admin. If the account has no
     such person, the owner of the organization gets it.
-  - **Admin › Members.** The card of the account shows its requests to each person who can answer.
+  - **Admin › Members.** The page of the account shows its requests to each person who can answer.
 - **Approve** (`chat.approve_member_request`). The account becomes a member with the scopes of the
   request: `chat.read` and `chat.write`, or only `chat.read`. A request never gives `chat.add_members`.
   The account also gets the chat scopes that it does not hold, as when you add it yourself.
@@ -952,7 +952,7 @@ To set it up:
    Select the agent that the dot acts as.
 2. Give the agent the scopes of the events: `mail.webhooks`, `chat.webhooks` or `drive.webhooks`.
    Give it also the read scope of the product, such as `chat.read`, because an event has no content.
-   Select them for a new agent at the approval, or add them in **Permissions** on the agent card.
+   Select them for a new agent at the approval, or add them in **Permissions** on the page of the agent.
 3. Open the agent in **Admin › Members**, and allow the callback host of ChatGPT in its
    [outbound policy](#outbound-policy). Without this step, `events/subscribe` gets the error
    `policy_denied`, and the error message names the host. An API key of a person needs no such step.

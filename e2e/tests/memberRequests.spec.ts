@@ -49,7 +49,7 @@ async function roomsOf(agent: Agent): Promise<string[]> {
 }
 
 // An agent cannot put a different agent into a room. It asks, and the person who manages that agent
-// decides: in the activity list of Chat, or on the card of the agent in Admin › Members.
+// decides: in the activity list of Chat, or on the page of the agent in Admin › Members.
 test("an agent asks to add an agent to a room, and its manager approves the request in Chat and denies a second request in Admin", async ({
 	browser,
 	request,
@@ -92,20 +92,19 @@ test("an agent asks to add an agent to a room, and its manager approves the requ
 		await expect(item).toHaveCount(0);
 		expect(await roomsOf(helper)).toEqual([first]);
 
-		// A second request, for a second room. The card of the agent in Admin › Members shows it.
+		// A second request, for a second room. The page of the agent in Admin › Members shows it.
 		const second = await privateRoom(asker, secondRoom);
 		const again = await asker.post(`/api/v1/chat/rooms/${second}/member-requests`, { principal_id: helper.id });
 		expect(again.status(), await again.text()).toBe(200);
 		await page.goto("/admin/members");
 		await page.getByRole("button", { name: /^Agents/ }).click();
-		const card = page.locator("details.admin-card").filter({ hasText: helperName });
-		await card.locator("summary").click();
-		const requests = card.getByRole("region", { name: "Requests" });
+		await page.getByRole("link", { name: new RegExp(`^${helperName}`) }).click();
+		const requests = page.getByRole("main").getByRole("region", { name: "Requests" });
 		await expect(requests).toContainText(`${askerName} asks to add this account to #${secondRoom}.`);
 		await expect(requests).toContainText("the account can read and post in the room");
 		await requests.getByRole("button", { name: `Deny the request to add ${helperName} to #${secondRoom}` }).click();
 		await expect(page.getByText(`${helperName} is not added to #${secondRoom}.`)).toBeVisible();
-		// The part goes away with its last request: the card shows no empty box.
+		// The part goes away with its last request: the page shows no empty box.
 		await expect(requests).toHaveCount(0);
 		expect(await roomsOf(helper)).toEqual([first]);
 	} finally {

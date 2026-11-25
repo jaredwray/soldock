@@ -158,7 +158,14 @@ export function Shell() {
 				// The key gives each principal its own page, so the data of one never shows on a different one.
 				return <ProfilePage key={route.principalId} principalId={route.principalId} />;
 			case "admin":
-				return <AdminPage section={route.section} navOpen={navOpen} onCloseNav={() => setNavOpen(false)} />;
+				return (
+					<AdminPage
+						section={route.section}
+						memberId={route.memberId ?? null}
+						navOpen={navOpen}
+						onCloseNav={() => setNavOpen(false)}
+					/>
+				);
 			case "connect":
 				return <ConnectPage key={route.requestId} requestId={route.requestId} />;
 			case "settings":

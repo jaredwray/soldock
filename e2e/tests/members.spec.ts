@@ -15,7 +15,7 @@ async function submit(page: Page, button: string): Promise<string> {
 
 // An admin creates a person and an agent in Admin › Members. A person gets no API key. An agent gets its
 // scopes and a first key, which shows once. The key has the scopes of the agent, and a change of the
-// permissions on the agent card applies to the key at once.
+// permissions on the page of the agent applies to the key at once.
 test("an admin creates a person with no API key, and an agent with scopes and a first key, and changes the permissions of the agent", async ({
 	browser,
 }) => {
@@ -59,22 +59,30 @@ test("an admin creates a person with no API key, and an agent with scopes and a 
 		};
 		expect(await scopesOfKey()).toEqual(["account.read", "mail.read"]);
 
-		// The Permissions part of the agent card changes the scopes of the agent. The first key gets them at
-		// its next call, without a new secret.
+		// The row of the agent opens the page of the agent, on its own path. The Permissions part changes the
+		// scopes of the agent. The first key gets them at its next call, without a new secret.
 		await page.getByRole("button", { name: /^Agents/ }).click();
-		const card = page.locator("details.admin-card").filter({ hasText: agent });
-		await card.locator("summary").click();
-		await expect(card.getByRole("checkbox", { name: /^mail\.read/ })).toBeChecked();
+		await page.getByRole("link", { name: new RegExp(`^${agent}`) }).click();
+		await expect(page).toHaveURL(new RegExp(`/admin/members/${agentId}$`));
+		const member = page.getByRole("main");
+		await expect(member.getByRole("heading", { level: 1, name: agent })).toBeVisible();
+		await expect(member.getByRole("checkbox", { name: /^mail\.read/ })).toBeChecked();
 		// Permissions has the scopes only. A hint tells where a person changes what the agent can do in a
 		// shared mailbox, a room or a shared drive.
-		await expect(card.getByRole("checkbox", { name: /^Limit/ })).toHaveCount(0);
+		await expect(member.getByRole("checkbox", { name: /^Limit/ })).toHaveCount(0);
 		await expect(
-			card.getByText("open the settings of that shared mailbox, room or shared drive", { exact: false }),
+			member.getByText("open the settings of that shared mailbox, room or shared drive", { exact: false }),
 		).toBeVisible();
-		await card.getByRole("checkbox", { name: /^chat\.read/ }).check();
-		await card.getByRole("button", { name: "Save permissions" }).click();
+		await member.getByRole("checkbox", { name: /^chat\.read/ }).check();
+		await member.getByRole("button", { name: "Save permissions" }).click();
 		await expect(page.getByText(`Permissions of ${agent} saved.`)).toBeVisible();
 		expect(await scopesOfKey()).toEqual(["account.read", "chat.read", "mail.read"]);
+
+		// Back gives the same list: the filter stays, and the row of the agent gets the focus.
+		await page.getByRole("link", { name: "Back to Members" }).click();
+		await expect(page).toHaveURL(/\/admin\/members$/);
+		await expect(page.getByRole("button", { name: /^Agents/ })).toHaveAttribute("aria-pressed", "true");
+		await expect(page.getByRole("link", { name: new RegExp(`^${agent}`) })).toBeFocused();
 	} finally {
 		// The agent first: a person who sponsors no agent can be deleted.
 		for (const id of ids.reverse()) {
