@@ -14,6 +14,7 @@ import {
 	canReadAgentMailboxes,
 	domainOf,
 	holdsForResource,
+	isAdmin,
 	isTeamMailboxId,
 	type MailboxRecord,
 	mailDomains,
@@ -32,11 +33,14 @@ import {
 	sha256Hex,
 } from "../platform/index.ts";
 import { mailboxStub, storeRaw } from "./delivery.ts";
-import type { Refusal, SendInput, StoredMessage } from "./mailbox.ts";
+import type { Refusal, SendInput, SettingsPatch, StoredMessage } from "./mailbox.ts";
 import { composeMessage } from "./mime/compose.ts";
 import { parseMail, readAttachment } from "./mime/parse.ts";
+import { readOrgSettings, screenerDefault, updateOrgSettings } from "./org-settings.ts";
 import { deniedOutboundAddresses, outboundMode, outboundPolicyDenial } from "./outbound.ts";
 import { sanitizeHtml } from "./sanitize.ts";
+import type { ScreenerContext, ScreenerSenderRecord } from "./screener/store.ts";
+import { screenerEnabled } from "./screener/store.ts";
 import { compileQuery, parseQuery, QueryError } from "./search.ts";
 import { htmlToText, replySubject } from "./threading.ts";
 import { webhookHandlers } from "./webhooks.ts";
@@ -47,6 +51,10 @@ type MailOperation =
 	| "mail.update_settings"
 	| "mail.get_mailbox_settings"
 	| "mail.update_mailbox_settings"
+	| "mail.get_org_settings"
+	| "mail.update_org_settings"
+	| "mail.list_screener"
+	| "mail.screen_sender"
 	| "mail.get_auto_labels"
 	| "mail.update_auto_labels"
 	| "mail.create_auto_label"
@@ -135,7 +143,7 @@ function auditOk(
 	mailbox: MailboxRecord,
 	op: string,
 	target: string,
-	extra?: { outboundMode: string; externalRecipients: number },
+	extra?: { outboundMode?: string; externalRecipients?: number; code?: string },
 ): void {
 	audit({
 		op,
@@ -148,6 +156,49 @@ function auditOk(
 		requestId: call.requestId,
 		...extra,
 	});
+}
+
+/**
+ * What the mailbox needs to know about the Screener: the default of the organization, and whether the
+ * Screener can apply. It applies to the own mailbox of a person and to a team mailbox. It never applies to
+ * the own mailbox of an agent or a service account.
+ */
+async function screenerContext(call: CallContext, record: MailboxRecord): Promise<ScreenerContext> {
+	const eligible = record.kind === "team" || (record.kind === "personal" && call.caller.kind === "human");
+	return { orgDefault: await screenerDefault(call.env.DIRECTORY), eligible };
+}
+
+/** The Screener part of the settings of a mailbox. */
+function screenerSettings(mode: "inherit" | "on" | "off", context: ScreenerContext) {
+	return { mode, org_default: context.orgDefault, enabled: screenerEnabled(mode, context) };
+}
+
+/** Only an owner or an admin reads or changes the mail settings of the organization. Never an agent. */
+function requireAdmin(call: CallContext, action: string): void {
+	if (!isAdmin(call.caller)) throw new OperationError("forbidden", `Only owners and admins can ${action}.`);
+}
+
+function toScreenerSender(record: ScreenerSenderRecord) {
+	return {
+		address: record.address,
+		name: record.name,
+		status: record.status,
+		messages_held: record.messagesHeld,
+		first_seen_at: iso(record.firstSeenAt),
+		latest: record.latest
+			? {
+					thread_id: record.latest.threadId,
+					message_id: record.latest.messageId,
+					subject: record.latest.subject,
+					snippet: record.latest.snippet,
+					received_at: iso(record.latest.receivedAt),
+					has_attachments: record.latest.hasAttachments,
+				}
+			: null,
+		decided_at: record.decidedAt === null ? null : iso(record.decidedAt),
+		decided_by: record.decidedBy,
+		untrusted: true as const,
+	};
 }
 
 /**
@@ -295,31 +346,46 @@ export const mailHandlers: Pick<HandlerMap<CallContext>, MailOperation> = {
 	},
 
 	async "mail.update_settings"(call, input) {
-		let defaultMailboxId = input.default_mailbox_id;
-		if (defaultMailboxId === call.caller.id) defaultMailboxId = null;
-		if (defaultMailboxId) {
-			// The web app opens the default mailbox and composes from it. So it must be a team mailbox that the
-			// person reads now. Nobody composes from the mailbox of an agent, and the mailbox of a different
-			// person is private.
-			if (!isTeamMailboxId(defaultMailboxId)) {
+		let defaultFrom: SettingsPatch["default_from"];
+		if (input.default_from) {
+			const { mailbox_id: mailboxId } = input.default_from;
+			const own = (id: string) => id === call.caller.id;
+			// The web app composes in the own mailbox or in a team mailbox. Nobody writes from the mailbox of an
+			// agent, and the mailbox of a different person is private.
+			if (!own(mailboxId) && !isTeamMailboxId(mailboxId)) {
 				throw new OperationError(
 					"invalid",
-					"The default mailbox must be your own mailbox or a team mailbox that you are a member of.",
+					"The mailbox in default_from must be your own mailbox or a team mailbox that you are a member of.",
 				);
 			}
-			await teamMailboxFor(call.env.DIRECTORY, defaultMailboxId, call.caller.id, ["mail.read"]);
+			// The same id means the address of the mailbox itself, which is the default.
+			const fromId = input.default_from.from_mailbox_id === mailboxId ? null : input.default_from.from_mailbox_id;
+			if (fromId !== null && !own(fromId) && !isTeamMailboxId(fromId)) {
+				throw new OperationError(
+					"invalid",
+					"You can send only from your own address and from the address of a team mailbox that you are a member of.",
+				);
+			}
+			// A removal needs no membership, so a person can remove a setting after a membership ended.
+			if (fromId !== null) {
+				if (!own(mailboxId)) await teamMailboxFor(call.env.DIRECTORY, mailboxId, call.caller.id, ["mail.read"]);
+				if (!own(fromId)) await teamMailboxFor(call.env.DIRECTORY, fromId, call.caller.id, ["mail.send"]);
+			}
+			defaultFrom = { mailbox_id: mailboxId, from_mailbox_id: fromId };
 		}
-		return mailboxStub(call.env, call.caller.id).updateSettings({
-			sidebar: input.sidebar,
-			default_mailbox_id: defaultMailboxId,
-		});
+		return mailboxStub(call.env, call.caller.id).updateSettings({ sidebar: input.sidebar, default_from: defaultFrom });
 	},
 
 	// The settings of a mailbox live in that mailbox, so the members of a team mailbox share them.
 	async "mail.get_mailbox_settings"(call, input) {
 		const { record, box } = await openMailbox(call, input.mailbox_id, "mail.get_mailbox_settings");
 		// No audit line, as for mail.get_profile: the settings hold no mail content.
-		return { mailbox_id: record.id, ...(await box.mailboxSettings()) };
+		const [settings, context] = await Promise.all([box.mailboxSettings(), screenerContext(call, record)]);
+		return {
+			mailbox_id: record.id,
+			signature: settings.signature,
+			screener: screenerSettings(settings.screener, context),
+		};
 	},
 
 	async "mail.update_mailbox_settings"(call, input) {
@@ -332,10 +398,75 @@ export const mailHandlers: Pick<HandlerMap<CallContext>, MailOperation> = {
 				"An agent or a service account can change only the settings of its own mailbox.",
 			);
 		}
-		const settings = await box.updateMailboxSettings({ signature: input.signature });
+		const context = await screenerContext(call, record);
+		// The mailbox of an agent has no Screener: nobody but the agent could decide there, from untrusted mail.
+		if (input.screener !== undefined && !context.eligible) {
+			throw new OperationError("forbidden", "The Screener is for the mailboxes of people and for team mailboxes.");
+		}
+		const settings = await box.updateMailboxSettings({ signature: input.signature, screener: input.screener }, context);
 		// The line names the mailbox only. It never holds the signature.
-		auditOk(call, record, "mail.update_mailbox_settings", record.id);
-		return { mailbox_id: record.id, ...settings };
+		auditOk(
+			call,
+			record,
+			"mail.update_mailbox_settings",
+			record.id,
+			input.screener === undefined ? undefined : { code: `screener_${input.screener}` },
+		);
+		return {
+			mailbox_id: record.id,
+			signature: settings.signature,
+			screener: screenerSettings(settings.screener, context),
+		};
+	},
+
+	async "mail.get_org_settings"(call) {
+		requireAdmin(call, "read the mail settings of the organization");
+		return readOrgSettings(call.env.DIRECTORY);
+	},
+
+	async "mail.update_org_settings"(call, input) {
+		requireAdmin(call, "change the mail settings of the organization");
+		const settings = await updateOrgSettings(call.env.DIRECTORY, input.screener.default_enabled, Date.now());
+		audit({
+			op: "mail.update_org_settings",
+			actor: call.caller.id,
+			actorKind: call.caller.kind,
+			credential: call.caller.credential,
+			target: "screener",
+			code: settings.screener.default_enabled ? "on" : "off",
+			result: "ok",
+			requestId: call.requestId,
+		});
+		return settings;
+	},
+
+	async "mail.list_screener"(call, input) {
+		const { record, box } = await openMailbox(call, input.mailbox_id, "mail.list_screener");
+		const page = accept(
+			await box.listScreener({
+				status: input.status,
+				cursor: input.cursor ?? null,
+				limit: input.limit ?? DEFAULT_PAGE,
+			}),
+		);
+		auditAgentRead(call, record, "mail.list_screener", record.id);
+		return { senders: page.senders.map(toScreenerSender), next_cursor: page.nextCursor };
+	},
+
+	async "mail.screen_sender"(call, input) {
+		// The contract lets only people call it. In the mailbox of an agent, openMailbox refuses a change.
+		const { record, box } = await openMailbox(call, input.mailbox_id, "mail.screen_sender");
+		const { principal } = call.caller;
+		const result = await box.screenSender({
+			address: input.address,
+			decision: input.decision,
+			by: { principal_id: principal.id, kind: "human", display_name: principal.display_name },
+			dryRun: input.dry_run,
+			now: Date.now(),
+		});
+		// The line names the mailbox and the decision. The address of the sender stays out of the log.
+		if (!input.dry_run) auditOk(call, record, "mail.screen_sender", record.id, { code: input.decision });
+		return result;
 	},
 
 	async "mail.get_auto_labels"(call, input) {
@@ -613,6 +744,9 @@ export const mailHandlers: Pick<HandlerMap<CallContext>, MailOperation> = {
 			replyThreadId: reply?.threadId ?? null,
 			recipients,
 			sentBy: { principal_id: principal.id, kind: principal.kind, display_name: principal.display_name },
+			// A send that screens a sender in is a decision, so it needs what mail.screen_sender needs: a person
+			// with mail.modify in the credential. The check of the membership of a team mailbox is below.
+			mayScreen: call.caller.kind === "human" && call.caller.scopes.has("mail.modify"),
 		};
 		// A send has slow steps: it resolves the recipients, composes the message and writes it to R2. An
 		// admin can remove the member in that time. So the handler checks the membership again, just before
@@ -620,7 +754,11 @@ export const mailHandlers: Pick<HandlerMap<CallContext>, MailOperation> = {
 		// between them is too late to stop this send.
 		if (record.kind === "team") {
 			try {
-				await teamMailboxFor(call.env.DIRECTORY, record.id, call.caller.id, ["mail.send", ...replyScopes]);
+				const member = await teamMailboxFor(call.env.DIRECTORY, record.id, call.caller.id, [
+					"mail.send",
+					...replyScopes,
+				]);
+				sendInput.mayScreen = sendInput.mayScreen === true && member.scopes.includes("mail.modify");
 			} catch (error) {
 				// No message references this attempt's object.
 				await call.env.BLOBS.delete(rawKey);
@@ -645,6 +783,8 @@ export const mailHandlers: Pick<HandlerMap<CallContext>, MailOperation> = {
 				externalRecipients: recipients.filter((recipient) => recipient.kind === "external").length,
 			});
 		} else auditOk(call, record, "mail.send", sent.result.message_id);
+		// Each sender that the send screened in gets the line of a decision. The line never holds the address.
+		for (let n = 0; n < sent.screenedIn; n++) auditOk(call, record, "mail.screen_sender", record.id, { code: "in" });
 		return sent.result;
 	},
 

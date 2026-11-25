@@ -20,6 +20,7 @@ export const SETTINGS_NAV_ID = "settings-nav";
 const NAV_IDS: Partial<Record<Route["page"], string>> = {
 	mail: MAIL_NAV_ID,
 	"mail-settings": MAIL_NAV_ID,
+	"mail-screener": MAIL_NAV_ID,
 	drive: DRIVE_NAV_ID,
 	chat: CHAT_NAV_ID,
 	admin: ADMIN_NAV_ID,
@@ -38,8 +39,8 @@ export type Product = "mail" | "drive" | "chat";
 export function productOf(route: Route): Product | null {
 	switch (route.page) {
 		case "mail":
-		case "mail-home":
 		case "mail-settings":
+		case "mail-screener":
 			return "mail";
 		case "drive":
 		case "doc":

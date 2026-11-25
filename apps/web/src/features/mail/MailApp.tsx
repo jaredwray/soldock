@@ -1,24 +1,26 @@
-import type { Label, Mailbox } from "@asterra/contracts";
+import type { Label, Mailbox, MailSettings } from "@asterra/contracts";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { lazyPage } from "../../lib/lazyPage.tsx";
 import { setPageTitle } from "../../lib/pageTitle.ts";
 import { navigate } from "../../lib/router.tsx";
 import { useToast } from "../../lib/toast.tsx";
 import { useOnChange } from "../../lib/useOnChange.ts";
-import { isAgentMailbox, type MailView, viewPath } from "../../routes.ts";
+import { isAgentMailbox, type MailView, type ScreenerTab, viewPath } from "../../routes.ts";
 import { SEARCH_INPUT_ID } from "../../shell/nav.ts";
 import { useSession } from "../auth/session.tsx";
 import { AutoLabelsDialog } from "./AutoLabelsDialog.tsx";
 import type { SendResult } from "./Composer.tsx";
 import { Composer, usePreloadComposer } from "./ComposerLoader.tsx";
-import { type Draft, newDraft, withSignature } from "./compose.ts";
+import { type Draft, newDraft } from "./compose.ts";
 import { useLabels, useMailboxSettings, useProfilePoll } from "./data.ts";
+import { FocusReply } from "./FocusReply.tsx";
 import { DeleteLabelDialog, NewLabelDialog } from "./LabelDialogs.tsx";
 import { MailPane } from "./MailPane.tsx";
 import { MailboxProvider, MailboxRightsProvider } from "./mailbox.tsx";
-import { mailboxRights } from "./mailboxNav.ts";
+import { defaultFromId, fromOptions, mailboxRights } from "./mailboxNav.ts";
 import { ShortcutHelp } from "./ShortcutHelp.tsx";
 import { Sidebar } from "./Sidebar.tsx";
+import { showScreener } from "./screener.ts";
 import { useShortcuts } from "./useShortcuts.ts";
 import { viewQuery, viewTitle } from "./views.ts";
 
@@ -29,16 +31,40 @@ type MailDialog =
 	| { type: "delete-label"; label: Label }
 	| null;
 
-// The settings view is a separate chunk: a person opens it seldom.
+/**
+ * The open composer: its draft, the mailbox that sends it at first, and the signature of that mailbox. The
+ * signature is null when it did not load yet: the composer then reads it.
+ */
+interface Composing {
+	draft: Draft;
+	from: string | null;
+	signature: string | null;
+}
+
+// The settings view and the Screener view are separate chunks: a person opens them seldom.
 const MailboxSettings = lazyPage(() => import("./MailboxSettings.tsx").then((module) => module.MailboxSettings));
+const Screener = lazyPage(() => import("./Screener.tsx").then((module) => module.Screener));
 
 interface MailAppProps {
-	/** `view` is null for the settings view of the mailbox. */
-	route: { mailboxId: string | null; view: MailView | null; threadId: string | null };
+	/**
+	 * `view` is null for the settings view and the Screener view of the mailbox. `screener` is set for the
+	 * Screener view. `focus` is true for Focus & Reply.
+	 */
+	route: {
+		mailboxId: string | null;
+		view: MailView | null;
+		threadId: string | null;
+		screener?: ScreenerTab;
+		focus?: true;
+	};
 	/** The mailboxes that the person can use, from the shell: the list stays when the mailbox changes. */
 	mailboxes: readonly Mailbox[] | null;
 	/** Loads the mailboxes again, after a change of the members of a team mailbox in its settings view. */
 	onMailboxesChanged: () => void;
+	/** The mail settings of the person, from the shell: they stay when the mailbox changes. Null while they load. */
+	mailSettings: MailSettings | null;
+	/** Keeps the mail settings that the settings view saved. */
+	onMailSettingsSaved: (settings: MailSettings) => void;
 	/** The mailboxes of the sidebar that the person expanded or collapsed, from the shell: the state stays when the mailbox changes. */
 	expandedMailboxes: Readonly<Record<string, boolean>>;
 	/** Expands or collapses a mailbox in the sidebar. Null goes back to the default. */
@@ -58,6 +84,8 @@ export function MailApp({
 	route,
 	mailboxes,
 	onMailboxesChanged,
+	mailSettings,
+	onMailSettingsSaved,
 	expandedMailboxes,
 	onSetExpanded,
 	navOpen,
@@ -73,7 +101,7 @@ export function MailApp({
 	const { settings: mailboxSettings, set: setMailboxSettings } = useMailboxSettings(mailboxId);
 	const listed = mailboxId ? (mailboxes?.find((mailbox) => mailbox.id === mailboxId) ?? null) : null;
 	const rights = useMemo(() => mailboxRights(mailboxes, mailboxId), [mailboxes, mailboxId]);
-	const [draft, setDraft] = useState<Draft | null>(null);
+	const [composing, setComposing] = useState<Composing | null>(null);
 	const [dialog, setDialog] = useState<MailDialog>(null);
 	const closeNavRef = useRef(onCloseNav);
 	usePreloadComposer();
@@ -97,7 +125,15 @@ export function MailApp({
 		? (profile?.display_name ?? listed?.display_name ?? (isAgentMailbox(mailboxId) ? "Agent mailbox" : "Team mailbox"))
 		: null;
 	const { view } = route;
-	const title = view ? viewTitle(view, labels) : "Settings";
+	const title = route.focus
+		? "Focus & Reply"
+		: view
+			? viewTitle(view, labels)
+			: route.screener
+				? "Screener"
+				: "Settings";
+	const screenerEnabled = mailboxSettings?.screener.enabled ?? false;
+	const screenerPending = profile?.screener_pending ?? 0;
 	const inboxUnread = labelsById.get("INBOX")?.threads_unread ?? profile?.inbox_unread ?? 0;
 
 	useEffect(() => {
@@ -105,16 +141,37 @@ export function MailApp({
 		setPageTitle(`${title}${inboxUnread > 0 ? ` (${inboxUnread})` : ""}${mailbox} – Asterra`);
 	}, [title, inboxUnread, mailboxName]);
 
-	const signature = mailboxSettings?.signature ?? "";
+	// The addresses that the person can send from, and the one that a new message in this mailbox comes from.
+	const senders = useMemo(
+		() =>
+			fromOptions(
+				mailboxes,
+				whoami.principal,
+				mailboxId && rights.send ? { id: mailboxId, display_name: mailboxName ?? "", address: myAddress } : null,
+			),
+		[mailboxes, whoami.principal, mailboxId, rights.send, mailboxName, myAddress],
+	);
+	const defaultFrom = defaultFromId(mailboxId, mailSettings?.default_from ?? {}, senders, whoami.principal.id);
+	// The signature of the default From, when it is not this mailbox.
+	const { settings: fromSettings } = useMailboxSettings(defaultFrom, defaultFrom !== mailboxId);
+	const signature = mailboxSettings?.signature ?? null;
+	const fromSignature = defaultFrom === mailboxId ? signature : (fromSettings?.signature ?? null);
 	const compose = useCallback(
 		(next?: Draft) => {
 			// Nobody sends from the mailbox of an agent except the agent.
 			if (!rights.send) return;
 			closeNavRef.current();
-			// The signature of the mailbox goes into each new message, reply and forward. The person can change it there.
-			setDraft(withSignature(next ?? newDraft(), signature));
+			// A reply comes from the mailbox of its conversation. A new message and a forward come from the default
+			// From of this mailbox. The signature of the mailbox that sends goes into the draft. The person can
+			// change it there.
+			const draft = next ?? newDraft();
+			setComposing(
+				draft.replyToMessageId === null
+					? { draft, from: defaultFrom, signature: fromSignature }
+					: { draft, from: mailboxId, signature },
+			);
 		},
-		[rights.send, signature],
+		[rights.send, defaultFrom, fromSignature, mailboxId, signature],
 	);
 
 	// The list has the shortcuts of Mail. The settings view keeps the ones that do not need a list.
@@ -140,7 +197,7 @@ export function MailApp({
 	});
 
 	function sent(result: SendResult) {
-		setDraft(null);
+		setComposing(null);
 		const failed = result.recipients.filter((recipient) => recipient.status === "failed");
 		toast(
 			failed.length > 0
@@ -167,6 +224,11 @@ export function MailApp({
 						canModify={rights.modify}
 						canSend={rights.send}
 						view={view}
+						screener={
+							showScreener(screenerEnabled, screenerPending)
+								? { pending: screenerPending, active: route.screener !== undefined }
+								: null
+						}
 						labels={labels}
 						labelsError={labelsError}
 						open={navOpen}
@@ -176,7 +238,17 @@ export function MailApp({
 						onDeleteLabel={(label) => setDialog({ type: "delete-label", label })}
 						onClose={onCloseNav}
 					/>
-					{view ? (
+					{route.focus ? (
+						<FocusReply
+							mailboxName={mailboxName}
+							labelsById={labelsById}
+							myAddress={myAddress}
+							refreshKey={refreshKey}
+							onChanged={onChanged}
+							onCompose={compose}
+							onShowHelp={() => setDialog({ type: "help" })}
+						/>
+					) : view ? (
 						<MailPane
 							key={viewPath(view)}
 							mailboxName={mailboxName}
@@ -192,6 +264,16 @@ export function MailApp({
 							onCompose={compose}
 							onShowHelp={() => setDialog({ type: "help" })}
 						/>
+					) : route.screener ? (
+						<Screener
+							mailboxId={mailboxId}
+							tab={route.screener}
+							title={mailboxName ? `${mailboxName}: Screener` : "Screener"}
+							enabled={screenerEnabled}
+							rights={rights}
+							refreshKey={refreshKey}
+							onChanged={onChanged}
+						/>
 					) : (
 						<MailboxSettings
 							mailbox={{
@@ -203,20 +285,24 @@ export function MailApp({
 							title={mailboxName ? `${mailboxName}: Settings` : "Settings"}
 							rights={rights}
 							mailboxes={mailboxes}
+							senders={senders}
 							refreshKey={refreshKey}
 							onSettingsSaved={setMailboxSettings}
+							onMailSettingsSaved={onMailSettingsSaved}
 							onMembersChanged={onMailboxesChanged}
 							onOpenAutoLabels={() => setDialog({ type: "auto-labels" })}
 							onChanged={onChanged}
 						/>
 					)}
-					{draft && rights.send && (
+					{composing && rights.send && (
 						<Composer
-							key={draft.key}
-							draft={draft}
+							key={composing.draft.key}
+							draft={composing.draft}
 							mailDomains={profile?.mail_domains ?? null}
-							from={mailboxId ? { display_name: mailboxName ?? "", address: myAddress } : null}
-							onClose={() => setDraft(null)}
+							fromOptions={senders}
+							initialFrom={composing.from}
+							signature={composing.signature}
+							onClose={() => setComposing(null)}
 							onSent={sent}
 						/>
 					)}

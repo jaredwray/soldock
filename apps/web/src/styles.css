@@ -1967,6 +1967,99 @@ fieldset {
 	font-size: 13px;
 }
 
+/* Reply later: the banner above its list, the pile at the end of the inbox, and Focus & Reply. */
+
+.reply-later-banner,
+.reply-later-pile {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	justify-content: space-between;
+	gap: 8px 16px;
+	margin: 12px 16px;
+	padding: 10px 12px;
+	border: 1px solid var(--border);
+	border-radius: var(--radius-md);
+	background: var(--surface);
+	font-size: 14px;
+}
+
+.reply-later-banner p {
+	margin: 0;
+	color: var(--muted-foreground);
+}
+
+.reply-later-pile-link {
+	display: inline-flex;
+	align-items: center;
+	gap: 8px;
+	color: var(--foreground);
+	text-decoration: none;
+}
+
+.reply-later-pile-link:hover {
+	text-decoration: underline;
+}
+
+.focus-intro {
+	margin: 0;
+	padding: 16px 22px 0;
+	color: var(--muted-foreground);
+	font-size: 14px;
+}
+
+.focus-list {
+	display: flex;
+	flex-direction: column;
+	gap: 16px;
+	max-width: 1000px;
+	margin: 0;
+	padding: 16px 22px 32px;
+	list-style: none;
+}
+
+.focus-card {
+	padding: 12px 16px 4px;
+	border: 1px solid var(--border);
+	border-radius: var(--radius-md);
+}
+
+.focus-card-header {
+	display: flex;
+	align-items: flex-start;
+	justify-content: space-between;
+	gap: 12px;
+}
+
+.focus-card-title {
+	min-width: 0;
+}
+
+.focus-card-subject {
+	font-size: 17px;
+	font-weight: 650;
+	overflow-wrap: anywhere;
+}
+
+.focus-card-subject a {
+	color: inherit;
+	text-decoration: none;
+}
+
+.focus-card-subject a:hover {
+	text-decoration: underline;
+}
+
+.focus-card-people {
+	margin: 2px 0 0;
+	color: var(--muted-foreground);
+	font-size: 13px;
+}
+
+.focus-card-state {
+	margin: 8px 0 12px;
+}
+
 /* Thread view */
 
 .thread-view {
@@ -2633,7 +2726,26 @@ fieldset {
 	font-size: 13px;
 }
 
-/* The sender of a message from a team mailbox. It is text: the mailbox decides it. */
+/* The From of a message: a list of the addresses that the person can send from. The text lines up with the
+   text of the other fields, and the hover background goes past it. */
+.compose-select {
+	justify-self: start;
+	max-width: calc(100% + 8px);
+	min-height: 40px;
+	margin-left: -8px;
+	padding: 6px 8px;
+	border: 0;
+	border-radius: var(--radius-sm);
+	background: transparent;
+	color: var(--foreground);
+	font: inherit;
+}
+
+.compose-select:hover:not(:disabled) {
+	background: var(--hover);
+}
+
+/* The From of a reply. It is text: a reply comes from the mailbox of its conversation. */
 .compose-from {
 	min-height: 40px;
 	padding: 10px 0;
@@ -4334,6 +4446,18 @@ fieldset {
 		padding: 12px 16px 24px;
 	}
 
+	.focus-intro {
+		padding: 12px 16px 0;
+	}
+
+	.focus-list {
+		padding: 12px 16px 24px;
+	}
+
+	.focus-card {
+		padding: 10px 12px 4px;
+	}
+
 	.thread-header {
 		margin-left: 0;
 	}
@@ -4366,6 +4490,7 @@ fieldset {
 
 	/* Text of 16px, so that iOS does not zoom in on the fields. */
 	.compose-input,
+	.compose-select,
 	.compose-body {
 		font-size: 16px;
 	}
@@ -4753,6 +4878,7 @@ fieldset {
 	.compose-copies,
 	.toast-action,
 	.compose-input,
+	.compose-select,
 	.compose-from {
 		min-height: 44px;
 	}
@@ -5560,16 +5686,111 @@ fieldset {
 	overflow-wrap: anywhere;
 }
 
-.mailbox-default {
+.default-from-form {
 	display: flex;
+	flex-wrap: wrap;
 	align-items: center;
-	gap: 6px;
-	color: var(--positive);
+	gap: 8px;
+	align-self: stretch;
+}
+
+.default-from-select {
+	width: auto;
+	max-width: 100%;
+}
+
+/* The Screener view of a mailbox: the senders that wait, and the decisions. */
+.screener {
+	display: flex;
+	flex-direction: column;
+	gap: 16px;
+}
+
+.screener > .panel-intro,
+.screener > .notice {
+	margin: 0;
+}
+
+/* A line of text in the Screener view, without the margin of its paragraph. */
+.screener-line {
+	margin: 0;
+}
+
+.screener-tabs,
+.screener-links {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px 16px;
+}
+
+.screener-tabs .segment {
+	color: inherit;
+	text-decoration: none;
+}
+
+.screener-list {
+	margin: 0;
+	padding: 0;
+	list-style: none;
+}
+
+.screener-row {
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+	padding: 12px 0;
+	border-bottom: 1px solid var(--border);
+}
+
+.screener-row:first-child {
+	padding-top: 0;
+}
+
+.screener-row:last-child {
+	padding-bottom: 0;
+	border-bottom: 0;
+}
+
+.screener-sender {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: baseline;
+	gap: 0 8px;
+	min-width: 0;
 	overflow-wrap: anywhere;
 }
 
-.mailbox-default strong {
-	color: var(--foreground);
+.screener-name,
+.screener-subject {
+	font-weight: 600;
+}
+
+.screener-preview {
+	overflow-wrap: anywhere;
+}
+
+.screener-actions {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
+	margin-top: 4px;
+}
+
+.screener-form {
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+}
+
+.screener-form-row {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
+}
+
+.screener-form-row > .input {
+	flex: 1 1 220px;
+	min-width: 0;
 }
 
 .signature-form {

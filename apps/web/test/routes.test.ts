@@ -10,6 +10,7 @@ import {
 	chatThreadsPath,
 	type DriveView,
 	drivePath,
+	focusReplyPath,
 	isAgentMailbox,
 	itemPath,
 	type MailView,
@@ -19,6 +20,7 @@ import {
 	parseRoute,
 	profilePath,
 	SETTINGS_SECTIONS,
+	screenerPath,
 	settingsPath,
 	threadPath,
 	viewPath,
@@ -26,6 +28,7 @@ import {
 
 const VIEWS: readonly MailView[] = [
 	{ kind: "system", view: "inbox" },
+	{ kind: "system", view: "reply-later" },
 	{ kind: "system", view: "starred" },
 	{ kind: "system", view: "sent" },
 	{ kind: "system", view: "spam" },
@@ -112,6 +115,39 @@ describe("routes", () => {
 		// The own id of the person in an agent path is the own mailbox, also for its settings.
 		expect(ownMailboxPath(parseRoute(mailSettingsPath(AGENT)), AGENT)).toBe("/mail/settings");
 		expect(ownMailboxPath(parseRoute(mailSettingsPath(AGENT)), "prn_01JD0000000000000000OTHER0")).toBeNull();
+	});
+
+	// Focus & Reply has its own path under Reply later. It is not the thread with the id "focus".
+	it("parses the Focus & Reply path of each mailbox back to Focus & Reply in that mailbox", () => {
+		const replyLater: MailView = { kind: "system", view: "reply-later" };
+		for (const mailboxId of [null, TEAM, AGENT]) {
+			expect(parseRoute(focusReplyPath(mailboxId))).toEqual({
+				page: "mail",
+				mailboxId,
+				view: replyLater,
+				threadId: null,
+				focus: true,
+			});
+		}
+		expect(focusReplyPath()).toBe("/mail/reply-later/focus");
+		expect(focusReplyPath(TEAM)).toBe(`/mail/team/${TEAM}/reply-later/focus`);
+		expect(parseRoute("/mail/reply-later/focus/more")).toEqual({ page: "not-found" });
+		expect(ownMailboxPath(parseRoute(focusReplyPath(AGENT)), AGENT)).toBe("/mail/reply-later/focus");
+	});
+
+	// The Screener view of a mailbox has its own paths under the mailbox: one for each tab.
+	it("parses the Screener paths of each mailbox back to the Screener view and its tab", () => {
+		for (const mailboxId of [null, TEAM, AGENT]) {
+			for (const tab of ["waiting", "history"] as const) {
+				expect(parseRoute(screenerPath(mailboxId, tab))).toEqual({ page: "mail-screener", mailboxId, tab });
+			}
+		}
+		expect(screenerPath()).toBe("/mail/screener");
+		expect(screenerPath(TEAM, "history")).toBe(`/mail/team/${TEAM}/screener/history`);
+		expect(parseRoute("/mail/screener/other")).toEqual({ page: "not-found" });
+		expect(parseRoute("/mail/screener/history/more")).toEqual({ page: "not-found" });
+		// The own id of the person in an agent path is the own mailbox, also for its Screener.
+		expect(ownMailboxPath(parseRoute(screenerPath(AGENT, "history")), AGENT)).toBe("/mail/screener/history");
 	});
 
 	// The server treats the own id of the person as the own mailbox, so the app must not show it read only.
@@ -285,9 +321,9 @@ describe("routes", () => {
 		}
 	});
 
-	it("sends / and /mail to the inbox of the default mailbox, and gives not-found for other paths", () => {
-		expect(parseRoute("/")).toEqual({ page: "mail-home" });
-		expect(parseRoute("/mail")).toEqual({ page: "mail-home" });
+	it("sends / and /mail to the inbox, and gives not-found for other paths", () => {
+		expect(parseRoute("/")).toEqual({ page: "redirect", to: "/mail/inbox" });
+		expect(parseRoute("/mail")).toEqual({ page: "redirect", to: "/mail/inbox" });
 		expect(parseRoute("/connect/oar_01JD0000000000000000000000")).toEqual({
 			page: "connect",
 			requestId: "oar_01JD0000000000000000000000",

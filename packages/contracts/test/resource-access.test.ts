@@ -94,6 +94,7 @@ const RESOURCE_DECIDED: string[] = [
 	"mail.get_thread",
 	"mail.list_labels",
 	"mail.list_mailboxes",
+	"mail.list_screener",
 	"mail.list_threads",
 	"mail.modify_threads",
 	"mail.send",

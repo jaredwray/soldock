@@ -42,7 +42,9 @@ use, not for the number of people. Google Workspace has a price for each person,
 ### Mail
 
 Asterra receives mail through Cloudflare Email Routing and sends mail through Cloudflare Email
-Service. The web app has threads, labels, stars, search, attachments and keyboard shortcuts. A shared
+Service. The web app has threads, labels, stars, search, attachments and keyboard shortcuts.
+**Reply later** takes a conversation out of the inbox until you answer it. **Focus & Reply** shows each
+conversation that waits, with its newest message and a reply button. A reply removes it from the list. A shared
 mailbox, such as `support@example.com`, gives a team one address with shared threads and one read
 state. Owners and admins can read the mailbox of each agent.
 
@@ -54,6 +56,10 @@ state. Owners and admins can read the mailbox of each agent.
 
 Mail from outside is untrusted content. Asterra sanitizes the HTML of a message before it shows the
 message.
+
+The Screener keeps the first mail from a new sender out of the inbox until you screen the sender in or
+out. The sender is not told. An admin sets the default for the organization, and each mailbox can turn
+it on or off.
 
 Auto labels sort new mail with labels such as Needs reply, Meeting, Newsletter, Cold pitch and
 Receipt, and with labels that you describe in plain words. A label can keep its mail out of the inbox.

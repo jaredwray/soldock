@@ -209,6 +209,43 @@ export function textToDoc(text: string): Node {
 	return nodes.doc.create(null, textBlocks(splitLines(text), 0));
 }
 
+/** The blocks that `textToDoc` makes from the lines: a paragraph for each line, a quote for `> ` lines. */
+export function linesToBlocks(lines: readonly string[]): Node[] {
+	if (lines.length === 0) return [];
+	const blocks: Node[] = [];
+	textToDoc(lines.join("\n")).forEach((block) => {
+		blocks.push(block);
+	});
+	return blocks;
+}
+
+/** The document with `blocks` in place of `count` top-level blocks from `start`. */
+export function spliceBlocks(doc: Node, start: number, count: number, blocks: readonly Node[]): Node {
+	const result: Node[] = [];
+	doc.forEach((child, _offset, index) => {
+		if (index === start) result.push(...blocks);
+		if (index < start || index >= start + count) result.push(child);
+	});
+	if (start >= doc.childCount) result.push(...blocks);
+	return nodes.doc.create(null, result);
+}
+
+/**
+ * The document with the blocks of the lines `next` in place of the first run of top-level blocks that are
+ * the same as the blocks of the lines `previous` (`linesToBlocks`), also a quote. Null when no run matches,
+ * for example after the person changed one of the lines, or when `previous` is empty.
+ */
+export function replaceLines(doc: Node, previous: readonly string[], next: readonly string[]): Node | null {
+	const old = linesToBlocks(previous);
+	if (old.length === 0) return null;
+	for (let start = 0; start + old.length <= doc.childCount; start += 1) {
+		if (old.every((block, offset) => doc.child(start + offset).eq(block))) {
+			return spliceBlocks(doc, start, old.length, linesToBlocks(next));
+		}
+	}
+	return null;
+}
+
 function linkLabel(text: string, href: string): string {
 	if (text === "") return href;
 	if (safeHref(text) === href || `mailto:${text}` === href) return text;

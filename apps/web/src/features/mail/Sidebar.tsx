@@ -1,13 +1,13 @@
 import type { Label, Mailbox } from "@asterra/contracts";
-import { type ReactNode, useEffect, useId, useRef } from "react";
+import { Fragment, type ReactNode, useEffect, useId, useRef } from "react";
 import { Icon } from "../../lib/icons.tsx";
 import { Link } from "../../lib/router.tsx";
-import { type MailView, viewPath } from "../../routes.ts";
+import { type MailView, screenerPath, viewPath } from "../../routes.ts";
 import { MAIL_NAV_ID, MENU_BUTTON_ID } from "../../shell/nav.ts";
 import { SidebarHeader } from "../../shell/SidebarHeader.tsx";
 import { useLabels } from "./data.ts";
 import { isExpanded, type MailboxEntry, mailboxNav } from "./mailboxNav.ts";
-import { labelRows, SYSTEM_NAV } from "./views.ts";
+import { labelRows, navCount, SYSTEM_NAV } from "./views.ts";
 
 interface SidebarProps {
 	/** The team mailbox or the agent mailbox of the views, or null for the own mailbox. */
@@ -29,8 +29,13 @@ interface SidebarProps {
 	canModify: boolean;
 	/** False when the person cannot send from the mailbox: no compose button. */
 	canSend: boolean;
-	/** The view that shows, or null in the settings view of the mailbox. */
+	/** The view that shows, or null in the settings view and the Screener view of the mailbox. */
 	view: MailView | null;
+	/**
+	 * The Screener item of the open mailbox: the senders that wait, and true when the Screener view shows.
+	 * Null when the sidebar does not show the item.
+	 */
+	screener: { pending: number; active: boolean } | null;
 	labels: Label[] | null;
 	labelsError: string | null;
 	open: boolean;
@@ -53,6 +58,7 @@ export function Sidebar({
 	canModify,
 	canSend,
 	view,
+	screener,
 	labels,
 	labelsError,
 	open,
@@ -84,6 +90,7 @@ export function Sidebar({
 		<MailboxContents
 			mailboxId={mailboxId}
 			view={view}
+			screener={screener}
 			labels={labels}
 			labelsError={labelsError}
 			nested={nested}
@@ -216,6 +223,7 @@ function OtherMailboxContents({ mailboxId }: { mailboxId: string | null }) {
 function MailboxContents({
 	mailboxId,
 	view,
+	screener = null,
 	labels,
 	labelsError,
 	nested,
@@ -227,6 +235,8 @@ function MailboxContents({
 	mailboxId: string | null;
 	/** The view that shows, or null when the mailbox is not open. */
 	view: MailView | null;
+	/** The Screener item, after the inbox. Only the open mailbox shows it. */
+	screener?: { pending: number; active: boolean } | null;
 	labels: Label[] | null;
 	labelsError: string | null;
 	/** True under a mailbox row: the heading of the labels is one level lower. */
@@ -245,24 +255,47 @@ function MailboxContents({
 			<ul className="nav-list">
 				{SYSTEM_NAV.map((item) => {
 					const active = view?.kind === "system" && view.view === item.view;
-					const unread = item.countLabel ? (byId.get(item.countLabel)?.threads_unread ?? 0) : 0;
+					const count = navCount(item, byId);
 					return (
-						<li key={item.view}>
-							<Link
-								to={viewPath({ kind: "system", view: item.view }, mailboxId)}
-								className={active ? "nav-item nav-item-active" : "nav-item"}
-								aria-current={active ? "page" : undefined}
-							>
-								<Icon name={item.icon} />
-								<span className="nav-name">{item.title}</span>
-								{unread > 0 && (
-									<span className="nav-count">
-										{unread}
-										<span className="visually-hidden"> unread</span>
-									</span>
-								)}
-							</Link>
-						</li>
+						<Fragment key={item.view}>
+							<li>
+								<Link
+									to={viewPath({ kind: "system", view: item.view }, mailboxId)}
+									className={active ? "nav-item nav-item-active" : "nav-item"}
+									aria-current={active ? "page" : undefined}
+								>
+									<Icon name={item.icon} />
+									<span className="nav-name">{item.title}</span>
+									{count > 0 && (
+										<span className="nav-count">
+											{count}
+											<span className="visually-hidden">{item.count?.of === "total" ? " to answer" : " unread"}</span>
+										</span>
+									)}
+								</Link>
+							</li>
+							{/* The Screener of the open mailbox comes after its inbox. */}
+							{item.view === "inbox" && screener && (
+								<li>
+									<Link
+										to={screenerPath(mailboxId)}
+										className={screener.active ? "nav-item nav-item-active" : "nav-item"}
+										aria-current={screener.active ? "page" : undefined}
+									>
+										<Icon name="shield" />
+										<span className="nav-name">Screener</span>
+										{screener.pending > 0 && (
+											<span className="nav-count">
+												{screener.pending}
+												<span className="visually-hidden">
+													{screener.pending === 1 ? " sender waits" : " senders wait"}
+												</span>
+											</span>
+										)}
+									</Link>
+								</li>
+							)}
+						</Fragment>
 					);
 				})}
 			</ul>

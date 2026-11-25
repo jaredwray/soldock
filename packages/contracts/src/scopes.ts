@@ -11,12 +11,13 @@ export const SCOPES = {
 	"account.keys":
 		"Create, list and revoke API keys and OAuth connections for yourself and for the agents that you sponsor, approve OAuth requests, and change passwords and two-step verification",
 	"directory.read":
-		"Read the directory; owners and admins can also read mail domain settings, AI settings and AI usage",
+		"Read the directory; owners and admins can also read mail domain settings, the mail settings of the organization, AI settings and AI usage",
 	"directory.write":
-		"Create accounts and change agent policies; owners and admins can also manage mail domains, team mailboxes and AI settings",
+		"Create accounts and change agent policies; owners and admins can also manage mail domains, team mailboxes, the mail settings of the organization and AI settings",
 	"mail.read":
-		"Read your mail and labels, and those of your team mailboxes; owners and admins can also read the mailboxes of agents",
-	"mail.modify": "Change labels, archive, trash, star and mark your mail and the mail of your team mailboxes",
+		"Read your mail, labels and Screener, and those of your team mailboxes; owners and admins can also read the mailboxes of agents",
+	"mail.modify":
+		"Change labels, archive, trash, star and mark your mail and the mail of your team mailboxes, and screen senders in or out",
 	"mail.send": "Send mail from your address and from the addresses of your team mailboxes",
 	"mail.webhooks": "Create a webhook endpoint and choose which mailboxes send new mail to it",
 	"drive.webhooks": "Create a webhook endpoint and choose which drives send item events to it",
@@ -86,7 +87,7 @@ export const SERVICE_SCOPES: readonly Scope[] = SERVICE_SCOPE_LIST;
 export const SERVICE_SCOPE_DESCRIPTIONS: Readonly<Record<ServiceScope, string>> = {
 	"account.read": "Read the account of the service account",
 	"directory.read": "Read the directory: the people, agents and service accounts of the organization",
-	"mail.read": "Read the mail and labels of the own mailbox of the service account",
+	"mail.read": "Read the mail, labels and Screener of the own mailbox of the service account",
 	"mail.modify": "Change labels, archive, trash, star and mark the mail of the own mailbox of the service account",
 	"mail.send": "Send mail from the own address of the service account",
 	"drive.read": "Read the own drive of the service account, and list the items that others shared with it",

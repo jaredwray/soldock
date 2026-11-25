@@ -1,5 +1,5 @@
 import type { Mailbox } from "@asterra/contracts";
-import { INBOX_PATH, isAgentMailbox, viewPath } from "../../routes.ts";
+import { isAgentMailbox } from "../../routes.ts";
 
 /** One mailbox in the sidebar. Under it, the sidebar shows its folders and labels when it is expanded. */
 export interface MailboxEntry {
@@ -123,19 +123,51 @@ export function rightsNotice(rights: MailboxRights): string | null {
 	return "You can read this shared mailbox. You cannot change it or send from it, and the conversations that you open stay unread.";
 }
 
-/**
- * The default mailbox of the person, from the saved `default_mailbox_id`: the id of a team mailbox, or
- * null for the own mailbox. A saved team mailbox is the default only while the person can read it: a
- * removed membership, or a membership without `mail.read`, gives the own mailbox. The mailbox of an agent
- * is never a default.
- */
-export function defaultMailboxId(saved: string | null, mailboxes: readonly Mailbox[]): string | null {
-	const listed = mailboxes.find((mailbox) => mailbox.id === saved);
-	return listed?.kind === "team" && listed.scopes.includes("mail.read") ? listed.id : null;
+/** An address that the person can send from: the From of the composer. */
+export interface FromOption {
+	/** The id of a team mailbox, or null for the own mailbox of the person. */
+	id: string | null;
+	display_name: string;
+	address: string;
 }
 
-/** The path that Mail opens first: the inbox of the default mailbox of the person (`defaultMailboxId`). */
-export function mailHomePath(saved: string | null, mailboxes: readonly Mailbox[]): string {
-	const id = defaultMailboxId(saved, mailboxes);
-	return id === null ? INBOX_PATH : viewPath({ kind: "system", view: "inbox" }, id);
+/**
+ * The addresses that the person can send from: the own address first, then the address of each team mailbox
+ * with `mail.send`. Nobody sends from the mailbox of an agent. `open` is the open team mailbox when the person
+ * can send from it: it is in the result also before the list of the mailboxes loads, as `mailboxRights` allows.
+ */
+export function fromOptions(
+	mailboxes: readonly Mailbox[] | null,
+	own: { display_name: string; address: string },
+	open: FromOption | null,
+): FromOption[] {
+	const list = mailboxes ?? [];
+	const personal = list.find((mailbox) => mailbox.kind === "personal");
+	const options: FromOption[] = [
+		{ id: null, display_name: personal?.display_name ?? own.display_name, address: personal?.address ?? own.address },
+		...list
+			.filter((mailbox) => mailbox.kind === "team" && mailbox.scopes.includes("mail.send"))
+			.map((mailbox) => ({ id: mailbox.id, display_name: mailbox.display_name, address: mailbox.address })),
+	];
+	if (open?.id && !options.some((option) => option.id === open.id)) options.push(open);
+	return options;
+}
+
+/**
+ * The From of a new message in the open mailbox: the id of a team mailbox, or null for the own mailbox.
+ * `defaults` is `default_from` of `mail.get_settings`: its keys and values are mailbox ids, with the id of the
+ * person for the own mailbox. A saved value counts only while it is in `options`, so a membership that ended
+ * or lost `mail.send` gives the default. The default is the open mailbox, or the own mailbox when the person
+ * cannot send from the open mailbox.
+ */
+export function defaultFromId(
+	openId: string | null,
+	defaults: Readonly<Record<string, string>>,
+	options: readonly FromOption[],
+	ownId: string,
+): string | null {
+	const saved = defaults[openId ?? ownId];
+	const savedId = saved === ownId ? null : saved;
+	if (savedId !== undefined && options.some((option) => option.id === savedId)) return savedId;
+	return options.some((option) => option.id === openId) ? openId : null;
 }

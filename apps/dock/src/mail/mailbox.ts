@@ -7,6 +7,9 @@ import {
 	MAIL_LIMITS,
 	MailboxId,
 	type MailSettings,
+	ScreenerMode,
+	type ScreenerStatus,
+	SYSTEM_LABELS,
 	WEBHOOK_LIMITS,
 } from "@asterra/contracts";
 import { addressTag, getMailbox, getPrincipal } from "../identity/index.ts";
@@ -43,6 +46,20 @@ import {
 import { deliverInternal, mailboxIdOfRawKey } from "./delivery.ts";
 import type { AttachmentMeta, AuthenticationResults, MailAddress, ParsedMail } from "./mime/parse.ts";
 import { deniedOutboundAddresses, outboundMode, outboundPolicyDenial } from "./outbound.ts";
+import {
+	type DecidedBy,
+	listSenders,
+	pendingCount,
+	recordHeld,
+	SCREENER_MIGRATION,
+	SCREENER_RESTORE_MS,
+	type ScreenerContext,
+	type ScreenerSenderRecord,
+	SENT_BY_PERSON,
+	screenerEnabled,
+	senderRow,
+	writeDecision,
+} from "./screener/store.ts";
 import { compileQuery, foldLabelName, parseQuery, QueryError } from "./search.ts";
 import { hasReplyPrefix, htmlToText, normalizeSubject, snippetOf } from "./threading.ts";
 
@@ -91,7 +108,29 @@ export interface DeliverInput {
 	 * callers do not send it.
 	 */
 	autoLabel?: { ownerAddress: string } | null;
+	/**
+	 * Set for mail from outside that is not spam. The mailbox holds the mail in the Screener when its
+	 * setting and this context turn the Screener on. Optional, because earlier callers do not send it.
+	 */
+	screener?: ScreenerContext | null;
 }
+
+/** The result of `screenSender`. */
+export interface ScreenResult {
+	address: string;
+	decision: "in" | "out";
+	changed: boolean;
+	messages_to_inbox: number;
+	messages_archived: number;
+	messages_screened_out: number;
+	dry_run: boolean;
+}
+
+/**
+ * Where a new message can join a thread. Held mail and visible mail never share a thread, and held mail
+ * of two senders never shares a thread, so a thread view never shows held mail in a view.
+ */
+type ThreadScope = { held: false } | { held: true; sender: string };
 
 export interface SendInput {
 	messageId: string;
@@ -107,6 +146,11 @@ export interface SendInput {
 	replyThreadId: string | null;
 	recipients: { address: string; kind: "local" | "external"; mailboxId: string | null; self: boolean }[];
 	sentBy: SentBy;
+	/**
+	 * True when the sender can decide in the Screener: a person, with mail.modify in the credential and, in a
+	 * team mailbox, in the membership. Only then does the send screen in a recipient that waits.
+	 */
+	mayScreen?: boolean;
 }
 
 /** The person or agent that sent a message from this mailbox, with the name at that time. */
@@ -186,7 +230,11 @@ export interface LabelRecord {
 	threads_unread: number;
 }
 
-const SYSTEM_LABEL_ORDER = ["INBOX", "STARRED", "IMPORTANT", "SENT", "SPAM", "TRASH", "UNREAD"];
+/** The order of the system labels in `listLabels`. */
+const SYSTEM_LABEL_ORDER: readonly string[] = SYSTEM_LABELS;
+
+/** The system labels of the first migration. Migrations are append only, so this list never changes. */
+const FIRST_SYSTEM_LABELS = ["INBOX", "STARRED", "IMPORTANT", "SENT", "SPAM", "TRASH", "UNREAD"];
 
 /** The tag of the watch sockets of a mailbox. The MCP stream of a subscriber holds one. */
 const WATCH_TAG = "watch";
@@ -288,7 +336,7 @@ const MIGRATIONS: string[][] = [
 			result TEXT NOT NULL,
 			created_at INTEGER NOT NULL
 		)`,
-		...SYSTEM_LABEL_ORDER.map(
+		...FIRST_SYSTEM_LABELS.map(
 			(id) =>
 				`INSERT INTO labels (id, name, name_folded, type, created_at) VALUES ('${id}', '${id}', '${id.toLowerCase()}', 'system', 0)`,
 		),
@@ -346,6 +394,23 @@ const MIGRATIONS: string[][] = [
 	],
 	// Auto labels: marks, signals, settings, corrections and the classifier outbox (autolabel/store.ts).
 	AUTOLABEL_MIGRATION,
+	// The Screener: the held state of a message and the senders (screener/store.ts).
+	SCREENER_MIGRATION,
+	// Reply later: the system label of the threads that the mailbox answers later. Label names are unique
+	// without regard to case. So a user label with the name reply_later first gets the lowest number n after its
+	// name, as "Reply_Later (n)", for which no label has that name. A person can make any name, also
+	// "Reply_Later (1)", so the number is not fixed. Both statements can run again with no change.
+	[
+		`WITH RECURSIVE n(i) AS (
+			SELECT 1
+			UNION ALL
+			SELECT i + 1 FROM n WHERE EXISTS (SELECT 1 FROM labels WHERE name_folded = 'reply_later (' || i || ')')
+		)
+		UPDATE labels SET name = name || ' (' || (SELECT MAX(i) FROM n) || ')',
+			name_folded = 'reply_later (' || (SELECT MAX(i) FROM n) || ')'
+		WHERE type = 'user' AND name_folded = 'reply_later'`,
+		"INSERT OR IGNORE INTO labels (id, name, name_folded, type, created_at) VALUES ('REPLY_LATER', 'REPLY_LATER', 'reply_later', 'system', 0)",
+	],
 ];
 
 /** The sends of one message to the classifier queue. A send that gets no result is repeated after `AUTOLABEL_RESEND_MS`. */
@@ -357,6 +422,9 @@ const AUTO_LABEL_MAILBOX_KEY = "auto_label_mailbox_id";
 const AUTO_LABELS_ORDER = AUTO_LABELS.map((label) => label.key);
 /** The folded names of the built-in auto labels. A custom auto label cannot take one. */
 const AUTO_LABELS_NAMES = new Set(AUTO_LABELS.map((label) => foldLabelName(label.name)));
+
+/** The labels that `modifyThreads` can change on a thread that the Screener holds. */
+const HELD_MAIL_LABELS: ReadonlySet<string> = new Set(["UNREAD", "STARRED", "IMPORTANT"]);
 
 /** A refusal thrown inside a transaction, so the transaction rolls back. */
 class AutoLabelRefusal extends Error {
@@ -471,26 +539,38 @@ export interface SettingsPatch {
 	sidebar?:
 		| { shared_mailboxes_collapsed?: boolean | undefined; agent_mailboxes_collapsed?: boolean | undefined }
 		| undefined;
-	/** Null clears the default. The handler checks the mailbox before it calls the object. */
-	default_mailbox_id?: string | null | undefined;
+	/**
+	 * The default From address of one mailbox. A null `from_mailbox_id` removes the setting. The handler
+	 * checks both mailboxes before it calls the object.
+	 */
+	default_from?: { mailbox_id: string; from_mailbox_id: string | null } | undefined;
 }
 
 /** The saved settings with the default for each setting that was never saved. A bad value gets the default. */
 function readSettings(raw: string | null): MailSettings {
-	let saved: { sidebar?: Record<string, unknown>; default_mailbox_id?: unknown } = {};
+	let saved: { sidebar?: Record<string, unknown>; default_from?: unknown } = {};
 	try {
 		saved = raw ? (JSON.parse(raw) as typeof saved) : {};
 	} catch {
 		// A value that does not parse gets the defaults. The next change writes a good value.
 	}
 	const flag = (value: unknown) => value === true;
-	const defaultMailbox = MailboxId.safeParse(saved.default_mailbox_id);
+	// An entry with a key or a value that is not a mailbox id is dropped. A value that is the same as its
+	// key is the default, so it is dropped too.
+	const defaultFrom: Record<string, string> = {};
+	if (saved.default_from !== null && typeof saved.default_from === "object" && !Array.isArray(saved.default_from)) {
+		for (const [key, value] of Object.entries(saved.default_from)) {
+			if (MailboxId.safeParse(key).success && MailboxId.safeParse(value).success && key !== value) {
+				defaultFrom[key] = value as string;
+			}
+		}
+	}
 	return {
 		sidebar: {
 			shared_mailboxes_collapsed: flag(saved.sidebar?.shared_mailboxes_collapsed),
 			agent_mailboxes_collapsed: flag(saved.sidebar?.agent_mailboxes_collapsed),
 		},
-		default_mailbox_id: defaultMailbox.success ? defaultMailbox.data : null,
+		default_from: defaultFrom,
 	};
 }
 
@@ -500,22 +580,29 @@ const MAILBOX_SETTINGS_KEY = "mailbox_settings";
 /** The settings of the mailbox itself, without its id. */
 export interface StoredMailboxSettings {
 	signature: string;
+	/** The Screener setting. `inherit` uses the default of the organization. */
+	screener: ScreenerMode;
 }
 
 /** A change to the settings of the mailbox: only the named settings change. */
 export interface MailboxSettingsPatch {
 	signature?: string | undefined;
+	screener?: ScreenerMode | undefined;
 }
 
 /** The saved settings of the mailbox, with the default for each setting that was never saved or does not parse. */
 function readMailboxSettings(raw: string | null): StoredMailboxSettings {
-	let saved: { signature?: unknown } = {};
+	let saved: { signature?: unknown; screener?: unknown } = {};
 	try {
 		saved = raw ? (JSON.parse(raw) as typeof saved) : {};
 	} catch {
 		// A value that does not parse gets the defaults. The next change writes a good value.
 	}
-	return { signature: typeof saved.signature === "string" ? saved.signature : "" };
+	const screener = ScreenerMode.safeParse(saved.screener);
+	return {
+		signature: typeof saved.signature === "string" ? saved.signature : "",
+		screener: screener.success ? screener.data : "inherit",
+	};
 }
 
 /**
@@ -621,12 +708,15 @@ export class MailboxDO extends DurableObject<Env> {
 	 * Stores a message that arrived for this mailbox. A second copy of the same content is dropped.
 	 * The second copy can come to a different `+tag` of this mailbox, so the copy adds its tag label.
 	 */
-	async deliver(
-		input: DeliverInput,
-	): Promise<{ status: "delivered" | "duplicate"; messageId: string; threadId: string }> {
+	async deliver(input: DeliverInput): Promise<{
+		status: "delivered" | "duplicate";
+		messageId: string;
+		threadId: string;
+		screened: "pending" | "out" | null;
+	}> {
 		const tagLabel = this.tagLabel(input.tag);
-		const existing = this.one<{ seq: number; id: string; thread_id: string }>(
-			"SELECT seq, id, thread_id FROM messages WHERE content_hash = ?",
+		const existing = this.one<{ seq: number; id: string; thread_id: string; screen: string | null }>(
+			"SELECT seq, id, thread_id, screen FROM messages WHERE content_hash = ?",
 			input.contentHash,
 		);
 		if (existing) {
@@ -640,14 +730,32 @@ export class MailboxDO extends DurableObject<Env> {
 					if (added > 0) this.bump();
 				});
 			}
-			return { status: "duplicate", messageId: existing.id, threadId: existing.thread_id };
+			return {
+				status: "duplicate",
+				messageId: existing.id,
+				threadId: existing.thread_id,
+				screened: existing.screen === "pending" || existing.screen === "out" ? existing.screen : null,
+			};
 		}
-		const labels = [...(input.spam ? ["SPAM", "UNREAD"] : ["INBOX", "UNREAD"]), ...(tagLabel ? [tagLabel] : [])];
-		const autoLabel = !input.spam && input.autoLabel && this.autoLabelsOn() ? input.autoLabel : null;
+		// The Screener applies only to mail from outside that is not spam. Spam goes to SPAM first.
+		const context = input.screener ?? null;
+		const screenerOn = context !== null && screenerEnabled(this.mailboxSettings().screener, context);
+		const screen = screenerOn && !input.spam && input.origin === "external" ? this.screenVerdict(input.parsed) : null;
+		// The Screener is off now, but mail waits in it: the default of the organization went off. The mail
+		// moves to the inbox now, so a change of the default needs no write to each mailbox.
+		const releaseWaiting = context !== null && !screenerOn && pendingCount(this.sql) > 0;
+		const labels = [
+			...(input.spam ? ["SPAM", "UNREAD"] : screen ? ["UNREAD"] : ["INBOX", "UNREAD"]),
+			...(tagLabel ? [tagLabel] : []),
+		];
+		// Held mail gets no auto labels: content from a stranger does not go to the model.
+		const autoLabel = !input.spam && !screen && input.autoLabel && this.autoLabelsOn() ? input.autoLabel : null;
 		let eventAt: number | null = null;
-		let inInbox = !input.spam;
+		let inInbox = !input.spam && !screen;
 		let classify = false;
+		let released = 0;
 		const stored = this.ctx.storage.transactionSync(() => {
+			if (releaseWaiting) released = this.releaseAllPending();
 			const inserted = this.insertMessage({
 				id: newId("msg"),
 				threadHint: null,
@@ -661,7 +769,11 @@ export class MailboxDO extends DurableObject<Env> {
 				labels,
 				subjectFallback: !input.spam,
 				sentBy: null,
+				screen,
 			});
+			if (screen && input.parsed.from) {
+				recordHeld(this.sql, input.parsed.from.address.toLowerCase(), input.parsed.from.name, input.internalDate);
+			}
 			if (autoLabel) {
 				// The rule stage runs in the transaction of the message, so mail that skips the inbox never shows there.
 				const outcome = this.autoLabelAtDelivery(inserted.seq, autoLabel.ownerAddress, { mayArchive: true });
@@ -669,13 +781,168 @@ export class MailboxDO extends DurableObject<Env> {
 				if (outcome === "queued") classify = true;
 			}
 			this.bump();
-			if (inInbox) eventAt = this.queueInboxEvent();
+			if (inInbox || released > 0) eventAt = this.queueInboxEvent();
 			return inserted;
 		});
-		if (inInbox) this.signalInbox();
+		if (inInbox || released > 0) this.signalInbox();
 		if (classify) await this.alarmBy(Date.now());
 		if (eventAt !== null) await this.alarmBy(eventAt);
-		return { status: "delivered", messageId: stored.id, threadId: stored.threadId };
+		return { status: "delivered", messageId: stored.id, threadId: stored.threadId, screened: screen };
+	}
+
+	// --- The Screener ---------------------------------------------------------------------------
+
+	/**
+	 * Where the Screener puts new mail from outside, when it is on: null for the inbox, `pending` to wait for
+	 * a decision, or `out` for a sender that a person screened out. A decision of a person comes first. With
+	 * no decision, a sender that a person wrote to, a reply to mail that a person sent, and a sender
+	 * with earlier mail in the views go to the inbox. So when the Screener goes on, only new senders wait.
+	 * Mail without a From address is not held: no decision can name its sender.
+	 */
+	private screenVerdict(parsed: ParsedMail): "pending" | "out" | null {
+		const address = parsed.from?.address.toLowerCase();
+		if (!address) return null;
+		const row = senderRow(this.sql, address);
+		if (row) return row.status === "in" ? null : row.status;
+		// A send by an agent decides nothing, so only the sends of a person count here and for the references.
+		if (this.one("SELECT 1 AS found FROM recipients WHERE address_key = ? AND person_sent = 1", address)) return null;
+		const refs = [...new Set([...(parsed.inReplyTo ? [parsed.inReplyTo] : []), ...parsed.references])].slice(-50);
+		for (const ref of refs) {
+			const sent = this.one(
+				`SELECT 1 AS found FROM messages m WHERE m.message_id_header = ? AND m.origin = 'sent' AND ${SENT_BY_PERSON}`,
+				ref,
+			);
+			if (sent) return null;
+		}
+		const earlier = this.one(
+			`SELECT 1 AS found FROM messages m WHERE m.from_addr = ? AND m.screen IS NULL AND m.origin <> 'sent'
+			AND NOT EXISTS (SELECT 1 FROM message_labels x WHERE x.message_seq = m.seq AND x.label_id = 'SPAM') LIMIT 1`,
+			address,
+		);
+		return earlier ? null : "pending";
+	}
+
+	/**
+	 * Moves held mail to the views, inside a transaction. `where` selects the messages, on the alias `m`.
+	 * With `inbox`, they get INBOX and keep UNREAD. Without it, they go to All mail and are marked as read.
+	 * Returns the number of messages.
+	 */
+	private releaseHeld(where: string, params: SqlStorageValue[], inbox: boolean): number {
+		const seqs = this.all<{ seq: number }>(`SELECT m.seq FROM messages m WHERE ${where}`, ...params).map(
+			(row) => row.seq,
+		);
+		for (const seq of seqs) {
+			if (inbox) this.sql.exec("INSERT OR IGNORE INTO message_labels (message_seq, label_id) VALUES (?, 'INBOX')", seq);
+			else this.sql.exec("DELETE FROM message_labels WHERE message_seq = ? AND label_id = 'UNREAD'", seq);
+			this.sql.exec("UPDATE messages SET screen = NULL WHERE seq = ?", seq);
+		}
+		return seqs.length;
+	}
+
+	/** Moves all mail that waits to the inbox, and removes the senders that wait. Inside a transaction. */
+	private releaseAllPending(): number {
+		const moved = this.releaseHeld("m.screen = 'pending'", [], true);
+		this.sql.exec("DELETE FROM screener_senders WHERE status = 'pending'");
+		return moved;
+	}
+
+	/**
+	 * Screens a sender in for a send by a person to the sender, inside the transaction of the send. Only a
+	 * sender that waits changes: a decision of a person stays. Returns the senders that changed and the
+	 * messages that went to the inbox.
+	 */
+	private screenInRecipients(addresses: MailAddress[], by: DecidedBy, now: number): { senders: number; moved: number } {
+		let senders = 0;
+		let moved = 0;
+		for (const address of new Set(addresses.map((a) => a.address.toLowerCase()))) {
+			if (senderRow(this.sql, address)?.status !== "pending") continue;
+			moved += this.releaseHeld("m.from_addr = ? AND m.screen = 'pending'", [address], true);
+			writeDecision(this.sql, address, "in", by, now);
+			senders++;
+		}
+		return { senders, moved };
+	}
+
+	/**
+	 * Records the decision of a person for a sender, and moves the held mail of the sender. `in`: the mail
+	 * that waits goes to the inbox. The mail of a sender that was screened out goes to the inbox for the last
+	 * `SCREENER_RESTORE_MS`, and to All mail, read, when it is older. `out`: the mail that waits is screened
+	 * out. Mail that is in a view already stays. The same decision again changes nothing.
+	 */
+	async screenSender(input: {
+		address: string;
+		decision: "in" | "out";
+		by: DecidedBy;
+		dryRun: boolean;
+		now: number;
+	}): Promise<ScreenResult> {
+		const address = input.address.toLowerCase();
+		const cutoff = input.now - SCREENER_RESTORE_MS;
+		const count = (where: string, ...params: SqlStorageValue[]) =>
+			this.one<{ n: number }>(
+				`SELECT COUNT(*) AS n FROM messages m WHERE m.from_addr = ? AND ${where}`,
+				address,
+				...params,
+			)?.n ?? 0;
+		const changed = senderRow(this.sql, address)?.status !== input.decision;
+		const result: ScreenResult = {
+			address,
+			decision: input.decision,
+			changed,
+			messages_to_inbox: 0,
+			messages_archived: 0,
+			messages_screened_out: 0,
+			dry_run: input.dryRun,
+		};
+		if (input.decision === "in") {
+			result.messages_to_inbox = count("(m.screen = 'pending' OR (m.screen = 'out' AND m.internal_date >= ?))", cutoff);
+			result.messages_archived = count("m.screen = 'out' AND m.internal_date < ?", cutoff);
+		} else {
+			result.messages_screened_out = count("m.screen = 'pending'");
+		}
+		const moves = result.messages_to_inbox + result.messages_archived + result.messages_screened_out;
+		if (input.dryRun || (!changed && moves === 0)) return result;
+		let eventAt: number | null = null;
+		this.ctx.storage.transactionSync(() => {
+			if (input.decision === "in") {
+				this.releaseHeld(
+					"m.from_addr = ? AND (m.screen = 'pending' OR (m.screen = 'out' AND m.internal_date >= ?))",
+					[address, cutoff],
+					true,
+				);
+				this.releaseHeld("m.from_addr = ? AND m.screen = 'out' AND m.internal_date < ?", [address, cutoff], false);
+			} else {
+				this.sql.exec("UPDATE messages SET screen = 'out' WHERE from_addr = ? AND screen = 'pending'", address);
+			}
+			writeDecision(this.sql, address, input.decision, input.by, input.now);
+			this.bump();
+			if (result.messages_to_inbox > 0) eventAt = this.queueInboxEvent();
+		});
+		if (result.messages_to_inbox > 0) this.signalInbox();
+		if (eventAt !== null) await this.alarmBy(eventAt);
+		return result;
+	}
+
+	/** One page of the senders with a status, or a refusal for a cursor that is not valid. */
+	listScreener(params: {
+		status: ScreenerStatus;
+		cursor: string | null;
+		limit: number;
+	}): { senders: ScreenerSenderRecord[]; nextCursor: string | null } | Refusal {
+		let after: [number, string] | null = null;
+		if (params.cursor) {
+			try {
+				const decoded = JSON.parse(atob(params.cursor)) as unknown;
+				if (Array.isArray(decoded) && typeof decoded[0] === "number" && typeof decoded[1] === "string") {
+					after = [decoded[0], decoded[1]];
+				}
+			} catch {
+				// Handled below.
+			}
+			if (!after) return { error: { code: "invalid", message: "The cursor is not valid." } };
+		}
+		const page = listSenders(this.sql, params.status, after, params.limit);
+		return { senders: page.senders, nextCursor: page.next ? btoa(JSON.stringify(page.next)) : null };
 	}
 
 	// --- Webhook events -------------------------------------------------------------------------
@@ -820,9 +1087,14 @@ export class MailboxDO extends DurableObject<Env> {
 		/** False for spam: a forged sender must not join a thread by its subject. */
 		subjectFallback: boolean;
 		sentBy: SentBy | null;
+		/** The held state of the message in the Screener. Null for mail in the views. */
+		screen?: "pending" | "out" | null;
 	}): { seq: number; id: string; threadId: string } {
 		const { parsed } = m;
-		const threadId = this.resolveThread(parsed, m.internalDate, m.threadHint, m.subjectFallback);
+		const screen = m.screen ?? null;
+		const sender = parsed.from?.address.toLowerCase() ?? "";
+		const scope: ThreadScope = screen ? { held: true, sender } : { held: false };
+		const threadId = this.resolveThread(parsed, m.internalDate, m.threadHint, m.subjectFallback, scope);
 		const text = capUtf8(parsed.text, MAX_TEXT_BYTES);
 		const html = capUtf8(parsed.html, MAX_HTML_BYTES);
 		const plain = parsed.text ?? (parsed.html ? htmlToText(parsed.html) : "");
@@ -831,8 +1103,8 @@ export class MailboxDO extends DurableObject<Env> {
 			`INSERT INTO messages (id, thread_id, content_hash, raw_key, origin, message_id_header, subject, from_name,
 				from_addr, to_json, cc_json, bcc_json, reply_to_json, to_text, cc_text, bcc_text, participants, sent_date,
 				internal_date, snippet, text_body, html_body, body_truncated, size, has_attachments, attachments_json,
-				attachment_names, auth_json, sent_by_json, signals_json)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING seq`,
+				attachment_names, auth_json, sent_by_json, signals_json, screen)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING seq`,
 			m.id,
 			threadId,
 			m.contentHash,
@@ -863,6 +1135,7 @@ export class MailboxDO extends DurableObject<Env> {
 			parsed.authentication ? JSON.stringify(parsed.authentication) : null,
 			m.sentBy ? JSON.stringify(m.sentBy) : null,
 			m.origin === "sent" ? null : JSON.stringify(parsed.signals),
+			screen,
 		)?.seq as number;
 		const refs = [...new Set([...parsed.references, ...(parsed.inReplyTo ? [parsed.inReplyTo] : [])])];
 		refs.forEach((ref, position) => {
@@ -894,29 +1167,44 @@ export class MailboxDO extends DurableObject<Env> {
 	/**
 	 * Finds the thread of a new message: a thread that holds a message it references, or a message
 	 * that references it (for mail that arrives out of order). A reply with no known reference joins
-	 * a recent thread with the same subject. When the message links two threads, they merge.
+	 * a recent thread with the same subject. When the message links two threads, they merge. `scope` keeps
+	 * held mail out of the threads of the views: held mail joins only held mail of the same sender.
 	 */
 	private resolveThread(
 		parsed: ParsedMail,
 		internalDate: number,
 		hint: string | null,
 		subjectFallback: boolean,
+		scope: ThreadScope,
 	): string {
 		const found = new Set<string>();
-		if (hint && this.one("SELECT 1 AS found FROM threads WHERE id = ?", hint)) found.add(hint);
+		// The condition on a message (alias m) of a thread that the new message can join.
+		const inScope = scope.held ? "m.screen IS NOT NULL AND m.from_addr = ?" : "m.screen IS NULL";
+		const scopeParams: SqlStorageValue[] = scope.held ? [scope.sender] : [];
+		if (
+			hint &&
+			!scope.held &&
+			this.one("SELECT 1 AS found FROM threads WHERE id = ?", hint) &&
+			!this.one("SELECT 1 AS found FROM messages WHERE thread_id = ? AND screen IS NOT NULL", hint)
+		) {
+			found.add(hint);
+		}
 		const refs = [...new Set([...(parsed.inReplyTo ? [parsed.inReplyTo] : []), ...parsed.references])].slice(-50);
 		for (const ref of refs) {
 			for (const row of this.all<{ thread_id: string }>(
-				"SELECT DISTINCT thread_id FROM messages WHERE message_id_header = ?",
+				`SELECT DISTINCT m.thread_id FROM messages m WHERE m.message_id_header = ? AND ${inScope}`,
 				ref,
+				...scopeParams,
 			)) {
 				found.add(row.thread_id);
 			}
 		}
 		if (parsed.messageIdHeader) {
 			for (const row of this.all<{ thread_id: string }>(
-				"SELECT DISTINCT m.thread_id FROM message_refs r JOIN messages m ON m.seq = r.message_seq WHERE r.ref = ?",
+				`SELECT DISTINCT m.thread_id FROM message_refs r JOIN messages m ON m.seq = r.message_seq
+				WHERE r.ref = ? AND ${inScope}`,
 				parsed.messageIdHeader,
+				...scopeParams,
 			)) {
 				found.add(row.thread_id);
 			}
@@ -931,12 +1219,13 @@ export class MailboxDO extends DurableObject<Env> {
 				WHERE t.normalized_subject = ? AND t.last_message_at >= ?
 				AND EXISTS (
 					SELECT 1 FROM messages m, json_each(m.participants) p
-					WHERE m.thread_id = t.id AND p.value = ?
+					WHERE m.thread_id = t.id AND p.value = ? AND ${inScope}
 				)
 				ORDER BY t.last_message_at DESC LIMIT 1`,
 				normalized,
 				internalDate - SUBJECT_THREAD_WINDOW_MS,
 				sender,
+				...scopeParams,
 			);
 			if (row) found.add(row.id);
 		}
@@ -973,20 +1262,30 @@ export class MailboxDO extends DurableObject<Env> {
 
 	// --- Reading --------------------------------------------------------------------------------
 
-	profile(): { messages_total: number; threads_total: number; inbox_unread: number; version: number } {
+	profile(): {
+		messages_total: number;
+		threads_total: number;
+		inbox_unread: number;
+		screener_pending: number;
+		version: number;
+	} {
+		// The totals do not count the mail that the Screener holds. A thread is all held or all in the views.
 		const counts = this.one<{ messages: number; threads: number }>(
-			"SELECT (SELECT COUNT(*) FROM messages) AS messages, (SELECT COUNT(*) FROM threads) AS threads",
+			`SELECT (SELECT COUNT(*) FROM messages WHERE screen IS NULL) AS messages,
+				(SELECT COUNT(*) FROM threads) - (SELECT COUNT(DISTINCT thread_id) FROM messages WHERE screen IS NOT NULL) AS threads`,
 		);
 		const unread = this.one<{ n: number }>(
 			`SELECT COUNT(DISTINCT m.thread_id) AS n FROM messages m
 			JOIN message_labels inbox ON inbox.message_seq = m.seq AND inbox.label_id = 'INBOX'
 			JOIN message_labels unread ON unread.message_seq = m.seq AND unread.label_id = 'UNREAD'
-			WHERE NOT EXISTS (SELECT 1 FROM message_labels x WHERE x.message_seq = m.seq AND x.label_id IN ('SPAM', 'TRASH'))`,
+			WHERE m.screen IS NULL
+			AND NOT EXISTS (SELECT 1 FROM message_labels x WHERE x.message_seq = m.seq AND x.label_id IN ('SPAM', 'TRASH'))`,
 		);
 		return {
 			messages_total: counts?.messages ?? 0,
 			threads_total: counts?.threads ?? 0,
 			inbox_unread: unread?.n ?? 0,
+			screener_pending: pendingCount(this.sql),
 			version: Number(this.meta("version") ?? 0),
 		};
 	}
@@ -1007,11 +1306,13 @@ export class MailboxDO extends DurableObject<Env> {
 			const value = patch.sidebar?.[key];
 			if (typeof value === "boolean") sidebar[key] = value;
 		}
-		const next: MailSettings = {
-			sidebar,
-			default_mailbox_id:
-				patch.default_mailbox_id === undefined ? current.default_mailbox_id : patch.default_mailbox_id,
-		};
+		const defaultFrom = { ...current.default_from };
+		if (patch.default_from) {
+			const { mailbox_id: mailboxId, from_mailbox_id: fromId } = patch.default_from;
+			if (fromId === null || fromId === mailboxId) delete defaultFrom[mailboxId];
+			else defaultFrom[mailboxId] = fromId;
+		}
+		const next: MailSettings = { sidebar, default_from: defaultFrom };
 		this.setMeta("settings", JSON.stringify(next));
 		return next;
 	}
@@ -1023,14 +1324,32 @@ export class MailboxDO extends DurableObject<Env> {
 
 	/**
 	 * Changes the named settings of this mailbox, keeps the others, and returns all of them. A setting is
-	 * not mail, so the change counter stays, as for `updateSettings`.
+	 * not mail, so the change counter stays, as for `updateSettings`. When the change turns the Screener off,
+	 * the mail that waits in it moves to the inbox in the same transaction, and the counter grows.
+	 * `context` tells the default of the organization, for a change of the Screener.
 	 */
-	updateMailboxSettings(patch: MailboxSettingsPatch): StoredMailboxSettings {
+	async updateMailboxSettings(patch: MailboxSettingsPatch, context?: ScreenerContext): Promise<StoredMailboxSettings> {
 		const current = readMailboxSettings(this.meta(MAILBOX_SETTINGS_KEY));
 		const next: StoredMailboxSettings = {
 			signature: patch.signature === undefined ? current.signature : normalizeSignature(patch.signature),
+			screener: patch.screener ?? current.screener,
 		};
-		this.setMeta(MAILBOX_SETTINGS_KEY, JSON.stringify(next));
+		const turnsOff =
+			context !== undefined &&
+			!screenerEnabled(next.screener, context) &&
+			(screenerEnabled(current.screener, context) || patch.screener !== undefined);
+		let eventAt: number | null = null;
+		let released = 0;
+		this.ctx.storage.transactionSync(() => {
+			this.setMeta(MAILBOX_SETTINGS_KEY, JSON.stringify(next));
+			if (turnsOff) released = this.releaseAllPending();
+			if (released > 0) {
+				this.bump();
+				eventAt = this.queueInboxEvent();
+			}
+		});
+		if (released > 0) this.signalInbox();
+		if (eventAt !== null) await this.alarmBy(eventAt);
 		return next;
 	}
 
@@ -1043,9 +1362,9 @@ export class MailboxDO extends DurableObject<Env> {
 				FROM message_labels ml
 				JOIN messages m ON m.seq = ml.message_seq
 				LEFT JOIN message_labels u ON u.message_seq = m.seq AND u.label_id = 'UNREAD'
-				WHERE ml.label_id IN ('SPAM', 'TRASH') OR NOT EXISTS (
+				WHERE m.screen IS NULL AND (ml.label_id IN ('SPAM', 'TRASH') OR NOT EXISTS (
 					SELECT 1 FROM message_labels x WHERE x.message_seq = m.seq AND x.label_id IN ('SPAM', 'TRASH')
-				)
+				))
 				GROUP BY ml.label_id`,
 			).map((row) => [row.id, row]),
 		);
@@ -1334,23 +1653,26 @@ export class MailboxDO extends DurableObject<Env> {
 	 * Counts one send to each address of a sent message, inside the transaction of the message. The same
 	 * address twice in one message (for example in To and in Cc) counts once, with the form of its first
 	 * entry. The stored form is the form of the newest send. A send with the same time as the stored one
-	 * is newer, because it is stored later. The migration backfill uses the same rules.
+	 * is newer, because it is stored later. The migration backfill uses the same rules. `byPerson` tells that
+	 * a person sent the message: the Screener lets an address in only for such a send.
 	 */
-	private recordRecipients(addresses: MailAddress[], sentAt: number): void {
+	private recordRecipients(addresses: MailAddress[], sentAt: number, byPerson: boolean): void {
 		const seen = new Set<string>();
 		for (const { address } of addresses) {
 			const key = address.toLowerCase();
 			if (seen.has(key)) continue;
 			seen.add(key);
 			this.sql.exec(
-				`INSERT INTO recipients (address_key, address, times_sent, last_sent_at) VALUES (?, ?, 1, ?)
+				`INSERT INTO recipients (address_key, address, times_sent, last_sent_at, person_sent) VALUES (?, ?, 1, ?, ?)
 				ON CONFLICT (address_key) DO UPDATE SET
 					address = CASE WHEN excluded.last_sent_at >= last_sent_at THEN excluded.address ELSE address END,
 					times_sent = times_sent + 1,
-					last_sent_at = MAX(last_sent_at, excluded.last_sent_at)`,
+					last_sent_at = MAX(last_sent_at, excluded.last_sent_at),
+					person_sent = MAX(person_sent, excluded.person_sent)`,
 				key,
 				address,
 				sentAt,
+				byPerson ? 1 : 0,
 			);
 		}
 	}
@@ -1412,11 +1734,25 @@ export class MailboxDO extends DurableObject<Env> {
 			}
 		}
 		const threadIds = [...new Set(params.threadIds)];
+		const heldChange = [...params.add, ...params.remove].some((label) => !HELD_MAIL_LABELS.has(label));
 		const changes: { seq: number; add: string[]; remove: string[] }[] = [];
 		let threadsChanged = 0;
 		for (const threadId of threadIds) {
 			if (!this.one("SELECT 1 AS found FROM threads WHERE id = ?", threadId)) {
 				return { error: { code: "not_found", message: `No thread has the id ${threadId}.` } };
+			}
+			// Held mail is in no view. A view label would put it in a view with no decision, or would stay on it
+			// after a decision. So only the read state and the marks of a person change on held mail.
+			if (
+				heldChange &&
+				this.one("SELECT 1 AS found FROM messages WHERE thread_id = ? AND screen IS NOT NULL", threadId)
+			) {
+				return {
+					error: {
+						code: "conflict",
+						message: `The Screener holds the thread ${threadId}. On held mail, only ${[...HELD_MAIL_LABELS].join(", ")} can change. To move the mail, a person screens the sender in or out (mail.screen_sender).`,
+					},
+				};
 			}
 			let changed = false;
 			for (const { seq } of this.all<{ seq: number }>("SELECT seq FROM messages WHERE thread_id = ?", threadId)) {
@@ -1486,6 +1822,14 @@ export class MailboxDO extends DurableObject<Env> {
 		this.sql.exec(
 			"DELETE FROM message_labels WHERE label_id = ? AND message_seq IN (SELECT seq FROM messages WHERE thread_id = ?)",
 			row.label_id,
+			threadId,
+		);
+	}
+
+	/** Removes REPLY_LATER from each message of a thread. */
+	private clearReplyLater(threadId: string): void {
+		this.sql.exec(
+			"DELETE FROM message_labels WHERE label_id = 'REPLY_LATER' AND message_seq IN (SELECT seq FROM messages WHERE thread_id = ?)",
 			threadId,
 		);
 	}
@@ -2030,21 +2374,35 @@ export class MailboxDO extends DurableObject<Env> {
 	 * transaction. With an idempotency key that was used before, it stores nothing and returns the
 	 * first result.
 	 */
-	async send(input: SendInput): Promise<{ duplicate: boolean; result: SendResult } | Refusal> {
+	async send(input: SendInput): Promise<{ duplicate: boolean; result: SendResult; screenedIn: number } | Refusal> {
 		if (this.meta("delivery_pause"))
 			return { error: { code: "conflict", message: "This mailbox is paused for a reset." } };
 		const now = Date.now();
 		const selfDelivery = input.recipients.some((r) => r.self);
 		let eventAt: number | null = null;
+		let released = 0;
+		let screenedIn = 0;
 		const result = this.ctx.storage.transactionSync(() => {
 			this.sql.exec("DELETE FROM idempotency WHERE created_at < ?", now - IDEMPOTENCY_TTL_MS);
 			if (input.idempotencyKey) {
 				const earlier = this.idempotentResult(input.idempotencyKey, input.requestHash);
 				if (earlier && "error" in earlier) return earlier;
-				if (earlier) return { duplicate: true, result: earlier };
+				if (earlier) return { duplicate: true, result: earlier, screenedIn: 0 };
 			}
 			const selfAddress = input.recipients.find((r) => r.self)?.address;
 			const selfTagLabel = selfAddress ? this.tagLabel(addressTag(selfAddress)) : null;
+			// A person who writes to a sender that waits wants the mail of that sender. This runs before the
+			// message is stored, so a reply to held mail joins its thread. A send by an agent decides nothing, and
+			// a send by a person who cannot decide in the Screener decides nothing.
+			if (input.mayScreen === true && input.sentBy.kind === "human") {
+				const decided = this.screenInRecipients(
+					[...input.parsed.to, ...input.parsed.cc, ...input.bcc],
+					{ ...input.sentBy, kind: "human" },
+					now,
+				);
+				released = decided.moved;
+				screenedIn = decided.senders;
+			}
 			const stored = this.insertMessage({
 				id: input.messageId,
 				threadHint: input.replyThreadId,
@@ -2059,9 +2417,15 @@ export class MailboxDO extends DurableObject<Env> {
 				subjectFallback: true,
 				sentBy: input.sentBy,
 			});
-			this.recordRecipients([...input.parsed.to, ...input.parsed.cc, ...input.bcc], input.internalDate);
+			this.recordRecipients(
+				[...input.parsed.to, ...input.parsed.cc, ...input.bcc],
+				input.internalDate,
+				input.sentBy.kind === "human",
+			);
 			// A reply answers the thread, so its Needs reply label goes.
 			if (this.autoLabelsOn()) this.clearNeedsReply(stored.threadId);
+			// A reply also takes the thread out of Reply later. A forward or a new message does not.
+			if (input.replyThreadId !== null) this.clearReplyLater(stored.threadId);
 			const recipients: DeliveryRecord[] = [];
 			for (const recipient of input.recipients) {
 				const status = recipient.self ? "delivered" : "queued";
@@ -2084,7 +2448,7 @@ export class MailboxDO extends DurableObject<Env> {
 					now,
 				);
 			}
-			if (selfDelivery) eventAt = this.queueInboxEvent();
+			if (selfDelivery || released > 0) eventAt = this.queueInboxEvent();
 			const sendResult: SendResult = { message_id: stored.id, thread_id: stored.threadId, recipients };
 			if (input.idempotencyKey) {
 				this.sql.exec(
@@ -2096,11 +2460,11 @@ export class MailboxDO extends DurableObject<Env> {
 				);
 			}
 			this.bump();
-			return { duplicate: false, result: sendResult };
+			return { duplicate: false, result: sendResult, screenedIn };
 		});
 		if ("error" in result || result.duplicate) return result;
-		// Mail to the mailbox itself is in its inbox now.
-		if (selfDelivery) this.signalInbox();
+		// Mail to the mailbox itself, or the mail of a sender that the send screened in, is in its inbox now.
+		if (selfDelivery || released > 0) this.signalInbox();
 		if (input.recipients.some((r) => !r.self)) await this.ctx.storage.setAlarm(now);
 		else if (eventAt !== null) await this.alarmBy(eventAt);
 		return result;

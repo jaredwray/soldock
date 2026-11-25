@@ -306,6 +306,22 @@ describe("MCP subscriptions/listen", () => {
 		await drainOutbox(bot.id);
 		expect((await ada.call("mail.list_threads")).threads.map((thread) => thread.subject)).toContain("Hi Ada");
 
+		// Mail that the Screener holds sends nothing. When a person screens the sender in, the mail is new in
+		// the inbox, and that sends one notification: the next one is for the inbox of Bot.
+		await ada.call("mail.update_mailbox_settings", { mailbox_id: support.id, screener: "on" });
+		await inject(
+			rawMessage({ from: "stranger@new.example", to: "support@dock.test", subject: "Held" }),
+			"support@dock.test",
+		);
+		await ada.call("mail.screen_sender", {
+			mailbox_id: support.id,
+			address: "stranger@new.example",
+			decision: "in",
+		});
+		await inject(rawMessage({ from: "x@internet.example", to: "bot@dock.test", subject: "Again" }), "bot@dock.test");
+		expect(await stream.next()).toEqual(updated(inbox(support.id)));
+		expect(await stream.next()).toEqual(updated(savedInbox));
+
 		// The client closes the stream: the mailboxes close their watch sockets.
 		expect(await watchSockets(bot.id)).toBe(1);
 		await stream.cancel();

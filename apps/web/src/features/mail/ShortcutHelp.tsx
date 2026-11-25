@@ -24,6 +24,7 @@ export const SHORTCUT_GROUPS: readonly { name: string; shortcuts: readonly Short
 			{ keys: ["e"], action: "Archive" },
 			{ keys: ["#"], action: "Move to Trash" },
 			{ keys: ["s"], action: "Star or remove the star" },
+			{ keys: ["l"], action: "Reply later, or Done in Reply later" },
 		],
 	},
 	{
