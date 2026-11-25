@@ -24,6 +24,10 @@ describe("the Screener in Mail", () => {
 		expect(search("in:screener")).toBe(true);
 		expect(search("in:screened_out")).toBe(true);
 		expect(search("from:bob@example.com IN:Screener")).toBe(true);
+		// The server reads a quoted value as the same folder.
+		expect(search('in:"screener"')).toBe(true);
+		expect(search('(IN:"Screened_Out")')).toBe(true);
+		expect(search('in:"screener')).toBe(false);
 		// A negated term and a different word do not show held mail, and no other view does.
 		expect(search("-in:screener")).toBe(false);
 		expect(search("in:screeners")).toBe(false);

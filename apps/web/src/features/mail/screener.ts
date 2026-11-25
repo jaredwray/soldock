@@ -20,11 +20,12 @@ export function screenerModeOptions(orgDefault: boolean): { value: ScreenerMode;
 
 /**
  * True when the view is a search that names the mail that the Screener holds (`in:screener` or
- * `in:screened_out`). The Screener view opens held mail in these searches. On held mail, the server changes
- * only the read state and the star, so the pane offers no other action there.
+ * `in:screened_out`, also in quotes, as the server reads them). The Screener view opens held mail in these
+ * searches. On held mail, the server changes only the read state and the star, so the pane offers no other
+ * action there.
  */
 export function showsHeldMail(view: MailView): boolean {
-	return view.kind === "search" && /(^|[\s(])in:(screener|screened_out)(?=$|[\s)])/i.test(view.query);
+	return view.kind === "search" && /(^|[\s(])in:("?)(screener|screened_out)\2(?=$|[\s)])/i.test(view.query);
 }
 
 /**
