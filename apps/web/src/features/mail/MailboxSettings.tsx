@@ -449,11 +449,11 @@ function DelegateAccess({ selfId, admin }: { selfId: string; admin: boolean }) {
 					)}
 				</>
 			}
-			onSet={async (principal, scopes) => {
-				setData((await api.call("mail.set_delegate", { principal_id: principal.id, scopes })).delegates);
+			onSet={async (principalId, scopes) => {
+				setData((await api.call("mail.set_delegate", { principal_id: principalId, scopes })).delegates);
 			}}
-			onRemove={async (principal) => {
-				setData((await api.call("mail.remove_delegate", { principal_id: principal.id })).delegates);
+			onRemove={async (principalId) => {
+				setData((await api.call("mail.remove_delegate", { principal_id: principalId })).delegates);
 			}}
 		/>
 	);

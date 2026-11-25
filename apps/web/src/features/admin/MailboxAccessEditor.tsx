@@ -6,7 +6,13 @@ import { actorKind, KIND_NAMES } from "../../lib/principalKind.ts";
 import { Select } from "../../lib/Select.tsx";
 import { useToast } from "../../lib/toast.tsx";
 import { principalOption } from "../../lib/usePrincipals.ts";
-import { MAILBOX_SCOPE_NAMES, memberScopes, scopesText, toggleMemberScope } from "./mailboxScopes.ts";
+import {
+	type AccessMember,
+	accessMembers,
+	MAILBOX_SCOPE_NAMES,
+	scopesText,
+	toggleMemberScope,
+} from "./mailboxScopes.ts";
 
 /** Sorts people and agents by name. */
 export function byName(a: Principal, b: Principal): number {
@@ -51,10 +57,10 @@ interface MailboxAccessEditorProps {
 	text: AccessEditorText;
 	/** A line under the form, for example about a different way to share mail. */
 	note?: ReactNode;
-	/** Adds a principal with these scopes, or gives a principal these scopes. It throws when the call fails. */
-	onSet: (principal: Principal, scopes: MailboxMemberScope[]) => Promise<void>;
-	/** Removes the access of a principal. It throws when the call fails. */
-	onRemove: (principal: Principal) => Promise<void>;
+	/** Adds the principal with this id and these scopes, or gives it these scopes. It throws when the call fails. */
+	onSet: (principalId: string, scopes: MailboxMemberScope[]) => Promise<void>;
+	/** Removes the access of the principal with this id. It throws when the call fails. */
+	onRemove: (principalId: string) => Promise<void>;
 }
 
 /**
@@ -79,26 +85,23 @@ export function MailboxAccessEditor({
 	const [newScopes, setNewScopes] = useState<MailboxMemberScope[]>([...MAILBOX_MEMBER_SCOPES]);
 	const [busy, setBusy] = useState(false);
 	const [error, setError] = useState<string | null>(null);
-	const [removing, setRemoving] = useState<Principal | null>(null);
+	const [removing, setRemoving] = useState<AccessMember | null>(null);
 	const ids = { heading: useId(), select: useId(), hint: useId(), scopes: useId() };
 	const memberIds = stored.map((member) => member.principal_id);
-	const members = stored.flatMap((member) =>
-		principals
-			.filter((principal) => principal.id === member.principal_id)
-			.map((principal) => ({ principal, scopes: memberScopes(member.scopes) })),
-	);
+	// Each principal with access has a row, also when the directory did not give its name.
+	const members = accessMembers(stored, principals);
 
 	/** Sets what a principal can do in the mailbox. The change applies at the next call of the principal. */
-	async function set(principal: Principal, scopes: MailboxMemberScope[], added: boolean) {
+	async function set(member: { id: string; name: string }, scopes: MailboxMemberScope[], added: boolean) {
 		setBusy(true);
 		setError(null);
 		try {
-			await onSet(principal, scopes);
+			await onSet(member.id, scopes);
 			if (added) {
 				setCandidateId("");
 				setNewScopes([...MAILBOX_MEMBER_SCOPES]);
 			}
-			toast({ message: `${principal.display_name} can now ${scopesText(scopes)} in ${mailboxName}.` });
+			toast({ message: `${member.name} can now ${scopesText(scopes)} in ${mailboxName}.` });
 		} catch (caught) {
 			setError(errorMessage(caught));
 		} finally {
@@ -118,12 +121,12 @@ export function MailboxAccessEditor({
 		event.preventDefault();
 		const principal = candidates.find((candidate) => candidate.id === candidateId);
 		if (!principal) return setError("Select a person or an agent.");
-		void set(principal, newScopes, true);
+		void set({ id: principal.id, name: principal.display_name }, newScopes, true);
 	}
 
-	async function remove(principal: Principal) {
-		await onRemove(principal);
-		toast({ message: `${principal.display_name} can no longer use ${mailboxName}.` });
+	async function remove(member: AccessMember) {
+		await onRemove(member.id);
+		toast({ message: `${member.name} can no longer use ${mailboxName}.` });
 	}
 
 	return (
@@ -149,31 +152,33 @@ export function MailboxAccessEditor({
 								</tr>
 							</thead>
 							<tbody>
-								{members.map(({ principal: member, scopes }) => (
-									<tr key={member.id} className={member.archived_at !== null ? "row-muted" : undefined}>
+								{members.map((member) => (
+									<tr key={member.id} className={member.archived ? "row-muted" : undefined}>
 										<td>
 											<div className="member-name">
-												{member.display_name}
-												{member.archived_at !== null && <span className="chip chip-small">Archived</span>}
+												{member.name}
+												{member.archived && <span className="chip chip-small">Archived</span>}
 											</div>
-											<div className="row-note">{member.address}</div>
+											<div className="row-note">{member.note}</div>
 										</td>
 										<td>
-											<span className={`kind kind-${actorKind(member.kind)}`}>{KIND_NAMES[member.kind]}</span>
+											{member.kind && (
+												<span className={`kind kind-${actorKind(member.kind)}`}>{KIND_NAMES[member.kind]}</span>
+											)}
 										</td>
 										<td>
 											<fieldset className="scope-inline">
 												<legend className="visually-hidden">
-													What {member.display_name} can do in {mailboxName}
+													What {member.name} can do in {mailboxName}
 												</legend>
 												{MAILBOX_MEMBER_SCOPES.map((scope) => {
-													const next = toggleMemberScope(scopes, scope);
+													const next = toggleMemberScope(member.scopes, scope);
 													return (
 														<label key={scope} className="check-row check-row-inline">
 															<input
 																type="checkbox"
 																className="checkbox"
-																checked={scopes.includes(scope)}
+																checked={member.scopes.includes(scope)}
 																onChange={() => next && void set(member, next, false)}
 																// A principal keeps one scope. Remove takes the access away.
 																disabled={busy || next === null}
@@ -188,7 +193,7 @@ export function MailboxAccessEditor({
 											<button
 												type="button"
 												className="button button-small"
-												aria-label={text.removeLabel(member.display_name, mailboxName)}
+												aria-label={text.removeLabel(member.name, mailboxName)}
 												onClick={() => setRemoving(member)}
 												disabled={busy}
 											>
@@ -259,7 +264,7 @@ export function MailboxAccessEditor({
 					onClose={() => setRemoving(null)}
 					onConfirm={() => remove(removing)}
 				>
-					<p>{text.removeBody(removing.display_name, mailboxName)}</p>
+					<p>{text.removeBody(removing.name, mailboxName)}</p>
 				</ConfirmDialog>
 			)}
 		</section>

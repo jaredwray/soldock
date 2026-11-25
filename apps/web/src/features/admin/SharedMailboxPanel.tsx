@@ -132,18 +132,18 @@ export function MembersPart({
 			principals={principals}
 			limit={TEAM_MAILBOX_LIMITS.members}
 			text={MEMBER_TEXT}
-			onSet={async (principal, scopes) => {
+			onSet={async (principalId, scopes) => {
 				const result = await api.call("directory.add_team_mailbox_member", {
 					mailbox_id: mailbox.id,
-					principal_id: principal.id,
+					principal_id: principalId,
 					scopes,
 				});
 				onChanged(result.team_mailbox);
 			}}
-			onRemove={async (principal) => {
+			onRemove={async (principalId) => {
 				const result = await api.call("directory.remove_team_mailbox_member", {
 					mailbox_id: mailbox.id,
-					principal_id: principal.id,
+					principal_id: principalId,
 				});
 				onChanged(result.team_mailbox);
 			}}

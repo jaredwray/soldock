@@ -47,13 +47,16 @@ export interface ListenInput {
 }
 
 /**
- * True when one of the feeds watches a resource that a membership or a share decides: a team mailbox, a room,
- * a shared drive, or an item in the drive of a different principal.
+ * True when one of the feeds watches a resource that a membership, a grant or a share decides: a team
+ * mailbox, the mailbox of a different person, a room, a shared drive, or an item in the drive of a different
+ * principal.
  */
 export function watchesShared(feeds: Iterable<Feed>, callerId: string): boolean {
 	for (const { resolved } of feeds) {
 		const { mailbox_id: mailbox, room_id: room, space_id: space, drive_id: drive } = resolved.vars;
-		if (mailbox?.startsWith("tmb_") || room !== undefined || drive !== undefined) return true;
+		// Each mailbox that is not the own mailbox of the caller: a team mailbox, or the mailbox of a person who
+		// lets the caller use it.
+		if ((mailbox !== undefined && mailbox !== callerId) || room !== undefined || drive !== undefined) return true;
 		if (space !== undefined && space !== callerId) return true;
 	}
 	return false;
@@ -90,9 +93,9 @@ function requestedUris(id: JsonRpcId, params: Record<string, unknown>): string[]
  * about resources of other principals.
  *
  * Before a notification, and at each keep-alive, the stream checks its age, and checks its access
- * again when the last check is older than `RECHECK_MS`. A stream that watches a team mailbox, a room or a
- * drive of a different principal checks its access again before each notification: a membership or a share
- * can end at any time, and no notification may follow its end (`watchesShared`). It ends without a response when the
+ * again when the last check is older than `RECHECK_MS`. A stream that watches a team mailbox, the mailbox
+ * of a different person, a room or a drive of a different principal checks its access again before each
+ * notification: a membership, a grant or a share can end at any time, and no notification may follow its end (`watchesShared`). It ends without a response when the
  * credential stops working, when the caller loses access to a watched resource, when a change feed
  * stops, or after `MAX_STREAM_MS`. A client then opens a new stream. Its acknowledgment shows what it
  * can still watch, and a dead credential gets `401`.

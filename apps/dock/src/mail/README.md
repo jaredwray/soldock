@@ -749,7 +749,9 @@ client of protocol 2026-07-28 subscribes to it with `subscriptions/listen`
   nothing. A decision of the Screener that moves mail to the inbox sends `inbox`.
 - In a team mailbox, each member with a stream gets the notification. A removed member, and a member
   that lost `mail.read` in the mailbox, stop getting notifications within about one minute, when the
-  stream checks the membership again. The same applies to a delegate of the mailbox of a person.
+  stream checks the membership again. A stream on a team mailbox, and a stream of a delegate on the mailbox
+  of a person, also check the access before each notification, so no notification follows the end of the
+  access ([`mcp`](../mcp/README.md#subscriptions)).
 - The signal holds no content. The client reads the inbox with the scope and mailbox checks of REST.
 - `resources/list` gives the inbox of each mailbox of `mail.list_mailboxes`, so an owner or an admin
   also sees the inbox of each agent. The acknowledgment of `subscriptions/listen` leaves those out. A

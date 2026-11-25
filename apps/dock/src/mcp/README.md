@@ -208,15 +208,18 @@ A modern client sends `subscriptions/listen` with the resource URIs in
   each resource kind again first, with all of its resources in one call. The check also reads each
   watched URI again (`resolveUri`), and the stream ends when one of them no longer names a resource that
   the credential can read. A feed that stops ends the stream, and the client opens a new one.
-- A stream that watches a resource that a membership or a share decides (a `tmb_` mailbox, a room, a
-  shared drive, or a drive of a different principal) checks its access before each notification
-  (`watchesShared`). A membership can end at any time, and no notification may follow its end. Each such
+- A stream that watches a resource that a membership, a grant or a share decides (a `tmb_` mailbox, the
+  mailbox of a different person, a room, a shared drive, or a drive of a different principal) checks its
+  access before each notification (`watchesShared`). A membership or a grant can end at any time, and no
+  notification may follow its end. Each such
   notification costs one access check.
-- Subrequest budget of one stream. When it opens: one D1 query for all team mailboxes, one D1 query
+- Subrequest budget of one stream. When it opens: one D1 query for all team mailboxes, one D1 query for
+  all delegated mailboxes when the stream watches the mailbox of a different person, one D1 query
   for all chat rooms, and one socket for each mailbox, each room and `chat.rooms` (at most 100). Each later access
-  check makes at most five D1 calls: the credential, the principal, the last-use time of the
-  credential, one query for all team mailboxes, and one query for all chat rooms. With one check each
-  minute, one stream makes at most about 400 subrequests in its hour.
+  check makes at most six D1 calls: the credential, the principal, the last-use time of the
+  credential, one query for all team mailboxes, one query for all delegated mailboxes when the stream
+  watches one, and one query for all chat rooms. With one check each
+  minute, one stream makes at most about 460 subrequests in its hour.
 - When the client closes the connection, the stream ends at once and closes its change feeds. The
   `enable_request_signal` compatibility flag makes `request.signal` abort on the disconnect.
 - One request can name at most 100 URIs. A filter that is not valid gets error `-32602`.
