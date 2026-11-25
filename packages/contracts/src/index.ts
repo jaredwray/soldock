@@ -1,5 +1,4 @@
 // Public surface of @asterra/contracts. Runtime-agnostic: no Workers, DOM or Node APIs.
-export { AgentAccessChange } from "./agent-access.ts";
 export {
 	AI_FEATURES,
 	AI_LIMITS,
@@ -230,6 +229,7 @@ export {
 	operationList,
 	operations,
 } from "./registry.ts";
+export { canTargetSharedResource, inputFields, RESOURCE_SCOPES, resourceDecidedScopes } from "./resource-access.ts";
 export {
 	defineResource,
 	expandTemplate,

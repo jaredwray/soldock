@@ -60,8 +60,9 @@ The seed has no access to a database or to a Durable Object. It uses only the pu
    `wrangler dev`. The mail goes through the real inbound pipeline.
 
 Each person and each agent acts with their own API key. `directory.create_principal` gives each agent every
-agent scope and returns its first key, which has the scopes of the agent. A sample agent uses the Support
-mailbox, the shared drives and the rooms that it is a member of, as a person does. A new person gets no
+agent scope and returns its first key, which only proves the identity of the agent. A sample agent uses the
+Support mailbox, the shared drives and the rooms that it is a member of, as its memberships say, as a person
+does. A new person gets no
 key, so the owner creates one for each person with `account.create_api_key`.
 Thus a person sends their own mail, posts their own chat messages and owns their own drive items.
 The owner creates the shared drive, because only an owner or an admin can. A member with the editor

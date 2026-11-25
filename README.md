@@ -105,12 +105,11 @@ decimals, bold, italic, colors and alignment. An agent sets the same formats.
 ### Agents
 
 Give an agent one URL: the MCP endpoint of your Asterra instance. The MCP client opens Asterra in a browser,
-and you approve the connection. A client without OAuth can use an API key. The permissions are on the
-agent: its scopes. Each key and each
-connection of the agent has them. Its sponsor, an owner or an admin changes them on the agent card, and
-each key and connection gets the change at its next call. An agent reaches its own mailbox and its own
-drive. It reaches a shared mailbox, a shared drive or a room when it is a member, as a person does. The
-settings of that mailbox, drive or room say what it can do there.
+and you approve the connection. A client without OAuth can use an API key. A key or a connection only proves
+who the agent is. An agent reaches its own mailbox and its own drive. It reaches a shared mailbox, a shared
+drive or a room when it is a member, as a person does. The settings of that mailbox, drive or room decide
+what it can do there, and a change applies at once to each key and connection of the agent. The page of the
+agent shows this access, with links to each place that changes it.
 
 Each MCP tool is one operation of the web app, for example `mail_send`, `drive_upload_file`,
 `docs_update` or `chat_post_message`. An agent can also subscribe to an inbox and get a notification
@@ -120,10 +119,10 @@ messages and drive changes, and Asterra sends it each event.
 An outbound policy sets who an agent can send mail to. The default is `internal-only`. An agent can
 never change its own policy, create accounts or manage keys. [Agents](docs/agents.md) has the details.
 
-A service account gives a script or a system access through the API. Only owners and admins set its scopes.
-It reaches each shared mailbox, shared drive and room that it is a member of. Owners and admins give it tokens, each with a lifetime of 1
-to 180 days, a custom date or no end. Each token has the permissions of the account, so one token for
-each system makes a rotation easy. Its card shows what it can reach and a log of its calls, and
+A service account gives a script or a system access through the API. It reaches each shared mailbox,
+shared drive and room that it is a member of, and each one decides what it can do there. Owners and admins give it tokens, each with a lifetime of 1
+to 180 days, a custom date or no end. A token only proves who the account is, so one token for each
+system makes a rotation easy. Its card shows what it can reach and a log of its calls, and
 **Revoke** stops a token at once.
 
 ![Admin, Members: the MCP endpoint with a Copy button, and people and agents in one list](docs/screenshots/members.png)

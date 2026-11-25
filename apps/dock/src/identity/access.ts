@@ -1,4 +1,11 @@
-import { operationList, operationNeedsScope, type Scope, scopeDescription } from "@asterra/contracts";
+import {
+	canTargetSharedResource,
+	operationList,
+	operationNeedsScope,
+	RESOURCE_SCOPES,
+	type Scope,
+	scopeDescription,
+} from "@asterra/contracts";
 import { audit, log, OperationError } from "../platform/index.ts";
 import type { AuthContext, CallContext } from "./auth.ts";
 import { getGrant } from "./oauth-store.ts";
@@ -30,8 +37,20 @@ export function canReadAgentMailboxes(caller: AuthContext): boolean {
 }
 
 /**
- * Who changes the policy and the access (the scopes) of an agent: its sponsor, an owner or an
- * admin. Only an owner or an admin changes them for a service account. Never an agent, also not for itself.
+ * True when the caller can use this scope in a resource. A person and a credential of a person need the scope.
+ * For an agent or a service account in a team mailbox, a room or a shared drive (`shared`), the membership
+ * decides: the object of the resource checks it, so the account scopes do not count. The ceiling of the kind
+ * still applies. In its own mailbox and its own drive, an agent needs its account scope.
+ */
+export function holdsForResource(caller: AuthContext, scope: Scope, shared: boolean): boolean {
+	if (caller.scopes.has(scope)) return true;
+	if (!shared || caller.principal.kind !== "agent" || !RESOURCE_SCOPES.includes(scope)) return false;
+	return scopeCeiling(caller.principal).includes(scope);
+}
+
+/**
+ * Who changes the policy of an agent and reads its access: its sponsor, an owner or an admin. Only an owner or
+ * an admin does this for a service account. Never an agent, also not for itself.
  */
 export function canManageAgent(caller: AuthContext, target: PrincipalRecord): boolean {
 	if (caller.kind !== "human" || target.kind !== "agent") return false;
@@ -89,9 +108,12 @@ export interface MissingScope {
 /**
  * The scopes that a credential of this kind can hold and this credential does not hold. Each one names
  * the operations of the caller kind that need it. A scope that no such operation needs is left out. MCP
- * lists only the tools that a credential can call, so this tells an agent which tools it cannot see.
+ * lists only the tools that a credential can call, so this tells an agent which tools it cannot see. For an
+ * agent, an operation that can name a team mailbox, a room or a shared drive is not in the list: MCP lists it,
+ * and the membership decides it (`canTargetSharedResource`).
  */
 export function missingScopes(caller: AuthContext): MissingScope[] {
+	const agent = caller.principal.kind === "agent";
 	return scopeCeiling(caller.principal)
 		.filter((scope) => !caller.scopes.has(scope))
 		.map((scope) => ({
@@ -99,6 +121,7 @@ export function missingScopes(caller: AuthContext): MissingScope[] {
 			description: scopeDescription(scope, caller.kind),
 			operations: operationList
 				.filter((operation) => operationNeedsScope(operation, scope, caller.scopes, caller.kind))
+				.filter((operation) => !(agent && RESOURCE_SCOPES.includes(scope) && canTargetSharedResource(operation)))
 				.map((operation) => operation.name),
 		}))
 		.filter((missing) => missing.operations.length > 0);

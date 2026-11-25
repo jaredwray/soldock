@@ -10,6 +10,7 @@ import {
 	rawMessage,
 	request,
 	seedOrg,
+	setLegacyScopes,
 	signIn,
 } from "./helpers.ts";
 
@@ -53,12 +54,14 @@ describe("the MCP endpoint", () => {
 		const unknown = await mcp(bot.key, "initialize", { protocolVersion: "1999-01-01" });
 		expect(((unknown.body?.result ?? {}) as { protocolVersion?: string }).protocolVersion).toBe("2025-11-25");
 
-		// A narrow agent learns which scopes it does not hold. The scopes are on the agent, so the text tells that
-		// a person adds the scope to the agent, and not that the agent needs a new key.
-		await ada.call("directory.set_agent_access", { principal_id: bot.id, scopes: ["account.read", "mail.read"] });
+		// An agent from before migration 0031 can have narrow account scopes. It learns which tools it cannot call.
+		// A membership can give a tool that names a team mailbox, a room or a shared drive, so such a tool is not
+		// in the text. The text tells that its account scopes do not change, and not that it needs a new key.
+		await setLegacyScopes(bot.id, ["account.read", "mail.read"]);
 		const narrow = instructionsOf((await initialize(bot.key)).body);
-		expect(narrow).toContain("mail.send (1 tool)");
-		expect(narrow).toContain("can add a scope to the agent");
+		expect(narrow).toMatch(/chat\.read \(\d+ tools\)/);
+		expect(narrow).not.toContain("mail.send (");
+		expect(narrow).toContain("apply only to your own mailbox, your own drive");
 		expect(narrow).not.toContain("create a key with more scopes");
 		expect(narrow).not.toContain("account.keys");
 		// A key of a person still has its own scopes: it needs a new key.
@@ -66,15 +69,15 @@ describe("the MCP endpoint", () => {
 		expect(instructionsOf((await initialize(api_key.secret)).body)).toContain("can create a key with more scopes");
 	});
 
-	// A token of a service account has the scopes of its account. A new token cannot have more scopes, so the
-	// text must not tell an agent to ask for a new token.
-	it("tells a service token that an admin adds a missing scope to the account", async () => {
+	// A token of a service account only proves who the account is. A new token cannot do more, so the text must
+	// not tell the account to ask for a new token.
+	it("tells a service token from before migration 0031 that its account scopes do not change", async () => {
 		const { owner } = await seedOrg();
 		const { principal } = await owner.call("directory.create_service_account", {
 			display_name: "CI",
 			address: "ci@dock.test",
-			scopes: ["account.read", "mail.read"],
 		});
+		await setLegacyScopes(principal.id, ["account.read", "mail.read"]);
 		const { api_key } = await owner.call("account.create_api_key", { principal_id: principal.id, label: "ci" });
 		const answer = await mcp(api_key.secret, "initialize", {
 			protocolVersion: "2025-06-18",
@@ -82,8 +85,8 @@ describe("the MCP endpoint", () => {
 			clientInfo: { name: "t", version: "1" },
 		});
 		const instructions = ((answer.body?.result ?? {}) as { instructions?: string }).instructions ?? "";
-		expect(instructions).toContain("mail.send (1 tool)");
-		expect(instructions).toContain("can add a scope to this service account");
+		expect(instructions).toMatch(/chat\.write \(\d+ tools\)/);
+		expect(instructions).toContain("In a team mailbox, a room and a shared drive, your membership decides");
 		expect(instructions).not.toContain("create a token with more scopes");
 	});
 
@@ -92,7 +95,7 @@ describe("the MCP endpoint", () => {
 		const { owner, bot } = await seedOrg();
 		const all = names((await mcp(owner.key, "tools/list")).body);
 		expect(all).toContain("directory_update_agent_policy");
-		expect(all).toHaveLength(207);
+		expect(all).toHaveLength(206);
 		// Only a person decides a member request, and only an agent or a service account makes one.
 		expect(all).not.toContain("chat_request_member");
 		expect(all).toEqual(

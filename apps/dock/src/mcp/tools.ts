@@ -1,14 +1,16 @@
 // MCP tools: one tool for each operation of the registry.
 import {
+	canTargetSharedResource,
 	holdsOperationScopes,
 	type Operation,
 	type OperationName,
 	operationList,
+	RESOURCE_SCOPES,
 	toolName,
 	UNTRUSTED_NOTICE,
 } from "@asterra/contracts";
 import { z } from "zod";
-import type { AuthContext, CallContext } from "../identity/index.ts";
+import { type AuthContext, type CallContext, scopeCeiling } from "../identity/index.ts";
 import { type HandlerMap, invokeOperation, OperationError } from "../platform/index.ts";
 
 interface Tool {
@@ -58,9 +60,32 @@ const TOOLS = new Map<string, { operation: Operation; tool: Tool }>(
 	]),
 );
 
-/** A tool is listed only when this credential can call it, so an agent never sees tools that would refuse it. */
+/**
+ * A tool is listed only when this credential can call it, so an agent never sees tools that would refuse it.
+ * For an agent or a service account, a scope that a membership can give counts for a tool that can name a team
+ * mailbox, a room or a shared drive: the membership decides the call (`canTargetSharedResource`). The call
+ * itself still checks the scopes with its input.
+ */
 export function canCall(caller: AuthContext, operation: Operation): boolean {
-	return operation.callers.includes(caller.kind) && holdsOperationScopes(operation, caller.scopes);
+	if (!operation.callers.includes(caller.kind)) return false;
+	if (holdsOperationScopes(operation, caller.scopes)) return true;
+	if (caller.principal.kind !== "agent" || !canTargetSharedResource(operation)) return false;
+	const ceiling = new Set<string>(scopeCeiling(caller.principal));
+	const decided = RESOURCE_SCOPES.filter((scope) => ceiling.has(scope));
+	return holdsOperationScopes(operation, new Set([...caller.scopes, ...decided]));
+}
+
+/**
+ * True when this credential can call the operation with this input: the same scope check as the invoker. For
+ * an agent, the input says if a membership decides the call or its account scopes do.
+ */
+export function canCallWith(caller: AuthContext, operation: Operation, rawInput: unknown): boolean {
+	if (!operation.callers.includes(caller.kind)) return false;
+	const decided = caller.resourceScopes?.(operation, rawInput) ?? [];
+	return holdsOperationScopes(
+		operation,
+		decided.length === 0 ? caller.scopes : new Set([...caller.scopes, ...decided]),
+	);
 }
 
 /** The tools that this credential can call, in the order of the registry. */

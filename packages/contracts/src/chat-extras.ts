@@ -1,4 +1,3 @@
-import { AgentAccessChange } from "./agent-access.ts";
 import {
 	CHAT_LIMITS,
 	ChatBody,
@@ -673,9 +672,6 @@ export const openGroupDm = defineOperation({
 	}),
 	output: z.object({
 		room: ChatRoom,
-		agent_access_changes: z.array(AgentAccessChange).default([]),
-		/** The agents that you manage, that are members of the room, and that did not get their access. */
-		agent_access_pending: z.array(z.string()).default([]),
 	}),
 	errors: ["not_found", "invalid"],
 });

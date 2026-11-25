@@ -1,7 +1,6 @@
 import { runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import {
-	EVENTS_SOCKET_CLOSE,
 	EVENTS_SOCKET_PATH,
 	type Scope,
 	SERVICE_ACTIVITY_LIMITS,
@@ -29,6 +28,7 @@ import {
 	request,
 	seedOrg,
 	sendMemberStates,
+	setLegacyScopes,
 	upgradeRoomSocket,
 	withEnv,
 } from "./helpers.ts";
@@ -45,9 +45,10 @@ afterEach(() => {
 
 /**
  * The owner, an admin, a member (Ada), the agent of Ada, and a service account that Ada sponsors. The
- * account has each service scope, unless `scopes` names its scopes.
+ * account has each service scope, as each new account does. `legacy` gives it the narrower account scopes that
+ * an account from before migration 0031 can have.
  */
-async function seedService(scopes: Scope[] = [...SERVICE_SCOPES]) {
+async function seedService(legacy?: Scope[]) {
 	const { owner, ada, bot } = await seedOrg();
 	const admin = await createActor(owner, {
 		kind: "human",
@@ -61,14 +62,14 @@ async function seedService(scopes: Scope[] = [...SERVICE_SCOPES]) {
 		address: "ci@dock.test",
 		description: "Posts build results",
 		sponsor_id: ada.id,
-		scopes: scopes as never,
 	});
+	if (legacy) await setLegacyScopes(principal.id, legacy);
 	return { owner, admin, ada, bot, service: principal };
 }
 
 /**
  * A token of the service account, made by `by`, as an actor that calls the API with it. A token has no
- * scopes of its own: it has the scopes of the account.
+ * scopes: it only proves the identity of the account.
  */
 async function serviceToken(
 	by: Actor,
@@ -77,11 +78,6 @@ async function serviceToken(
 ): Promise<Actor & { keyId: string }> {
 	const { api_key } = await by.call("account.create_api_key", { principal_id: serviceId, label: "deploy", ...extra });
 	return { id: serviceId, address: "ci@dock.test", key: api_key.secret, call: api(api_key.secret), keyId: api_key.id };
-}
-
-/** Sets the scopes of the service account, as an admin does. Each token of the account gets them. */
-async function setScopes(admin: Actor, serviceId: string, scopes: Scope[]) {
-	await admin.call("directory.set_agent_access", { principal_id: serviceId, scopes: scopes as never });
 }
 
 /** Moves the end of a key into the past, as when its lifetime ends. */
@@ -102,8 +98,8 @@ async function activityOf(admin: Actor, principalId: string, count: number, keyI
 }
 
 describe("service accounts", () => {
-	it("are created by owners and admins only, with a description, a creator, a sponsor, scopes and no token", async () => {
-		const { owner, admin, ada, bot, service } = await seedService(["account.read", "chat.read"]);
+	it("are created by owners and admins only, with a description, a creator, a sponsor, each service scope and no token", async () => {
+		const { owner, admin, ada, bot, service } = await seedService();
 		expect(service).toMatchObject({
 			kind: "service",
 			display_name: "CI Pipeline",
@@ -115,25 +111,24 @@ describe("service accounts", () => {
 			outbound_policy: { mode: "internal-only", allowlist: [] },
 		});
 		expect((await admin.call("account.list_api_keys", { principal_id: service.id })).api_keys).toEqual([]);
-		// The account has the scopes of its creation.
+		// The account gets each service scope for its own mailbox, its own drive and the actions without a resource.
+		// Its memberships decide the rest. It never gets a webhook scope.
 		expect(await admin.call("directory.get_agent_access", { principal_id: service.id })).toMatchObject({
-			scopes: ["account.read", "chat.read"],
+			scopes: [...SERVICE_SCOPES],
 			tokens: [],
 		});
 		// The owner can create one through MCP too. The sponsor is the caller by default.
 		const viaMcp = await callTool(owner.key, "directory_create_service_account", {
 			display_name: "Backup Job",
 			address: "backup@dock.test",
-			scopes: ["drive.read"],
 		});
 		expect(viaMcp.isError).toBeFalsy();
 		expect(viaMcp.structuredContent).toMatchObject({ principal: { kind: "service", sponsor_id: owner.id } });
 
-		const input = { display_name: "Nope", address: "nope@dock.test", scopes: ["account.read" as const] };
-		// An account needs a scope, and only a scope that a service account can hold.
-		expect(await codeOf(admin.call("directory.create_service_account", { ...input, scopes: [] }))).toBe("invalid");
+		const input = { display_name: "Nope", address: "nope@dock.test" };
+		// The scope editor of an account is gone: the call takes no scopes.
 		expect(
-			await codeOf(admin.call("directory.create_service_account", { ...input, scopes: ["account.keys" as never] })),
+			await codeOf(admin.call("directory.create_service_account", { ...input, scopes: ["mail.read"] } as never)),
 		).toBe("invalid");
 		// An account has no resource limits now. A call that asks for them creates nothing.
 		expect(await codeOf(admin.call("directory.create_service_account", { ...input, limits: "none" } as never))).toBe(
@@ -146,14 +141,12 @@ describe("service accounts", () => {
 		// A narrow key of an admin without directory.write cannot create one.
 		const { api_key } = await admin.call("account.create_api_key", { label: "narrow", scopes: ["account.keys"] });
 		expect(await codeOf(api(api_key.secret)("directory.create_service_account", input))).toBe("forbidden");
-		// A key with directory.write cannot give the account a scope that the key does not hold.
+		// A key with directory.write cannot make an account that does more than the key.
 		const writer = await admin.call("account.create_api_key", {
 			label: "writer",
 			scopes: ["directory.write", "account.read"],
 		});
-		expect(
-			await codeOf(api(writer.api_key.secret)("directory.create_service_account", { ...input, scopes: ["mail.read"] })),
-		).toBe("forbidden");
+		expect(await codeOf(api(writer.api_key.secret)("directory.create_service_account", input))).toBe("forbidden");
 		// The address follows the rules of a principal: a saved domain, and no other holder.
 		expect(await codeOf(admin.call("directory.create_service_account", { ...input, address: "x@unknown.test" }))).toBe(
 			"invalid",
@@ -173,7 +166,6 @@ describe("service accounts", () => {
 					display_name: "Race",
 					address: "race@dock.test",
 					sponsor_id: ada.id,
-					scopes: ["account.read"],
 				}),
 			},
 		);
@@ -226,7 +218,7 @@ describe("service accounts", () => {
 });
 
 describe("tokens of a service account", () => {
-	it("are managed by owners and admins only, never by the sponsor, and have the scopes of the account", async () => {
+	it("are managed by owners and admins only, never by the sponsor, and only prove the identity of the account", async () => {
 		const { owner, admin, ada, service } = await seedService(["mail.send", "chat.write"]);
 		const before = Date.now();
 		const { api_key } = await admin.call("account.create_api_key", {
@@ -239,8 +231,8 @@ describe("tokens of a service account", () => {
 			principal_id: service.id,
 			description: "GitHub Actions",
 			created_by: admin.id,
-			// A token has no scopes of its own. It shows the scopes of its account.
-			scopes: ["mail.send", "chat.write"],
+			// A token has no scopes. It only proves the identity of its account.
+			scopes: [],
 			expired: false,
 			revoked: false,
 			revoked_by: null,
@@ -265,80 +257,30 @@ describe("tokens of a service account", () => {
 			),
 		).toBe("invalid");
 		expect(await codeOf(admin.call("account.create_api_key", { label: "x" }))).toBe("invalid");
-		// A new token gives each scope of the account. A narrow key of an admin that does not hold them cannot
-		// create one, or it gets a secret with scopes that it does not hold.
+		// A new token acts with each account scope of the account. A narrow key of an admin that does not hold them
+		// cannot create one, or it gets a secret that does more than the key.
 		const narrow = await admin.call("account.create_api_key", { label: "narrow", scopes: ["account.keys"] });
 		expect(
 			await codeOf(api(narrow.api_key.secret)("account.create_api_key", { principal_id: service.id, label: "x" })),
 		).toBe("forbidden");
 	});
 
-	it("get a change of the scopes of the account at their next call, each one", async () => {
-		const { owner, admin, ada, bot, service } = await seedService(["account.read", "mail.read"]);
-		const first = await serviceToken(admin, service.id);
-		const second = await serviceToken(admin, service.id);
-		await first.call("mail.list_threads", {});
-		expect(await codeOf(second.call("chat.list_rooms", {}))).toBe("forbidden");
-
-		// Only owners and admins change the access of a service account: not its sponsor. A person has none.
-		const change = { principal_id: service.id, scopes: ["account.read" as const, "chat.read" as const] };
-		for (const caller of [ada, bot, first]) {
-			expect(await codeOf(caller.call("directory.set_agent_access", change))).toBe("forbidden");
-		}
-		expect(await codeOf(admin.call("directory.set_agent_access", { ...change, principal_id: ada.id }))).toBe(
-			"not_found",
-		);
-		// The list has only scopes that a service account can hold, and the call needs the list.
-		expect(
-			await codeOf(admin.call("directory.set_agent_access", { ...change, scopes: ["account.keys" as never] })),
-		).toBe("invalid");
-		expect(await codeOf(admin.call("directory.set_agent_access", { principal_id: service.id } as never))).toBe(
-			"invalid",
-		);
-		// An account has no resource limits now. A call that sends them changes nothing.
-		expect(await codeOf(admin.call("directory.set_agent_access", { ...change, resources: null } as never))).toBe(
-			"invalid",
-		);
-		// A key with directory.write cannot give the account a scope that the key does not hold.
-		const writer = await admin.call("account.create_api_key", {
-			label: "writer",
-			scopes: ["directory.write", "account.read"],
-		});
-		const asWriter = api(writer.api_key.secret);
-		expect(await codeOf(asWriter("directory.set_agent_access", change))).toBe("forbidden");
-
-		// The owner changes the scopes through MCP: the operation has REST and MCP.
-		const viaMcp = await callTool(owner.key, "directory_set_agent_access", change);
-		expect(viaMcp.isError).toBeFalsy();
-		expect(viaMcp.structuredContent).toEqual({ principal_id: service.id, scopes: ["account.read", "chat.read"] });
-		// Both tokens lose mail.read and get chat.read, without a new secret.
-		for (const token of [first, second]) {
-			expect(await codeOf(token.call("mail.list_threads", {}))).toBe("forbidden");
-			await token.call("chat.list_rooms", {});
-			expect((await token.call("account.whoami")).scopes).toEqual(["account.read", "chat.read"]);
-		}
-		const listed = (await admin.call("account.list_api_keys", { principal_id: service.id })).api_keys;
-		expect(listed.map((key) => key.scopes)).toEqual([
-			["account.read", "chat.read"],
-			["account.read", "chat.read"],
-		]);
-		// The change is in the log of the account, as a change of an admin.
-		await vi.waitFor(async () => {
-			const page = await admin.call("directory.list_service_account_activity", { principal_id: service.id });
-			expect(page.entries.map((entry) => [entry.operation, entry.surface, entry.actor_id])).toContainEqual([
-				"directory.set_agent_access",
-				"admin",
-				owner.id,
-			]);
-		});
-		// Stored scopes that are not valid give an account without a scope, never an account with each scope.
+	// A token acts with the account scopes of its account in its own mailbox and for the actions without a
+	// resource. A stored list that is not valid gives no scope, never each scope.
+	it("act with the account scopes of an account from before migration 0031, and with none for a list that is not valid", async () => {
+		const { admin, service } = await seedService(["account.read", "mail.read"]);
+		const token = await serviceToken(admin, service.id);
+		expect((await token.call("mail.list_threads", {})).threads).toEqual([]);
+		expect(await codeOf(token.call("chat.list_threads", {}))).toBe("forbidden");
+		expect((await token.call("account.whoami")).scopes).toEqual(["account.read", "mail.read"]);
 		await env.DIRECTORY.prepare("UPDATE principals SET agent_scopes = '{bad' WHERE id = ?").bind(service.id).run();
-		expect(await codeOf(first.call("chat.list_rooms", {}))).toBe("forbidden");
+		expect(await codeOf(token.call("mail.list_threads", {}))).toBe("forbidden");
 	});
 
-	// A scheduled message is a lasting effect of a token. It must not post with access that the account lost.
-	it("post no scheduled message after the account loses chat.write, also without a binding", async () => {
-		const { admin, service } = await seedService(["account.read", "chat.read", "chat.write"]);
+	// A scheduled message is a lasting effect of a token. It must not post with access that the account lost in
+	// the room: the membership decides.
+	it("post no scheduled message after the membership loses chat.write, also without a binding", async () => {
+		const { admin, service } = await seedService();
 		const token = await serviceToken(admin, service.id);
 		const { room } = await admin.call("chat.create_room", { kind: "private", name: "ci", member_ids: [service.id] });
 		const principal = env.PRINCIPAL.get(env.PRINCIPAL.idFromName(service.id));
@@ -374,14 +316,16 @@ describe("tokens of a service account", () => {
 		await fire(sent.id);
 		expect(await texts()).toEqual(["Build 1 passed."]);
 
-		// The account loses chat.write: the message does not post.
+		const setRights = (scopes: ("chat.read" | "chat.write")[]) =>
+			admin.call("chat.set_member_scopes", { room_id: room.id, principal_id: service.id, scopes });
+		// The membership loses chat.write: the message does not post.
 		const unscoped = await schedule("Build 2 passed.");
-		await setScopes(admin, service.id, ["account.read", "chat.read"]);
+		await setRights(["chat.read"]);
 		await fire(unscoped.id);
 		expect(await statusOf(unscoped.id)).toBe("failed");
 
 		// A message from before the credential binding has no binding. It needs the same access.
-		await setScopes(admin, service.id, ["account.read", "chat.read", "chat.write"]);
+		await setRights(["chat.read", "chat.write"]);
 		const legacy = await schedule("Build 3 passed.");
 		await runInDurableObject(principal, (_instance, state) => {
 			state.storage.sql.exec(
@@ -389,62 +333,10 @@ describe("tokens of a service account", () => {
 				legacy.id,
 			);
 		});
-		await setScopes(admin, service.id, ["account.read", "chat.read"]);
+		await setRights(["chat.read"]);
 		await fire(legacy.id);
 		expect(await statusOf(legacy.id)).toBe("failed");
 		expect(await texts()).toEqual(["Build 1 passed."]);
-	});
-
-	it("lose their live connections when the scopes of the account change", async () => {
-		const { admin, service } = await seedService(["account.read", "chat.read"]);
-		const token = await serviceToken(admin, service.id);
-		// A membership with only chat.read: the admin manages the account, so chat.write in the membership would
-		// change the access of the account before this test changes it.
-		const { room } = await admin.call("chat.create_room", { kind: "private", name: "ci" });
-		await admin.call("chat.add_members", { room_id: room.id, principal_ids: [service.id], scopes: ["chat.read"] });
-		const refsOf = () =>
-			runInDurableObject(env.CHAT_ROOM.get(env.CHAT_ROOM.idFromName(room.id)), (_instance, state) =>
-				state
-					.getWebSockets()
-					.map((socket) => (socket.deserializeAttachment() as { credential: CredentialRef }).credential),
-			);
-		const open = async () => {
-			const opened = await upgradeRoomSocket(room.id, bearer(token.key));
-			expect(opened.status).toBe(101);
-			opened.webSocket?.accept();
-		};
-		await open();
-		const events = readSocket(
-			await request(EVENTS_SOCKET_PATH, { headers: { upgrade: "websocket", ...bearer(token.key) } }),
-		);
-		expect(await events.next()).toMatchObject({ type: "hello" });
-		const before = await refsOf();
-		expect(before.map((ref) => ref.av)).toEqual([undefined]);
-		expect(await checkCredentials(env.DIRECTORY, before)).toEqual(["live"]);
-
-		// A save of the access that the account has changes nothing: the connections stay live. So a script can
-		// send the wanted access again and again.
-		const version = async () =>
-			(
-				await env.DIRECTORY.prepare("SELECT access_version FROM principals WHERE id = ?")
-					.bind(service.id)
-					.first<{ access_version: number }>()
-			)?.access_version;
-		await setScopes(admin, service.id, ["chat.read", "account.read"]);
-		expect(await version()).toBe(0);
-		expect(await checkCredentials(env.DIRECTORY, before)).toEqual(["live"]);
-
-		// A change of the scopes closes the events socket at once, and the reference of the room socket must open
-		// again. The token still works, so the code tells the client to open a new socket, not to stop.
-		await setScopes(admin, service.id, ["account.read", "chat.read", "mail.read"]);
-		expect(await version()).toBe(1);
-		expect(await events.next()).toEqual({ closed: EVENTS_SOCKET_CLOSE.reconnect });
-		expect(await checkCredentials(env.DIRECTORY, before)).toEqual(["renew"]);
-		// A new socket has the number of the new access, and is live.
-		await open();
-		const after = (await refsOf()).filter((ref) => ref.av !== undefined);
-		expect(after.map((ref) => ref.av)).toEqual([1]);
-		expect(await checkCredentials(env.DIRECTORY, after)).toEqual(["live"]);
 	});
 
 	it("lose all rights when the admin who made them becomes a member", async () => {
@@ -504,7 +396,7 @@ describe("rotation of a token", () => {
 		const { api_key } = await admin.call("account.rotate_api_key", { key_id: token.keyId, overlap_minutes: 60 });
 		expect(api_key).toMatchObject({
 			id: token.keyId,
-			scopes: ["account.read", "chat.read"],
+			scopes: [],
 			expires_at: before?.expires_at,
 			rotated_by: admin.id,
 		});
@@ -641,18 +533,20 @@ describe("calls of a service account", () => {
 		const whoami = await token.call("account.whoami");
 		expect(whoami).toMatchObject({ principal: { kind: "service" }, credential: "api_key", sign_in: null });
 		expect(whoami.missing_scopes).toEqual([]);
-		// A token of a narrow account learns what the account misses, with the text of a service account, not
-		// of a person.
+		// A token of a narrow account from before migration 0031 learns what the account misses, with the text of a
+		// service account, not of a person.
 		const small = await admin.call("directory.create_service_account", {
 			display_name: "Small",
 			address: "small@dock.test",
-			scopes: ["account.read"],
 		});
+		await setLegacyScopes(small.principal.id, ["account.read"]);
 		const narrow = await serviceToken(admin, small.principal.id);
 		const missing = (await narrow.call("account.whoami")).missing_scopes;
-		expect(missing.find((entry) => entry.scope === "mail.read")?.description).toBe(
-			SERVICE_SCOPE_DESCRIPTIONS["mail.read"],
+		expect(missing.find((entry) => entry.scope === "chat.read")?.description).toBe(
+			SERVICE_SCOPE_DESCRIPTIONS["chat.read"],
 		);
+		// A membership can give mail.read in a team mailbox, so no tool of mail.read is out of reach.
+		expect(missing.find((entry) => entry.scope === "mail.read")).toBeUndefined();
 
 		expect(await codeOf(token.call("account.create_api_key", { label: "x", scopes: ["mail.read"] }))).toBe("forbidden");
 		expect(
@@ -812,11 +706,12 @@ describe("the activity log of a service account", () => {
 		expect((await mcp(expired.key, "tools/list")).status).toBe(401);
 		// A secret of no token names no account, so it adds nothing.
 		expect((await request("/api/v1/account", { headers: bearer(`sdk_${"x".repeat(43)}`) })).status).toBe(401);
-		// A socket that the account cannot open without chat.read. Then, with chat.read, a room of which the
-		// account is not a member.
+		// The events socket carries the events of the rooms of the account, so each room decides, also for an
+		// account from before migration 0031 without chat.read. A room socket of a room of which the account is not
+		// a member is refused.
 		const events = await request(EVENTS_SOCKET_PATH, { headers: { upgrade: "websocket", ...bearer(narrow.key) } });
-		expect(events.status).toBe(403);
-		await setScopes(admin, service.id, ["account.read", "chat.read"]);
+		expect(events.status).toBe(101);
+		events.webSocket?.accept();
 		const { room } = await owner.call("chat.create_room", { kind: "private", name: "secret" });
 		expect((await upgradeRoomSocket(room.id, bearer(narrow.key))).status).toBeGreaterThanOrEqual(400);
 
@@ -832,7 +727,7 @@ describe("the activity log of a service account", () => {
 			expect.arrayContaining([
 				["auth.refused_token", "denied", "revoked", "rest", revoked.keyId],
 				["auth.refused_token", "denied", "expired", "mcp", expired.keyId],
-				["events.open_socket", "denied", "forbidden", "rest", narrow.keyId],
+				["events.open_socket", "ok", null, "rest", narrow.keyId],
 			]),
 		);
 		const roomEntry = entries.find((entry) => entry.operation === "chat.open_room_socket");
@@ -938,11 +833,11 @@ describe("the activity log of a service account", () => {
 		const { admin, service } = await seedService(["account.read", "mail.read", "mail.send"]);
 		const token = await serviceToken(admin, service.id);
 		await token.call("account.whoami");
-		expect(await codeOf(token.call("chat.list_rooms", {}))).toBe("forbidden");
+		expect(await codeOf(token.call("chat.list_threads", {}))).toBe("forbidden");
 		expect(await codeOf(token.call("mail.send", { to: [], text: "x" }))).toBe("invalid");
 		await callTool(token.key, "mail_list_mailboxes");
 		// MCP refuses a tool outside the scopes before the invoker runs. The log still gets the refusal.
-		expect((await mcp(token.key, "tools/call", { name: "chat_list_rooms", arguments: {} })).body).toHaveProperty(
+		expect((await mcp(token.key, "tools/call", { name: "chat_list_threads", arguments: {} })).body).toHaveProperty(
 			"error",
 		);
 		await admin.call("account.revoke_api_key", { key_id: token.keyId });
@@ -951,10 +846,10 @@ describe("the activity log of a service account", () => {
 		// The newest entry first.
 		expect(page.entries.map((entry) => [entry.operation, entry.result, entry.surface])).toEqual([
 			["account.revoke_api_key", "ok", "admin"],
-			["chat.list_rooms", "denied", "mcp"],
+			["chat.list_threads", "denied", "mcp"],
 			["mail.list_mailboxes", "ok", "mcp"],
 			["mail.send", "error", "rest"],
-			["chat.list_rooms", "denied", "rest"],
+			["chat.list_threads", "denied", "rest"],
 			["account.whoami", "ok", "rest"],
 			["account.create_api_key", "ok", "admin"],
 			["directory.create_service_account", "ok", "admin"],
@@ -1212,11 +1107,11 @@ describe("the access of a service account", () => {
 			chat_rooms_truncated: false,
 			drive_shared_items: [{ space_id: ada.id, item_id: kept.id, name: "kept.txt", kind: "file", role: "viewer" }],
 			drive_shared_items_truncated: false,
-			// A token has no scopes of its own: the scopes are those of the account.
+			// A token only proves the identity of the account.
 			tokens: [{ key_id: live.keyId, label: "deploy", expires_at: null }],
-			// The membership of the team mailbox gave the account mail.modify and mail.send. The editor role in
-			// the shared drive gave it drive.read and drive.write, and the membership of the room gave it chat.write.
-			scopes: ["mail.read", "mail.modify", "mail.send", "drive.read", "drive.write", "chat.read", "chat.write"],
+			// The memberships decide in the team mailbox, the shared drive and the rooms. They change nothing on the
+			// account: an account from before migration 0031 keeps its account scopes.
+			scopes: ["mail.read", "chat.read"],
 		});
 		const viaMcp = await callTool(admin.key, "directory_get_agent_access", { principal_id: service.id });
 		expect(viaMcp.structuredContent).toEqual(access);

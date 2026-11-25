@@ -26,8 +26,8 @@ export function MemberRequestActions({ request, onGone }: MemberRequestActionsPr
 		setBusy(decision);
 		try {
 			if (decision === "approve") {
-				const result = await api.call("chat.approve_member_request", { request_id: request.id });
-				toast({ message: approvedText(request, result) });
+				await api.call("chat.approve_member_request", { request_id: request.id });
+				toast({ message: approvedText(request) });
 				onGone("approved");
 			} else {
 				await api.call("chat.deny_member_request", { request_id: request.id });

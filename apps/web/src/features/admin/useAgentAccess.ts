@@ -11,19 +11,14 @@ export interface AgentAccessState {
 	error: string | null;
 	/** Reads the access again, for example after a change of a key. */
 	reload: () => void;
-	/** Shows the scopes of a save at once. A read that started before the save is then too old. */
-	applySaved: (saved: OutputOf<"directory.set_agent_access">) => void;
 }
 
-/**
- * The access of one agent or service account (`directory.get_agent_access`). One read gives the
- * Permissions part its scopes, and the Access part its lists.
- */
+/** The access of one agent or service account (`directory.get_agent_access`), for the Access part. */
 export function useAgentAccess(principalId: string): AgentAccessState {
 	const [access, setAccess] = useState<AgentAccess | null>(null);
 	const [error, setError] = useState<string | null>(null);
 	// The number of the newest read. An answer of an older read must not replace a newer one: a key change
-	// and a save of the permissions can each start a read.
+	// and an approval of a member request can each start a read.
 	const newestRead = useRef(0);
 	const load = useCallback(async () => {
 		newestRead.current += 1;
@@ -40,9 +35,5 @@ export function useAgentAccess(principalId: string): AgentAccessState {
 		void load();
 	}, [load]);
 	const reload = useCallback(() => void load(), [load]);
-	const applySaved = useCallback((saved: OutputOf<"directory.set_agent_access">) => {
-		newestRead.current += 1;
-		setAccess((current) => (current === null ? current : { ...current, scopes: saved.scopes }));
-	}, []);
-	return { access, error, reload, applySaved };
+	return { access, error, reload };
 }

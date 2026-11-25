@@ -62,11 +62,8 @@ const KIND_NAMES: Record<AuthContext["kind"], string> = {
 
 /** How the credential gets a scope that it does not hold. */
 function addScopeHint(caller: AuthContext): string {
-	if (caller.kind === "service") {
-		return "The scopes are on the service account, not on this token. An owner or an admin can add a scope to this service account in Admin › Members. This token then has the scope, without a new token.";
-	}
-	if (caller.kind === "agent") {
-		return "The scopes are on this agent, not on this key or connection. The sponsor of this agent, an owner or an admin can add a scope to the agent in Admin › Members. This credential then has the scope, without a new key or connection.";
+	if (caller.principal.kind === "agent") {
+		return "These account scopes apply only to your own mailbox, your own drive and the actions that have no mailbox, room or drive. They do not change. In a team mailbox, a room and a shared drive, your membership decides what you can do. A person changes it in the settings of that mailbox, room or drive.";
 	}
 	return "The scopes of an API key do not change. You can create a key with more scopes in Settings.";
 }

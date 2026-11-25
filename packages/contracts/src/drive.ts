@@ -1,4 +1,3 @@
-import { AgentAccessChange } from "./agent-access.ts";
 import { prefixedId, RoomId, Timestamp } from "./common.ts";
 import { defineOperation } from "./operation.ts";
 import type { Scope } from "./scopes.ts";
@@ -908,26 +907,9 @@ const MemberInput = z.strictObject({ principal_id: PrincipalId, role: z.enum(SHA
 const SHARED_ROLES =
 	"A viewer can read, download and copy. An editor can also add and change items, move them in the drive, put them in the trash and restore them. A manager can also change the members, rename the drive, share an item with a principal that is not a member, delete permanently and move items out of the drive. A manager is a person: an agent can be an editor or a viewer.";
 
-/** What a membership changes on an agent or a service account. */
-const AGENT_MEMBER = [
-	"The call also changes each agent and each service account that it makes a member and that you manage.",
-	"You manage an agent when you are its sponsor, an owner or an admin, and your credential holds directory.write.",
-	"The agent gets the drive scopes of its role that it does not hold: drive.read for a viewer, and also drive.write for an editor. Your credential must hold each scope that the agent gets.",
-	"agent_access_changes has these changes. agent_access_pending names each agent that did not get them.",
-	"For such an agent, call drive.add_shared_drive_members with the same role again.",
-	"A membership gives no new scope to an agent that you do not manage. Such an agent uses the drive with the scopes that it holds. Its sponsor, an owner or an admin gives it more.",
-].join(" ");
-
-/** The fields of a result that tell what the call changed on the agents that the caller manages. */
-const AGENT_ACCESS = {
-	agent_access_changes: z.array(AgentAccessChange).default([]),
-	/**
-	 * The agents that you manage, that are members of the drive, and that did not get the access of their
-	 * membership: a different call changed their access at the same time. A later call for the member
-	 * completes it.
-	 */
-	agent_access_pending: z.array(PrincipalId).default([]),
-};
+/** What a membership gives to an agent or a service account. */
+const AGENT_MEMBER =
+	"The role alone decides what an agent or a service account can do in the drive. Its account and its API keys do not change. It can use the drive at once with each of its keys, and it loses the drive at once when it stops being a member.";
 
 export const createSharedDrive = defineOperation({
 	name: "drive.create_shared_drive",
@@ -952,10 +934,10 @@ export const createSharedDrive = defineOperation({
 			.max(255)
 			.optional()
 			.describe(
-				"Makes a retry safe: a second call with the same key and the same input returns the first shared drive and creates nothing. It changes no agent: agent_access_changes is empty.",
+				"Makes a retry safe: a second call with the same key and the same input returns the first shared drive and creates nothing.",
 			),
 	}),
-	output: z.object({ shared_drive: SharedDrive, members: z.array(SharedDriveMember), ...AGENT_ACCESS }),
+	output: z.object({ shared_drive: SharedDrive, members: z.array(SharedDriveMember) }),
 	errors: ["not_found", "conflict"],
 });
 
@@ -1028,7 +1010,7 @@ export const addSharedDriveMembers = defineOperation({
 		drive_id: SharedDriveId,
 		members: z.array(MemberInput).min(1).max(SHARED_DRIVE_LIMITS.members),
 	}),
-	output: z.object({ shared_drive: SharedDrive, members: z.array(SharedDriveMember), ...AGENT_ACCESS }),
+	output: z.object({ shared_drive: SharedDrive, members: z.array(SharedDriveMember) }),
 	errors: ["not_found", "conflict"],
 });
 

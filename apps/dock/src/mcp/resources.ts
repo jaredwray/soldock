@@ -9,7 +9,7 @@ import {
 } from "@asterra/contracts";
 import type { AuthContext, CallContext } from "../identity/index.ts";
 import { type HandlerMap, invokeOperation, OperationError } from "../platform/index.ts";
-import { canCall, hasUntrusted } from "./tools.ts";
+import { canCall, canCallWith, hasUntrusted } from "./tools.ts";
 
 /** A URI longer than this names no resource. Each resource URI of the registry is much shorter. */
 const MAX_URI_CHARS = 2048;
@@ -50,7 +50,12 @@ export function resolveUri(caller: AuthContext, uri: unknown): ResolvedResource 
 		const vars = matchTemplate(resource.uriTemplate, canonical);
 		if (!vars) continue;
 		if (expandTemplate(resource.uriTemplate, vars) !== canonical) return null;
-		const input = operations[resource.read.operation].input.safeParse(resource.read.input(vars));
+		const read = operations[resource.read.operation];
+		const raw = resource.read.input(vars);
+		// The scopes of the read with this input: for an agent, a membership decides a team mailbox, a room or a
+		// shared drive, and its account scopes decide its own mailbox and its own drive.
+		if (!canCallWith(caller, read, raw)) return null;
+		const input = read.input.safeParse(raw);
 		return input.success ? { uri, resource, vars } : null;
 	}
 	return null;

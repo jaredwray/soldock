@@ -6,7 +6,6 @@ import {
 	type TeamMailbox,
 } from "@asterra/contracts";
 import { type FormEvent, useId, useState } from "react";
-import { accessChangeText } from "../../lib/accessChange.ts";
 import { api, errorMessage } from "../../lib/api.ts";
 import { ConfirmDialog } from "../../lib/ConfirmDialog.tsx";
 import { actorKind, KIND_NAMES } from "../../lib/principalKind.ts";
@@ -125,8 +124,8 @@ function NameForm({ mailbox, onChanged }: PartProps) {
 /**
  * The members, with what each one can do in the mailbox (`directory.add_team_mailbox_member` with `scopes`),
  * a control to add one and a button to remove each one. The scopes are the same for a person, an agent and a
- * service account. An agent or a service account also gets the scopes on its account, so it can use the
- * mailbox at once.
+ * service account. For an agent or a service account, the membership alone decides: it uses the mailbox at
+ * once with its key.
  */
 export function MembersPart({
 	mailbox,
@@ -162,9 +161,7 @@ export function MembersPart({
 				scopes,
 			});
 			onChanged(result.team_mailbox);
-			toast({
-				message: `${principal.display_name} can now ${scopesText(scopes)} in ${mailbox.display_name}.${accessChangeText(principal.display_name, result.agent_access_changes)}`,
-			});
+			toast({ message: `${principal.display_name} can now ${scopesText(scopes)} in ${mailbox.display_name}.` });
 		} catch (caught) {
 			setError(errorMessage(caught));
 		} finally {
@@ -192,9 +189,7 @@ export function MembersPart({
 			setCandidateId("");
 			setNewScopes([...MAILBOX_MEMBER_SCOPES]);
 			onChanged(result.team_mailbox);
-			toast({
-				message: `${principal.display_name} can now ${scopesText(newScopes)} in ${mailbox.display_name}.${accessChangeText(principal.display_name, result.agent_access_changes)}`,
-			});
+			toast({ message: `${principal.display_name} can now ${scopesText(newScopes)} in ${mailbox.display_name}.` });
 		} catch (caught) {
 			setError(errorMessage(caught));
 		} finally {
@@ -325,8 +320,8 @@ export function MembersPart({
 						})}
 						<p id={ids.scopes} className="field-hint">
 							Read shows the mail and the labels. Change sets labels, the read state, archive and trash. Send sends from
-							the address of the mailbox. An agent or a service account also gets these scopes on its account, so it can
-							use the mailbox at once.
+							the address of the mailbox. For an agent or a service account, the membership alone decides, and it can
+							use the mailbox at once with its key.
 						</p>
 					</fieldset>
 					{error && (

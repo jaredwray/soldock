@@ -359,14 +359,10 @@ MCP clients. The app has no UI-only path.
       The first API key of a new agent shows once, with a copy button.
       A new person gets no API key. A toast tells the admin to give the first password to the person.
       The person can create keys in Settings after the sign-in.
-      A service account (`directory.create_service_account`) gets a name, an address, a description, a sponsor and its scopes, and no key.
-      The form shows the scopes of a service account with their texts (`SERVICE_SCOPE_DESCRIPTIONS`), and selects only `account.read` first.
+      A service account (`directory.create_service_account`) gets a name, an address, a description and a sponsor, and no key.
       A toast tells the admin to open it to add a token.
-      An agent (`directory.create_principal`) gets its scopes in the same way: the form shows `AGENT_SCOPES` with the texts for a person (`scopeDescription` with the kind `agent`), selects only `account.read` first, and sends the selected scopes as `scopes`.
-      The first API key of the agent has no scopes of its own. It has the scopes of the agent.
-      The form has no control for where a new agent or service account can act. A line tells that it reaches its own mailbox and its own drive, and a shared mailbox, a shared drive or a room after a member adds it there.
-      A credential cannot grant a scope that it does not hold.
-      The form offers only the scopes of the session.
+      An agent (`directory.create_principal`) gets a name, an address and a sponsor. Its first API key only proves its identity.
+      The form has no scopes and no control for where a new agent or service account can act. A line tells that it reaches its own mailbox and its own drive, and a shared mailbox, a shared drive or a room after a member adds it there, and that the settings of each one decide what it can do.
       A person also needs a first password. The admin gives the password to the person.
       An archived person cannot be a sponsor.
       The dialog shows the banner when Agent is selected.
@@ -387,39 +383,32 @@ MCP clients. The app has no UI-only path.
       The confirmation says that delete cannot be undone.
       For a person who sponsors agents, the dialog names the agents.
       It tells the admin to give each agent a different sponsor first, or to archive or delete the agent.
-    - The page of an agent and the page of a service account share two parts. An agent and a service account hold their scopes. Each API key and each OAuth connection of an agent, and each token of a service account, has them, and has none of its own.
-      **Permissions** (`directory.set_agent_access`, `AgentPermissions.tsx`): the scopes of the agent, and no other control.
-      The scopes do not say where the agent can act. A hint under the scopes tells that the agent reaches its own mailbox and drive and each membership, and that the settings of each shared mailbox, room and shared drive change what it can do there.
-      The form offers `AGENT_SCOPES` for an agent and `SERVICE_SCOPES` for a service account (`scopesFor` of `admin/permissionsDraft.ts`).
-      The scope texts come from `scopeDescription`: the texts for a person for an agent, and the texts for a service account (`SERVICE_SCOPE_DESCRIPTIONS`, without "your") for a service account.
-      **Save permissions** sends the full list of the selected scopes (`permissionsChange` of `admin/permissionsDraft.ts`), and is off when nothing changed. A line tells when the choices are not saved.
-      After a save, the form shows the saved values from the answer of the save at once, also when the next read of the access is slow or fails. The page ignores the answer of a read that is older than its newest read.
-      **Access** (`directory.get_agent_access`, `AgentAccess.tsx`): the live API keys (**Live tokens** for a service account), the own mailbox and drive, the team mailboxes, the shared drives, the rooms with the role, and **Shared directly in Drive** (the items that a member shared with the agent).
-      The agent reaches each of them. A direct message shows the name of its other member (`peer_name`, `admin/roomLabel.ts`).
-      The list of live API keys of an agent does not show the apps that connect with OAuth.
-      The page reads the access one time for **Permissions** and for **Access** (`admin/useAgentAccess.ts`).
-      A create, a rotation or a revoke of a key, and a save of the permissions, load the access again.
+    - The page of an agent and the page of a service account share **Access** (`directory.get_agent_access`, `AgentAccess.tsx`): a read-only summary. Each shared mailbox, room and shared drive decides what the account can do there, and an API key, an OAuth connection or a token only proves its identity. The page has no permissions editor.
+      The rows come from `admin/accessSummary.ts`: each team mailbox with what the membership allows ("Can read and send"), each shared drive and each item shared directly with the role, and each room with its kind and role. A direct message shows the name of its other member (`peer_name`, `admin/roomLabel.ts`).
+      Each row links to the place where a person changes the access, when the person who looks can open it: **Admin › Shared mailboxes** and **Admin › Shared drives** for an owner or an admin, the shared drive for a different person, a public room, and an item of the own drive of the person who looks. A private room and a direct message get no link.
+      **Own mailbox, own drive and organization** lists the account scopes with their texts (`scopeDescription`). When the account holds fewer than its kind, a line tells that it is an account from before memberships decided its access, and that the limit applies only there.
+      The live API keys (**Live tokens** for a service account) show last. The list of live API keys of an agent does not show the apps that connect with OAuth.
+      A create, a rotation or a revoke of a key, and an approval of a member request, load the access again (`admin/useAgentAccess.ts`). The page ignores the answer of a read that is older than its newest read.
     - The page of an agent and the page of a service account also share **Requests** (`chat.list_member_requests` with `principal_id`, `MemberRequests.tsx`), above **Access**.
       An agent cannot add an agent or a service account to a room. It asks, and a person who manages the account decides.
       Each row has the text "<the agent that asked> asks to add this account to <room>", what the account can do in the room after an approval, and the time.
       Each row has **Approve** and **Deny**, with the buttons, the toasts and the rules of the Activity view of Chat (`chat/MemberRequestActions.tsx`).
-      An approval loads the access again, so **Access** shows the new room and **Permissions** shows the new scopes.
+      An approval loads the access again, so **Access** shows the new room.
       The part shows nothing when the account has no request. It shows a line while the requests load, and an error with **Try again**.
     - The page of a service account has these parts, for an owner or an admin only:
       **Name, description and sponsor** (`directory.update_principal`, with `description`).
       The creation time, the creator and the sponsor.
       The outbound policy.
-      **Permissions**.
       **Tokens of …**: the API key manager with the word "token", a lifetime of 90 days first, and the creator and the revoker of each token.
       The token form has a label, a description and a lifetime, and no scopes (`scopesFrom="account"`). A token row shows no scopes.
       **Requests**, when the account has a member request.
       **Access**.
       **Activity** (`directory.list_service_account_activity`): a table of the newest entries, a filter for one token, **Refresh** and **Load more**.
       The surface `system` shows as "Asterra", for example for the notice before a token ends. The surface `member` shows as "Member change".
-      A create, a rotation or a revoke of a token, and a save of the permissions, load the access and the activity again.
+      A create, a rotation or a revoke of a token, and an approval of a request, load the access and the activity again.
       Each part shows its loading, empty and error states, and an error has **Try again**.
-    - The page of an agent also has the outbound policy, **Permissions**, the connected apps, the webhooks, the API keys, **Requests** (when the agent has a member request) and **Access**.
-      The sponsor, an owner or an admin sees the page, and each of them can save the permissions. An agent can never change its own permissions.
+    - The page of an agent also has the outbound policy, the connected apps, the webhooks, the API keys, **Requests** (when the agent has a member request) and **Access**.
+      The sponsor, an owner or an admin sees the page. An agent can never change its own policy or access.
       The policy sets the mail recipients and the webhook hosts (`directory.update_agent_policy`).
       **Apps connected as …** uses `oauth.list_grants` and Revoke (`oauth.revoke_grant`).
       A connection has the permissions of the agent, so a row shows no scopes.
@@ -458,9 +447,8 @@ MCP clients. The app has no UI-only path.
         member keeps one scope, and **Remove** takes the access away (`toggleMemberScope` in
         `mailboxScopes.ts`).
       - **The new member can** has the same three check boxes for a new member. Each one is on at the start.
-      - The rule is the same for a person, an agent and a service account. The toast names the scopes that
-        an agent or a service account got on its account (`agent_access_changes`, `accessChangeText`).
-        The toast of a new shared mailbox names them too.
+      - The rule is the same for a person, an agent and a service account: the membership alone decides.
+        The toast names what the member can do now.
     - **Webhooks of …**, each webhook that gets the mail event of the shared mailbox (`mail.list_webhook_subscriptions`).
       **Edit events** opens the check box of that event. An owner or an admin can clear it
       (`mail.delete_webhook_subscription`), for example when the mailbox reaches its limit of active subscriptions.
@@ -476,13 +464,9 @@ MCP clients. The app has no UI-only path.
       (`drive.add_shared_drive_members`, which also changes a role) and a **Remove** button, with a
       confirmation (`drive.remove_shared_drive_member`). A form below the table adds a person or an
       agent with a role. The role menu of an agent has no Manager entry. For an agent or a service
-      account, the form tells that the account also gets the Drive scopes of its role. The toast of
-      an add or a role change names the scopes that the account got (`driveAccessText` of
-      `lib/accessChange.ts`). It also names an agent that did not get the scopes of its role, because
-      the access of the account changed at the same time.
-      The row of such an agent then has a note and a **Try again** button, which sends the role of the
-      member again. The role menu sends no call for the role that the member has.
-      The card of a new shared drive shows the same note for an agent that the create call named.
+      account, the form tells that the role alone decides what the account can do in the drive
+      (`AGENT_ROLE_HINT`). The toast of an add or a role change names the new role. The role menu sends no
+      call for the role that the member has.
     - **Webhooks of …**, each webhook that gets a drive event of that drive (`drive.list_webhook_subscriptions`).
       **Edit events** opens the check boxes of the drive events. An owner or an admin can clear an event
       (`drive.delete_webhook_subscription`). A member creates a webhook with the API.
@@ -525,19 +509,11 @@ MCP clients. The app has no UI-only path.
   - An owner or an admin can create a new agent: the name and the address come from the client name
     and the first mail domain, and the person can change them. A person can also select an agent
     that they sponsor (each agent, for an admin). The list does not offer an archived agent.
-  - For a new agent, the scopes are the agent scopes that the session holds. The page selects the
-    requested scopes and `account.read` first, or each scope when the client asked for none. The app
-    sends them as `scopes` with `new_agent`.
-  - For a new agent, the page has no control for where the agent can act. A line tells that the agent
-    reaches its own mailbox and its own drive, and a shared mailbox, a shared drive or a room after a
-    member adds it there.
-  - For an agent that exists, the page offers no scopes and sends only `agent_id`. A line tells that
-    the app gets each permission of the agent, and that the page of the agent in Admin › Members changes them.
-    The page reads the selected agent (`directory.get_agent_access`) and lists each scope of the agent.
-    It marks a scope as **Requested** or **Not requested**, and names the requested scopes that the agent
-    does not hold (`agentGrant` in `connect.ts`). A line tells that the app reaches each mailbox, drive
-    and room that the agent reaches.
-    It does not make this read for a new agent. If the read fails, the page shows the error and **Try again**.
+  - The page has no scopes: a connection only proves the identity of the agent. A line tells that a new
+    agent reaches its own mailbox and its own drive, and a shared mailbox, a shared drive or a room after
+    a member adds it there, or that the app acts as the agent that exists. It also tells that the settings
+    of each mailbox, room and drive decide what the app can do, and that the Access part of the agent
+    lists them.
   - **Approve and connect** (`oauth.approve_authorization`) and **Deny** (`oauth.deny_authorization`)
     send the browser to the `redirect_to` of the result. A member who cannot approve sees only Deny.
   - An expired or decided request shows a message to start again in the app.
@@ -1151,8 +1127,7 @@ MCP clients. The app has no UI-only path.
       It has the buttons **Approve** (`chat.approve_member_request`) and **Deny** (`chat.deny_member_request`).
       The id of the request is `message_id` of the item.
     - The accessible name of each button has the account and the room. The two buttons are off while a call runs.
-    - After an approval, a toast says that the account is now a member of the room. It also tells the scopes
-      that the account got (`agent_access_changes`), or that it did not get them (`agent_access_pending`).
+    - After an approval, a toast says that the account is now a member of the room.
       After a denial, a toast says that the account is not added. The item then goes off the list.
     - After `not_found` or `conflict`, the server does not have the request. A toast shows the message of the
       server, and the item goes off the list. Each other error keeps the item.
@@ -1600,11 +1575,8 @@ MCP clients. The app has no UI-only path.
       a principal, it asks what the new member can do, with the rights of its kind selected
       (`offeredRights`): a person can post and add members, and an agent can post. The form does not offer
       **Post** to a person who cannot post: a member gives only what its membership has.
-    - The toast names the scopes that an agent got on its account (`agent_access_changes`,
-      `roomAccessText` in `lib/accessChange.ts`). It also names an agent that is a member and did not get
-      the scopes of its membership, because the access of the account changed at the same time
-      (`agent_access_pending`). The toast tells the person to add it again. A new direct message, the quick
-      switcher and **Message** on a profile show the same toast: the change is on the account of the agent.
+    - The toast names what the new member can do in the room. For an agent, the membership alone decides:
+      nothing changes on its account.
     - A member without `chat.write` has no box for a message. The room says **You can read this room. The
       owner of the room can let you post.**
     The owner changes the name and the topic in a second dialog.

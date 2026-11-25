@@ -13,6 +13,7 @@ import {
 	type CallContext,
 	canReadAgentMailboxes,
 	domainOf,
+	holdsForResource,
 	isTeamMailboxId,
 	type MailboxRecord,
 	mailDomains,
@@ -272,8 +273,14 @@ export const mailHandlers: Pick<HandlerMap<CallContext>, MailOperation> = {
 			teamMailboxesOf(call.env.DIRECTORY, call.caller.id),
 			canReadAgentMailboxes(call.caller) ? agentMailboxes(call.env.DIRECTORY) : [],
 		]);
+		// A person can do each thing in their own mailbox. An agent or a service account can do what its account
+		// scopes allow there. In a team mailbox, the membership decides for each principal.
+		const own =
+			call.caller.principal.kind === "agent"
+				? MAILBOX_MEMBER_SCOPES.filter((scope) => call.caller.scopes.has(scope))
+				: [...MAILBOX_MEMBER_SCOPES];
 		const mailboxes = [
-			{ ...ownMailbox(call), service: call.caller.kind === "service", scopes: [...MAILBOX_MEMBER_SCOPES] },
+			{ ...ownMailbox(call), service: call.caller.kind === "service", scopes: own },
 			...teams.map((mailbox) => ({ ...mailbox, service: false })),
 			// An owner or an admin can read the mailbox of an agent or a service account, and nothing more.
 			...agents.map((mailbox) => ({ ...mailbox, scopes: ["mail.read"] })),
@@ -498,10 +505,12 @@ export const mailHandlers: Pick<HandlerMap<CallContext>, MailOperation> = {
 
 	async "mail.send"(call, input) {
 		// A reply reads the message that it answers: its subject and its references go into the new message.
-		// So a reply needs mail.read too, or a send would show mail that the caller cannot read. The credential
-		// needs it in each mailbox, and a member of a team mailbox needs it in the membership.
+		// So a reply needs mail.read too, or a send would show mail that the caller cannot read. A member of a
+		// team mailbox needs it in the membership. The credential needs it too, except for an agent in a team
+		// mailbox, where the membership alone decides.
 		const replyScopes: MailboxMemberScope[] = input.reply_to_message_id ? ["mail.read"] : [];
-		const missing = replyScopes.filter((scope) => !call.caller.scopes.has(scope));
+		const team = input.mailbox_id !== undefined && isTeamMailboxId(input.mailbox_id);
+		const missing = replyScopes.filter((scope) => !holdsForResource(call.caller, scope, team));
 		if (missing.length > 0) {
 			throw new OperationError(
 				"forbidden",

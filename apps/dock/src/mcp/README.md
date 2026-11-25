@@ -82,16 +82,20 @@ SDK. Protocol 2026-07-28 has no sessions, so a hand-written server stays small.
 - `tools/list` lists only the tools that the credential can call (caller kind and scopes). A call
   to another tool gets JSON-RPC error `-32602`. A token of a service account sees only the tools
   whose callers name `"service"`, and each of its calls goes into the activity log of the account,
-  with the surface `mcp`. The server hides no tool and no resource kind because of where an agent can
-  act. The handler of each operation checks the membership of the agent
-  ([identity](../identity/README.md#where-an-agent-can-act)).
+  with the surface `mcp`. For an agent, a tool that can name a team mailbox, a room or a shared drive is in
+  the list also when its account scopes do not hold its scope: a membership can give it
+  (`canTargetSharedResource`). The call checks the scopes with its input, and the handler of each operation
+  checks the membership of the agent ([identity](../identity/README.md#access-of-an-agent)).
+- A resource URI resolves only when the read with the input of the URI passes the scope check of the
+  invoker (`canCallWith`). So an agent from before migration `0031` without `mail.read` on its account
+  cannot watch its own inbox, and it can watch the inbox of a team mailbox where its membership has
+  `mail.read`.
 - The instructions name each scope that the credential does not hold, with the number of its
-  tools (`missingScopes` of `identity`). They also tell how to get the scope (`addScopeHint`):
-  - An API key or an OAuth connection of an agent: the scopes are on the agent, not on the key or the
-    connection. The sponsor, an owner or an admin adds the scope to the agent in Admin › Members
-    (`directory.set_agent_access`). The key or the connection stays, and gets the scope.
-  - A token of a service account: the scopes are on the account. An owner or an admin adds the scope to
-    the account in Admin › Members (`directory.set_agent_access`). The token stays.
+  tools (`missingScopes` of `identity`). For an agent, a tool that a membership can give is not counted.
+  They also tell what the scope means (`addScopeHint`):
+  - An API key or an OAuth connection of an agent or a service account: the account scopes apply only to
+    its own mailbox, its own drive and the actions without a resource, and they do not change. In a team
+    mailbox, a room and a shared drive, the membership decides.
   - An API key of a person: its scopes do not change, so the person creates a key with more scopes in
     Settings.
 
@@ -193,13 +197,13 @@ A modern client sends `subscriptions/listen` with the resource URIs in
 - The log line `mcp subscriptions/listen ended` gives the reason of each end.
 - The stream checks its age before each notification and at each keep-alive. When the last access
   check is older than one minute, it authenticates the credential again and asks the change feed of
-  each resource kind again first, with all of its resources in one call. So a lost access stops the
-  notifications within about one minute. The scopes of an agent or a service
-  account can change while a stream is open. So the check
-  also reads each watched URI again with the new scopes (`resolveUri`), and the stream ends
-  when one of them no longer names a resource that the credential can read. The change also closes a
-  feed on the object of the agent (`chat.rooms`, `chat.addressed`) at once with `reconnect`. A feed of a
-  room closes at its next check. A feed that stops ends the stream, and the client opens a new one.
+  each resource kind again first, with all of its resources in one call. The check also reads each
+  watched URI again (`resolveUri`), and the stream ends when one of them no longer names a resource that
+  the credential can read. A feed that stops ends the stream, and the client opens a new one.
+- A stream that watches a resource that a membership or a share decides (a `tmb_` mailbox, a room, a
+  shared drive, or a drive of a different principal) checks its access before each notification
+  (`watchesShared`). A membership can end at any time, and no notification may follow its end. Each such
+  notification costs one access check.
 - Subrequest budget of one stream. When it opens: one D1 query for all team mailboxes, one D1 query
   for all chat rooms, and one socket for each mailbox, each room and `chat.rooms` (at most 100). Each later access
   check makes at most five D1 calls: the credential, the principal, the last-use time of the

@@ -20,6 +20,7 @@ import {
 	request,
 	SETUP_TOKEN,
 	seedOrg,
+	setLegacyScopes,
 	webhookEventRows,
 } from "./helpers.ts";
 
@@ -679,12 +680,16 @@ describe("access checks before each POST", () => {
 	});
 
 	it("stops a webhook when its creator loses access to the mailbox", async () => {
-		const team = await teamMailbox([cy.id, ada.id]);
+		await allowAnyHost();
+		const team = await teamMailbox([cy.id, ada.id, bot.id]);
 		const inTeam = (await createMail(cy, { mailbox_id: team, url: HOOK })).webhook;
 		const noRead = (await createMail(ada, { mailbox_id: team, url: HOOK })).webhook;
 		const forBot = (await createMail(ada, { mailbox_id: bot.id, url: HOOK })).webhook;
+		// The membership decides for an agent too: the end of its membership stops its webhook.
+		const ofAgent = (await createMail(bot, { mailbox_id: team, url: HOOK })).webhook;
 		const posts = receiveWebhooks();
 		await owner.call("directory.remove_team_mailbox_member", { mailbox_id: team, principal_id: cy.id });
+		await owner.call("directory.remove_team_mailbox_member", { mailbox_id: team, principal_id: bot.id });
 		// A member that stays, but can no longer read the mailbox, lost the access of a new webhook too.
 		await owner.call("directory.add_team_mailbox_member", {
 			mailbox_id: team,
@@ -692,8 +697,9 @@ describe("access checks before each POST", () => {
 			scopes: ["mail.send"],
 		});
 		await owner.call("directory.update_principal", { principal_id: bot.id, sponsor_id: cy.id });
-		await consumeWebhooks([deliveryJob(inTeam), deliveryJob(noRead), deliveryJob(forBot)]);
+		await consumeWebhooks([deliveryJob(inTeam), deliveryJob(noRead), deliveryJob(forBot), deliveryJob(ofAgent)]);
 		expect(posts).toEqual([]);
+		expect(await webhookOf(bot, ofAgent.id)).toMatchObject({ status: "disabled", disabled_reason: "access_lost" });
 		expect(await webhookOf(cy, inTeam.id)).toMatchObject({ status: "disabled", disabled_reason: "access_lost" });
 		expect(await webhookOf(ada, noRead.id)).toMatchObject({ status: "disabled", disabled_reason: "access_lost" });
 		expect(await webhookOf(ada, forBot.id)).toMatchObject({ status: "disabled", disabled_reason: "access_lost" });
@@ -772,7 +778,7 @@ describe("the webhook migration", () => {
 		await env.DIRECTORY.prepare(`UPDATE api_keys SET scopes = ${withoutNewScope} WHERE principal_id = ?`)
 			.bind(owner.id)
 			.run();
-		await owner.call("directory.set_agent_access", { principal_id: bot.id, scopes: ["account.read", "mail.read"] });
+		await setLegacyScopes(bot.id, ["account.read", "mail.read"]);
 		const list = domain === "mail" ? "mail.list_webhook_subscriptions" : "chat.list_webhook_subscriptions";
 		expect(await codeOf(owner.call(list))).toBe("forbidden");
 

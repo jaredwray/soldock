@@ -46,6 +46,19 @@ export interface ListenInput {
 	signal: AbortSignal;
 }
 
+/**
+ * True when one of the feeds watches a resource that a membership or a share decides: a team mailbox, a room,
+ * a shared drive, or an item in the drive of a different principal.
+ */
+export function watchesShared(feeds: Iterable<Feed>, callerId: string): boolean {
+	for (const { resolved } of feeds) {
+		const { mailbox_id: mailbox, room_id: room, space_id: space, drive_id: drive } = resolved.vars;
+		if (mailbox?.startsWith("tmb_") || room !== undefined || drive !== undefined) return true;
+		if (space !== undefined && space !== callerId) return true;
+	}
+	return false;
+}
+
 function invalid(id: JsonRpcId, message: string): Response {
 	return rpcError(id, RPC_ERRORS.invalidParams, message);
 }
@@ -77,7 +90,9 @@ function requestedUris(id: JsonRpcId, params: Record<string, unknown>): string[]
  * about resources of other principals.
  *
  * Before a notification, and at each keep-alive, the stream checks its age, and checks its access
- * again when the last check is older than `RECHECK_MS`. It ends without a response when the
+ * again when the last check is older than `RECHECK_MS`. A stream that watches a team mailbox, a room or a
+ * drive of a different principal checks its access again before each notification: a membership or a share
+ * can end at any time, and no notification may follow its end (`watchesShared`). It ends without a response when the
  * credential stops working, when the caller loses access to a watched resource, when a change feed
  * stops, or after `MAX_STREAM_MS`. A client then opens a new stream. Its acknowledgment shows what it
  * can still watch, and a dead credential gets `401`.
@@ -159,10 +174,13 @@ export async function listen(input: ListenInput): Promise<Response> {
 			stop("the access check failed");
 		}
 	};
-	/** True while the stream can send: it is open, young enough, and its last access check is recent. */
-	const current = async (): Promise<boolean> => {
+	/**
+	 * True while the stream can send: it is open, young enough, and its last access check is recent. With
+	 * `strict`, the check is new for each notification.
+	 */
+	const current = async (strict = false): Promise<boolean> => {
 		if (open && Date.now() - openedAt >= MAX_STREAM_MS) stop("the stream reached its longest life");
-		if (open && Date.now() - checkedAt >= RECHECK_MS) {
+		if (open && (strict || Date.now() - checkedAt >= RECHECK_MS)) {
 			checking ??= recheck().finally(() => {
 				checking = null;
 			});
@@ -186,7 +204,7 @@ export async function listen(input: ListenInput): Promise<Response> {
 		queue = queue
 			.then(async () => {
 				// The check can wait. The facts are those of the newest change at the time of the send.
-				if (!(await current())) return;
+				if (!(await current(watchesShared(feeds.values(), call.caller.id)))) return;
 				const newest = waiting.get(uri);
 				waiting.delete(uri);
 				send({

@@ -13,14 +13,11 @@ import {
 } from "@asterra/contracts";
 import { filesForMessage } from "../drive/index.ts";
 import {
-	accessOutput,
-	assertMemberGrants,
 	type CallContext,
 	canManageAgent,
 	chatPresenceHandlers,
 	getPrincipal,
 	getPrincipals,
-	giveMemberAccess,
 	isAdmin,
 	mentionCandidates,
 	type PrincipalRecord,
@@ -99,6 +96,25 @@ function actorOf(call: CallContext): ActorRecord {
 /** The object of a room, with the caller for it. The object decides what the caller can do. */
 function openRoom(call: CallContext, roomId: string): { room: ReturnType<typeof roomStub>; ctx: RoomCall } {
 	return { room: roomStub(call.env, roomId), ctx: { roomId, actor: actorOf(call) } };
+}
+
+/**
+ * The rooms of the list that each room confirms, for an agent or a service account without chat.read on its
+ * account. Such an account could not read a room before the memberships decided the access of agents, and a
+ * room that did not wake since then still has its membership from before in the list. Each room narrows that
+ * membership when it wakes (`narrowAgentMembers`), so the list asks each room and shows its answer. Each
+ * other caller gets the list as it is.
+ */
+async function confirmedRooms<T extends { id: string }>(call: CallContext, rooms: readonly T[]): Promise<T[]> {
+	if (call.caller.principal.kind !== "agent" || call.caller.scopes.has("chat.read")) return [...rooms];
+	const answers = await Promise.all(
+		rooms.map(async (room) => {
+			const opened = openRoom(call, room.id);
+			const found = await opened.room.get(opened.ctx);
+			return "error" in found || found.room.role === null ? null : room;
+		}),
+	);
+	return answers.filter((room): room is Awaited<T> => room !== null);
 }
 
 /** Turns a refusal from an object into an OperationError, and returns any other result. */
@@ -266,11 +282,6 @@ async function requestToDecide(
 		throw new OperationError("not_found", NO_REQUEST);
 	}
 	return { request, target };
-}
-
-/** A new member with the scopes of its kind, for the access that an agent gets with its membership. */
-function defaultMembership(principal: PrincipalRecord): { principal_id: string; scopes: string[] } {
-	return { principal_id: principal.id, scopes: defaultRoomMemberScopes(principal.kind) };
 }
 
 /**
@@ -610,7 +621,8 @@ export const chatHandlers: Pick<HandlerMap<CallContext>, ChatOperation> = {
 			);
 		}
 		const shown = input.view === "public" ? await withOwnState(call.env, call.caller.id, page) : page;
-		return { rooms: shown.rooms.map(toRoom), next_cursor: shown.nextCursor };
+		const rooms = input.view === "public" ? shown.rooms : await confirmedRooms(call, shown.rooms);
+		return { rooms: rooms.map(toRoom), next_cursor: shown.nextCursor };
 	},
 
 	async "chat.list_threads"(call, input) {
@@ -665,9 +677,6 @@ export const chatHandlers: Pick<HandlerMap<CallContext>, ChatOperation> = {
 	async "chat.create_room"(call, input) {
 		const principals = await principalsOf(call, input.member_ids ?? []);
 		const members = principals.map(toActor);
-		// An agent that the caller manages gets the access of its membership. Refuse what the caller cannot
-		// give before the room exists.
-		assertMemberGrants(call, principals, (principal) => defaultRoomMemberScopes(principal.kind));
 		const opened = openRoom(call, newId("rm"));
 		const room = accept(
 			await opened.room.create(opened.ctx, {
@@ -684,10 +693,7 @@ export const chatHandlers: Pick<HandlerMap<CallContext>, ChatOperation> = {
 			"chat.create_room",
 			room.id,
 		);
-		// The members are in the room now. An agent that did not get its access does not fail the call: the
-		// result names it, and `chat.add_members` completes it.
-		const access = await giveMemberAccess(call, principals.map(defaultMembership));
-		return { room: toRoom(room), ...accessOutput(access) };
+		return { room: toRoom(room) };
 	},
 
 	async "chat.open_dm"(call, input) {
@@ -696,17 +702,13 @@ export const chatHandlers: Pick<HandlerMap<CallContext>, ChatOperation> = {
 		}
 		const principals = await principalsOf(call, [input.principal_id]);
 		const roomId = await dmRoomId(call.caller.id, input.principal_id);
-		// A person who manages the agent and opens a direct message with it decided that the agent can use
-		// the room. Each call does this, so a second call completes a write that failed.
-		assertMemberGrants(call, principals, (principal) => defaultRoomMemberScopes(principal.kind));
 		const opened = openRoom(call, roomId);
 		const result = accept(await opened.room.openDm(opened.ctx, toActor(principals[0] as PrincipalRecord)));
 		if (result.created) {
 			auditOk(call, "chat.open_dm", result.room.id);
 			recordServiceMemberships(call, [input.principal_id], "chat.open_dm", result.room.id);
 		}
-		const access = await giveMemberAccess(call, principals.map(defaultMembership));
-		return { room: toRoom(result.room), ...accessOutput(access) };
+		return { room: toRoom(result.room) };
 	},
 
 	async "chat.get_room"(call, input) {
@@ -739,7 +741,6 @@ export const chatHandlers: Pick<HandlerMap<CallContext>, ChatOperation> = {
 		// The room comes first. A caller without access gets the same answer for each principal id.
 		accept(await opened.room.checkAddMembers(opened.ctx, input.scopes));
 		const principals = await principalsOf(call, input.principal_ids);
-		assertMemberGrants(call, principals, (principal) => input.scopes ?? defaultRoomMemberScopes(principal.kind));
 		const result = accept(await opened.room.addMembers(opened.ctx, principals.map(toActor), input.scopes));
 		// The room gives the time of its write. A request from before it has nothing to decide. A later request
 		// can follow a remove, so it stays.
@@ -753,17 +754,12 @@ export const chatHandlers: Pick<HandlerMap<CallContext>, ChatOperation> = {
 			result.members.map((member) => member.principal_id),
 			written,
 		);
-		// Each named agent that the caller manages gets the access of its membership, also a member from
-		// before. So a second call completes a write that failed.
-		const access = await giveMemberAccess(call, result.members);
-		return { members_added: result.added.length, room: toRoom(result.room), ...accessOutput(access) };
+		return { members_added: result.added.length, room: toRoom(result.room) };
 	},
 
 	async "chat.set_member_scopes"(call, input) {
 		const opened = openRoom(call, input.room_id);
 		// A principal that left the directory can still be a member. The room decides if the member exists.
-		const principals = await getPrincipals(call.env.DIRECTORY, [input.principal_id]);
-		assertMemberGrants(call, principals, () => input.scopes);
 		const result = accept(
 			await opened.room.setMemberScopes(opened.ctx, {
 				principalId: input.principal_id,
@@ -776,9 +772,7 @@ export const chatHandlers: Pick<HandlerMap<CallContext>, ChatOperation> = {
 			auditOk(call, "chat.set_member_scopes", `${input.room_id}:${input.principal_id}:${scopes}`);
 			recordServiceMemberships(call, [input.principal_id], "chat.set_member_scopes", input.room_id);
 		}
-		// Each call for an agent that the caller manages gives the agent the access of its membership.
-		const access = await giveMemberAccess(call, [result.member]);
-		return { member: { ...result.member, joined_at: iso(result.member.joined_at) }, ...accessOutput(access) };
+		return { member: { ...result.member, joined_at: iso(result.member.joined_at) } };
 	},
 
 	async "chat.request_member"(call, input) {
@@ -846,9 +840,6 @@ export const chatHandlers: Pick<HandlerMap<CallContext>, ChatOperation> = {
 
 	async "chat.approve_member_request"(call, input) {
 		const { request, target } = await requestToDecide(call, input.request_id);
-		// The approval can give the account the chat scopes of the membership. Refuse what the credential cannot
-		// give before the room writes the member.
-		assertMemberGrants(call, [target], () => request.scopes);
 		// The delete of the request is the decision. Only one answer deletes it, so a denial and an approval at
 		// the same time cannot both succeed. The room writes the member only after the approval won.
 		if (!(await removeMemberRequest(call, request))) throw new OperationError("not_found", NO_REQUEST);
@@ -862,14 +853,12 @@ export const chatHandlers: Pick<HandlerMap<CallContext>, ChatOperation> = {
 		// so such a request has nothing to decide. The room gives the time of its write: a later request can
 		// follow a remove, so it stays.
 		await settleMemberRequests(call, request.room_id, [target.id], new Date(admitted.at).toISOString());
-		// The account was a member before the approval: a person added it in the meantime. That membership is not
-		// the one of the request, so the approval gives the account no scope.
-		if (!admitted.added) return { request: toMemberRequest(request), ...accessOutput({ changes: [], pending: [] }) };
+		// The account was a member before the approval: a person added it in the meantime. The room keeps that
+		// membership as it is.
+		if (!admitted.added) return { request: toMemberRequest(request) };
 		auditOk(call, "chat.approve_member_request", `${request.room_id}:${target.id}`);
 		recordServiceMemberships(call, [target.id], "chat.approve_member_request", request.room_id);
-		// The member is in the room. The write of the scopes is idempotent, as for chat.add_members.
-		const access = await giveMemberAccess(call, [admitted.member]);
-		return { request: toMemberRequest(request), ...accessOutput(access) };
+		return { request: toMemberRequest(request) };
 	},
 
 	async "chat.deny_member_request"(call, input) {

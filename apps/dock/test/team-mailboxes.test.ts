@@ -2,6 +2,7 @@ import { createExecutionContext, runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import { ApiError, TEAM_MAILBOX_LIMITS } from "@asterra/contracts";
 import { beforeEach, describe, expect, it } from "vitest";
+import resourceAccessMigration from "../migrations/0031_resource_access.sql?raw";
 import worker from "../src/index.ts";
 import {
 	type Actor,
@@ -10,14 +11,14 @@ import {
 	drainOutbox,
 	fakeEmailService,
 	inject,
+	mcp,
 	ORIGIN,
 	PASSWORD,
-	racing,
 	rawMessage,
 	request,
 	SETUP_TOKEN,
 	seedOrg,
-	withEnv,
+	setLegacyScopes,
 } from "./helpers.ts";
 
 let owner: Actor;
@@ -103,7 +104,6 @@ describe("team mailboxes in the directory", () => {
 					kind: "agent",
 					display_name: "Support Bot",
 					address: "support@dock.test",
-					scopes: ["account.read"],
 				}),
 			),
 		).toBe("conflict");
@@ -353,128 +353,151 @@ describe("the scopes of a member of a team mailbox", () => {
 		expect(await members()).toEqual([{ principal_id: ada.id, scopes: [] }]);
 		expect(await code(ada.call("mail.list_threads", { mailbox_id: support.id }))).toBe("forbidden");
 	});
+
+	// Before 0031, a call of an agent in a team mailbox needed the scope on its account and in its membership.
+	// The migration keeps for each membership of an agent what the agent could do, so no agent gets more.
+	it("keeps for each agent membership only the scopes that its account also held, in migration 0031", async () => {
+		const { principal: service } = await owner.call("directory.create_service_account", {
+			display_name: "CI",
+			address: "ci@dock.test",
+		});
+		const odd = await owner.call("directory.create_principal", {
+			kind: "agent",
+			display_name: "Odd",
+			address: "odd@dock.test",
+		});
+		const support = await createSupport([ada, bot]);
+		for (const id of [service.id, odd.principal.id]) {
+			await owner.call("directory.add_team_mailbox_member", { mailbox_id: support.id, principal_id: id });
+		}
+		await setLegacyScopes(bot.id, ["account.read", "mail.read", "mail.send"]);
+		await setLegacyScopes(service.id, ["chat.read"]);
+		// A stored list that is not valid JSON gives nothing, on the account and in the membership.
+		await env.DIRECTORY.prepare("UPDATE principals SET agent_scopes = '{bad' WHERE id = ?")
+			.bind(odd.principal.id)
+			.run();
+		await env.DIRECTORY.prepare("UPDATE team_mailbox_members SET scopes = 'all' WHERE principal_id = ?")
+			.bind(ada.id)
+			.run();
+		await env.DIRECTORY.prepare(resourceAccessMigration).run();
+		const scopes = Object.fromEntries(
+			(await owner.call("directory.list_team_mailboxes")).team_mailboxes[0]?.members.map((member) => [
+				member.principal_id,
+				member.scopes,
+			]) ?? [],
+		);
+		// A person keeps the membership as it is: its credential still limits each call.
+		expect(scopes).toEqual({
+			[ada.id]: [],
+			[bot.id]: ["mail.read", "mail.send"],
+			[service.id]: [],
+			[odd.principal.id]: [],
+		});
+		const stored = await env.DIRECTORY.prepare("SELECT scopes FROM team_mailbox_members WHERE principal_id = ?")
+			.bind(ada.id)
+			.first("scopes");
+		expect(stored).toBe("all");
+		expect(await code(bot.call("mail.create_label", { mailbox_id: support.id, name: "Done" }))).toBe("forbidden");
+	});
 });
 
 describe("an agent in a team mailbox", () => {
-	/** A new agent of Ada with `mail.read` only. It is a member of no team mailbox. */
-	async function newAgent() {
+	/**
+	 * A new agent of Ada with its first key. It is a member of no team mailbox. `legacy` gives it the narrow
+	 * account scopes that an agent from before migration 0031 can have.
+	 */
+	async function newAgent(legacy?: readonly string[]) {
 		const created = await owner.call("directory.create_principal", {
 			kind: "agent",
 			display_name: "Helper",
 			address: "helper@dock.test",
 			sponsor_id: ada.id,
-			scopes: ["account.read", "mail.read"],
 		});
-		return { id: created.principal.id, call: api(created.api_key?.secret ?? "") };
+		if (legacy) await setLegacyScopes(created.principal.id, legacy);
+		const key = created.api_key?.secret ?? "";
+		return { id: created.principal.id, address: created.principal.address, key, call: api(key) };
 	}
 	const access = (id: string) => owner.call("directory.get_agent_access", { principal_id: id });
+	const team = async (display_name: string, address: string) =>
+		(await owner.call("directory.create_team_mailbox", { display_name, address })).team_mailbox;
+	/** The error code of a refused MCP tool call. */
+	const toolCode = (result: Awaited<ReturnType<typeof callTool>>) =>
+		result.isError ? (JSON.parse(result.content[0]?.text ?? "{}") as { code?: string }).code : "ok";
 
-	/** Adds a member as the owner, with a directory binding that makes a parallel change before each batch. */
-	const addAs = (directory: D1Database, mailboxId: string, principalId: string) =>
-		withEnv({ DIRECTORY: directory }, `/api/v1/directory/team-mailboxes/${mailboxId}/members`, {
-			method: "POST",
-			headers: { authorization: `Bearer ${owner.key}`, "content-type": "application/json" },
-			body: JSON.stringify({ principal_id: principalId }),
+	// The resource permissions are the source of truth. An admin grants Read and send on Support and Read on
+	// Billing. The key that the agent had before acts at once, as the memberships say, and the end of a
+	// membership ends that access at once. No member setting and no credential changes. An agent from before
+	// migration 0031 with narrow account scopes gets the same: its account scopes limit only its own mailbox.
+	it.each([
+		["a new agent", undefined],
+		["an agent from before migration 0031", ["account.read", "chat.read"]],
+	] as const)("lets %s use each team mailbox as its membership says, at once, with its key", async (_name, legacy) => {
+		const agent = await newAgent(legacy);
+		const before = await access(agent.id);
+		const support = await team("Support", "support@dock.test");
+		const billing = await team("Billing", "billing@dock.test");
+		const send = (mailbox_id: string, subject: string) =>
+			agent.call("mail.send", { mailbox_id, to: ["owner@dock.test"], subject, text: "Hi" });
+		expect(await code(send(support.id, "Early"))).toBe("forbidden");
+		expect(await code(agent.call("mail.list_threads", { mailbox_id: billing.id }))).toBe("forbidden");
+
+		await owner.call("directory.add_team_mailbox_member", {
+			mailbox_id: support.id,
+			principal_id: agent.id,
+			scopes: ["mail.read", "mail.send"],
 		});
-
-	// An admin who adds an agent to a mailbox decided what the agent can do there. The agent must not need a
-	// second change of its scopes before it can use the mailbox.
-	it("gets the scopes of its membership, so it can use the mailbox at once", async () => {
-		const agent = await newAgent();
-		const support = await createSupport([]);
-		const add = { mailbox_id: support.id, principal_id: agent.id };
-		const added = await owner.call("directory.add_team_mailbox_member", add);
-		// The result tells the admin what the agent got: the scopes also apply to the own mailbox of the agent.
-		expect(added.agent_access_changes).toEqual([
-			{ principal_id: agent.id, scopes_added: ["mail.modify", "mail.send"] },
-		]);
-		expect(await access(agent.id)).toMatchObject({
-			scopes: ["account.read", "mail.read", "mail.modify", "mail.send"],
-			team_mailboxes: [{ id: support.id, scopes: ALL }],
+		await owner.call("directory.add_team_mailbox_member", {
+			mailbox_id: billing.id,
+			principal_id: agent.id,
+			scopes: ["mail.read"],
 		});
-		// The key from before the membership sends from the mailbox.
-		const sent = await agent.call("mail.send", { mailbox_id: support.id, to: ["owner@dock.test"], text: "Hi" });
-		expect(sent.message_id).toEqual(expect.any(String));
-		// A second call has nothing to add. A person gets no scopes.
-		expect((await owner.call("directory.add_team_mailbox_member", add)).agent_access_changes).toEqual([]);
-		const person = await owner.call("directory.add_team_mailbox_member", { ...add, principal_id: ada.id });
-		expect(person.agent_access_changes).toEqual([]);
-
-		// The first members of a new mailbox get the same, and the result names each change. The owner takes
-		// the new scopes away first. The bot holds each scope: it has no change.
-		await owner.call("directory.set_agent_access", { principal_id: agent.id, scopes: ["account.read", "mail.read"] });
-		const { team_mailbox: sales, agent_access_changes: changes } = await owner.call("directory.create_team_mailbox", {
-			display_name: "Sales",
-			address: "sales@dock.test",
-			member_ids: [agent.id, bot.id],
-		});
-		expect(changes).toEqual([{ principal_id: agent.id, scopes_added: ["mail.modify", "mail.send"] }]);
-		expect((await agent.call("mail.list_threads", { mailbox_id: sales.id })).threads).toEqual([]);
-	});
-
-	// A narrow key with directory.write must not give an agent a scope that the key does not hold.
-	it("needs a credential that holds each scope that the membership gives to the agent", async () => {
-		const agent = await newAgent();
-		const support = await createSupport([]);
-		const narrow = await narrowKey(owner, ["directory.read", "directory.write", "mail.read"]);
-		const add = { mailbox_id: support.id, principal_id: agent.id };
-		expect(await code(narrow("directory.add_team_mailbox_member", add))).toBe("forbidden");
-		const sales = { display_name: "Sales", address: "sales@dock.test", member_ids: [agent.id] };
-		expect(await code(narrow("directory.create_team_mailbox", sales))).toBe("forbidden");
-		// The refused calls wrote nothing.
-		expect((await owner.call("directory.list_team_mailboxes")).team_mailboxes).toEqual([support]);
-		expect((await access(agent.id)).scopes).toEqual(["account.read", "mail.read"]);
-
-		// The key gives the scope that it holds. A person has no scopes of its own, so a person needs no check.
-		const read = await narrow("directory.add_team_mailbox_member", { ...add, scopes: ["mail.read"] });
-		expect(read.team_mailbox.members).toEqual([{ principal_id: agent.id, scopes: ["mail.read"] }]);
-		const person = await narrow("directory.add_team_mailbox_member", { ...add, principal_id: ada.id });
-		expect(person.team_mailbox.members[1]).toEqual({ principal_id: ada.id, scopes: ALL });
-	});
-
-	// The membership and the access of the agent are one transaction. A change of the access of the agent by
-	// a different call, between the read and the write, must not be lost, and must not leave a half result.
-	it("keeps a parallel change of the access of the agent, and writes nothing when each try loses", async () => {
-		const agent = await newAgent();
-		const support = await createSupport([]);
-		// One parallel change: a manager gives the agent drive.read. The second try has it.
-		const once = racing(
-			`UPDATE principals SET agent_scopes = '["account.read","mail.read","drive.read"]',
-				access_version = access_version + 1 WHERE id = ? AND agent_scopes NOT LIKE '%drive.read%'`,
-			agent.id,
-		);
-		const added = await addAs(once, support.id, agent.id);
-		expect(added.status).toBe(200);
-		expect((await access(agent.id)).scopes).toEqual([
-			"account.read",
-			"mail.read",
-			"mail.modify",
-			"mail.send",
-			"drive.read",
+		// The grants changed nothing on the agent: not its account, and not its keys.
+		const after = await access(agent.id);
+		expect(after.scopes).toEqual(before.scopes);
+		expect(after.tokens).toEqual(before.tokens);
+		expect(after.team_mailboxes.map((mailbox) => [mailbox.id, mailbox.scopes])).toEqual([
+			[billing.id, ["mail.read"]],
+			[support.id, ["mail.read", "mail.send"]],
 		]);
 
-		// A change before each try: the call gets conflict. No member, no mailbox and no new access stay.
-		const other = await owner.call("directory.create_principal", {
-			kind: "agent",
-			display_name: "Second",
-			address: "second@dock.test",
-			sponsor_id: ada.id,
-			scopes: ["account.read"],
-		});
-		const always = () =>
-			racing("UPDATE principals SET access_version = access_version + 1 WHERE id = ?", other.principal.id);
-		expect((await addAs(always(), support.id, other.principal.id)).status).toBe(409);
-		const created = await withEnv({ DIRECTORY: always() }, "/api/v1/directory/team-mailboxes", {
-			method: "POST",
-			headers: { authorization: `Bearer ${owner.key}`, "content-type": "application/json" },
-			body: JSON.stringify({ display_name: "Sales", address: "sales@dock.test", member_ids: [other.principal.id] }),
-		});
-		expect(created.status).toBe(409);
-		const { team_mailboxes } = await owner.call("directory.list_team_mailboxes");
-		expect(team_mailboxes.map((mailbox) => [mailbox.address, mailbox.member_ids])).toEqual([
-			["support@dock.test", [agent.id]],
+		// REST: the agent sends from Support with its key from before, and can only read Billing.
+		expect((await send(support.id, "Order 42")).message_id).toEqual(expect.any(String));
+		expect(await subjects(agent, support.id, "in:sent")).toEqual(["Order 42"]);
+		expect(await subjects(agent, billing.id)).toEqual([]);
+		expect(await code(send(billing.id, "Refund"))).toBe("forbidden");
+		expect(await code(agent.call("mail.create_label", { mailbox_id: billing.id, name: "Paid" }))).toBe("forbidden");
+		// Read and send does not let the agent change Support.
+		expect(await code(agent.call("mail.create_label", { mailbox_id: support.id, name: "Done" }))).toBe("forbidden");
+		const listed = (await agent.call("mail.list_mailboxes")).mailboxes.filter((mailbox) => mailbox.kind === "team");
+		expect(listed.map((mailbox) => [mailbox.id, mailbox.scopes])).toEqual([
+			[billing.id, ["mail.read"]],
+			[support.id, ["mail.read", "mail.send"]],
 		]);
-		expect((await access(other.principal.id)).scopes).toEqual(["account.read"]);
+
+		// MCP: the same key sees the tools, and each call gets the same answer as REST.
+		const { body } = await mcp(agent.key, "tools/list");
+		const toolList = (body?.result ?? { tools: [] }) as { tools: { name: string }[] };
+		const tools = toolList.tools.map((tool) => tool.name);
+		expect(tools).toEqual(expect.arrayContaining(["mail_send", "mail_list_threads", "mail_create_label"]));
+		const sendTool = (mailbox_id: string) =>
+			callTool(agent.key, "mail_send", { mailbox_id, to: ["owner@dock.test"], subject: "MCP", text: "Hi" });
+		expect(toolCode(await sendTool(support.id))).toBe("ok");
+		expect(toolCode(await sendTool(billing.id))).toBe("forbidden");
+		expect(toolCode(await callTool(agent.key, "mail_list_threads", { mailbox_id: billing.id }))).toBe("ok");
+
+		// The end of the Support membership ends the Support access at once, on each surface. Billing stays.
+		await owner.call("directory.remove_team_mailbox_member", { mailbox_id: support.id, principal_id: agent.id });
+		expect(await code(send(support.id, "Late"))).toBe("forbidden");
+		expect(await code(agent.call("mail.list_threads", { mailbox_id: support.id }))).toBe("forbidden");
+		expect(toolCode(await sendTool(support.id))).toBe("forbidden");
+		expect(toolCode(await callTool(agent.key, "mail_list_threads", { mailbox_id: support.id }))).toBe("forbidden");
+		expect(await subjects(agent, billing.id)).toEqual([]);
+		expect((await access(agent.id)).scopes).toEqual(before.scopes);
+
+		// An agent from before keeps the limit of its account in its own mailbox.
+		const own = agent.call("mail.send", { to: ["owner@dock.test"], subject: "Own", text: "Hi" });
+		if (legacy) expect(await code(own)).toBe("forbidden");
+		else expect((await own).message_id).toEqual(expect.any(String));
 	});
 });
 

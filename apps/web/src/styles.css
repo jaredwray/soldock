@@ -4106,21 +4106,6 @@ fieldset {
 	overflow-wrap: anywhere;
 }
 
-.connect-requested {
-	margin-left: 8px;
-}
-
-/* The scopes of an agent that exists: a list to read, in the columns of the scope checkboxes. */
-.connect-scopes {
-	margin: 0;
-	padding: 0;
-	list-style: none;
-}
-
-.connect-scope {
-	padding: 6px 0;
-}
-
 .connect-form {
 	display: grid;
 	grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));

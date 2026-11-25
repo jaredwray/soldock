@@ -715,6 +715,8 @@ const AGENT_DM =
 const NEXT_OWNER_FROM = "SELECT principal_id FROM members";
 const NEXT_OWNER_SORT = "ORDER BY json_extract(actor_json, '$.kind') = 'human' DESC, joined_at, principal_id";
 const NEXT_OWNER_ORDER = `${NEXT_OWNER_SORT} LIMIT 1`;
+/** The key in `meta` of the one-time step `narrowAgentMembers`. */
+const AGENT_ACCESS_KEY = "agent_access_narrowed";
 const NO_WRITE = "Your membership of this room does not have chat.write. The owner of the room can add it.";
 const NO_ADD_MEMBERS = "Your membership of this room does not have chat.add_members. The owner of the room can add it.";
 /**
@@ -867,6 +869,8 @@ export class ChatRoomDO extends DurableObject<Env> {
 		if (this.hasTables) {
 			ctx.blockConcurrencyWhile(async () => {
 				this.migrate();
+				// Before the first call after the deploy that made the memberships decide the access of agents.
+				await this.narrowAgentMembers();
 				// A change sets the alarm after its transaction commits. If the object stopped between the
 				// two, the outbox has rows and no alarm: set one now.
 				const pending =
@@ -888,6 +892,10 @@ export class ChatRoomDO extends DurableObject<Env> {
 		const current = Number(
 			this.one<{ value: string }>("SELECT value FROM meta WHERE key = 'schema_version'")?.value ?? 0,
 		);
+		// A new room has each membership from after the deploy of `narrowAgentMembers`: it has nothing to narrow.
+		if (current === 0) {
+			this.sql.exec("INSERT INTO meta (key, value) VALUES (?, '1') ON CONFLICT (key) DO NOTHING", AGENT_ACCESS_KEY);
+		}
 		for (let version = current; version < MIGRATIONS.length; version++) {
 			this.ctx.storage.transactionSync(() => {
 				for (const statement of MIGRATIONS[version] ?? []) this.sql.exec(statement);
@@ -1416,6 +1424,7 @@ export class ChatRoomDO extends DurableObject<Env> {
 		const existing = this.room();
 		if (existing) {
 			if (existing.kind !== "dm" || !this.member(call.actor.principal_id)) return refuse("not_found", NOT_FOUND);
+			await this.restorePeers(call, existing, [peer]);
 			return { room: this.record(call.actor.principal_id), created: false };
 		}
 		if (this.agentAddsAgent(call, [peer])) return refuse("forbidden", AGENT_DM);
@@ -1429,6 +1438,7 @@ export class ChatRoomDO extends DurableObject<Env> {
 		const existing = this.room();
 		if (existing) {
 			if (existing.kind !== "group_dm" || !this.member(call.actor.principal_id)) return refuse("not_found", NOT_FOUND);
+			await this.restorePeers(call, existing, peers);
 			return { room: this.record(call.actor.principal_id), created: false };
 		}
 		const unique = new Map<string, ActorRecord>();
@@ -1442,6 +1452,25 @@ export class ChatRoomDO extends DurableObject<Env> {
 		this.createRoom(call, "group_dm", null, "", [...unique.values()]);
 		await this.flush();
 		return { room: this.record(call.actor.principal_id), created: true };
+	}
+
+	/**
+	 * Makes each peer of a direct message a member again when it is not a member: `narrowAgentMembers` removes an
+	 * agent that could not read the room before the deploy. The id of a direct message comes from the ids of its
+	 * members, so the peers of the call are the members of the room. A member that opens the direct message
+	 * again decides that the agent can use it, as at the first open. An agent never adds a different agent.
+	 */
+	private async restorePeers(call: RoomCall, room: RoomRow, peers: readonly ActorRecord[]): Promise<void> {
+		const missing = peers.filter(
+			(peer) =>
+				peer.kind === "agent" && peer.principal_id !== call.actor.principal_id && !this.member(peer.principal_id),
+		);
+		if (missing.length === 0 || this.agentAddsAgent(call, missing)) return;
+		this.ctx.storage.transactionSync(() => {
+			for (const peer of missing) this.insertMember(peer, "member", Date.now(), room.last_seq);
+			this.roomChanged(call.actor.principal_id);
+		});
+		await this.flush();
 	}
 
 	/**
@@ -1837,6 +1866,76 @@ export class ChatRoomDO extends DurableObject<Env> {
 			this.touch(`member:${next}`);
 			this.roomChanged("system");
 		});
+	}
+
+	/**
+	 * A step that runs one time in each room, before its first call after the deploy that made the memberships
+	 * decide the access of agents (D1 migration 0031). Before that deploy, a call of an agent or a service
+	 * account needed the scope in its account too. So each agent member keeps only what it could do before:
+	 * - Without `chat.read` on its account, it could not read the room. The room removes it, because each
+	 *   member reads.
+	 * - Without `chat.write`, it could only read. It keeps `chat.read` only, and an owner becomes a member: the
+	 *   next member in the order of the owners becomes the owner.
+	 *
+	 * A room that nobody created, or that has no agent member, reads nothing. An agent that the directory does
+	 * not have does not change: it cannot authenticate. Nothing writes the account scopes after the deploy, so
+	 * a room that wakes later gets the same result. A failed read of the directory throws: the room then does
+	 * not serve, and the next call tries again.
+	 */
+	private async narrowAgentMembers(): Promise<void> {
+		if (this.one<{ value: string }>("SELECT value FROM meta WHERE key = ?", AGENT_ACCESS_KEY)) return;
+		const agents = this.all<MemberRow>("SELECT * FROM members WHERE json_extract(actor_json, '$.kind') = 'agent'");
+		const accounts = new Map(
+			(agents.length === 0
+				? []
+				: await getPrincipals(
+						this.env.DIRECTORY,
+						agents.map((agent) => agent.principal_id),
+					)
+			).map((principal) => [principal.id, principal.agent_scopes]),
+		);
+		const removed: string[] = [];
+		let newOwner = false;
+		this.ctx.storage.transactionSync(() => {
+			for (const agent of agents) {
+				const account = accounts.get(agent.principal_id);
+				if (!account || account.includes("chat.write")) continue;
+				if (!account.includes("chat.read")) {
+					this.sql.exec("DELETE FROM members WHERE principal_id = ?", agent.principal_id);
+					this.sql.exec("DELETE FROM thread_follows WHERE principal_id = ?", agent.principal_id);
+					this.sql.exec("DELETE FROM post_allowed WHERE principal_id = ?", agent.principal_id);
+					this.sql.exec("DELETE FROM activity_outbox WHERE target_principal_id = ?", agent.principal_id);
+					this.touch(`${PRINCIPAL_TARGET}${agent.principal_id}`);
+					removed.push(agent.principal_id);
+				} else {
+					this.sql.exec(
+						"UPDATE members SET role = 'member', scopes = ? WHERE principal_id = ?",
+						JSON.stringify(["chat.read"]),
+						agent.principal_id,
+					);
+				}
+				this.touch(`member:${agent.principal_id}`);
+				if (agent.role === "owner") {
+					const next = this.one<{ principal_id: string }>(
+						`${NEXT_OWNER_FROM} WHERE principal_id != ? ${NEXT_OWNER_ORDER}`,
+						agent.principal_id,
+					);
+					if (next) {
+						this.sql.exec("UPDATE members SET role = 'owner' WHERE principal_id = ?", next.principal_id);
+						this.touch(`member:${next.principal_id}`);
+						newOwner = true;
+					}
+				}
+			}
+			if (agents.length > 0 && this.room()) this.roomChanged("system");
+			this.sql.exec("INSERT INTO meta (key, value) VALUES (?, '1') ON CONFLICT (key) DO NOTHING", AGENT_ACCESS_KEY);
+		});
+		if (newOwner) await this.settleOwner();
+		for (const principalId of removed) {
+			for (const socket of this.ctx.getWebSockets(socketTag(principalId))) {
+				this.end(socket, CHAT_SOCKET_CLOSE.ended, "You are not a member of this room now.");
+			}
+		}
 	}
 
 	/** Archives a room so it becomes read-only. Room owner, or org admin/owner on a public room. */

@@ -26,9 +26,10 @@ interface MemberPageProps {
 /**
  * The page of one person, agent or service account in Admin › Members (`/admin/members/<prn_id>`). A
  * summary with the avatar, the address and the chips comes first. Each part follows in its own card. An
- * owner or an admin changes the account here. An agent also has the policy, the permissions, the connected
- * apps, the webhooks, the API keys, the member requests and the access. A service account has the policy,
- * the permissions, the tokens, the member requests, the access and the activity.
+ * owner or an admin changes the account here. An agent also has the policy, the connected apps, the
+ * webhooks, the API keys, the member requests and a read-only summary of its access. A service account has
+ * the policy, the tokens, the member requests, the access summary and the activity. Each mailbox, room and
+ * drive decides what an agent can do there, so the page has no permissions editor.
  */
 export function MemberPage({ principal, me, humans, principals, elevated, onChanged, onDeleted }: MemberPageProps) {
 	const isAgent = principal.kind === "agent";

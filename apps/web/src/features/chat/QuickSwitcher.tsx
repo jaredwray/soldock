@@ -1,6 +1,5 @@
 import type { ChatRoom, DirectoryEntry } from "@asterra/contracts";
 import { useEffect, useId, useMemo, useRef, useState } from "react";
-import { roomAccessText } from "../../lib/accessChange.ts";
 import { api, errorMessage } from "../../lib/api.ts";
 import { Dialog } from "../../lib/Dialog.tsx";
 import { initials } from "../../lib/format.ts";
@@ -98,9 +97,6 @@ export function QuickSwitcher({
 		setBusy(true);
 		try {
 			const result = await api.call("chat.open_dm", { principal_id: item.person.id });
-			// The change is on the account of the agent, so the person who manages it must see it.
-			const changed = roomAccessText(result, () => item.person.display_name).trim();
-			if (changed) toast({ message: changed });
 			onOpened(result.room);
 		} catch (caught) {
 			toast({ message: errorMessage(caught), tone: "error" });

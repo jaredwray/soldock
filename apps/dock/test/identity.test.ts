@@ -1,6 +1,6 @@
 import { applyD1Migrations } from "cloudflare:test";
 import { env } from "cloudflare:workers";
-import { ALL_SCOPES, ApiError } from "@asterra/contracts";
+import { AGENT_SCOPES, ALL_SCOPES, ApiError, SERVICE_SCOPES } from "@asterra/contracts";
 import { describe, expect, it, vi } from "vitest";
 import baseMigration from "../migrations/0001_directory.sql?raw";
 import domainMigration from "../migrations/0003_mail_domains.sql?raw";
@@ -31,6 +31,7 @@ import {
 	request,
 	SETUP_TOKEN,
 	seedOrg,
+	setLegacyScopes,
 	setupOwner,
 	signIn,
 	submitSignIn,
@@ -221,7 +222,6 @@ describe("first-run setup", () => {
 		const old = await owner.call("directory.create_service_account", {
 			display_name: "CI",
 			address: "ci@dock.test",
-			scopes: ["account.read"],
 		});
 		const oldToken = await owner.call("account.create_api_key", { principal_id: old.principal.id, label: "ci" });
 		// The AI settings belong to the old organization, and the ledger names its mailboxes.
@@ -260,13 +260,12 @@ describe("first-run setup", () => {
 			token_source: "secret",
 		});
 		expect(await env.DIRECTORY.prepare("SELECT COUNT(*) AS count FROM ai_usage").first("count")).toBe(0);
-		// The fresh directory has the columns of 0024 and 0026: a service account with scopes, and a key with
-		// an end.
+		// The fresh directory has the columns of 0024 and 0026: a service account with its account scopes, and a
+		// key with an end.
 		const fresh = api(result.api_key.secret);
 		const service = await fresh("directory.create_service_account", {
 			display_name: "CI",
 			address: "ci@new.example",
-			scopes: ["account.read"],
 		});
 		const token = await fresh("account.create_api_key", {
 			principal_id: service.principal.id,
@@ -275,7 +274,7 @@ describe("first-run setup", () => {
 		});
 		expect(await api(token.api_key.secret)("account.whoami")).toMatchObject({
 			principal: { kind: "service" },
-			scopes: ["account.read"],
+			scopes: [...SERVICE_SCOPES],
 		});
 		await refusal(await submitSignIn(ada.address, PASSWORD));
 		await signIn("owner@new.example");
@@ -1096,10 +1095,10 @@ describe("directory authorization", () => {
 		await admin.call("directory.create_principal", input);
 	});
 
-	it("gives a new person no API key, and a new agent its scopes and a first key", async () => {
+	it("gives a new person no API key, and a new agent each agent scope and a first key that only proves its identity", async () => {
 		const owner = await setupOwner();
 		const person = { kind: "human", display_name: "Eve", address: "eve@dock.test", password: PASSWORD } as const;
-		expect(await denied(owner.call("directory.create_principal", { ...person, scopes: ["mail.read"] }))).toBe(
+		expect(await denied(owner.call("directory.create_principal", { ...person, scopes: ["mail.read"] } as never))).toBe(
 			"invalid",
 		);
 		const eve = await owner.call("directory.create_principal", person);
@@ -1118,20 +1117,25 @@ describe("directory authorization", () => {
 			kind: "agent",
 			display_name: "Helper",
 			address: "helper@dock.test",
-			scopes: ["account.read", "mail.read"],
 		});
-		// The first key is only a credential: it has the scopes of the agent.
-		expect(agent.api_key).toMatchObject({ label: "First key", scopes: ["account.read", "mail.read"] });
+		// The first key only proves the identity of the agent: it has no scopes. The memberships of the agent decide
+		// in each team mailbox, room and shared drive, and each agent scope applies to the rest.
+		expect(agent.api_key).toMatchObject({ label: "First key", scopes: [] });
 		expect((await owner.call("account.list_api_keys", { principal_id: agent.principal.id })).api_keys).toHaveLength(1);
-		expect((await api(agent.api_key?.secret ?? "")("account.whoami")).scopes).toEqual(["account.read", "mail.read"]);
+		expect((await api(agent.api_key?.secret ?? "")("account.whoami")).scopes).toEqual([...AGENT_SCOPES]);
+		// The call takes no scopes for an agent: the scope editor of an account is gone.
+		const withScopes = { kind: "agent", display_name: "Old", address: "old@dock.test", scopes: ["mail.read"] };
+		expect(await denied(owner.call("directory.create_principal", withScopes as never))).toBe("invalid");
+		// A narrow key cannot make an agent that does more than the key.
+		const { api_key: narrow } = await owner.call("account.create_api_key", {
+			label: "narrow",
+			scopes: ["directory.write", "mail.read"],
+		});
+		const narrowAgent = { kind: "agent", display_name: "Narrow", address: "narrow@dock.test" } as const;
+		expect(await denied(api(narrow.secret)("directory.create_principal", narrowAgent))).toBe("forbidden");
 		// An agent has no resource limits. The call refuses a client that asks for them: the client must not
 		// get an agent that reaches more than it asked for.
-		const free = {
-			kind: "agent" as const,
-			display_name: "Free",
-			address: "free@dock.test",
-			scopes: ["account.read" as const],
-		};
+		const free = { kind: "agent" as const, display_name: "Free", address: "free@dock.test" };
 		for (const limits of ["own", "none", null]) {
 			const refused = owner.call("directory.create_principal", { ...free, limits } as never);
 			expect(await denied(refused), JSON.stringify(limits)).toBe("invalid");
@@ -1144,12 +1148,6 @@ describe("directory authorization", () => {
 			.filter((line) => line?.audit === true && line.op === "directory.create_principal");
 		spy.mockRestore();
 		expect(auditLines.map((line) => line.target)).toEqual([second.principal.id]);
-		// An agent needs scopes.
-		expect(
-			await denied(
-				owner.call("directory.create_principal", { kind: "agent", display_name: "Bare", address: "bare@dock.test" }),
-			),
-		).toBe("invalid");
 	});
 
 	it("gives a new agent a human sponsor and the internal-only policy, and validates the address", async () => {
@@ -1158,7 +1156,6 @@ describe("directory authorization", () => {
 			kind: "agent",
 			display_name: "Helper",
 			address: "helper@dock.test",
-			scopes: ["account.read"],
 		});
 		expect(principal).toMatchObject({
 			kind: "agent",
@@ -1186,7 +1183,6 @@ describe("directory authorization", () => {
 					display_name: "Z",
 					address: "z@dock.test",
 					password: PASSWORD,
-					scopes: ["account.read"],
 				}),
 			),
 		).toBe("invalid");
@@ -1197,7 +1193,6 @@ describe("directory authorization", () => {
 					display_name: "Y",
 					address: "y@dock.test",
 					sponsor_id: principal.id,
-					scopes: ["account.read"],
 				}),
 			),
 		).toBe("invalid");
@@ -1294,7 +1289,7 @@ describe("directory authorization", () => {
 		).toEqual({ outbound_mode: "any", outbound_allowlist: "[]" });
 	});
 
-	it("lets the sponsor manage an agent's keys, which have the scopes of the agent, and nobody else but admins", async () => {
+	it("lets the sponsor manage an agent's keys, which only prove its identity, and nobody else but admins", async () => {
 		const { ada, bot, owner } = await seedOrg();
 		const other = await createActor(owner, {
 			kind: "human",
@@ -1302,11 +1297,12 @@ describe("directory authorization", () => {
 			address: "bob@dock.test",
 			password: PASSWORD,
 		});
-		await ada.call("directory.set_agent_access", { principal_id: bot.id, scopes: ["account.read", "mail.read"] });
+		// An agent from before migration 0031 can have narrow account scopes. Each of its keys acts with them.
+		await setLegacyScopes(bot.id, ["account.read", "mail.read"]);
 		const { api_key } = await ada.call("account.create_api_key", { principal_id: bot.id, label: "reader" });
-		expect(api_key).toMatchObject({ principal_id: bot.id, scopes: ["account.read", "mail.read"] });
+		expect(api_key).toMatchObject({ principal_id: bot.id, scopes: [] });
 		expect((await api(api_key.secret)("account.whoami")).scopes).toEqual(["account.read", "mail.read"]);
-		// A key of an agent is only a credential: it takes no scopes of its own.
+		// A key of an agent only proves its identity: it takes no scopes of its own.
 		expect(
 			await denied(ada.call("account.create_api_key", { principal_id: bot.id, label: "x", scopes: ["mail.read"] })),
 		).toBe("invalid");
@@ -1318,8 +1314,8 @@ describe("directory authorization", () => {
 		expect(await denied(api(narrow.secret)("account.create_api_key", { principal_id: bot.id, label: "x" }))).toBe(
 			"forbidden",
 		);
-		// The key row of an agent stores no scopes. A rotation gives the scopes of the agent, so the narrow key
-		// cannot rotate the key. The full credential of the sponsor can.
+		// The key row of an agent stores no scopes. A rotation gives a key that acts with the account scopes of the
+		// agent, so the narrow key cannot rotate the key. The full credential of the sponsor can.
 		expect(await denied(api(narrow.secret)("account.rotate_api_key", { key_id: api_key.id }))).toBe("forbidden");
 		expect((await api(api_key.secret)("account.whoami")).scopes).toEqual(["account.read", "mail.read"]);
 		const rotated = await ada.call("account.rotate_api_key", { key_id: api_key.id });
@@ -1549,7 +1545,8 @@ describe("a bounded read of the directory", () => {
 		// The read needs directory.read, for a key of a person and for an agent.
 		const { api_key } = await owner.call("account.create_api_key", { label: "No directory", scopes: ["account.read"] });
 		expect(await denied(api(api_key.secret)("directory.get_principals", { ids: ada.id }))).toBe("forbidden");
-		await ada.call("directory.set_agent_access", { principal_id: bot.id, scopes: ["account.read"] });
+		// The read has no mailbox, room or drive, so the account scopes of an agent decide it.
+		await setLegacyScopes(bot.id, ["account.read"]);
 		expect(await denied(bot.call("directory.get_principals", { ids: ada.id }))).toBe("forbidden");
 	});
 
@@ -1604,7 +1601,6 @@ describe("a bounded read of the directory", () => {
 			display_name: "Billing Bot",
 			address: "bot@dock.test",
 			sponsor_id: ada.principal.id,
-			scopes: ["account.read"],
 		});
 		const people = 40;
 		for (let index = 0; index < people; index++) {

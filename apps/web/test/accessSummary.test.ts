@@ -1,0 +1,99 @@
+import { AGENT_SCOPES, type OutputOf, SERVICE_SCOPES } from "@asterra/contracts";
+import { describe, expect, it } from "vitest";
+import {
+	accountScopes,
+	driveRows,
+	mailboxRows,
+	roomRows,
+	sharedItemRows,
+} from "../src/features/admin/accessSummary.ts";
+import { roomLabel } from "../src/features/admin/roomLabel.ts";
+
+type Access = OutputOf<"directory.get_agent_access">;
+
+const access: Access = {
+	principal_id: "prn_agent",
+	team_mailboxes: [
+		{ id: "tmb_support", display_name: "Support", address: "support@dock.test", scopes: ["mail.read", "mail.send"] },
+		{ id: "tmb_billing", display_name: "Billing", address: "billing@dock.test", scopes: ["mail.read"] },
+	],
+	shared_drives: [{ id: "drv_team", name: "Team", role: "viewer" }],
+	chat_rooms: [
+		{ id: "rm_public", kind: "public", name: "general", peer_name: null, role: "member" },
+		{ id: "rm_private", kind: "private", name: "secret", peer_name: null, role: "member" },
+		{ id: "dm_ada", kind: "dm", name: null, peer_name: "Ada Lovelace", role: "member" },
+	],
+	chat_rooms_truncated: false,
+	drive_shared_items: [
+		{ space_id: "prn_admin", item_id: "itm_brief", name: "Brief", kind: "doc", role: "editor" },
+		{ space_id: "prn_other", item_id: "itm_plan", name: "Plan", kind: "file", role: "viewer" },
+	],
+	drive_shared_items_truncated: false,
+	tokens: [],
+	scopes: [...AGENT_SCOPES],
+};
+
+const admin = { id: "prn_admin", admin: true };
+const sponsor = { id: "prn_sponsor", admin: false };
+
+describe("the Access part of an agent or a service account", () => {
+	// A direct message has no name. It names its other member, so two direct messages differ in the list.
+	it("names a room, a direct message by its other member, and a group message", () => {
+		expect(roomLabel({ kind: "private", name: "builds", peer_name: null })).toBe("#builds");
+		expect(roomLabel({ kind: "dm", name: null, peer_name: "Ada Lovelace" })).toBe("Direct message with Ada Lovelace");
+		expect(roomLabel({ kind: "dm", name: null, peer_name: null })).toBe("Direct message");
+		expect(roomLabel({ kind: "group_dm", name: null, peer_name: null })).toBe("Group message");
+	});
+
+	// Each membership decides what the agent can do. The summary says it, and links only to a page where the
+	// person who looks can change it: a link that the person cannot use would only fail.
+	it("shows what each team mailbox allows, with a link for an owner or an admin only", () => {
+		expect(mailboxRows(access, admin)).toEqual([
+			{
+				key: "tmb_support",
+				name: "Support (support@dock.test)",
+				detail: "Can read and send",
+				href: "/admin/shared-mailboxes",
+			},
+			{ key: "tmb_billing", name: "Billing (billing@dock.test)", detail: "Can read", href: "/admin/shared-mailboxes" },
+		]);
+		expect(mailboxRows(access, sponsor).map((row) => row.href)).toEqual([null, null]);
+		const narrowed = { ...access, team_mailboxes: [{ ...access.team_mailboxes[1], scopes: [] }] } as Access;
+		expect(mailboxRows(narrowed, admin)[0]?.detail).toBe("Can do nothing");
+	});
+
+	it("links a shared drive to its admin section, or to the drive for a different person", () => {
+		expect(driveRows(access, admin)).toEqual([
+			{ key: "drv_team", name: "Team", detail: "Can view", href: "/admin/shared-drives" },
+		]);
+		expect(driveRows(access, sponsor)[0]?.href).toBe("/drive/shared-drives/drv_team");
+	});
+
+	// Each person can open a public room. A private room and a direct message can be closed to the person.
+	it("links only a public room", () => {
+		expect(roomRows(access).map((row) => [row.name, row.detail, row.href])).toEqual([
+			["#general", "Public room, Member", "/chat/rm_public"],
+			["#secret", "Private room, Member", null],
+			["Direct message with Ada Lovelace", "Member", null],
+		]);
+	});
+
+	// The owner of the drive of an item changes its sharing. A different person cannot open the item.
+	it("links a shared item for the owner of its drive only", () => {
+		expect(sharedItemRows(access, admin).map((row) => [row.name, row.detail, row.href])).toEqual([
+			["Brief", "Can edit", "/docs/prn_admin/itm_brief"],
+			["Plan", "Can view", null],
+		]);
+	});
+
+	// A new account holds each scope of its kind. An account from before keeps its narrower list, and the
+	// summary says that the list applies only outside the mailboxes, rooms and drives.
+	it("shows the account scopes, and the scopes of the kind that an account from before does not hold", () => {
+		expect(accountScopes(access, "agent").missing).toEqual([]);
+		expect(accountScopes({ ...access, scopes: [...SERVICE_SCOPES] }, "service").missing).toEqual([]);
+		const legacy = accountScopes({ ...access, scopes: ["account.read", "mail.read"] }, "agent");
+		expect(legacy.held.map((entry) => entry.scope)).toEqual(["account.read", "mail.read"]);
+		expect(legacy.missing).toContain("mail.send");
+		expect(legacy.missing).not.toContain("account.read");
+	});
+});

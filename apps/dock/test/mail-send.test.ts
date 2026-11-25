@@ -13,6 +13,7 @@ import {
 	request,
 	SETUP_TOKEN,
 	seedOrg,
+	setLegacyScopes,
 } from "./helpers.ts";
 
 let owner: Actor;
@@ -598,8 +599,9 @@ describe("agent outbound policy", () => {
 		expect(email.sent).toEqual([{ from: "bot@dock.test", to: "customer@example.org" }]);
 	});
 
-	it("needs the mail.send scope", async () => {
-		await ada.call("directory.set_agent_access", { principal_id: bot.id, scopes: ["mail.read"] });
+	// The own mailbox of an agent has no members: its account scopes decide, also for an account from before.
+	it("needs the mail.send account scope in the own mailbox of an agent", async () => {
+		await setLegacyScopes(bot.id, ["mail.read"]);
 		expect(await code(bot.call("mail.send", { to: ["ada@dock.test"], text: "x" }))).toBe("forbidden");
 	});
 });

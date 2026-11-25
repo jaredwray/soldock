@@ -12,6 +12,7 @@ export {
 	credentialBinding,
 	credentialRef,
 	credentialState,
+	holdsForResource,
 	isAdmin,
 	type MissingScope,
 	missingScopes,
@@ -72,6 +73,7 @@ export {
 	normalizeAddress,
 	type OutboundMode,
 	type PrincipalRecord,
+	scopeCeiling,
 	unknownPrincipalIds,
 } from "./store.ts";
 export {
@@ -86,4 +88,3 @@ export {
 	teamMailboxFor,
 	teamMailboxMemberScopes,
 } from "./team-mailboxes.ts";
-export { accessOutput, assertMemberGrants, giveMemberAccess } from "./widening.ts";

@@ -1,4 +1,4 @@
-import { ALL_SCOPES, type PrincipalKind, type Scope } from "@asterra/contracts";
+import { ALL_SCOPES, type PrincipalKind, resourceDecidedScopes, type Scope } from "@asterra/contracts";
 import { type Caller, type InvokeOutcome, sha256Hex } from "../platform/index.ts";
 import { type RequestTrace, recordRefusedToken } from "./access.ts";
 import { ACCESS_TOKEN_PREFIX, findGrantByAccessToken, touchGrant } from "./oauth-store.ts";
@@ -56,14 +56,29 @@ export function readCookie(request: Request, name: string): string | null {
 
 /**
  * The scopes that a credential of this principal holds. A key or an OAuth connection of an agent or a service
- * account is only a credential: it has the scopes of the agent, so a change of the agent applies to the next
- * call of each credential. A key of a person has its own scopes (`own`). The ceiling of the kind applies
- * again here, so a stored list with a wider scope still cannot exceed it.
+ * account only proves its identity: it has the account scopes of the agent. They apply to the own mailbox, the
+ * own drive and the actions without a resource (`resourceScopesOf`). A key of a person has its own scopes
+ * (`own`). The ceiling of the kind applies again here, so a stored list with a wider scope still cannot
+ * exceed it.
  */
 function credentialScopes(principal: PrincipalRecord, own: readonly Scope[]): Scope[] {
 	const ceiling = new Set<Scope>(scopeCeiling(principal));
 	const scopes = principal.kind === "agent" ? principal.agent_scopes : own;
 	return scopes.filter((scope) => ceiling.has(scope));
+}
+
+/**
+ * For an agent or a service account: the scopes of a call that the membership of a team mailbox, a room or a
+ * shared drive decides, or a share of an item (`resourceDecidedScopes`). The object of the resource checks
+ * them on the call, so the account scopes do not decide them. The ceiling of the kind still applies, so a
+ * service account never gets a scope that its kind cannot hold. Undefined for a person: the scopes of a key
+ * of a person limit each call.
+ */
+function resourceScopesOf(principal: PrincipalRecord): AuthContext["resourceScopes"] {
+	if (principal.kind !== "agent") return undefined;
+	const ceiling = new Set<string>(scopeCeiling(principal));
+	return (operation, rawInput) =>
+		resourceDecidedScopes(operation, rawInput, principal.id).filter((scope) => ceiling.has(scope));
 }
 
 /**
@@ -105,6 +120,7 @@ export async function authenticate(
 				sessionHash: null,
 				accessHash: await sha256Hex(match[1]),
 				scopes: new Set(credentialScopes(granted.principal, [])),
+				resourceScopes: resourceScopesOf(granted.principal),
 			};
 		}
 		const found = await findApiKey(env.DIRECTORY, match[1]);
@@ -124,6 +140,7 @@ export async function authenticate(
 			sessionHash: null,
 			accessHash: null,
 			scopes: new Set(credentialScopes(found.principal, found.key.scopes)),
+			resourceScopes: resourceScopesOf(found.principal),
 		};
 	}
 	if (!options.allowSession) return null;

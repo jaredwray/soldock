@@ -422,7 +422,7 @@ person, an agent and a service account.
 - The credential that adds an agent must hold each scope of the membership. A script with a narrow key
   must send `scopes` that its key holds, or get a key with the mail scopes.
 - [Agents](agents.md#team-mailboxes) has the rules.
-- [Agents](agents.md#permissions-of-an-agent) has the rules.
+- [Agents](agents.md#access-of-an-agent) has the rules.
 
 ### Scopes of a member of a room
 
@@ -510,7 +510,7 @@ The new Worker does not change the old limits. So after a rollback:
 - The old limits of an account still name a room or a drive that it left after the upgrade. Read the
   limits of each account, and remove such a room or drive.
 
-[Agents](agents.md#permissions-of-an-agent) has the rules.
+[Agents](agents.md#access-of-an-agent) has the rules.
 
 ### An agent asks before it adds an agent
 
@@ -548,6 +548,61 @@ A rollback to the Worker from before this change works. That Worker does not kno
 `member_request`. Its `chat.list_activity` finds no message for such an item, so it removes the item as old.
 The waiting requests stay in the table of the migration, and that Worker does not use them. An agent can
 then add an agent to a room again, until the next deploy of this change.
+
+### Resource access for agents
+
+After this upgrade, each shared mailbox, room and shared drive decides what an agent or a service account
+can do there, as it does for a person. An item that a person shares with an agent decides in the same way.
+An API key or an OAuth connection only proves the identity of the agent. The account scope editor and the
+step that copied the scopes of a membership to the account are gone. See
+[Access of an agent](agents.md#access-of-an-agent).
+
+The upgrade gives no account more access than it had. Before it, a call of an agent in a shared resource
+needed the scope in its account and in its membership. So each membership of an agent keeps only what both
+allowed:
+
+- Migration `0031_resource_access.sql` changes each membership of an agent in a team mailbox to the mail
+  scopes that the membership and the account both hold. A membership can then have no scope. A membership
+  of a person does not change.
+- Each room object makes the same change for its agent members before its first call after the deploy. An
+  agent without `chat.read` on its account leaves the room. An agent without `chat.write` keeps
+  `chat.read` only, and an agent that owned the room becomes a member: the next member becomes the owner.
+  A person who opens a direct message again gives it back to such an agent.
+- Each drive object makes the same change before its first call after the deploy. An agent without
+  `drive.read` on its account loses its role in a shared drive and each item share. An agent without
+  `drive.write` becomes a viewer.
+- A list of the rooms or the shared drives of an agent without the read scope asks each room or drive, so
+  it never shows a membership from before that the object did not narrow yet.
+
+The account scopes (`principals.agent_scopes`) now apply only to the own mailbox, the own drive and the
+actions that have no mailbox, room or drive. A new agent and a new service account get each scope of their
+kind. Nothing writes the account scopes after the creation of an account. An account from before keeps its
+narrower list, and its page in **Admin › Members** says so. No operation changes it.
+
+What changes for a script that calls the API:
+
+- `directory.set_agent_access` is gone. `POST /api/v1/directory/agents/{principal_id}/access` and the MCP
+  tool `directory_set_agent_access` no longer exist. Change a membership in the settings of the resource.
+- `directory.create_principal`, `directory.create_service_account` and `oauth.approve_authorization` take
+  no `scopes`. A call that sends `scopes` gets `invalid`. The credential of the call must hold each scope of
+  the kind of the new account.
+- The results of the membership operations have no `agent_access_changes` and no `agent_access_pending`:
+  `directory.create_team_mailbox`, `directory.add_team_mailbox_member`, `chat.create_room`,
+  `chat.open_dm`, `chat.open_group_dm`, `chat.add_members`, `chat.set_member_scopes`,
+  `chat.approve_member_request`, `drive.create_shared_drive` and `drive.add_shared_drive_members`.
+- `ApiKey.scopes` of a key of an agent or a service account, and `OAuthGrant.scopes`, are always empty.
+- A credential of a person keeps its own scopes. In a team mailbox, a call of a person still needs the
+  scope in the credential and in the membership.
+- `directory.get_agent_access` changes nothing, and its `scopes` are the account scopes.
+- In the contracts, `AgentAccessChange` is gone. `RESOURCE_SCOPES`, `resourceDecidedScopes` and
+  `canTargetSharedResource` are new.
+- A subscription of `subscriptions/listen` that watches a shared mailbox, a room or a drive of a
+  different principal checks its access before each notification.
+
+The deploy applies the migration while the old Worker runs. In that time, the old Worker can still copy the
+scopes of a new membership to an agent. That gives the agent no more than its new membership. A rollback to
+a Worker from before this change makes the account scopes limit each membership again, and the narrowed
+memberships stay narrow.
 
 ### Recover a sign-in
 

@@ -260,8 +260,8 @@ describe("pins, saved messages, drafts, scheduled messages, and reminders", () =
 		).toBe("invalid");
 	});
 
-	// The scopes are on the agent, and the sponsor can change them after the agent schedules.
-	it("posts no scheduled message of an agent after the agent loses chat.write", async () => {
+	// The membership of the room decides, and its owner can change it after the agent schedules.
+	it("posts no scheduled message of an agent after its membership loses chat.write", async () => {
 		const room = await createRoom(ada, "private", "Billing", [bot.id]);
 		const principal = env.PRINCIPAL.get(env.PRINCIPAL.idFromName(bot.id));
 		const schedule = async (text: string) =>
@@ -296,9 +296,9 @@ describe("pins, saved messages, drafts, scheduled messages, and reminders", () =
 		await fire(sent.id);
 		expect(await statusOf(sent.id)).toBe("sent");
 
-		// The agent loses chat.write.
+		// The membership of the agent loses chat.write.
 		const unscoped = await schedule("Invoice 2 is paid.");
-		await ada.call("directory.set_agent_access", { principal_id: bot.id, scopes: ["account.read", "chat.read"] });
+		await ada.call("chat.set_member_scopes", { room_id: room.id, principal_id: bot.id, scopes: ["chat.read"] });
 		await fire(unscoped.id);
 		expect(await statusOf(unscoped.id)).toBe("failed");
 		expect(await texts()).toEqual(["Invoice 1 is paid."]);

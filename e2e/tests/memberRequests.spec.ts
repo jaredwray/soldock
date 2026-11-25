@@ -11,17 +11,12 @@ interface Agent {
 	post: (path: string, data: unknown) => ReturnType<APIRequestContext["post"]>;
 }
 
-/** A new agent of the admin, with scopes. The admin is its sponsor. */
-async function createAgent(
-	admin: BrowserContext,
-	request: APIRequestContext,
-	name: string,
-	scopes: string[],
-): Promise<Agent> {
+/** A new agent of the admin. The admin is its sponsor. */
+async function createAgent(admin: BrowserContext, request: APIRequestContext, name: string): Promise<Agent> {
 	const local = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
 	const response = await admin.request.post("/api/v1/directory/principals", {
 		headers: JSON_HEADERS,
-		data: { kind: "agent", display_name: name, address: `bot-${local}@example.com`, scopes },
+		data: { kind: "agent", display_name: name, address: `bot-${local}@example.com` },
 	});
 	expect(response.ok(), `the new agent ${name}: ${response.status()} ${await response.text()}`).toBe(true);
 	const created = (await response.json()) as { principal: { id: string }; api_key: { secret: string } };
@@ -62,9 +57,9 @@ test("an agent asks to add an agent to a room, and its manager approves the requ
 	const secondRoom = unique("Drafts");
 	const ids: string[] = [];
 	try {
-		const asker = await createAgent(admin, request, askerName, ["account.read", "chat.read", "chat.write"]);
+		const asker = await createAgent(admin, request, askerName);
 		ids.push(asker.id);
-		const helper = await createAgent(admin, request, helperName, ["account.read"]);
+		const helper = await createAgent(admin, request, helperName);
 		ids.push(helper.id);
 
 		// The agent owns the room, and still cannot add the other agent. It can ask.
@@ -83,12 +78,8 @@ test("an agent asks to add an agent to a room, and its manager approves the requ
 		await expect(item).toContainText(`to #${firstRoom}`);
 		await expect(item.getByRole("button")).toHaveCount(2);
 		await item.getByRole("button", { name: `Approve the request to add ${helperName} to #${firstRoom}` }).click();
-		// The agent had no chat scope. The approval gives it the scopes of the membership, and the toast says so.
-		await expect(
-			page.getByText(
-				`${helperName} is now a member of #${firstRoom}. ${helperName} now also holds chat.read, chat.write.`,
-			),
-		).toBeVisible();
+		// The approval makes the member. The membership alone decides what the agent can do in the room.
+		await expect(page.getByText(`${helperName} is now a member of #${firstRoom}.`, { exact: true })).toBeVisible();
 		await expect(item).toHaveCount(0);
 		expect(await roomsOf(helper)).toEqual([first]);
 

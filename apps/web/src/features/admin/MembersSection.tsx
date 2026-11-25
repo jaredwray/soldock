@@ -51,7 +51,7 @@ export function MembersSection({ me, elevated, principals, filter, onFilterChang
 					<p className="panel-heading panel-intro">
 						{elevated
 							? "The people, agents and service accounts of the organization. Open an account to change it. An archived account cannot sign in or use a token, and it keeps its mail and files."
-							: "Set who each agent can send mail to and what it can do. Manage its connected apps and its API keys. An agent can never change its own policy or permissions."}
+							: "Set who each agent can send mail to. Manage its connected apps and its API keys. Each mailbox, room and drive decides what an agent can do there. An agent can never change its own policy."}
 					</p>
 					{elevated && (
 						<button type="button" className="button button-primary" onClick={() => setCreating(true)}>

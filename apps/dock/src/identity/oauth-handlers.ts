@@ -1,4 +1,4 @@
-import type { OAuthAuthorization, OAuthGrant } from "@asterra/contracts";
+import { AGENT_SCOPES, type OAuthAuthorization, type OAuthGrant } from "@asterra/contracts";
 import { type HandlerMap, OperationError } from "../platform/index.ts";
 import { auditOk, canManageCredentialsOf, credentialOwner, grantableScopes, isAdmin } from "./access.ts";
 import type { CallContext } from "./auth.ts";
@@ -46,7 +46,8 @@ function toGrantOutput(record: OAuthGrantRecord): OAuthGrant {
 		principal_id: record.principal_id,
 		client_id: record.client_id,
 		client_name: record.client_name,
-		scopes: record.scopes,
+		// A connection only proves the identity of its agent.
+		scopes: [],
 		created_by: record.created_by,
 		created_at: record.created_at,
 		last_used_at: record.last_used_at,
@@ -102,9 +103,9 @@ export const oauthHandlers: Pick<HandlerMap<CallContext>, OAuthOperation> = {
 				throw new OperationError("invalid", "The address must use a saved mail domain. Check Admin settings.");
 			}
 			assertPrimaryAddress(input.new_agent.address);
-			// The scopes of the new agent. Each key and connection of the agent has them. The contract makes a new
-			// agent send scopes.
-			const scopes = grantableScopes(call.caller, { kind: "agent", service: false }, input.scopes ?? []);
+			// A new agent gets each agent scope for its own mailbox, its own drive and the actions that have no
+			// mailbox, room or drive. Its memberships decide the rest. The credential of the call must hold each one.
+			const scopes = grantableScopes(call.caller, { kind: "agent", service: false }, AGENT_SCOPES);
 			const { code, approval } = await approvalAt();
 			// The request must still wait, and the approver, who becomes the sponsor, must still be active.
 			const created = await createPrincipal(
@@ -141,8 +142,8 @@ export const oauthHandlers: Pick<HandlerMap<CallContext>, OAuthOperation> = {
 				"Only the sponsor of the agent, an owner or an admin can connect an app to it.",
 			);
 		}
-		// The connection is only a credential of the agent: its tokens give each scope of the agent. So the
-		// credential of the approver must hold each one, as for a new key of the agent.
+		// The connection only proves the identity of the agent: its tokens act with each account scope of the
+		// agent. So the credential of the approver must hold each one, as for a new key of the agent.
 		grantableScopes(call.caller, agent, agent.agent_scopes);
 		const { code, approval } = await approvalAt();
 		const statement = approveStatement(call.env.DIRECTORY, { ...approval, principalId: agent.id });
