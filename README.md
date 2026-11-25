@@ -108,7 +108,7 @@ Give an agent one URL: the MCP endpoint of your Asterra instance. The MCP client
 and you approve the connection. A client without OAuth can use an API key. A key or a connection only proves
 who the agent is. An agent reaches its own mailbox and its own drive. It reaches a shared mailbox, a shared
 drive or a room when it is a member, as a person does. The settings of that mailbox, drive or room decide
-what it can do there, and a change applies at once to each key and connection of the agent. The page of the
+what it can do there. A change applies at once to each key and connection of the agent. The page of the
 agent shows this access, with links to each place that changes it.
 
 Each MCP tool is one operation of the web app, for example `mail_send`, `drive_upload_file`,

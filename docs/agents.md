@@ -43,8 +43,8 @@ A connection has no scopes. The memberships of the agent decide what it can do i
 room and shared drive. See [Access of an agent](#access-of-an-agent).
 
 An agent sees only the tools that it can call. A new agent can call each tool of its kind. An agent from
-before migration `0031` can have narrower account scopes: `account.whoami` then lists `missing_scopes`,
-each account scope that it does not hold, with the operations that no membership can give. The MCP
+before migration `0031` can have narrower account scopes. `account.whoami` then lists `missing_scopes`:
+each account scope that the agent does not hold, with the operations that no membership can give. The MCP
 instructions also name these scopes.
 
 For client developers:
@@ -110,13 +110,17 @@ or for a key.
   before its next notification. A webhook of the agent for the resource stops at its next delivery.
 - **Who.** Each person who can change the members of a resource gives an agent access to it, as for a
   person. A person who adds an agent to a room or a shared drive does not need to be its sponsor.
-- **Access summary.** **Access** on the page of the agent in **Admin › Members** shows each shared mailbox,
-  room, shared drive and shared item of the agent, with what it can do there, and links to the place that
-  changes it (`directory.get_agent_access`). The page changes nothing. **Apps connected as …** lists its
+- **Access summary.** Open the page of the agent in **Admin › Members**. **Access** shows each shared
+  mailbox, room, shared drive and shared item of the agent, with what it can do there
+  (`directory.get_agent_access`). Each row has a link to the place that changes it. The page changes
+  nothing. **Apps connected as …** lists its
   OAuth connections.
 - **Account scopes.** The account scopes of an agent apply to its own mailbox, its own drive, and the
-  actions that have no mailbox, room or drive: for example `directory.read`, a new room, a direct message,
-  the personal views of Chat and webhooks. A new agent gets each scope of its kind. Nothing changes the
+  actions that have no mailbox, room or drive. Examples are `directory.read`, a new room, a direct message,
+  the personal views of Chat and webhooks. They also apply to the personal state of the agent for a room.
+  This state is its read marker, its star, its drafts, its saved messages and its reminders. An agent also needs the
+  account scope to leave a room, and to read a public room that it is not a member of. A new agent gets
+  each scope of its kind. Nothing changes the
   account scopes after that. An agent from before migration `0031` keeps the narrower account scopes that
   it had, and **Access** says so. See [Resource access for agents](self-hosting.md#resource-access-for-agents).
 - **No escalation.** To create or rotate a key, or connect an app to the agent, the credential must hold
@@ -148,8 +152,8 @@ Drive and Chat it acts as an agent, so its outbound policy applies.
    `principal_id`, and `expires_in_days` or `expires_at`). The secret shows once.
 3. The script sends the token as a bearer token to REST or MCP. An expired or revoked token gets
    `401`.
-4. The card shows each token with its creator, its end and its last use, the access summary of the
-   account (`directory.get_agent_access`), and its activity log
+4. The card shows each token with its creator, its end and its last use. It also shows the access summary
+   of the account (`directory.get_agent_access`) and its activity log
    (`directory.list_service_account_activity`). **Revoke** stops a token at once
    (`account.revoke_api_key`).
 

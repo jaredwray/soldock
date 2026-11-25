@@ -552,7 +552,7 @@ then add an agent to a room again, until the next deploy of this change.
 ### Resource access for agents
 
 After this upgrade, each shared mailbox, room and shared drive decides what an agent or a service account
-can do there, as it does for a person. An item that a person shares with an agent decides in the same way.
+can do there. It decides in the same way for a person. An item that a person shares with an agent decides in the same way.
 An API key or an OAuth connection only proves the identity of the agent. The account scope editor and the
 step that copied the scopes of a membership to the account are gone. See
 [Access of an agent](agents.md#access-of-an-agent).
@@ -563,16 +563,24 @@ allowed:
 
 - Migration `0031_resource_access.sql` changes each membership of an agent in a team mailbox to the mail
   scopes that the membership and the account both hold. A membership can then have no scope. A membership
-  of a person does not change.
+  of a person does not change. Do not change the access of an agent with the old Worker
+  between the migration and the deploy of the new Worker. The new Worker does not apply that change to a
+  membership.
 - Each room object makes the same change for its agent members before its first call after the deploy. An
   agent without `chat.read` on its account leaves the room. An agent without `chat.write` keeps
-  `chat.read` only, and an agent that owned the room becomes a member: the next member becomes the owner.
-  A person who opens a direct message again gives it back to such an agent.
+  `chat.read` only, and an agent that owned the room becomes a member. The next member that the room did
+  not narrow becomes the owner. A room without such a member has no owner: an owner or an admin gives it
+  one (`chat.admin_assign_owner`). A person who opens a direct message again gives it back to such an
+  agent.
 - Each drive object makes the same change before its first call after the deploy. An agent without
   `drive.read` on its account loses its role in a shared drive and each item share. An agent without
   `drive.write` becomes a viewer.
-- A list of the rooms or the shared drives of an agent without the read scope asks each room or drive, so
-  it never shows a membership from before that the object did not narrow yet.
+- A list of the rooms or the shared drives of an agent without the read scope asks each room or drive. So
+  the list never shows a membership from before that the object did not narrow. The **Access** summary of
+  such an agent does the same.
+- An agent from before keeps the limit of its account for its personal state in a room. Examples are a
+  read marker, a star and a draft. It also keeps that limit when it leaves a room, and when it reads a
+  public room that it is not a member of.
 
 The account scopes (`principals.agent_scopes`) now apply only to the own mailbox, the own drive and the
 actions that have no mailbox, room or drive. A new agent and a new service account get each scope of their

@@ -193,24 +193,40 @@ closes the sockets of the member in the same step.
   its members in the directory one time, and gives itself to the first member that can act
   (`settleOwner`). The remove, that read and the write of the owner are one step of the room, so each
   member is in the read. Without this, an archived person as the owner stops each change of the room.
-- **The account scopes.** The invoker does not check the chat scopes of the account of an agent for a call
-  that names a room, or for the joined and starred views of `chat.list_rooms`: the room decides. The
+- **The account scopes.** The room decides a call of an agent that names a room, when the room checks the
+  scope of the operation in the membership. The room also decides the joined and starred views of
+  `chat.list_rooms`. The invoker does not check the chat scopes of the account for these calls. The
   account scopes still decide `chat.create_room`, `chat.open_dm`, `chat.open_group_dm` and the chat
-  operations without a room.
+  operations without a room. They also decide the calls where the room does not check the scope of the
+  operation ([`identity`](../identity/README.md#access-of-an-agent)):
+  - The personal state of the caller for a room: `chat.mark_read`, `chat.star_room`, `chat.follow_thread`,
+    `chat.mark_thread_read`, `chat.set_room_section`, `chat.set_room_notification_level`, the saved
+    messages, the reminders, the drafts and the list of the scheduled messages.
+  - `chat.invoke_slash_command`, and `chat.remove_member` when an agent removes itself.
+  - `chat.get_room` of a public room for an agent that is not a member: the handler checks `chat.read` on
+    the account.
+
+  `chat.schedule_message` stays with the room. The handler refuses a member that cannot post, and the room
+  checks `chat.write` again when the message is due.
 - **Rooms from before.** Before migration `0031`, a call of an agent in a room needed the chat scope on its
   account too. Each room narrows its agent members one time, before its first call after the deploy
   (`narrowAgentMembers`, in `blockConcurrencyWhile` of the constructor). It reads the account scopes of the
   agent members from the directory:
   - An agent without `chat.read` leaves the room, because each member reads. The room ends its sockets.
-  - An agent without `chat.write` keeps `chat.read` only. An agent that owned the room becomes a member,
-    and the next member in the order of the owners becomes the owner.
+  - An agent without `chat.write` keeps `chat.read` only. An agent that owned the room becomes a member.
+  - The room gives itself a new owner after it narrowed each agent: the next member in the order of the
+    owners that the step did not narrow or remove. An owner has each scope, so a narrowed agent never
+    becomes the owner. A room without such a member has no owner, and `chat.admin_assign_owner` gives it
+    one.
   - The key `agent_access_narrowed` of `meta` records the step. A new room writes it at its first
     migration, so the step never narrows a membership from after the deploy. A failed read of the
     directory throws, and the room serves no call until the step succeeds.
   - A person who opens a direct message again gives it back to an agent that the step removed
     (`restorePeers`). An agent never gives it back to a different agent.
-  - For an agent without `chat.read` on its account, `chat.list_rooms` asks each room of its page, so a room
-    that did not narrow yet never shows in the list.
+  - For an agent without `chat.read` on its account, `chat.list_rooms` asks each room of its page
+    (`roomRolesOf`). So a room that did not narrow never shows in the list. `directory.get_agent_access`
+    asks each room of its answer for an agent without `chat.read` or `chat.write`
+    (`confirmedRoomsOfAgent`).
 
 ### A request of an agent to add an agent
 

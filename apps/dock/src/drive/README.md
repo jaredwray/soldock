@@ -353,9 +353,11 @@ once, with each of its keys, and nothing changes on its account.
 
 - **Who.** Each manager of the drive adds an agent, as a viewer or an editor. An agent is never a manager.
   Nobody needs to manage the agent.
-- **The account scopes.** The invoker does not check the drive scopes of the account of an agent for a call
-  where each drive is a shared drive or the drive of a different principal: the drive decides. The account
-  scopes still decide the own drive of the agent and its list of the items that others shared with it.
+- **The account scopes.** The drive decides a call of an agent where each drive is a shared drive or the
+  drive of a different principal. The invoker does not check the drive scopes of the account for such a
+  call. The account scopes still decide the own drive of the agent and its list of the items that others
+  shared with it. They also decide `drive.star_items`, because the stars of the agent are in its own
+  drive, and `drive.unshare_item` when the agent removes its own share.
 - **The order of the refusals.** `drive.add_shared_drive_members` asks the drive first if the caller can
   change its members (`checkSetMembers`). Then it reads the directory and checks the list. So a caller
   without access to the drive gets `not_found` for each list.
@@ -373,7 +375,9 @@ once, with each of its keys, and nothing changes on its account.
     migration, so the step never narrows a role from after the deploy. A failed read of the directory
     throws, and the drive serves no call until the step succeeds.
   - For an agent without `drive.read` on its account, `drive.list_shared_drives` asks each drive of its
-    page, so a drive that did not narrow yet never shows in the list.
+    page (`sharedDriveRolesOf`). So a drive that did not narrow never shows in the list.
+    `directory.get_agent_access` asks each shared drive of an agent without `drive.read` or `drive.write`
+    (`confirmedSharedDrivesOfAgent`).
 
 ### The index in D1
 

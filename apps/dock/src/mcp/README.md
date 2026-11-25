@@ -90,6 +90,10 @@ SDK. Protocol 2026-07-28 has no sessions, so a hand-written server stays small.
   invoker (`canCallWith`). So an agent from before migration `0031` without `mail.read` on its account
   cannot watch its own inbox, and it can watch the inbox of a team mailbox where its membership has
   `mail.read`.
+- `resources/list` leaves out a resource kind when the list operation of the kind does not pass that check
+  with its input. The list of the Drive items names the own drive. So an agent from before migration
+  `0031` without `drive.read` on its account gets no Drive items in the list, and it still gets each other
+  kind.
 - The instructions name each scope that the credential does not hold, with the number of its
   tools (`missingScopes` of `identity`). For an agent, a tool that a membership can give is not counted.
   They also tell what the scope means (`addScopeHint`):
