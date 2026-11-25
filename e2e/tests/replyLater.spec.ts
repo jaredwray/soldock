@@ -81,6 +81,8 @@ test("a member puts mail in Reply later and answers it in Focus & Reply", async 
 		await expect(page.getByText("Message sent.")).toBeVisible();
 		await expect(firstCard).toHaveCount(0);
 		await expect(cards).toHaveCount(1);
+		// The focus goes to the card in the place of the card that left, not to the start of the page.
+		await expect(secondCard.getByRole("link", { name: second })).toBeFocused();
 
 		// Done takes a conversation out without a reply, and Undo puts it back.
 		await secondCard.getByRole("button", { name: /^Done/ }).click();
@@ -95,12 +97,13 @@ test("a member puts mail in Reply later and answers it in Focus & Reply", async 
 		await expect(secondCard).toHaveCount(1);
 		await secondCard.getByRole("button", { name: /^Done/ }).click();
 		await expect(main.getByText("No conversation waits for an answer.")).toBeVisible();
+		await expect(main).toBeFocused();
 
-		// The answered conversation is in the sent mail of the shared mailbox. Neither one is back in the inbox.
-		const sent = await member.request.get(
+		// The server has no conversation in Reply later now, and neither one is back in the inbox.
+		const waiting = await member.request.get(
 			`/api/v1/mail/threads?mailbox_id=${mailbox.id}&query=${encodeURIComponent("in:reply_later")}`,
 		);
-		expect((await sent.json()).threads).toEqual([]);
+		expect((await waiting.json()).threads).toEqual([]);
 		await page.goto(inbox);
 		await expect(page.getByText("The inbox of this team mailbox is empty.")).toBeVisible();
 		await expect(page.getByRole("region", { name: "Reply later" })).toHaveCount(0);

@@ -352,10 +352,17 @@ const MIGRATIONS: string[][] = [
 	// Auto labels: marks, signals, settings, corrections and the classifier outbox (autolabel/store.ts).
 	AUTOLABEL_MIGRATION,
 	// Reply later: the system label of the threads that the mailbox answers later. Label names are unique
-	// without regard to case. So a user label with the name reply_later gets its id after its name first.
-	// The id is unique, so the new name is unique too. Both statements can run again with no change.
+	// without regard to case. So a user label with the name reply_later first gets the lowest number n after its
+	// name, as "Reply_Later (n)", for which no label has that name. A person can make any name, also
+	// "Reply_Later (1)", so the number is not fixed. Both statements can run again with no change.
 	[
-		`UPDATE labels SET name = name || ' (' || id || ')', name_folded = name_folded || ' (' || lower(id) || ')'
+		`WITH RECURSIVE n(i) AS (
+			SELECT 1
+			UNION ALL
+			SELECT i + 1 FROM n WHERE EXISTS (SELECT 1 FROM labels WHERE name_folded = 'reply_later (' || i || ')')
+		)
+		UPDATE labels SET name = name || ' (' || (SELECT MAX(i) FROM n) || ')',
+			name_folded = 'reply_later (' || (SELECT MAX(i) FROM n) || ')'
 		WHERE type = 'user' AND name_folded = 'reply_later'`,
 		"INSERT OR IGNORE INTO labels (id, name, name_folded, type, created_at) VALUES ('REPLY_LATER', 'REPLY_LATER', 'reply_later', 'system', 0)",
 	],

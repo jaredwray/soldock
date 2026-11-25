@@ -306,11 +306,14 @@ and the web app use it in the same way.
 - `mail.list_labels` gives its total and unread counts. The web app shows the total.
 - The members of a team mailbox share it, as they share each label. A reply of one member removes it for
   each member.
+- A change through `mail.modify_threads` needs `mail.modify`. The removal by a reply needs only the scopes of
+  the reply (`mail.send`, and `mail.read` for `reply_to_message_id`). A reply answers the thread, so a member
+  that can answer it can also take it out of Reply later.
 - A `+tag` never selects it, as for each system label.
 - Migration 6 adds the label to each mailbox when the object starts. Label names are unique without regard
-  to case, so a user label named `reply_later` first gets its id after its name, for example
-  `Reply_Later (lbl_…)`. It keeps its id, its threads and its auto label. Mail to `user+reply_later@` then
-  matches no label.
+  to case, so a user label named `reply_later` first gets the lowest free number after its name, for example
+  `Reply_Later (1)`. A number is free when no label has that name. The label keeps its id, its threads and
+  its auto label. Mail to `user+reply_later@` then matches no label.
 
 ## Auto labels
 

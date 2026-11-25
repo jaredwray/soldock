@@ -1,5 +1,5 @@
 import type { Label, Message, ThreadSummary } from "@asterra/contracts";
-import { useEffect, useRef, useState } from "react";
+import { type FocusEvent, useEffect, useRef, useState } from "react";
 import { errorMessage } from "../../lib/api.ts";
 import { participantsLabel } from "../../lib/format.ts";
 import { Icon } from "../../lib/icons.tsx";
@@ -12,6 +12,7 @@ import { SearchBox } from "../../shell/SearchBox.tsx";
 import { actionChange, actionNotice, modifyThreads, type Undo, undoChanges, undoNow } from "./actions.ts";
 import { type Draft, forwardDraft, replyDraft } from "./compose.ts";
 import { useThread, useThreadList } from "./data.ts";
+import { MailboxNotice } from "./MailboxNotice.tsx";
 import { MessageCard, type ReplyMode } from "./MessageCard.tsx";
 import { useMailboxId, useMailboxRights } from "./mailbox.tsx";
 import { useShortcuts } from "./useShortcuts.ts";
@@ -46,10 +47,36 @@ export function FocusReply(props: FocusReplyProps) {
 	const rights = useMailboxRights();
 	const list = useThreadList(mailboxId, QUERY);
 	const [scroller, setScroller] = useState<HTMLDivElement | null>(null);
+	const mainRef = useRef<HTMLElement>(null);
+	const listRef = useRef<HTMLOListElement>(null);
+	/** The position of the card that has the focus, or null when the focus is not in a card. */
+	const focusedCard = useRef<number | null>(null);
 	const title = props.mailboxName ? `${props.mailboxName}: Focus & Reply` : "Focus & Reply";
 	const listPath = viewPath(REPLY_LATER_VIEW, mailboxId);
 
 	useOnChange(props.refreshKey, () => void list.refresh());
+
+	// Done and a reply remove the card that had the focus, and the browser puts the focus on the body. The focus
+	// then goes to the card that takes its place, or to the page when no card stays.
+	useOnChange(list.threads, () => {
+		const position = focusedCard.current;
+		if (position === null || (document.activeElement && document.activeElement !== document.body)) return;
+		const links = listRef.current?.querySelectorAll<HTMLElement>(":scope > li .focus-card-subject a") ?? [];
+		const next = links[Math.min(position, links.length - 1)] ?? mainRef.current;
+		next?.focus();
+		focusedCard.current = links.length > 0 ? Math.min(position, links.length - 1) : null;
+	});
+
+	function trackFocus(event: FocusEvent<HTMLOListElement>) {
+		const card = (event.target as HTMLElement).closest(".focus-list > li");
+		focusedCard.current = card ? [...(listRef.current?.children ?? [])].indexOf(card) : null;
+	}
+
+	function untrackFocus(event: FocusEvent<HTMLOListElement>) {
+		// A card that leaves the page can send a blur with no new target. Keep its position then.
+		const next = event.relatedTarget as Node | null;
+		if (next && !listRef.current?.contains(next)) focusedCard.current = null;
+	}
 
 	useShortcuts((event) => {
 		switch (event.key) {
@@ -99,10 +126,11 @@ export function FocusReply(props: FocusReplyProps) {
 		onChanged();
 	}
 
-	const count = list.threads.length;
+	// The label counts each waiting thread. The list has only its first pages.
+	const count = Math.max(labelsById.get("REPLY_LATER")?.threads_total ?? 0, list.threads.length);
 
 	return (
-		<main id="main" className="mail-main" tabIndex={-1}>
+		<main id="main" className="mail-main" tabIndex={-1} ref={mainRef}>
 			<div className="toolbar">
 				<Link to={listPath} className="icon-button" aria-label="Back to Reply later" title="Back to Reply later (u)">
 					<Icon name="back" />
@@ -114,6 +142,7 @@ export function FocusReply(props: FocusReplyProps) {
 				<span className="toolbar-spacer" />
 				<SearchBox product="mail" query="" mailboxId={mailboxId} />
 			</div>
+			<MailboxNotice />
 			<div className="mail-scroll" ref={setScroller}>
 				{list.status === "loading" ? (
 					<div className="list-state mail-state" aria-live="polite">
@@ -131,7 +160,7 @@ export function FocusReply(props: FocusReplyProps) {
 							Try again
 						</button>
 					</div>
-				) : count === 0 ? (
+				) : list.threads.length === 0 ? (
 					<div className="list-state mail-state">
 						<span className="mail-state-icon">
 							<Icon name="check" size={22} />
@@ -149,7 +178,13 @@ export function FocusReply(props: FocusReplyProps) {
 							{rights.send ? " Send a reply, and the conversation leaves Reply later." : ""}
 							{rights.modify ? " Done takes it out without a reply." : ""}
 						</p>
-						<ol className="focus-list" aria-label="Conversations in Reply later">
+						<ol
+							ref={listRef}
+							className="focus-list"
+							aria-label="Conversations in Reply later"
+							onFocus={trackFocus}
+							onBlur={untrackFocus}
+						>
 							{list.threads.map((thread) => (
 								<FocusCard
 									key={thread.id}
@@ -157,7 +192,6 @@ export function FocusReply(props: FocusReplyProps) {
 									scroller={scroller}
 									myAddress={myAddress}
 									labelsById={labelsById}
-									refreshKey={props.refreshKey}
 									canModify={rights.modify}
 									onReply={reply}
 									onDone={() => void done(thread)}
@@ -223,32 +257,27 @@ interface FocusCardProps {
 	scroller: HTMLElement | null;
 	myAddress: string;
 	labelsById: ReadonlyMap<string, Label>;
-	refreshKey: number;
 	canModify: boolean;
 	onReply: (message: Message, mode: ReplyMode) => void;
 	onDone: () => void;
 }
 
 /** One conversation of Focus & Reply: the subject, the people, and the newest message with its reply buttons. */
-function FocusCard({
-	summary,
-	scroller,
-	myAddress,
-	labelsById,
-	refreshKey,
-	canModify,
-	onReply,
-	onDone,
-}: FocusCardProps) {
+function FocusCard({ summary, scroller, myAddress, labelsById, canModify, onReply, onDone }: FocusCardProps) {
 	const ref = useRef<HTMLLIElement>(null);
 	const mailboxId = useMailboxId();
 	const near = useNearView(ref, scroller);
 	const thread = useThread(mailboxId, near ? summary.id : null);
 	const subject = summary.subject.trim() || "(no subject)";
-	const newest = thread.thread?.messages.at(-1) ?? null;
-	const earlier = (thread.thread?.messages.length ?? summary.message_count) - 1;
+	const messages = thread.thread?.messages ?? [];
+	// The newest message that the mailbox got, so Reply answers the person who waits. A forward can join the
+	// thread and stay in Reply later, and a reply to the forward would go to its recipients.
+	const newest = messages.findLast((message) => message.origin !== "sent") ?? messages.at(-1) ?? null;
+	const earlier = (thread.thread ? messages.length : summary.message_count) - 1;
 
-	useOnChange(refreshKey, () => void thread.refresh());
+	// The list refreshes after each change in the mailbox. A card gets its thread again only when the thread
+	// changed, so one Done does not get each card again.
+	useOnChange(`${summary.last_message_at} ${summary.message_count}`, () => void thread.refresh());
 
 	return (
 		<li ref={ref} className="focus-card">
@@ -259,7 +288,7 @@ function FocusCard({
 					</h2>
 					<p className="focus-card-people">
 						{participantsLabel(summary.participants, mailboxId ? "" : myAddress)}
-						{earlier > 0 && ` · ${earlier} earlier ${earlier === 1 ? "message" : "messages"}`}
+						{earlier > 0 && ` · ${earlier} more ${earlier === 1 ? "message" : "messages"} in the conversation`}
 					</p>
 				</div>
 				{canModify && (

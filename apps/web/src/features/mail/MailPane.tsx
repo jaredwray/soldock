@@ -7,7 +7,6 @@ import { useToast } from "../../lib/toast.tsx";
 import { useOnChange } from "../../lib/useOnChange.ts";
 import {
 	focusReplyPath,
-	isAgentMailbox,
 	type MailView,
 	mailSettingsPath,
 	REPLY_LATER_VIEW,
@@ -30,9 +29,9 @@ import {
 import { removesAutoLabel } from "./autoLabels.ts";
 import { type Draft, forwardDraft, replyDraft } from "./compose.ts";
 import { useThread, useThreadList } from "./data.ts";
+import { MailboxNotice } from "./MailboxNotice.tsx";
 import type { ReplyMode } from "./MessageCard.tsx";
 import { mailboxInput, useMailboxId, useMailboxRights } from "./mailbox.tsx";
-import { rightsNotice } from "./mailboxNav.ts";
 import { ThreadList } from "./ThreadList.tsx";
 import { ThreadView } from "./ThreadView.tsx";
 import { Toolbar } from "./Toolbar.tsx";
@@ -73,7 +72,6 @@ export function MailPane(props: MailPaneProps) {
 	const mailboxId = useMailboxId();
 	const rights = useMailboxRights();
 	const readOnly = !rights.modify;
-	const notice = rightsNotice(rights);
 	const list = useThreadList(mailboxId, query.status === "ready" ? query.query : null);
 	const thread = useThread(mailboxId, threadId);
 	const [selected, setSelected] = useState<ReadonlySet<string>>(() => new Set());
@@ -224,9 +222,14 @@ export function MailPane(props: MailPaneProps) {
 	const allStarred = listMode
 		? targetSummaries.length > 0 && targetSummaries.every((item) => item.starred)
 		: (openThread?.label_ids.includes("STARRED") ?? false);
-	const allReplyLater = listMode
-		? targetSummaries.length > 0 && targetSummaries.every((item) => item.label_ids.includes("REPLY_LATER"))
-		: (openThread?.label_ids.includes("REPLY_LATER") ?? false);
+	// In the inbox, Reply later always moves the threads out. A thread with REPLY_LATER is in the inbox only
+	// because new mail came, and the person then wants it out again, not out of Reply later.
+	const inInbox = view.kind === "system" && view.view === "inbox";
+	const allReplyLater =
+		!inInbox &&
+		(listMode
+			? targetSummaries.length > 0 && targetSummaries.every((item) => item.label_ids.includes("REPLY_LATER"))
+			: (openThread?.label_ids.includes("REPLY_LATER") ?? false));
 	const inSpamOrTrash = view.kind === "system" && (view.view === "spam" || view.view === "trash");
 	const replyLaterCount = labelsById.get("REPLY_LATER")?.threads_total ?? 0;
 
@@ -278,7 +281,9 @@ export function MailPane(props: MailPaneProps) {
 				// Reply later, or Done for threads that are in Reply later already.
 				if (inSpamOrTrash) break;
 				const inReplyLater = listMode
-					? keyTargets.length > 0 && keyTargets.every((id) => labelsOf(id)?.includes("REPLY_LATER") === true)
+					? !inInbox &&
+						keyTargets.length > 0 &&
+						keyTargets.every((id) => labelsOf(id)?.includes("REPLY_LATER") === true)
 					: allReplyLater;
 				void run(inReplyLater ? "replyLaterDone" : "replyLater", keyTargets);
 				break;
@@ -333,23 +338,7 @@ export function MailPane(props: MailPaneProps) {
 				}}
 				settingsPath={mailSettingsPath(mailboxId)}
 			/>
-			{isAgentMailbox(mailboxId) ? (
-				<p className="notice read-only-notice">
-					<Icon name="eye" size={18} />
-					<span>
-						<strong>Read only.</strong> This is the mailbox of an agent. As an owner or an admin, you can read it. You
-						cannot change it or send from it, and the conversations that you open stay unread for the agent. The audit
-						log records the lists and the conversations that you open.
-					</span>
-				</p>
-			) : (
-				notice && (
-					<p className="notice read-only-notice">
-						<Icon name="eye" size={18} />
-						<span>{notice} An owner or an admin sets what each member can do.</span>
-					</p>
-				)
-			)}
+			<MailboxNotice />
 			<div className="mail-scroll" ref={scrollRef}>
 				{query.status === "missing" ? (
 					<div className="list-state" role="alert">

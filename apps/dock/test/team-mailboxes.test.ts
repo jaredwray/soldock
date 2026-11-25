@@ -568,6 +568,42 @@ describe("mail in a team mailbox", () => {
 		).toBe(false);
 	});
 
+	// The members share Reply later. Only mail.modify adds or removes it. A reply needs only the scopes of the
+	// reply (mail.send and mail.read), because it answers the thread, so a reply of an agent over MCP removes it
+	// for each member.
+	it("shares Reply later, refuses a change without mail.modify, and a reply of an agent removes it", async () => {
+		const support = await createSupport();
+		await owner.call("directory.add_team_mailbox_member", {
+			mailbox_id: support.id,
+			principal_id: bot.id,
+			scopes: ["mail.read", "mail.send"],
+		});
+		await owner.call("mail.send", { to: ["support@dock.test"], subject: "Refund", text: "Can I get a refund?" });
+		await drainOutbox(owner.id);
+		const [thread] = (await ada.call("mail.list_threads", { mailbox_id: support.id })).threads;
+		const threadId = thread?.id as string;
+		const change = { mailbox_id: support.id, thread_ids: [threadId] };
+		await ada.call("mail.modify_threads", { ...change, add_label_ids: ["REPLY_LATER"], remove_label_ids: ["INBOX"] });
+		expect(await subjects(bot, support.id, "in:reply_later")).toEqual(["Refund"]);
+
+		expect(await code(bot.call("mail.modify_threads", { ...change, remove_label_ids: ["REPLY_LATER"] }))).toBe(
+			"forbidden",
+		);
+		const refused = await callTool(bot.key, "mail_modify_threads", { ...change, remove_label_ids: ["REPLY_LATER"] });
+		expect(refused.isError).toBe(true);
+		expect(await subjects(ada, support.id, "in:reply_later")).toEqual(["Refund"]);
+
+		const [message] = (await bot.call("mail.get_thread", { mailbox_id: support.id, thread_id: threadId })).messages;
+		const reply = await callTool(bot.key, "mail_send", {
+			mailbox_id: support.id,
+			to: ["owner@dock.test"],
+			text: "Yes, it is on its way.",
+			reply_to_message_id: message?.id,
+		});
+		expect(reply.isError ?? false).toBe(false);
+		expect(await subjects(ada, support.id, "in:reply_later")).toEqual([]);
+	});
+
 	it("sends from the team address, records which member sent it, and threads the reply in the team mailbox", async () => {
 		const support = await createSupport();
 		const email = await fakeEmailService(support.id);

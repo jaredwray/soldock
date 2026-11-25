@@ -250,24 +250,35 @@ MCP clients. The app has no UI-only path.
 - **Reply later** (`/mail/reply-later`, [`FocusReply.tsx`](src/features/mail/FocusReply.tsx)). A place for
   the conversations that the person answers later.
   - **Reply later** in the toolbar, or the `l` key, adds `REPLY_LATER` and removes `INBOX`
-    (`mail.modify_threads`). The conversation leaves the inbox. When each target is in Reply later already,
-    the button is **Done** (a check), and `l` removes `REPLY_LATER`. The spam and trash views have neither.
-  - The sidebar shows **Reply later** after the inbox, with the number of all its conversations, not only
-    the unread ones (`navCount` in `views.ts`). Its list uses the query `in:reply_later`.
-  - At the end of the inbox list, a pile says how many conversations wait for an answer, with links to the
+    (`mail.modify_threads`). The conversation leaves the inbox.
+  - When each target is in Reply later already, the button is **Done** (a check), and `l` removes
+    `REPLY_LATER`. In the inbox, the button and `l` always move the conversation out. A conversation there
+    with `REPLY_LATER` got new mail. The spam and trash views have neither action.
+  - The sidebar shows **Reply later** after the inbox, with the number of all its conversations (`navCount`
+    in `views.ts`). Its list uses the query `in:reply_later`.
+  - At the end of the inbox list, a pile tells how many conversations wait for an answer. It has links to the
     list and to Focus & Reply. The pile shows only when the count is more than 0.
   - The Reply later list has a banner with **Focus & Reply** above its rows.
-  - **Focus & Reply** (`/mail/reply-later/focus`) shows each conversation of Reply later as a card: the
-    subject (a link to the conversation), the people, the number of earlier messages, **Done**, and the
-    newest message with Reply, Reply all and Forward. The cards are in the order of the list, newest first.
-    A card gets its conversation (`mail.get_thread`) when it comes near the visible part of the page, so a
-    long list does not get each conversation at once. The page shows the first 50 conversations, and
-    **Older** gets more.
+  - **Focus & Reply** (`/mail/reply-later/focus`) shows a card for each conversation of Reply later. The
+    cards are in the order of the list, newest first.
+  - A card has the subject, the people, the number of other messages and **Done**. The subject is a link to
+    the conversation.
+  - A card shows the newest message that the mailbox got, with Reply, Reply all and Forward. A forward can
+    join the conversation, and a reply to it would go to the wrong people. When each message is a sent
+    message, the card shows the newest one.
+  - A card gets its conversation (`mail.get_thread`) when it comes near the visible part of the page. It gets
+    the conversation again only when the list shows a new message in it.
+  - The page shows the first 50 conversations, and **Older** gets more. The count at the top comes from the
+    label, so it counts each waiting conversation.
   - A reply from the composer removes `REPLY_LATER` on the server. After the send, the card leaves the page.
-    **Done** removes the label without a reply, with a toast and **Undo**. Focus & Reply does not mark a
-    conversation as read.
+  - **Done** removes the label without a reply, with a toast and **Undo**.
+  - When the card with the focus leaves, the focus goes to the subject of the card in its place. When no card
+    stays, the focus goes to the page.
+  - Focus & Reply does not mark a conversation as read.
   - The shortcuts `c`, `/` and `?` work in Focus & Reply, and `u` goes back to the Reply later list.
-  - Without `mail.modify`, Focus & Reply has no **Done**. Without `mail.send`, it has no Reply.
+  - Without `mail.modify`, Focus & Reply has no **Done**. Without `mail.send`, it has no Reply. The notice of
+    the list says why. The mailbox of an agent shows the notice of a read-only mailbox, because each card
+    opens a conversation, and the audit log records it.
 - **Mailbox tree.** When the person can use more than the own mailbox, the sidebar shows a row for
   each mailbox (`mail.list_mailboxes`, `mailboxNav.ts`). "My mailbox" is first, then the shared
   (team) mailboxes, then the agent mailboxes. The sidebar has no group headings.
