@@ -295,8 +295,9 @@ function SenderNotice({
 			<div className="sender-notice-text">
 				{verdict === "verified" && (
 					<p>
-						<strong>Verified sender.</strong> This message came from {from}. That domain is outside your organization,
-						so be careful with links, attachments and requests.
+						<strong>Verified sender.</strong> {domain ? <>The domain {from}</> : "The domain of its sender"} sent this
+						message. The message came from outside your organization, so be careful with links, attachments and
+						requests.
 					</p>
 				)}
 				{verdict === "unverified" && (

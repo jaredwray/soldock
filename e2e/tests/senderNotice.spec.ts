@@ -70,7 +70,7 @@ test("external mail shows a verdict on its sender, and the results of the checks
 		// A verified sender is not a safe message. The notice keeps the caution.
 		await openMessage(person, page, `proved${local}`);
 		const verified = page.getByRole("paragraph").filter({ hasText: "Verified sender." });
-		await expect(verified).toContainText("This message came from outside.example.");
+		await expect(verified).toContainText("The domain outside.example sent this message.");
 		await expect(verified).toContainText("be careful with links, attachments and requests");
 
 		// A DMARC failure goes to Spam. One notice tells both facts.
