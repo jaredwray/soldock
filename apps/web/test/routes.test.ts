@@ -10,7 +10,7 @@ import {
 	chatThreadsPath,
 	type DriveView,
 	drivePath,
-	focusReplyPath,
+	focusPath,
 	isAgentMailbox,
 	itemPath,
 	type MailView,
@@ -117,22 +117,34 @@ describe("routes", () => {
 		expect(ownMailboxPath(parseRoute(mailSettingsPath(AGENT)), "prn_01JD0000000000000000OTHER0")).toBeNull();
 	});
 
-	// Focus & Reply has its own path under Reply later. It is not the thread with the id "focus".
-	it("parses the Focus & Reply path of each mailbox back to Focus & Reply in that mailbox", () => {
-		const replyLater: MailView = { kind: "system", view: "reply-later" };
-		for (const mailboxId of [null, TEAM, AGENT]) {
-			expect(parseRoute(focusReplyPath(mailboxId))).toEqual({
-				page: "mail",
-				mailboxId,
-				view: replyLater,
-				threadId: null,
-				focus: true,
-			});
+	// Focus & Reply has its own path under each view. It is not the thread with the id "focus".
+	it("parses the Focus & Reply path of each view and mailbox back to Focus & Reply in that view", () => {
+		const views: MailView[] = [
+			{ kind: "system", view: "reply-later" },
+			{ kind: "system", view: "inbox" },
+			{ kind: "label", labelId: "lbl_01JD0000000000000000LABEL1" },
+			{ kind: "search", query: "from:ana has:attachment" },
+		];
+		for (const view of views) {
+			for (const mailboxId of [null, TEAM, AGENT]) {
+				expect(parseRoute(focusPath(view, mailboxId))).toEqual({
+					page: "mail",
+					mailboxId,
+					view,
+					threadId: null,
+					focus: true,
+				});
+			}
 		}
-		expect(focusReplyPath()).toBe("/mail/reply-later/focus");
-		expect(focusReplyPath(TEAM)).toBe(`/mail/team/${TEAM}/reply-later/focus`);
+		expect(focusPath({ kind: "system", view: "reply-later" })).toBe("/mail/reply-later/focus");
+		expect(focusPath({ kind: "system", view: "inbox" }, TEAM)).toBe(`/mail/team/${TEAM}/inbox/focus`);
+		expect(focusPath({ kind: "label", labelId: "lbl_1" })).toBe("/mail/label/lbl_1/focus");
+		expect(focusPath({ kind: "search", query: "a b" })).toBe("/mail/search/focus?q=a%20b");
 		expect(parseRoute("/mail/reply-later/focus/more")).toEqual({ page: "not-found" });
-		expect(ownMailboxPath(parseRoute(focusReplyPath(AGENT)), AGENT)).toBe("/mail/reply-later/focus");
+		expect(parseRoute("/mail/label/lbl_1/focus/more")).toEqual({ page: "not-found" });
+		expect(ownMailboxPath(parseRoute(focusPath({ kind: "label", labelId: "lbl_1" }, AGENT)), AGENT)).toBe(
+			"/mail/label/lbl_1/focus",
+		);
 	});
 
 	// The Screener view of a mailbox has its own paths under the mailbox: one for each tab.

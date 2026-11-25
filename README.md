@@ -43,8 +43,10 @@ use, not for the number of people. Google Workspace has a price for each person,
 
 Asterra receives mail through Cloudflare Email Routing and sends mail through Cloudflare Email
 Service. The web app has threads, labels, stars, search, attachments and keyboard shortcuts.
-**Reply later** takes a conversation out of the inbox until you answer it. **Focus & Reply** shows each
-conversation that waits, with its newest message and a reply button. A reply removes it from the list. A shared
+**Reply later** takes a conversation out of the inbox until you answer it. **Focus & Reply** shows the
+conversations of a list one after the other, each with its newest message and a reply in the page. It works in
+each list except Spam and Trash. In Reply later, a reply removes the conversation from the list. In the inbox, a
+reply archives it. A shared
 mailbox, such as `support@example.com`, gives a team one address with shared threads and one read
 state. Owners and admins can read the mailbox of each agent.
 

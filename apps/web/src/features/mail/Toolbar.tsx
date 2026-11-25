@@ -35,6 +35,8 @@ interface ToolbarProps {
 	onAction: (action: MailAction) => void;
 	onBack: () => void;
 	onRefresh: () => void;
+	/** The path of Focus & Reply in the view, or null for a view without it. */
+	focusPath: string | null;
 	/** The path of the settings view of the mailbox. */
 	settingsPath: string;
 }
@@ -115,6 +117,17 @@ export function Toolbar(props: ToolbarProps) {
 			{props.search}
 			{!hasTargets && (
 				<>
+					{mode === "list" && props.focusPath !== null && !props.listEmpty && (
+						<Link
+							to={props.focusPath}
+							className="button button-small toolbar-focus"
+							aria-label="Focus & Reply"
+							title="Focus & Reply"
+						>
+							<Icon name="reply" size={16} />
+							<span className="toolbar-focus-text">Focus &amp; Reply</span>
+						</Link>
+					)}
 					<ToolButton icon="refresh" label="Refresh" onClick={props.onRefresh} />
 					<Link to={props.settingsPath} className="icon-button" aria-label="Mailbox settings" title="Mailbox settings">
 						<Icon name="settings" />

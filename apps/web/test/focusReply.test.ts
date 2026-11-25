@@ -1,7 +1,9 @@
 import type { Message, ThreadSummary } from "@asterra/contracts";
 import { describe, expect, it } from "vitest";
 import {
+	type ClearKind,
 	finishSummary,
+	focusMode,
 	leftQueue,
 	mergeQueue,
 	moveActive,
@@ -10,7 +12,9 @@ import {
 	replyTarget,
 	restoreAt,
 	sessionProgress,
+	waitingCount,
 } from "../src/features/mail/focusReply.ts";
+import type { MailView } from "../src/routes.ts";
 
 function thread(id: string, messageCount = 1, lastMessageAt = "2026-11-02T10:00:00.000Z"): ThreadSummary {
 	return {
@@ -133,15 +137,104 @@ describe("restoreAt", () => {
 	});
 });
 
+describe("focusMode", () => {
+	const system = (view: Extract<MailView, { kind: "system" }>["view"]): MailView => ({ kind: "system", view });
+	const archive = { add: [], remove: ["INBOX"] };
+
+	// Done takes the conversation out of the view where a label change can. In the inbox, a reply also archives.
+	// A view that keeps a cleared conversation does not count it as waiting (`leaves`).
+	it("gives each view its Done, its Later, its reply change and its count", () => {
+		const table: [MailView, object][] = [
+			[
+				system("inbox"),
+				{
+					done: archive,
+					later: true,
+					archiveOnReply: true,
+					countLabel: "INBOX",
+					leaves: { answered: true, done: true, later: true },
+				},
+			],
+			[
+				system("reply-later"),
+				{
+					done: { add: [], remove: ["REPLY_LATER"] },
+					later: false,
+					archiveOnReply: false,
+					countLabel: "REPLY_LATER",
+					leaves: { answered: true, done: true, later: true },
+				},
+			],
+			[
+				system("starred"),
+				{
+					done: { add: [], remove: ["STARRED"] },
+					later: true,
+					archiveOnReply: false,
+					countLabel: "STARRED",
+					leaves: { answered: false, done: true, later: false },
+				},
+			],
+			[
+				{ kind: "label", labelId: "lbl_1" },
+				{
+					done: { add: [], remove: ["lbl_1"] },
+					later: true,
+					archiveOnReply: false,
+					countLabel: "lbl_1",
+					leaves: { answered: false, done: true, later: false },
+				},
+			],
+			[system("sent"), { done: archive, archiveOnReply: false, countLabel: "SENT", leaves: { done: false } }],
+			[system("all"), { done: archive, archiveOnReply: false, countLabel: null, leaves: { done: false } }],
+			[
+				{ kind: "search", query: "from:ana" },
+				{ done: archive, archiveOnReply: false, countLabel: null, leaves: { done: false } },
+			],
+		];
+		for (const [view, mode] of table) expect(focusMode(view), JSON.stringify(view)).toMatchObject(mode);
+	});
+
+	// Spam and Trash have no reply. The server refuses to move mail that the Screener holds.
+	it("gives no Focus & Reply to Spam, Trash and a search of held mail", () => {
+		for (const view of [system("spam"), system("trash"), { kind: "search", query: "in:screener" } as MailView]) {
+			expect(focusMode(view)).toBeNull();
+		}
+	});
+
+	it("names what Done does, with the name of the label when it loaded", () => {
+		const label: MailView = { kind: "label", labelId: "lbl_1" };
+		expect(focusMode(label, "Clients")?.doneText("Q3")).toBe("remove the label “Clients” from “Q3”");
+		expect(focusMode(label, "Clients")?.doneNotice).toBe("Label “Clients” removed.");
+		expect(focusMode(label)?.doneText("Q3")).toBe("remove the label from “Q3”");
+		expect(focusMode(system("inbox"))?.doneText("Q3")).toBe("archive “Q3”");
+	});
+});
+
+describe("waitingCount", () => {
+	it("counts the cards when the queue is complete, else the label count without the cleared ones that stay", () => {
+		expect(waitingCount({ complete: true, queued: 3, total: 40, staying: 1 })).toEqual({ left: 3, more: false });
+		// A starred conversation that the person answered stays in Starred, and the label still counts it.
+		expect(waitingCount({ complete: false, queued: 50, total: 80, staying: 2 })).toEqual({ left: 78, more: false });
+		// The label count comes a moment after a change. The cards on screen still wait.
+		expect(waitingCount({ complete: false, queued: 50, total: 10, staying: 0 })).toEqual({ left: 50, more: false });
+		// All mail and a search have no label count: more can come with Older.
+		expect(waitingCount({ complete: false, queued: 50, total: null, staying: 0 })).toEqual({ left: 50, more: true });
+	});
+});
+
 describe("progress and finish text", () => {
 	it("counts the conversations of this visit", () => {
 		expect(sessionProgress(0, 3)).toEqual({ total: 3, fraction: 0, label: "3 left" });
 		expect(sessionProgress(2, 3)).toEqual({ total: 5, fraction: 0.4, label: "2 of 5 done · 3 left" });
 		expect(sessionProgress(5, 0)).toEqual({ total: 5, fraction: 1, label: "5 of 5 done" });
+		// With more conversations than the page shows and no label count, the text shows no total.
+		expect(sessionProgress(0, 50, true).label).toBe("50+ left");
+		expect(sessionProgress(2, 48, true).label).toBe("2 done · 48+ left");
 	});
 
-	it("says what the person answered and marked as done", () => {
-		const cleared = (how: "answered" | "done", count: number) =>
+	it("says what the person answered, marked as done and moved to Reply later", () => {
+		const cleared = (how: ClearKind, count: number) =>
 			Array.from({ length: count }, (_, index) => ({ id: `${how}${index}`, subject: "S", how }));
 		const table: [ReturnType<typeof cleared>, string][] = [
 			[cleared("answered", 1), "You answered 1 conversation."],
@@ -149,6 +242,11 @@ describe("progress and finish text", () => {
 			[cleared("done", 1), "You marked 1 conversation as done."],
 			[cleared("done", 2), "You marked 2 conversations as done."],
 			[[...cleared("answered", 4), ...cleared("done", 1)], "You answered 4 conversations and marked 1 as done."],
+			[cleared("later", 2), "You moved 2 conversations to Reply later."],
+			[
+				[...cleared("later", 1), ...cleared("answered", 2), ...cleared("done", 3)],
+				"You answered 2 conversations, marked 3 as done and moved 1 to Reply later.",
+			],
 		];
 		for (const [log, text] of table) expect(finishSummary(log)).toBe(text);
 	});

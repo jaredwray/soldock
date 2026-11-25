@@ -270,9 +270,30 @@ MCP clients. The app has no UI-only path.
   - At the end of the inbox list, a pile tells how many conversations wait for an answer. It has links to the
     list and to Focus & Reply. The pile shows only when the count is more than 0.
   - The Reply later list has a banner with **Focus & Reply** above its rows.
-  - **Focus & Reply** (`/mail/reply-later/focus`, [`FocusReply.tsx`](src/features/mail/FocusReply.tsx), with
-    the rules in [`focusReply.ts`](src/features/mail/focusReply.ts)) shows a card for each conversation of Reply
-    later. The cards are in one column of 760px, in the order of the list, newest first.
+- **Focus & Reply** ([`FocusReply.tsx`](src/features/mail/FocusReply.tsx), with the rules in
+  [`focusReply.ts`](src/features/mail/focusReply.ts)) shows a card for each conversation of a list. The cards are
+  in one column of 760px, in the order of the list, newest first.
+  - Each list except Spam and Trash has Focus & Reply: the inbox, Reply later, Starred, Sent, All mail, each label
+    and each search. A search of the mail that the Screener holds has no Focus & Reply, because the server does not
+    move that mail. The Focus & Reply path of such a list goes to the list.
+  - The path is the path of the list and `/focus`, for example `/mail/inbox/focus`, `/mail/label/<id>/focus` or
+    `/mail/search/focus?q=…`. A team or agent mailbox has the same paths under its own path (`focusPath`).
+  - The header row of a list with rows has **Focus & Reply** at its right. At 900px and below, the button shows
+    its icon only. The Reply later list also has its banner, and the inbox has its pile.
+  - The header row of Focus & Reply shows the name of the list after the title. A phone does not show it: the
+    Back button names the list.
+  - Done, Later and a reply do a different change in each list (`focusMode`):
+
+    | List | Done | Later | After a reply |
+    | --- | --- | --- | --- |
+    | Inbox | Archives | Moves to Reply later | The page archives the conversation |
+    | Reply later | Removes `REPLY_LATER` | None: `l` is Done | The server removes `REPLY_LATER` |
+    | Starred | Removes the star | Moves to Reply later | The star stays |
+    | A label | Removes the label | Moves to Reply later | The label stays |
+    | Sent, All mail, a search | Archives | Moves to Reply later | No change |
+
+  - In Sent, All mail and a search, the conversation can stay in the list after Done. Its card then leaves the
+    page only. When Done does not change the conversation, the toast says "Conversation marked as done.".
   - One card is active: the first card at the start. It has the color of a card, a shadow and a bar at its left.
     The other cards are flat. A click or the focus in a card makes it active. `j` and `k` move to the next or the
     previous card, give it the focus and bring it to the top of the view. **Skip** on the active card does the
@@ -285,45 +306,52 @@ MCP clients. The app has no UI-only path.
     the message. So the person answers one conversation after the other with no click. No toast shows for a
     send. A live region says "Reply sent." and the progress. A toast shows when the delivery to a recipient
     failed.
+  - In the inbox, the page archives the conversation after the send (`mail.modify_threads`). A failed archive
+    shows a toast. The archive after a reply has no Undo.
   - A strip above the cards shows the progress of this visit, for example "2 of 5 done · 3 left", and a bar of
-    2px on its border. "Done" counts the replies and the Done of this visit. "Left" counts the waiting
+    2px on its border. "Done" counts the replies, the Done and the Later of this visit. "Left" counts the waiting
     conversations. On a large screen, the strip also shows the keys. While the focus is in a reply, it shows
     Ctrl+Enter and Esc.
-  - A card that leaves plays a short motion: an answered card moves to the right, and a card that is done gets
-    smaller. Then its place closes. The card is inert during the motion. With `prefers-reduced-motion`, the
-    card goes at once.
-  - A card has the subject, the people, the number of other messages and **Done**. The subject is a link to
-    the conversation.
+  - The page shows the first 50 conversations, and **Older** gets more. With more pages, "left" comes from the
+    count of the label of the list (`waitingCount`). That count also has the cleared conversations that stay in
+    the list, for example a starred conversation after a reply, so the page subtracts them. All mail and a search
+    have no label count. The strip then shows the cards on the page with a plus, for example "50+ left".
+  - A card that leaves plays a short motion: an answered card moves to the right, and a card that is done or
+    moved to Reply later gets smaller. Then its place closes. The card is inert during the motion. With
+    `prefers-reduced-motion`, the card goes at once.
+  - A card has the subject, the people, the number of other messages, **Later** and **Done**. The subject is a
+    link to the conversation. At 600px and below, **Later** shows its icon only.
   - A card shows the newest message that the mailbox got, with Reply, Reply all and Forward. A forward can
     join the conversation, and a reply to it would go to the wrong people. When each message is a sent
     message, the card shows the newest one.
   - A card gets its conversation (`mail.get_thread`) when it comes near the visible part of the page. It gets
     the conversation again only when the list shows a new message in it.
-  - The page shows the first 50 conversations, and **Older** gets more. The count at the top comes from the
-    label, so it counts each waiting conversation.
-  - A reply from the composer removes `REPLY_LATER` on the server. After the send, the card leaves the page.
-  - **Done** removes the label without a reply, with a toast and **Undo**. `l` is Done for the active card, but
-    not while its reply is open, so a key never discards text. The **Done** button asks "Discard your reply?"
-    when the reply of its card has text. **Undo** puts the card back at its old place, with its reply closed.
-    A refresh that started before the server made a Done does not bring the card back.
+  - **Done** and **Later** each show a toast with **Undo**. `e` is Done for the active card. `l` is Later, as in
+    the list, and Done in Reply later. A key does nothing while the reply of the active card is open, so a key
+    never discards text. The buttons ask "Discard your reply?" when the reply of their card has text. **Undo**
+    puts the card back at its old place, with its reply closed.
+  - A conversation that the person cleared in this visit does not come back in this visit (`gone` in
+    `mergeQueue`). The server can still show it, for example in a refresh that started before a Done, or in
+    Starred after a reply. A new visit shows it again.
   - When the active card leaves, the focus goes to the subject of the next card. When no card stays, the focus
     goes to the page.
-  - When the last card leaves, the page shows **All caught up.**, what the person answered and marked as done in
-    this visit, and a list of those conversations (at most 8, then a count). Each is a link to the conversation.
-    **Go to the inbox** and **Reply later list** follow. A page that opens with no conversation shows the empty
-    state.
+  - When the last card leaves, the page shows **All caught up.**, what the person answered, marked as done and
+    moved to Reply later in this visit, and a list of those conversations (at most 8, then a count). Each is a
+    link to the conversation. **Go to the inbox** follows. After the inbox or Reply later, **Reply later list**
+    is second. After a different list, the link back to that list is second. A page that opens with no
+    conversation shows the empty state.
   - While a reply in a card has text, the app asks "Discard your reply?" before it leaves the page
     ([`navigationGuard.ts`](src/lib/navigationGuard.ts), which `navigate()` asks). The browser asks before it
     closes or reloads the tab. The Back button of the browser does not ask: a `popstate` event cannot stop.
-  - A refresh does not move a card. A card with an open reply stays, also when its conversation left Reply
-    later, for example after a reply by a different member. The card then says so. A card from **Older** stays
-    until the server shows that it left (`mergeQueue`).
+  - A refresh does not move a card. A card with an open reply stays, also when its conversation left the list,
+    for example after a reply by a different member. The card then says so. A card from **Older** stays until
+    the server shows that it left (`mergeQueue`).
   - Focus & Reply does not mark a conversation as read.
-  - The shortcuts `j`, `k`, `r`, `a`, `f`, `l`, `o`, `c`, `/` and `?` work in Focus & Reply, and `u` goes back to
-    the Reply later list. The shortcut help has a Focus & Reply group.
-  - Without `mail.modify`, Focus & Reply has no **Done**. Without `mail.send`, it has no Reply. The notice of
-    the list says why. The mailbox of an agent shows the notice of a read-only mailbox, because each card
-    opens a conversation, and the audit log records it.
+  - The shortcuts `j`, `k`, `r`, `a`, `f`, `e`, `l`, `o`, `c`, `/` and `?` work in Focus & Reply, and `u` goes back
+    to the list. The shortcut help has a Focus & Reply group.
+  - Without `mail.modify`, Focus & Reply has no **Done** and no **Later**, and a reply in the inbox does not
+    archive. Without `mail.send`, it has no Reply. The notice of the list says why. The mailbox of an agent shows
+    the notice of a read-only mailbox, because each card opens a conversation, and the audit log records it.
 - **Mailbox tree.** When the person can use more than the own mailbox, the sidebar shows a row for
   each mailbox (`mail.list_mailboxes`, `mailboxNav.ts`). "My mailbox" is first, then the shared
   (team) mailboxes, then the agent mailboxes. The sidebar has no group headings.

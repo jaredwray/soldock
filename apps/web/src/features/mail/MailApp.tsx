@@ -14,6 +14,7 @@ import { Composer, usePreloadComposer } from "./ComposerLoader.tsx";
 import { type Draft, newDraft } from "./compose.ts";
 import { useLabels, useMailboxSettings, useProfilePoll } from "./data.ts";
 import { FocusReply } from "./FocusReply.tsx";
+import { focusMode } from "./focusReply.ts";
 import { DeleteLabelDialog, NewLabelDialog } from "./LabelDialogs.tsx";
 import { MailPane } from "./MailPane.tsx";
 import { MailboxProvider, MailboxRightsProvider } from "./mailbox.tsx";
@@ -48,7 +49,7 @@ const Screener = lazyPage(() => import("./Screener.tsx").then((module) => module
 interface MailAppProps {
 	/**
 	 * `view` is null for the settings view and the Screener view of the mailbox. `screener` is set for the
-	 * Screener view. `focus` is true for Focus & Reply.
+	 * Screener view. `focus` is true for Focus & Reply in the view.
 	 */
 	route: {
 		mailboxId: string | null;
@@ -125,13 +126,23 @@ export function MailApp({
 		? (profile?.display_name ?? listed?.display_name ?? (isAgentMailbox(mailboxId) ? "Agent mailbox" : "Team mailbox"))
 		: null;
 	const { view } = route;
-	const title = route.focus
-		? "Focus & Reply"
-		: view
-			? viewTitle(view, labels)
-			: route.screener
-				? "Screener"
-				: "Settings";
+	// Focus & Reply works in each view with a reply and a Done (`focusMode`). Its path in a different view goes
+	// to the list of the view.
+	const focus =
+		route.focus && view
+			? focusMode(view, view.kind === "label" ? (labelsById.get(view.labelId)?.name ?? null) : null)
+			: null;
+	const focusRedirect = route.focus && view && !focus ? viewPath(view, mailboxId) : null;
+	useEffect(() => {
+		if (focusRedirect) navigate(focusRedirect, { replace: true });
+	}, [focusRedirect]);
+	const title = view
+		? focus
+			? `Focus & Reply: ${viewTitle(view, labels)}`
+			: viewTitle(view, labels)
+		: route.screener
+			? "Screener"
+			: "Settings";
 	const screenerEnabled = mailboxSettings?.screener.enabled ?? false;
 	const screenerPending = profile?.screener_pending ?? 0;
 	const inboxUnread = labelsById.get("INBOX")?.threads_unread ?? profile?.inbox_unread ?? 0;
@@ -238,8 +249,13 @@ export function MailApp({
 						onDeleteLabel={(label) => setDialog({ type: "delete-label", label })}
 						onClose={onCloseNav}
 					/>
-					{route.focus ? (
+					{focusRedirect ? null : focus && view ? (
 						<FocusReply
+							key={`focus ${viewPath(view)}`}
+							view={view}
+							query={viewQuery(view, labels)}
+							viewTitle={viewTitle(view, labels)}
+							mode={focus}
 							mailboxName={mailboxName}
 							labelsById={labelsById}
 							myAddress={myAddress}

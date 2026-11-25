@@ -203,3 +203,105 @@ test("a member puts mail in Reply later and answers it in Focus & Reply", async 
 		await member.close();
 	}
 });
+
+// Focus & Reply works in each list. In the inbox, a send also archives the conversation, e (Done) archives, and l
+// moves the conversation to Reply later, as in the list. In Starred, a reply keeps the star, and the card of the
+// conversation does not come back in this visit.
+test("a member clears the inbox and Starred in Focus & Reply", async ({ browser }) => {
+	const admin = await signIn(browser, "tomasz");
+	const member = await signIn(browser, "rafael");
+	try {
+		const name = unique("Operations");
+		const local = `operations-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+		const address = `${local}@example.com`;
+		const me = await (await member.request.get("/api/v1/account")).json();
+		const { team_mailbox: mailbox } = await post<{ team_mailbox: { id: string } }>(
+			admin,
+			"/api/v1/directory/team-mailboxes",
+			{ display_name: name, address, member_ids: [me.principal.id] },
+		);
+		const first = unique("Budget review");
+		const second = unique("Office move");
+		const third = unique("Hiring plan");
+		await post(admin, "/api/v1/mail/messages", { to: [address], subject: first, text: "Can you approve the budget?" });
+		await post(admin, "/api/v1/mail/messages", { to: [address], subject: second, text: "Which day suits the move?" });
+		await post(admin, "/api/v1/mail/messages", { to: [address], subject: third, text: "Do we hire two people?" });
+		const threads = async (query: string): Promise<{ subject: string }[]> => {
+			const response = await member.request.get(
+				`/api/v1/mail/threads?mailbox_id=${mailbox.id}&query=${encodeURIComponent(query)}`,
+			);
+			return (await response.json()).threads;
+		};
+
+		const page = await member.newPage();
+		const inbox = `/mail/team/${mailbox.id}/inbox`;
+		const firstRow = page.getByRole("listitem").filter({ hasText: first });
+		await expect(async () => {
+			await page.goto(inbox);
+			await expect(firstRow).toBeVisible({ timeout: 1000 });
+			await expect(page.getByRole("listitem").filter({ hasText: second })).toBeVisible({ timeout: 1000 });
+			await expect(page.getByRole("listitem").filter({ hasText: third })).toBeVisible({ timeout: 1000 });
+		}).toPass({ timeout: 20_000 });
+		// A star on the oldest conversation, for Starred at the end.
+		await firstRow.getByRole("button", { name: "Star" }).click();
+		await expect(firstRow.getByRole("button", { name: "Star" })).toHaveAttribute("title", "Starred");
+
+		const main = page.getByRole("main");
+		await main.getByRole("link", { name: "Focus & Reply" }).click();
+		await expect(page).toHaveURL(new RegExp(`${inbox}/focus$`));
+		await expect(main.getByRole("heading", { level: 1, name: `${name}: Focus & Reply` })).toBeVisible();
+		const cards = main.getByRole("list", { name: "Conversations in the inbox" }).locator(":scope > li");
+		const card = (subject: string) => cards.filter({ has: page.getByRole("heading", { level: 2, name: subject }) });
+		const replyBox = (subject: string) =>
+			card(subject).getByRole("region", { name: "Reply" }).getByRole("textbox", { name: "Message" });
+		await expect(cards).toHaveCount(3);
+		await expect(card(third)).toHaveAttribute("aria-current", "true");
+		await expect(main.getByText("3 left", { exact: true })).toBeVisible();
+
+		// A send archives the conversation, and the reply of the next card opens.
+		await page.keyboard.press("r");
+		await expect(replyBox(third)).toBeFocused();
+		await replyBox(third).pressSequentially("Yes, two people.");
+		await page.keyboard.press("Control+Enter");
+		await expect(card(third)).toHaveCount(0);
+		await expect(main.getByText("1 of 3 done · 2 left", { exact: true })).toBeVisible();
+		await expect(replyBox(second)).toBeFocused();
+
+		// l moves the conversation to Reply later, as in the list of the inbox.
+		await page.keyboard.press("Escape");
+		await expect(card(second).getByRole("region", { name: "Reply" })).toHaveCount(0);
+		await page.keyboard.press("l");
+		await expect(card(second)).toHaveCount(0);
+		await expect(page.getByText("Conversation moved to Reply later.")).toBeVisible();
+		await expect(main.getByText("2 of 3 done · 1 left", { exact: true })).toBeVisible();
+
+		// e is Done. In the inbox, Done archives.
+		await expect(card(first)).toHaveAttribute("aria-current", "true");
+		await page.keyboard.press("e");
+		await expect(main.getByText("All caught up.")).toBeVisible();
+		await expect(
+			main.getByText("You answered 1 conversation, marked 1 as done and moved 1 to Reply later."),
+		).toBeVisible();
+		await expect(page.getByText("Conversation archived.")).toBeVisible();
+		await expect.poll(async () => (await threads("in:inbox")).length).toBe(0);
+		expect((await threads("in:reply_later")).map((thread) => thread.subject)).toEqual([second]);
+
+		// In Starred, a reply keeps the star. The refresh after the send does not bring the card back.
+		await page.goto(`/mail/team/${mailbox.id}/starred/focus`);
+		const starred = main.getByRole("list", { name: "Conversations in Starred" }).locator(":scope > li");
+		await expect(starred).toHaveCount(1);
+		await expect(starred.getByText("Can you approve the budget?")).toBeVisible();
+		await page.keyboard.press("r");
+		const starredReply = starred.getByRole("region", { name: "Reply" }).getByRole("textbox", { name: "Message" });
+		await expect(starredReply).toBeFocused();
+		await starredReply.pressSequentially("Approved.");
+		await page.keyboard.press("Control+Enter");
+		await expect(main.getByText("You answered 1 conversation.")).toBeVisible();
+		await expect.poll(async () => (await threads("is:starred")).map((thread) => thread.subject)).toEqual([first]);
+		await expect(main.getByText("All caught up.")).toBeVisible();
+		await expect(starred).toHaveCount(0);
+	} finally {
+		await admin.close();
+		await member.close();
+	}
+});

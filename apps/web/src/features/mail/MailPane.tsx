@@ -5,14 +5,7 @@ import { Icon } from "../../lib/icons.tsx";
 import { Link, navigate } from "../../lib/router.tsx";
 import { useToast } from "../../lib/toast.tsx";
 import { useOnChange } from "../../lib/useOnChange.ts";
-import {
-	focusReplyPath,
-	type MailView,
-	mailSettingsPath,
-	REPLY_LATER_VIEW,
-	threadPath,
-	viewPath,
-} from "../../routes.ts";
+import { focusPath, type MailView, mailSettingsPath, REPLY_LATER_VIEW, threadPath, viewPath } from "../../routes.ts";
 import { SEARCH_INPUT_ID } from "../../shell/nav.ts";
 import { SearchBox } from "../../shell/SearchBox.tsx";
 import {
@@ -29,6 +22,7 @@ import {
 import { removesAutoLabel } from "./autoLabels.ts";
 import { type Draft, forwardDraft, replyDraft } from "./compose.ts";
 import { useThread, useThreadList } from "./data.ts";
+import { focusMode } from "./focusReply.ts";
 import { MailboxNotice } from "./MailboxNotice.tsx";
 import type { ReplyMode } from "./MessageCard.tsx";
 import { mailboxInput, useMailboxId, useMailboxRights } from "./mailbox.tsx";
@@ -344,6 +338,7 @@ export function MailPane(props: MailPaneProps) {
 					void list.refresh();
 					onChanged();
 				}}
+				focusPath={focusMode(view) ? focusPath(view, mailboxId) : null}
 				settingsPath={mailSettingsPath(mailboxId)}
 			/>
 			<MailboxNotice />
@@ -406,7 +401,7 @@ function FocusBanner({ mailboxId }: { mailboxId: string | null }) {
 	return (
 		<div className="reply-later-banner">
 			<p>Answer these conversations one after the other, each with its newest message.</p>
-			<Link to={focusReplyPath(mailboxId)} className="button button-primary button-small">
+			<Link to={focusPath(REPLY_LATER_VIEW, mailboxId)} className="button button-primary button-small">
 				<Icon name="reply" size={16} />
 				Focus &amp; Reply
 			</Link>
@@ -428,7 +423,7 @@ function ReplyLaterPile({ mailboxId, count }: { mailboxId: string | null; count:
 					answer
 				</span>
 			</Link>
-			<Link to={focusReplyPath(mailboxId)} className="button button-small">
+			<Link to={focusPath(REPLY_LATER_VIEW, mailboxId)} className="button button-small">
 				Focus &amp; Reply
 			</Link>
 		</section>
