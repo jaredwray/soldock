@@ -323,7 +323,9 @@ MCP clients. The app has no UI-only path.
     left after Previous and after Undo. With `prefers-reduced-motion`, it shows at once.
   - Archive, Spam, Later and Done each show a toast. The toast has **Undo** when the change altered the
     conversation. **Undo** puts the conversation back at its old place and shows it, with its reply closed. While
-    the reply on screen has text, Undo only puts the conversation back into the order.
+    the reply on screen has text, Undo only puts the conversation back into the order. When the Undo fails, the
+    next conversation shows. Undo and the end of a request read the state of the page at that time, not at the
+    time of the action.
   - The page shows the newest message that the mailbox got, with Reply, Reply all and Forward. A forward can join
     the conversation, and a reply to it would go to the wrong people. When each message is a sent message, the page
     shows the newest one. **Show 2 more messages** in the line of the people shows the other messages of the
@@ -337,11 +339,13 @@ MCP clients. The app has no UI-only path.
   - While the reply has text, the app asks "Discard your reply?" before it leaves the page
     ([`navigationGuard.ts`](src/lib/navigationGuard.ts), which `navigate()` asks). The browser asks before it
     closes or reloads the tab. The Back button of the browser does not ask: a `popstate` event cannot stop.
-  - The page gets the thread of the next conversation before it shows (`mail.get_thread`), so Next is fast. The
-    conversation on screen gets its thread again only when the list shows a new message in it.
+  - The page gets the thread of the next conversation before it shows (`mail.get_thread`), so Next is fast. It
+    keeps the threads of the last 10 conversations. A thread that has fewer messages than the list does not show.
+    The reply that opens after a send waits for the own thread of the conversation. The conversation on screen
+    gets its thread again only when the list shows a new message in it.
   - The page loads the first 50 conversations. When the conversation on screen is one of the last 5 loaded, the
-    page gets the next page. Next at the last loaded conversation waits for that page (`aria-busy`). A failed
-    request shows a toast.
+    page gets the next page. Next at the last loaded conversation waits for that page (`aria-busy`). A different
+    move, an action or a reply that opens ends the wait. A failed request shows a toast, and Next then asks again.
   - With more pages, the total of the position comes from the count of the label of the list (`waitingCount`).
     That count also has the cleared conversations that stay in the list, for example a starred conversation after
     a reply, so the page subtracts them. All mail and a search have no label count. The total then has a plus.
@@ -364,7 +368,7 @@ MCP clients. The app has no UI-only path.
   - Focus does not mark a conversation as read.
   - The shortcuts work in Focus: `j` or `→` for Next, `k` or `←` for Previous, `r`, `a`, `f`, `e` for the primary
     button, `l` for Later (Done in Reply later), `!` for Spam, `o`, `c`, `/` and `?`. `u` goes back to the list.
-    The shortcut help has a Focus group.
+    Shift with an arrow key does not move: it selects text. The shortcut help has a Focus group.
   - Without `mail.modify`, Focus has no Spam, Archive, Later or Done, and a reply in the inbox does not archive.
     Without `mail.send`, it has no Reply. The notice of the list says why. The mailbox of an agent shows the
     notice of a read-only mailbox, because each conversation that shows is opened, and the audit log records it.

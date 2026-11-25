@@ -48,6 +48,9 @@ const FINISH_LIST_MAX = 8;
 /** The page gets the next page when the conversation on screen is one of this many last loaded ones. */
 const PRELOAD_FROM_END = 5;
 
+/** The page keeps the threads of this many conversations that it got before they showed. */
+const CACHE_SIZE = 10;
+
 interface FocusReplyProps {
 	/** The view of the conversations. The query gives its threads, newest first, as in its list. */
 	view: MailView;
@@ -177,6 +180,15 @@ export function FocusReply(props: FocusReplyProps) {
 	const current = index < 0 ? null : (items[index] ?? null);
 	const nextId = index < 0 ? null : (ids[index + 1] ?? null);
 	const complete = list.nextCursor === null;
+	const loadedIds = new Set(ids);
+	// Threads that the list has and the order does not have yet, for example a page that came in this render.
+	const unmerged = list.threads.filter((thread) => !loadedIds.has(thread.id) && !isGone(thread, gone)).length;
+	/**
+	 * The values of the last render, for code that runs after its own render: Undo, the end of a request, and a
+	 * move that waits for a page. Their closure can hold old values.
+	 */
+	const latest = useRef({ draft, dirty, current, ids, threads: list.threads, complete });
+	latest.current = { draft, dirty, current, ids, threads: list.threads, complete };
 	const keepRef = useRef<ReadonlySet<string>>(new Set());
 	keepRef.current = new Set([...(active === null ? [] : [active]), ...restoringRef.current]);
 
@@ -245,14 +257,25 @@ export function FocusReply(props: FocusReplyProps) {
 	const preload = useThread(mailboxId, nextId);
 	useEffect(() => {
 		const thread = preload.thread;
-		if (thread) setCache((now) => new Map(now).set(thread.id, thread));
+		if (!thread) return;
+		setCache((now) => {
+			// The cache keeps the threads of the last few conversations only.
+			const next = new Map(now);
+			next.delete(thread.id);
+			next.set(thread.id, thread);
+			for (const id of next.keys()) {
+				if (next.size <= CACHE_SIZE) break;
+				next.delete(id);
+			}
+			return next;
+		});
 	}, [preload.thread]);
 
 	// The page gets the next page when the person is near the end of the loaded conversations, or when each loaded
 	// one is cleared. A refresh that starts later discards the result with no error, so the page then asks again.
 	// If the request fails, the page shows a toast, and Older when no conversation stays.
 	const { loadOlder, nextCursor, loadingOlder } = list;
-	const nearEnd = shown === "conversation" && index >= ids.length - PRELOAD_FROM_END;
+	const nearEnd = shown === "conversation" && index >= ids.length + unmerged - PRELOAD_FROM_END;
 	useEffect(() => {
 		if (!(nearEnd || shown === "older") || loadingOlder || nextCursor === null || olderFrom === nextCursor) return;
 		setOlderFrom(nextCursor);
@@ -262,15 +285,15 @@ export function FocusReply(props: FocusReplyProps) {
 		);
 	}, [nearEnd, shown, loadingOlder, nextCursor, olderFrom, loadOlder, toast]);
 
-	// Next at the last loaded conversation waits for the next page, and moves when it comes.
+	// Next at the last loaded conversation waits for the next page, and moves when it comes. A reply that opened in
+	// the meantime stays: the move does not happen. A different move, an action or a reply ends the wait too.
 	// biome-ignore lint/correctness/useExhaustiveDependencies: show() reads the current values of this render.
 	useEffect(() => {
 		if (pendingNext === null) return;
-		if (nextId !== null) {
-			setPendingNext(null);
-			show(nextId, "next", pendingNext === "key" ? "heading" : "keep");
-		} else if (complete || (olderFrom === nextCursor && !loadingOlder)) setPendingNext(null);
-	}, [pendingNext, nextId, complete, olderFrom, nextCursor, loadingOlder]);
+		if (latest.current.draft) setPendingNext(null);
+		else if (nextId !== null) show(nextId, "next", pendingNext === "key" ? "heading" : "keep");
+		else if (unmerged === 0 && (complete || (olderFrom === nextCursor && !loadingOlder))) setPendingNext(null);
+	}, [pendingNext, nextId, unmerged, complete, olderFrom, nextCursor, loadingOlder]);
 
 	function ask(threadId: string, replyMode: ReplyMode) {
 		// The conversation remembers the last token that it handled. So each request gets a new token.
@@ -300,24 +323,26 @@ export function FocusReply(props: FocusReplyProps) {
 	 * example after a reply by a different member. The live region then says where the person is.
 	 */
 	function show(threadId: string | null, motion: "next" | "previous", focus: FocusAfter, prefix = "") {
-		const previous = current;
+		const { current: previous, threads, complete: full } = latest.current;
 		if (
 			previous &&
 			previous.id !== threadId &&
 			!restoringRef.current.has(previous.id) &&
-			leftQueue(previous, list.threads, complete)
+			leftQueue(previous, threads, full)
 		) {
 			setItems((now) => now.filter((item) => item.id !== previous.id));
 		}
 		setActiveId(threadId);
 		setEnter(motion);
+		setPendingNext(null);
 		setRequest((now) => (now && now.threadId !== threadId ? null : now));
-		// With no conversation left, the finish state or the empty state gets the focus.
+		// With no conversation left, the finish state or the empty state gets the focus. A button that stays keeps
+		// it, so an old request for the heading must not act when its conversation shows again.
 		if (threadId === null) mainRef.current?.focus();
 		else if (focus === "heading") {
 			requestTokens.current += 1;
 			setHeadingFocus({ threadId, token: requestTokens.current });
-		}
+		} else setHeadingFocus(null);
 		movePrefix.current = prefix;
 		setMoveToken((token) => token + 1);
 	}
@@ -326,8 +351,11 @@ export function FocusReply(props: FocusReplyProps) {
 		if (active === null) return;
 		const target = moveActive(ids, active, step);
 		if (target === active) {
-			// At the last loaded conversation, Next waits for the next page.
-			if (step === 1 && !complete && leaveDraft(source)) setPendingNext(source);
+			// At the last loaded conversation, Next waits for the next page. After a failed request, Next asks again.
+			if (step === 1 && !complete && leaveDraft(source)) {
+				if (olderFrom === nextCursor && !loadingOlder) setOlderFrom(null);
+				setPendingNext(source);
+			}
 			return;
 		}
 		if (!leaveDraft(source)) return;
@@ -373,6 +401,8 @@ export function FocusReply(props: FocusReplyProps) {
 			ask(threadId, replyMode);
 			return;
 		}
+		// A Next that waits for a page does not move away from the reply.
+		setPendingNext(null);
 		setDraft(replyDraft(message, myAddress, replyMode === "replyAll"));
 		setDirty(false);
 	}
@@ -455,7 +485,9 @@ export function FocusReply(props: FocusReplyProps) {
 		restoringRef.current.add(thread.id);
 		setItems((now) => restoreAt(now, thread, position));
 		setLog((now) => now.filter((item) => item.id !== thread.id));
-		if (draft && dirty) return;
+		// Undo and a failed request come after their render. The reply on screen now can have text.
+		const { draft: open, dirty: typed } = latest.current;
+		if (open && typed) return;
 		closeDraft();
 		show(thread.id, "previous", "heading");
 	}
@@ -466,16 +498,26 @@ export function FocusReply(props: FocusReplyProps) {
 			for (const undo of undos) await modifyThreads(mailboxId, undo.ids, undo.change);
 			toast({ message: "Action undone." });
 		} catch (error) {
-			// The change stays, so the conversation goes again.
+			// The change stays, so the conversation goes again, and the next one shows. A reply with text on it keeps
+			// it on screen: it leaves the order when the person moves away.
 			restoringRef.current.delete(thread.id);
-			setItems((now) => now.filter((item) => item.id !== thread.id));
 			setLog((now) => [...now, cleared(thread, how, !mode.leaves[how])]);
+			const { current: onScreen, draft: open, dirty: typed, ids: order } = latest.current;
+			if (onScreen?.id !== thread.id) setItems((now) => now.filter((item) => item.id !== thread.id));
+			else if (!(open && typed)) {
+				const next = nextActive(order, thread.id);
+				closeDraft();
+				setItems((now) => now.filter((item) => item.id !== thread.id));
+				show(next, "next", "heading");
+			}
 			toast({ message: `The undo failed. ${errorMessage(error)}`, tone: "error" });
 		}
 		onChanged();
 	}
 
 	useShortcuts((event) => {
+		// Shift and an arrow select text in the message.
+		if (event.shiftKey && event.key.startsWith("Arrow")) return;
 		switch (event.key) {
 			case "j":
 			case "ArrowRight":
@@ -581,7 +623,13 @@ export function FocusReply(props: FocusReplyProps) {
 	return (
 		<main id="main" className={draft ? "mail-main focus-replying" : "mail-main"} tabIndex={-1} ref={mainRef}>
 			<div className="toolbar">
-				<Link to={listPath} className="icon-button" aria-label={`Back to ${place}`} title={`Back to ${place} (u)`}>
+				<Link
+					to={listPath}
+					className="icon-button"
+					aria-label={`Back to ${place}`}
+					title={`Back to ${place} (u)`}
+					aria-keyshortcuts="u"
+				>
 					<Icon name="back" />
 				</Link>
 				<div className="page-title">
@@ -716,7 +764,7 @@ export function FocusReply(props: FocusReplyProps) {
 							labelsById={labelsById}
 							view={view}
 							place={place}
-							queued={!leftQueue(current, list.threads, complete)}
+							queued={restoringRef.current.has(current.id) || !leftQueue(current, list.threads, complete)}
 							enter={enter}
 							headingFocus={headingFocus?.threadId === current.id ? headingFocus.token : null}
 							request={request?.threadId === current.id ? request : null}
@@ -861,16 +909,20 @@ function FocusConversation(props: FocusConversationProps) {
 	const headingRef = useRef<HTMLHeadingElement>(null);
 	const headingId = useId();
 	const messagesId = useId();
-	const loaded = thread.thread ?? (props.cached?.id === summary.id ? props.cached : null);
+	// A thread that the page got before has the messages of the summary. Else a newer message came, and the
+	// conversation waits for its own thread.
+	const cached =
+		props.cached?.id === summary.id && props.cached.messages.length === summary.message_count ? props.cached : null;
+	const loaded = thread.thread ?? cached;
 	const messages = loaded?.messages ?? [];
 	const newest = replyTarget(messages);
 	/** The newest message with its full body, from the message card. */
 	const [full, setFull] = useState<Message | null>(null);
 	/** True while the other messages of the conversation show. */
 	const [showAll, setShowAll] = useState(false);
-	// A key and the step after a send start a reply from here. They wait for a body that the server left out, as
-	// the buttons of the message do.
-	const source = replySource(newest, full);
+	// A key and the step after a send start a reply from here. They wait for the own thread of the conversation,
+	// not the thread that the page got before, and for a body that the server left out, as the buttons do.
+	const source = thread.thread ? replySource(replyTarget(thread.thread.messages), full) : null;
 	const earlier = (loaded ? messages.length : summary.message_count) - 1;
 	/** The last request and the last focus token that this conversation handled, so each acts one time. */
 	const handledRef = useRef<number | null>(null);

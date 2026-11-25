@@ -2315,8 +2315,15 @@ fieldset {
 		display: none;
 	}
 
-	.mail-main:has(.focus-actions-bar) .mail-scroll {
+	.mail-main:not(.focus-replying):has(.focus-actions-bar) .mail-scroll {
 		padding-bottom: calc(72px + env(safe-area-inset-bottom));
+	}
+
+	/* "Show 2 more messages" gets the height of a touch target. */
+	.focus-more {
+		display: inline-flex;
+		align-items: center;
+		min-height: 44px;
 	}
 
 	/* While the reply is open, the keyboard and Send need the room. */

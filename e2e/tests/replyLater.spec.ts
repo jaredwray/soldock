@@ -125,12 +125,22 @@ test("a member puts mail in Reply later and answers it in Focus", async ({ brows
 		await page.keyboard.press("j");
 		await expect(subject).toHaveText(second);
 		await expect(focus.position("2 of 3")).toBeVisible();
+		// After a key, the focus is on the subject, and the live region says where the person is.
+		await expect(subject).toBeFocused();
+		await expect(main.locator('p[aria-live="polite"]')).toHaveText(
+			`Conversation 2 of 3: ${second}, from Tomasz Wieczorek.`,
+		);
 		await page.keyboard.press("k");
 		await expect(subject).toHaveText(third);
 		await expect(main.getByRole("button", { name: "Previous conversation" })).toHaveAttribute("aria-disabled", "true");
 		await page.keyboard.press("r");
 		await expect(message).toBeFocused();
 		await message.pressSequentially("Pizza, please.");
+		// While the reply has text, the keys do nothing, so a key never discards it.
+		await subject.focus();
+		for (const key of ["j", "e", "l", "!"]) await page.keyboard.press(key);
+		await expect(subject).toHaveText(third);
+		await expect(message).toContainText("Pizza, please.");
 
 		// Ctrl+Enter in the link dialog of the editor does not send the message. The reply and its text stay.
 		await reply.getByRole("button", { name: "Link" }).click();
@@ -227,8 +237,19 @@ test("a member clears the inbox and Starred in Focus", async ({ browser }) => {
 		await oldestRow.getByRole("button", { name: "Star" }).click();
 		await expect(oldestRow.getByRole("button", { name: "Star" })).toHaveAttribute("title", "Starred");
 
+		// In Starred, the primary button is Done. A starred conversation in the inbox also has Archive, with Undo.
 		const focus = focusPage(page);
 		const { main, subject, message } = focus;
+		await page.goto(`/mail/team/${mailbox.id}/starred/focus`);
+		await expect(subject).toHaveText(oldest);
+		await expect(main.getByRole("button", { name: /^Done/ })).toBeVisible();
+		await main.getByRole("button", { name: /^Archive/ }).click();
+		await expect(main.getByText("You archived 1 conversation.", { exact: true })).toBeVisible();
+		await focus.undo("Conversation archived.").click();
+		await expect(subject).toHaveText(oldest);
+		await expect.poll(() => subjects(member, mailbox.id, "in:inbox")).toContain(oldest);
+
+		await page.goto(inbox);
 		await main.getByRole("link", { name: "Focus", exact: true }).click();
 		await expect(page).toHaveURL(new RegExp(`${inbox}/focus$`));
 		await expect(main.getByRole("heading", { level: 1, name: `${mailbox.name}: Focus` })).toBeVisible();
@@ -250,21 +271,35 @@ test("a member clears the inbox and Starred in Focus", async ({ browser }) => {
 		await expect(subject).toHaveText(older);
 		await expect(page.getByText("Conversation moved to Reply later.")).toBeVisible();
 
-		// Next and Previous move between the conversations, and stop at the ends.
-		await main.getByRole("button", { name: "Next conversation" }).click();
+		// Next and Previous move between the conversations, stop at the ends, and keep the focus.
+		const next = main.getByRole("button", { name: "Next conversation" });
+		const previous = main.getByRole("button", { name: "Previous conversation" });
+		await next.click();
 		await expect(subject).toHaveText(oldest);
 		await expect(focus.position("2 of 2")).toBeVisible();
-		await expect(main.getByRole("button", { name: "Next conversation" })).toHaveAttribute("aria-disabled", "true");
-		await expect(main.getByRole("button", { name: "Next conversation" })).toBeFocused();
-		await page.keyboard.press("k");
+		await expect(next).toHaveAttribute("aria-disabled", "true");
+		await expect(next).toBeFocused();
+		await previous.click();
 		await expect(subject).toHaveText(older);
+		await expect(previous).toBeFocused();
 
-		// ! marks the conversation as spam, and Undo shows it again. The Spam button does the same.
+		// ! marks the conversation as spam, and the next one shows.
 		await page.keyboard.press("!");
 		await expect(subject).toHaveText(oldest);
+		// Undo while the reply on screen has text puts the conversation back into the order only. The reply stays.
+		await page.keyboard.press("r");
+		await expect(message).toBeFocused();
+		await message.pressSequentially("One moment.");
 		await focus.undo("Conversation marked as spam.").click();
-		await expect(subject).toHaveText(older);
+		await expect(page.getByText("Action undone.")).toBeVisible();
+		await expect(subject).toHaveText(oldest);
+		await expect(message).toContainText("One moment.");
+		await expect(focus.position("2 of 2")).toBeVisible();
 		await expect.poll(() => subjects(member, mailbox.id, "in:spam")).toEqual([]);
+		// Previous asks before it discards the reply. A Yes shows the conversation that came back.
+		page.once("dialog", (dialog) => void dialog.accept());
+		await previous.click();
+		await expect(subject).toHaveText(older);
 		await main.getByRole("button", { name: /^Report spam/ }).click();
 		await expect(subject).toHaveText(oldest);
 
@@ -385,6 +420,9 @@ test("a cleared conversation comes back in Focus when a new message comes", asyn
 		await page.keyboard.press("j");
 		await expect(subject).toHaveText(first);
 		await expect(main.getByText("Also, is there a bike rack?")).toBeVisible();
+		// The other message of the conversation shows on request.
+		await main.getByRole("button", { name: "Show 1 more message" }).click();
+		await expect(main.getByText("Where do I park?")).toBeVisible();
 	} finally {
 		await admin.close();
 		await member.close();
