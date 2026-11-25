@@ -44,8 +44,8 @@ const OTHER_RESULT = "This result is not a pass and not a failure.";
  * The checks of the receiving server, for the details of the sender notice. DMARC comes first, because
  * the verdict comes from it. A check without a result is left out.
  *
- * The server can record a DMARC pass for a different domain than `domain`. The verdict is then not
- * `verified`, and the text of the pass must not name `domain`.
+ * A DMARC pass without the verdict `verified` can be for a different domain than `domain`, or the
+ * server sent no verdict. The text of such a pass must not name `domain`.
  */
 export function senderChecks(
 	authentication: Message["authentication"],
@@ -60,7 +60,7 @@ export function senderChecks(
 			pass:
 				verdict === "verified"
 					? `The message passed the policy of ${ofOwner}. This result proves the domain only, not the name before the @.`
-					: `The pass is not for ${ofOwner}, so it proves nothing about this sender.`,
+					: "The receiving server recorded a DMARC pass, but this result does not verify the sender.",
 			fail: `The message failed the policy of ${ofOwner}.`,
 			none: `${owner} publishes no policy, so nothing proves that the domain sent the message.`,
 		},

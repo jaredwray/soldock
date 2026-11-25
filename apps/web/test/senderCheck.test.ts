@@ -51,7 +51,7 @@ describe("the sender notice of a message", () => {
 			/^The message passed the policy of bank\.example\./,
 		);
 		expect(senderChecks(pass, "bank.example", "unverified")[0]?.text).toBe(
-			"The pass is not for bank.example, so it proves nothing about this sender.",
+			"The receiving server recorded a DMARC pass, but this result does not verify the sender.",
 		);
 	});
 
