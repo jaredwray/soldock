@@ -518,11 +518,13 @@ export const MailSettings = z.object({
 		agent_mailboxes_collapsed: z.boolean(),
 	}),
 	/**
-	 * The mailbox that the web app opens first: the id of a team mailbox that you are a member of. Null
-	 * means your own mailbox, which is the default. A membership can end after you save it, so a client
-	 * opens your own mailbox when the id is not in mail.list_mailboxes.
+	 * The default From address of a new message, for each mailbox where you write it. A key is the id of
+	 * the mailbox that is open in the web app: your own id, or the id of a team mailbox. Its value is the
+	 * id of the mailbox whose address the message comes from: your own id, or the id of a team mailbox
+	 * that you can send from. A mailbox without a key uses its own address. A membership can end after you
+	 * save a value, so a client ignores a value that mail.list_mailboxes does not show with mail.send.
 	 */
-	default_mailbox_id: z.string().nullable(),
+	default_from: z.record(z.string(), z.string()),
 });
 export type MailSettings = z.infer<typeof MailSettings>;
 
@@ -530,7 +532,7 @@ export const getSettings = defineOperation({
 	name: "mail.get_settings",
 	summary: "Get your mail settings",
 	description:
-		"Returns your mail settings: the sections of the sidebar of the web app that are collapsed, and the mailbox that the web app opens first (default_mailbox_id, null for your own mailbox). The settings belong to your own mailbox, never to a team mailbox. A setting that you did not change has its default value. For the signature of a mailbox, use mail.get_mailbox_settings.",
+		"Returns your mail settings: the sections of the sidebar of the web app that are collapsed, and the default From address of a new message in each mailbox (default_from: the id of the open mailbox, then the id of the mailbox that sends). The settings belong to your own mailbox, never to a team mailbox. A setting that you did not change has its default value. For the signature of a mailbox, use mail.get_mailbox_settings.",
 	http: { method: "GET", path: "/api/v1/mail/settings" },
 	scopes: ["mail.read"],
 	callers: ["human"],
@@ -544,7 +546,7 @@ export const updateSettings = defineOperation({
 	name: "mail.update_settings",
 	summary: "Change your mail settings",
 	description:
-		"Changes the settings that the request names, and keeps the others. Returns all your mail settings. The settings belong to your own mailbox, never to a team mailbox. A change does not change the mailbox version that mail.get_profile returns. default_mailbox_id must be your own id, null, or the id of a team mailbox that you are a member of with mail.read. The mailbox of an agent cannot be the default.",
+		"Changes the settings that the request names, and keeps the others. Returns all your mail settings. The settings belong to your own mailbox, never to a team mailbox. A change does not change the mailbox version that mail.get_profile returns. default_from changes the default From address of one mailbox, and keeps the others. Its mailbox_id is your own id, or the id of a team mailbox that you are a member of with mail.read. Its from_mailbox_id is your own id, or the id of a team mailbox that you are a member of with mail.send. Null, or the same id as mailbox_id, removes the setting, so the mailbox uses its own address. A removal needs no membership. Nobody writes or sends from the mailbox of an agent, so it cannot be in default_from.",
 	http: { method: "POST", path: "/api/v1/mail/settings" },
 	scopes: ["mail.modify"],
 	callers: ["human"],
@@ -556,9 +558,15 @@ export const updateSettings = defineOperation({
 				agent_mailboxes_collapsed: z.boolean().optional(),
 			})
 			.optional(),
-		default_mailbox_id: MailboxId.nullable()
+		default_from: z
+			.strictObject({
+				mailbox_id: MailboxId.describe("The mailbox where you write: your own id, or the id of a team mailbox."),
+				from_mailbox_id: MailboxId.nullable().describe(
+					"The mailbox whose address a new message comes from. Null, or the same id as mailbox_id, means the address of that mailbox.",
+				),
+			})
 			.optional()
-			.describe("The mailbox that the web app opens first. Null, or your own id, means your own mailbox."),
+			.describe("The default From address of a new message in one mailbox. The other mailboxes keep theirs."),
 	}),
 	output: MailSettings,
 	errors: ["not_found", "invalid"],
@@ -602,7 +610,7 @@ export type MailboxSettings = z.infer<typeof MailboxSettings>;
 export const getMailboxSettings = defineOperation({
 	name: "mail.get_mailbox_settings",
 	summary: "Get the settings of a mailbox",
-	description: `Returns the settings of the mailbox: for now, its plain-text signature (an empty string for none). mail.send never adds the signature. To sign a message, add the signature to text, after a line with "-- " (two dashes and a space), and to html. ${IN_MAILBOX_READ} The members of a team mailbox share its settings. For your own settings, such as the mailbox that the web app opens first, use mail.get_settings.`,
+	description: `Returns the settings of the mailbox: for now, its plain-text signature (an empty string for none). mail.send never adds the signature. To sign a message, add the signature to text, after a line with "-- " (two dashes and a space), and to html. ${IN_MAILBOX_READ} The members of a team mailbox share its settings. For your own settings, such as the default From address of each mailbox, use mail.get_settings.`,
 	http: { method: "GET", path: "/api/v1/mail/mailbox-settings" },
 	scopes: ["mail.read"],
 	callers: ["human", "agent", "service"],

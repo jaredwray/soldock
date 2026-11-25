@@ -6,11 +6,13 @@ import { fileToBase64 } from "../../lib/base64.ts";
 import { Dialog } from "../../lib/Dialog.tsx";
 import { formatBytes } from "../../lib/format.ts";
 import { Icon } from "../../lib/icons.tsx";
-import { type Draft, parseAddressList } from "./compose.ts";
-import { mailboxInput, useMailboxId } from "./mailbox.tsx";
+import { Select } from "../../lib/Select.tsx";
+import { type Draft, parseAddressList, signatureLines, withSignature } from "./compose.ts";
+import { mailboxInput } from "./mailbox.tsx";
+import { type FromOption, mailboxKey } from "./mailboxNav.ts";
 import { RecipientInput } from "./RecipientInput.tsx";
 import { RichTextEditor } from "./RichTextEditor.tsx";
-import { docToHtml, docToText, textToDoc } from "./richText.ts";
+import { docToHtml, docToText, replaceLines, textToDoc } from "./richText.ts";
 
 export type SendResult = OutputOf<"mail.send">;
 
@@ -52,23 +54,50 @@ interface ComposerProps {
 	 * external. Null while the profile loads.
 	 */
 	mailDomains: readonly string[] | null;
+	/** The addresses that the person can send from (`fromOptions`). They include `initialFrom`. */
+	fromOptions: readonly FromOption[];
 	/**
-	 * The team mailbox that sends the message, when the composer is in one. The message then comes from
-	 * its name and address, so the composer shows them. Null for the own mailbox of the person.
+	 * The mailbox that sends the message at first: the id of a team mailbox, or null for the own mailbox. The
+	 * message comes from its name and address, and the sent copy goes into it. A reply comes from the mailbox
+	 * of its conversation, so the person cannot change the From of a reply.
 	 */
-	from: { display_name: string; address: string } | null;
+	initialFrom: string | null;
+	/** The signature of `initialFrom`. The composer adds it to the draft. */
+	signature: string;
 	onClose: () => void;
 	onSent: (result: SendResult) => void;
 }
 
-export function Composer({ draft, mailDomains, from, onClose, onSent }: ComposerProps) {
-	const mailboxId = useMailboxId();
+/** The body of the composer: the editor starts from `doc`. A change of the From can give a new start. */
+interface BodySeed {
+	doc: Node;
+	/** Grows with each new start. It is the key of the editor, so the editor starts again. */
+	version: number;
+	/** True when the person changed the body before the new start. */
+	edited: boolean;
+}
+
+export function Composer({ draft, mailDomains, fromOptions, initialFrom, signature, onClose, onSent }: ComposerProps) {
 	const [fields, setFields] = useState({ to: draft.to, cc: draft.cc, bcc: draft.bcc });
 	const [showCopies, setShowCopies] = useState(draft.cc !== "" || draft.bcc !== "");
 	const [subject, setSubject] = useState(draft.subject);
+	// A reply needs the message that it answers, and only the mailbox of the conversation has it. So a reply
+	// shows its From as text, and only a new message and a forward get the list.
+	const fromLocked = draft.replyToMessageId !== null;
+	const [from, setFrom] = useState(initialFrom);
+	const sender = fromOptions.find((option) => option.id === from);
 	// The body is a rich-text document. The draft text becomes paragraphs, and its "> " lines a quote.
-	const [initialDoc] = useState(() => textToDoc(draft.text));
-	const [doc, setDoc] = useState<Node>(initialDoc);
+	const [seed, setSeed] = useState<BodySeed>(() => ({
+		doc: textToDoc(withSignature(draft, signature).text),
+		version: 0,
+		edited: false,
+	}));
+	const [doc, setDoc] = useState<Node>(seed.doc);
+	// A change of the From reads the signature of the new mailbox, and the body can change while it loads. So
+	// the change reads the body, the start and the signature in the body from refs.
+	const bodyRef = useRef({ doc: seed.doc, seed, signature });
+	const signatures = useRef(new Map<string | null, string>([[initialFrom, signature]]));
+	const fromChanges = useRef(0);
 	// Each send has both forms: HTML for the formatting, and plain text for mail apps without HTML.
 	const body = useMemo(() => ({ text: docToText(doc), html: docToHtml(doc) }), [doc]);
 	const [attachments, setAttachments] = useState<PendingAttachment[]>([]);
@@ -84,6 +113,7 @@ export function Composer({ draft, mailDomains, from, onClose, onSent }: Composer
 		cc: useId(),
 		bcc: useId(),
 		subject: useId(),
+		from: useId(),
 		files: useId(),
 		size: useId(),
 	};
@@ -93,7 +123,8 @@ export function Composer({ draft, mailDomains, from, onClose, onSent }: Composer
 		fields.cc !== draft.cc ||
 		fields.bcc !== draft.bcc ||
 		subject !== draft.subject ||
-		!doc.eq(initialDoc) ||
+		seed.edited ||
+		!doc.eq(seed.doc) ||
 		attachments.length > 0;
 
 	const attachmentBytes = attachments.reduce((sum, file) => sum + file.size, 0);
@@ -114,6 +145,45 @@ export function Composer({ draft, mailDomains, from, onClose, onSent }: Composer
 			: externalRecipients.join(", ");
 	const externalError = `The message is too large for ${externalNames}. Cloudflare Email Service accepts at most ${externalLimit} for mail to an address outside your organization. Make the message smaller, or remove those recipients.`;
 	const showExternalHint = externalRecipients.length > 0 || (mailDomains === null && overExternalLimit);
+
+	function changeBody(next: Node) {
+		bodyRef.current.doc = next;
+		setDoc(next);
+	}
+
+	/**
+	 * A new From. The signature of the old mailbox in the body becomes the signature of the new one. A body
+	 * that the person did not change starts again with the new signature. When the person changed the lines of
+	 * the signature, the body stays as it is.
+	 */
+	async function changeFrom(next: string | null) {
+		setFrom(next);
+		setError(null);
+		const change = ++fromChanges.current;
+		let nextSignature = signatures.current.get(next);
+		if (nextSignature === undefined) {
+			try {
+				nextSignature = (await api.call("mail.get_mailbox_settings", mailboxInput(next))).signature;
+				signatures.current.set(next, nextSignature);
+			} catch {
+				// A membership without mail.read cannot read the signature. The body then gets none.
+				nextSignature = "";
+			}
+		}
+		// A newer change of the From decides the body.
+		if (change !== fromChanges.current) return;
+		const current = bodyRef.current;
+		if (nextSignature === current.signature) return;
+		const untouched = !current.seed.edited && current.doc.eq(current.seed.doc);
+		const swapped = untouched
+			? textToDoc(withSignature(draft, nextSignature).text)
+			: replaceLines(current.doc, signatureLines(current.signature), signatureLines(nextSignature));
+		if (!swapped) return;
+		const nextSeed = { doc: swapped, version: current.seed.version + 1, edited: !untouched };
+		bodyRef.current = { doc: swapped, seed: nextSeed, signature: nextSignature };
+		setSeed(nextSeed);
+		setDoc(swapped);
+	}
 
 	function requestClose() {
 		if (sending) return;
@@ -203,7 +273,7 @@ export function Composer({ draft, mailDomains, from, onClose, onSent }: Composer
 		setError(null);
 		try {
 			const result = await api.call("mail.send", {
-				...mailboxInput(mailboxId),
+				...mailboxInput(from),
 				to: parsed.to.addresses,
 				cc: parsed.cc.addresses,
 				bcc: parsed.bcc.addresses,
@@ -259,12 +329,34 @@ export function Composer({ draft, mailDomains, from, onClose, onSent }: Composer
 		<Dialog title={draft.title} onClose={requestClose} className="composer">
 			<form className="compose-form" onSubmit={submit} noValidate>
 				<div className="compose-fields">
-					{from && (
+					{fromLocked ? (
+						sender && (
+							<div className="compose-row">
+								<span className="compose-label">From:</span>
+								<span className="compose-from">
+									{sender.display_name} &lt;{sender.address}&gt;
+								</span>
+							</div>
+						)
+					) : (
 						<div className="compose-row">
-							<span className="compose-label">From:</span>
-							<span className="compose-from">
-								{from.display_name} &lt;{from.address}&gt;
-							</span>
+							<label htmlFor={ids.from} className="compose-label">
+								From:
+							</label>
+							<Select
+								id={ids.from}
+								className="compose-select"
+								value={mailboxKey(from)}
+								options={fromOptions.map((option) => ({
+									value: mailboxKey(option.id),
+									label: option.display_name,
+									description: `<${option.address}>`,
+								}))}
+								onChange={(key) =>
+									void changeFrom(fromOptions.find((option) => mailboxKey(option.id) === key)?.id ?? null)
+								}
+								disabled={sending}
+							/>
 						</div>
 					)}
 					{addressInput(
@@ -299,12 +391,14 @@ export function Composer({ draft, mailDomains, from, onClose, onSent }: Composer
 					</div>
 				</div>
 				<RichTextEditor
-					initialDoc={initialDoc}
-					onChange={setDoc}
+					key={seed.version}
+					initialDoc={seed.doc}
+					onChange={changeBody}
 					disabled={sending}
 					label="Message"
 					placeholder="Write your message"
-					autofocus={draft.to !== ""}
+					// A new start after a change of the From keeps the focus on the From.
+					autofocus={seed.version === 0 && draft.to !== ""}
 				/>
 				{attachments.length > 0 && (
 					<ul className="file-cards compose-attachments" aria-label="Attachments">

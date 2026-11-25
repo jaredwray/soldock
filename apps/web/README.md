@@ -169,6 +169,15 @@ MCP clients. The app has no UI-only path.
     attachments. One idempotency key for each composed message makes a retry safe.
   - Each field label of the composer ends with a colon, for example `To:` and `Subject:`. Each row
     sizes its own label, so the text field starts right after the label.
+  - The first row is **From:**. In a new message and a forward, it is a list
+    ([`Select.tsx`](src/lib/Select.tsx)) of each address that the person can send from: the own
+    address, then each shared mailbox with `mail.send` (`fromOptions` in
+    [`mailboxNav.ts`](src/features/mail/mailboxNav.ts)). The list shows also when it has one address.
+    `mail.send` gets the `mailbox_id` of the chosen address, so the sent copy goes into that mailbox.
+  - A new message and a forward start with the default address of the open mailbox (`defaultFromId`):
+    the saved `default_from` of the person while they can send from it, or else the open mailbox. A reply
+    comes from the mailbox of its conversation, because only that mailbox has the message that it
+    answers. So a reply shows its From as text, with no list.
   - "Add Cc and Bcc" is at the end of the To row. "Attach files" is at the left of the last row.
     Discard and Send are at the right. An attached file is a file card with a Remove button.
   - Each address field (To, Cc and Bcc) is an ARIA combobox ([`RecipientInput.tsx`](src/features/mail/RecipientInput.tsx)).
@@ -204,11 +213,16 @@ MCP clients. The app has no UI-only path.
   - `mail.send` gets both forms of the body: `html` for the formatting, and `text` for mail apps
     without HTML. In the HTML, each paragraph is a `<div>`, as in most mail apps. In the text, a
     list item starts with `- ` or `1. `, a quote line starts with `> `, and a link is `text <address>`.
-  - Each new message, reply and forward starts with the signature of the mailbox (`withSignature` in
-    [`compose.ts`](src/features/mail/compose.ts), from `mail.get_mailbox_settings`): two empty lines,
-    the line `-- `, and the signature. The signature is above the quote of a reply and the header of a
-    forward. A draft with only the signature closes without a question. The person can change or remove
-    the signature in the draft.
+  - Each new message, reply and forward starts with the signature of the mailbox that sends it
+    (`withSignature` in [`compose.ts`](src/features/mail/compose.ts), from `mail.get_mailbox_settings`):
+    two empty lines, the line `-- `, and the signature. The signature is above the quote of a reply and
+    the header of a forward. A draft with only the signature closes without a question. The person can
+    change or remove the signature in the draft.
+  - A change of the From puts the signature of the new mailbox in place of the old one. A body that the
+    person did not change starts again with the new signature. In a changed body, the lines of the old
+    signature change (`replaceLines` in [`richText.ts`](src/features/mail/richText.ts)). When the person
+    changed those lines, the body stays as it is. A membership without `mail.read` cannot read the
+    signature of its mailbox, so the body then gets no signature. The focus stays on the From.
   - A reply or forward starts with the draft text from [`compose.ts`](src/features/mail/compose.ts).
     Each line becomes a paragraph, and a run of `> ` lines becomes a quote block. A line that starts
     with `>` and no space stays text, so an unchanged draft sends the same text. Quotes nest to a
@@ -244,8 +258,8 @@ MCP clients. The app has no UI-only path.
   - A deep link to a mailbox that is not in the list gives that mailbox a row, so its folders show.
   - A person with only the own mailbox sees the folders and the labels with no mailbox rows.
   - The Compose button of Mail fills the width of the sidebar.
-  - The web app uses `mail.get_settings` and `mail.update_settings` only for the default mailbox
-    (`default_mailbox_id`). Their sidebar settings are for the mailbox sections that the sidebar no
+  - The web app uses `mail.get_settings` and `mail.update_settings` only for the default From address of
+    each mailbox (`default_from`). Their sidebar settings are for the mailbox sections that the sidebar no
     longer has.
 - **Mailbox settings** (`/mail/settings`, `/mail/team/<tmb_id>/settings`, `/mail/agent/<prn_id>/settings`,
   [`MailboxSettings.tsx`](src/features/mail/MailboxSettings.tsx)). The gear after Refresh in the header of
@@ -264,11 +278,12 @@ MCP clients. The app has no UI-only path.
     and admins can only read the mailbox of an agent. After each change of the members, the shell gets
     `mail.list_mailboxes` again, so the rights of the person in the open mailbox follow a change of the
     own membership. A person who can no longer read the mailbox goes to the own inbox.
-  - **Default address.** **Make <address> my default** saves the mailbox as the default of the person
-    (`default_mailbox_id`). Mail then opens it first, so a new message comes from its address. The
-    mailbox of an agent cannot be a default. `defaultMailboxId` in `mailboxNav.ts` decides the current
-    default, as for the start of Mail. So the section shows **Loading…** until the list of the mailboxes
-    is there, except for the own mailbox with no saved default.
+  - **Default address.** The address that a new message in this mailbox comes from: a list of the
+    addresses that the person can send from (`fromOptions`), and **Save** (`default_from` of
+    `mail.update_settings`). It is a setting of the person, so each member of a shared mailbox has their
+    own. At first it is the address of the mailbox. `defaultFromId` in `mailboxNav.ts` decides the current
+    value, as for the composer. So the section shows **Loading…** until the list of the mailboxes is
+    there. The mailbox of an agent, and a shared mailbox without `mail.send`, show text and no list.
   - **Signature.** Plain text, at most 2,000 characters, with a counter
     (`mail.update_mailbox_settings`). The members of a shared mailbox share it. Without `mail.modify`,
     the field is read only. After a save, the next draft has the new signature. The mail app reads the
@@ -281,8 +296,9 @@ MCP clients. The app has no UI-only path.
   - The shell keeps the list of mailboxes and gets it again on window focus and when the page
     changes, for example from Admin to Mail. Each mailbox has its
     own mail app (a React key), so the data of one mailbox never shows in a different one.
-  - The composer shows a **From** row with the name and the address of the team mailbox. A reply
-    leaves out the team address, not the address of the person.
+  - In a team mailbox, the From of the composer starts with the address of the team mailbox, unless the
+    person saved a different default address for it. A reply leaves out the team address, not the
+    address of the person.
   - A sent message shows **Sent by** and the member (`sent_by`). No sender shows as "me", because
     more than one person sends from the address.
   - The views follow the scopes of the membership (`scopes` of `mail.list_mailboxes`, `mailboxRights` in
@@ -1813,7 +1829,7 @@ dock Worker serves `index.html` for each app path, so a deep link works on reloa
 
 | Path | Page |
 | --- | --- |
-| `/`, `/mail` | Goes to the inbox of the default mailbox of the person (`default_mailbox_id` of `mail.get_settings`). Without a default, or when the person cannot read it now, goes to `/mail/inbox` (`mailHomePath` in `mailboxNav.ts`). The page shows **Loading…** until the setting is there. The rail link of Mail and the mark of Asterra go here |
+| `/`, `/mail` | Goes to `/mail/inbox` |
 | `/mail/<view>` | The thread list of a view: `inbox`, `starred`, `sent`, `spam`, `trash` or `all` |
 | `/mail/label/<lbl_id>` | The thread list of a user label |
 | `/mail/search?q=<query>` | The search results |

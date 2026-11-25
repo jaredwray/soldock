@@ -471,26 +471,38 @@ export interface SettingsPatch {
 	sidebar?:
 		| { shared_mailboxes_collapsed?: boolean | undefined; agent_mailboxes_collapsed?: boolean | undefined }
 		| undefined;
-	/** Null clears the default. The handler checks the mailbox before it calls the object. */
-	default_mailbox_id?: string | null | undefined;
+	/**
+	 * The default From address of one mailbox. A null `from_mailbox_id` removes the setting. The handler
+	 * checks both mailboxes before it calls the object.
+	 */
+	default_from?: { mailbox_id: string; from_mailbox_id: string | null } | undefined;
 }
 
 /** The saved settings with the default for each setting that was never saved. A bad value gets the default. */
 function readSettings(raw: string | null): MailSettings {
-	let saved: { sidebar?: Record<string, unknown>; default_mailbox_id?: unknown } = {};
+	let saved: { sidebar?: Record<string, unknown>; default_from?: unknown } = {};
 	try {
 		saved = raw ? (JSON.parse(raw) as typeof saved) : {};
 	} catch {
 		// A value that does not parse gets the defaults. The next change writes a good value.
 	}
 	const flag = (value: unknown) => value === true;
-	const defaultMailbox = MailboxId.safeParse(saved.default_mailbox_id);
+	// An entry with a key or a value that is not a mailbox id is dropped. A value that is the same as its
+	// key is the default, so it is dropped too.
+	const defaultFrom: Record<string, string> = {};
+	if (saved.default_from !== null && typeof saved.default_from === "object" && !Array.isArray(saved.default_from)) {
+		for (const [key, value] of Object.entries(saved.default_from)) {
+			if (MailboxId.safeParse(key).success && MailboxId.safeParse(value).success && key !== value) {
+				defaultFrom[key] = value as string;
+			}
+		}
+	}
 	return {
 		sidebar: {
 			shared_mailboxes_collapsed: flag(saved.sidebar?.shared_mailboxes_collapsed),
 			agent_mailboxes_collapsed: flag(saved.sidebar?.agent_mailboxes_collapsed),
 		},
-		default_mailbox_id: defaultMailbox.success ? defaultMailbox.data : null,
+		default_from: defaultFrom,
 	};
 }
 
@@ -1007,11 +1019,13 @@ export class MailboxDO extends DurableObject<Env> {
 			const value = patch.sidebar?.[key];
 			if (typeof value === "boolean") sidebar[key] = value;
 		}
-		const next: MailSettings = {
-			sidebar,
-			default_mailbox_id:
-				patch.default_mailbox_id === undefined ? current.default_mailbox_id : patch.default_mailbox_id,
-		};
+		const defaultFrom = { ...current.default_from };
+		if (patch.default_from) {
+			const { mailbox_id: mailboxId, from_mailbox_id: fromId } = patch.default_from;
+			if (fromId === null || fromId === mailboxId) delete defaultFrom[mailboxId];
+			else defaultFrom[mailboxId] = fromId;
+		}
+		const next: MailSettings = { sidebar, default_from: defaultFrom };
 		this.setMeta("settings", JSON.stringify(next));
 		return next;
 	}

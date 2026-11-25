@@ -209,6 +209,37 @@ export function textToDoc(text: string): Node {
 	return nodes.doc.create(null, textBlocks(splitLines(text), 0));
 }
 
+/** The text of a paragraph that holds only plain text, or null for each other node. */
+function plainParagraphText(node: Node): string | null {
+	if (node.type !== nodes.paragraph) return null;
+	let text = "";
+	for (let index = 0; index < node.childCount; index += 1) {
+		const child = node.child(index);
+		if (!child.isText || child.marks.length > 0) return null;
+		text += child.text ?? "";
+	}
+	return text;
+}
+
+/**
+ * The document with a paragraph for each line of `next` in place of the first run of top-level paragraphs
+ * that hold the lines of `previous` as plain text. Null when no run matches, for example after the person
+ * changed one of the lines, or when `previous` is empty: the caller then keeps the document.
+ */
+export function replaceLines(doc: Node, previous: readonly string[], next: readonly string[]): Node | null {
+	if (previous.length === 0) return null;
+	for (let start = 0; start + previous.length <= doc.childCount; start += 1) {
+		if (!previous.every((line, offset) => plainParagraphText(doc.child(start + offset)) === line)) continue;
+		const blocks: Node[] = [];
+		doc.forEach((child, _offset, index) => {
+			if (index === start) blocks.push(...next.map((line) => paragraph(line)));
+			if (index < start || index >= start + previous.length) blocks.push(child);
+		});
+		return nodes.doc.create(null, blocks);
+	}
+	return null;
+}
+
 function linkLabel(text: string, href: string): string {
 	if (text === "") return href;
 	if (safeHref(text) === href || `mailto:${text}` === href) return text;

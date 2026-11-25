@@ -144,23 +144,33 @@ who can.
 
 - The collapsed sections of the sidebar of the web app (`sidebar.shared_mailboxes_collapsed`,
   `sidebar.agent_mailboxes_collapsed`).
-- `default_mailbox_id`: the mailbox that the web app opens first, and so the address that a new message
-  comes from. Null means the own mailbox.
+- `default_from`: the default From address of a new message in each mailbox. A key is the id of the
+  mailbox that is open in the web app, and its value is the id of the mailbox whose address the message
+  comes from. The own mailbox has the id of the person. A mailbox without a key uses its own address. A
+  reply always comes from the mailbox of its conversation, so this setting is only for a new message
+  and a forward.
 
 - The settings live in the own mailbox of the caller, in the `meta` table. The operations take no
   `mailbox_id`, so a team mailbox and the mailbox of an agent never get settings.
-- Each setting has a default (`false`, and null for `default_mailbox_id`). A stored value that does not
-  parse gets the defaults. A stored `default_mailbox_id` that is not a mailbox id gets null.
+- Each setting has a default (`false`, and an empty object for `default_from`). A stored value that does
+  not parse gets the defaults. A stored `default_from` entry with a key or a value that is not a mailbox
+  id is dropped, and so is an entry with the same key and value.
 - `mail.update_settings` changes only the settings that the request names, and returns all of them.
   A second call with the same values changes nothing.
-- `default_mailbox_id` accepts null, the own id (stored as null), or the id of a team mailbox that the
-  caller is a member of with `mail.read`. The check reads the directory. An unknown team mailbox gets
-  `not_found`, and a team mailbox without membership or without `mail.read` gets `forbidden`. Any other
-  id gets `invalid`: nobody sends from the mailbox of an agent, and the mailbox of a different person is
-  private.
-- `mail.get_settings` returns the stored `default_mailbox_id` without a check. A membership can end
-  after the save. The web app then opens the own mailbox: it opens a team mailbox only when
-  `mail.list_mailboxes` has it with `mail.read`. The server does not clear the stale value.
+- `mail.update_settings` changes `default_from` one mailbox at a time:
+  `default_from: { mailbox_id, from_mailbox_id }`. The other entries stay.
+  - `mailbox_id` is the own id, or the id of a team mailbox that the caller is a member of with
+    `mail.read`.
+  - `from_mailbox_id` is the own id, or the id of a team mailbox that the caller is a member of with
+    `mail.send`. Null, or the same id as `mailbox_id`, removes the entry.
+  - The check reads the directory. An unknown team mailbox gets `not_found`, and a team mailbox without
+    membership or without the scope gets `forbidden`. Any other id gets `invalid`: nobody writes or sends
+    from the mailbox of an agent, and the mailbox of a different person is private.
+  - A removal needs no membership, so a person can remove an entry after a membership ended.
+- `mail.get_settings` returns the stored `default_from` without a check. A membership can end after the
+  save. The web app then uses the address of the open mailbox: it uses a saved value only when
+  `mail.list_mailboxes` has that mailbox with `mail.send`. The server does not clear a stale value. The
+  object has at most one entry for each team mailbox that the person was a member of.
 - A change does not change the mailbox `version`, so the web app does not get the list again.
 - Only people can call them. An agent has no web app. A change writes no audit line, as for
   `chat.mark_read`: it changes the view of the person, not their data.
@@ -170,7 +180,8 @@ who can.
 `mail.get_mailbox_settings` and `mail.update_mailbox_settings` read and change the settings of one
 mailbox. For now, the only setting is the plain-text `signature`. The web app shows them in the
 settings view of the mailbox (the gear in the header of Mail), with the AI switch
-(`mail.update_auto_labels`), the members of a team mailbox and the default address of the person.
+(`mail.update_auto_labels`), the members of a team mailbox and the default From address of the person
+in the mailbox.
 
 - The settings live in the mailbox, in the `meta` table (`mailbox_settings`). So the members of a team
   mailbox share them, as they share the labels and the auto-label settings.
@@ -703,7 +714,7 @@ A disabled endpoint stays disabled. Delete it and create a new one.
 | Change counter | `MailboxDO` table `meta` (`version`) | |
 | Sent recipients | `MailboxDO` table `recipients` | One row for each address that the mailbox sent mail to: the address, the number of sent messages and the time of the last one. Rebuildable from the sent messages |
 | Watch sockets | `MailboxDO` hibernatable WebSockets, tag `watch` | Not stored. A socket ends with its `subscriptions/listen` stream, and a restart of the object ends it. No backup |
-| Mail settings of a person | `MailboxDO` table `meta` (`settings`) | JSON. Only in the own mailbox of a person. The sidebar sections that the person collapsed, and the default mailbox (`default_mailbox_id`) |
+| Mail settings of a person | `MailboxDO` table `meta` (`settings`) | JSON. Only in the own mailbox of a person. The sidebar sections that the person collapsed, and the default From address of each mailbox (`default_from`) |
 | Settings of a mailbox | `MailboxDO` table `meta` (`mailbox_settings`) | JSON. In each mailbox: the plain-text signature, at most 2,000 characters. The members of a team mailbox share it |
 | Raw MIME of each message | R2 `blobs`, key `mail/raw/<mailbox id>/<sha256>` | One owner for each object: each mailbox has its own copy. Inbound: the key comes from the content, so a retry writes the same object. Sends: a duplicate attempt deletes its object. An error after the R2 write and before the mailbox answers can leave an orphan, which blob GC will collect |
 | Inbound jobs | Queue `soldock-mail-inbound`, dead letters in `soldock-mail-inbound-dlq` | Jobs hold ids, keys and the `+tag` of the recipient address, never message content |
@@ -757,8 +768,9 @@ Backups: not built yet. mbox/EML export comes with Takeout.
   sent), the addresses of the directory that the mailbox never wrote to, and a way to remove a
   suggestion
 - Filters, vacation responder and forwarding
-- Aliases, groups, delegation and send-as. So the default address is the default mailbox: a person has
-  one address for the own mailbox and one for each team mailbox
+- Aliases, groups, delegation and send-as. A person has one address for the own mailbox and one for each
+  team mailbox, so the From of the web composer chooses a mailbox
+- A reply from a mailbox that is not the mailbox of its conversation
 - For signatures: a signature for each member of a team mailbox, a signature with formatting or
   pictures, and a signature that `mail.send` adds
 - For team mailboxes: a read state for each member, assignment of a thread to a member, unread

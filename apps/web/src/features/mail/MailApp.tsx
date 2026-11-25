@@ -11,12 +11,12 @@ import { useSession } from "../auth/session.tsx";
 import { AutoLabelsDialog } from "./AutoLabelsDialog.tsx";
 import type { SendResult } from "./Composer.tsx";
 import { Composer, usePreloadComposer } from "./ComposerLoader.tsx";
-import { type Draft, newDraft, withSignature } from "./compose.ts";
-import { useLabels, useMailboxSettings, useProfilePoll } from "./data.ts";
+import { type Draft, newDraft } from "./compose.ts";
+import { useLabels, useMailboxSettings, useMailSettings, useProfilePoll } from "./data.ts";
 import { DeleteLabelDialog, NewLabelDialog } from "./LabelDialogs.tsx";
 import { MailPane } from "./MailPane.tsx";
 import { MailboxProvider, MailboxRightsProvider } from "./mailbox.tsx";
-import { mailboxRights } from "./mailboxNav.ts";
+import { defaultFromId, fromOptions, mailboxRights } from "./mailboxNav.ts";
 import { ShortcutHelp } from "./ShortcutHelp.tsx";
 import { Sidebar } from "./Sidebar.tsx";
 import { useShortcuts } from "./useShortcuts.ts";
@@ -28,6 +28,13 @@ type MailDialog =
 	| { type: "auto-labels" }
 	| { type: "delete-label"; label: Label }
 	| null;
+
+/** The open composer: its draft, the mailbox that sends it at first, and the signature of that mailbox. */
+interface Composing {
+	draft: Draft;
+	from: string | null;
+	signature: string;
+}
 
 // The settings view is a separate chunk: a person opens it seldom.
 const MailboxSettings = lazyPage(() => import("./MailboxSettings.tsx").then((module) => module.MailboxSettings));
@@ -71,9 +78,10 @@ export function MailApp({
 	const { profile, sync } = useProfilePoll(mailboxId, bump);
 	const { labels, error: labelsError, reload: reloadLabels } = useLabels(mailboxId);
 	const { settings: mailboxSettings, set: setMailboxSettings } = useMailboxSettings(mailboxId);
+	const { settings: mailSettings, set: setMailSettings } = useMailSettings();
 	const listed = mailboxId ? (mailboxes?.find((mailbox) => mailbox.id === mailboxId) ?? null) : null;
 	const rights = useMemo(() => mailboxRights(mailboxes, mailboxId), [mailboxes, mailboxId]);
-	const [draft, setDraft] = useState<Draft | null>(null);
+	const [composing, setComposing] = useState<Composing | null>(null);
 	const [dialog, setDialog] = useState<MailDialog>(null);
 	const closeNavRef = useRef(onCloseNav);
 	usePreloadComposer();
@@ -105,16 +113,37 @@ export function MailApp({
 		setPageTitle(`${title}${inboxUnread > 0 ? ` (${inboxUnread})` : ""}${mailbox} – Asterra`);
 	}, [title, inboxUnread, mailboxName]);
 
+	// The addresses that the person can send from, and the one that a new message in this mailbox comes from.
+	const senders = useMemo(
+		() =>
+			fromOptions(
+				mailboxes,
+				whoami.principal,
+				mailboxId && rights.send ? { id: mailboxId, display_name: mailboxName ?? "", address: myAddress } : null,
+			),
+		[mailboxes, whoami.principal, mailboxId, rights.send, mailboxName, myAddress],
+	);
+	const defaultFrom = defaultFromId(mailboxId, mailSettings?.default_from ?? {}, senders, whoami.principal.id);
+	// The signature of the default From, when it is not this mailbox.
+	const { settings: fromSettings } = useMailboxSettings(defaultFrom, defaultFrom !== mailboxId);
 	const signature = mailboxSettings?.signature ?? "";
+	const fromSignature = defaultFrom === mailboxId ? signature : (fromSettings?.signature ?? "");
 	const compose = useCallback(
 		(next?: Draft) => {
 			// Nobody sends from the mailbox of an agent except the agent.
 			if (!rights.send) return;
 			closeNavRef.current();
-			// The signature of the mailbox goes into each new message, reply and forward. The person can change it there.
-			setDraft(withSignature(next ?? newDraft(), signature));
+			// A reply comes from the mailbox of its conversation. A new message and a forward come from the default
+			// From of this mailbox. The signature of the mailbox that sends goes into the draft. The person can
+			// change it there.
+			const draft = next ?? newDraft();
+			setComposing(
+				draft.replyToMessageId === null
+					? { draft, from: defaultFrom, signature: fromSignature }
+					: { draft, from: mailboxId, signature },
+			);
 		},
-		[rights.send, signature],
+		[rights.send, defaultFrom, fromSignature, mailboxId, signature],
 	);
 
 	// The list has the shortcuts of Mail. The settings view keeps the ones that do not need a list.
@@ -140,7 +169,7 @@ export function MailApp({
 	});
 
 	function sent(result: SendResult) {
-		setDraft(null);
+		setComposing(null);
 		const failed = result.recipients.filter((recipient) => recipient.status === "failed");
 		toast(
 			failed.length > 0
@@ -203,20 +232,24 @@ export function MailApp({
 							title={mailboxName ? `${mailboxName}: Settings` : "Settings"}
 							rights={rights}
 							mailboxes={mailboxes}
+							senders={senders}
 							refreshKey={refreshKey}
 							onSettingsSaved={setMailboxSettings}
+							onMailSettingsSaved={setMailSettings}
 							onMembersChanged={onMailboxesChanged}
 							onOpenAutoLabels={() => setDialog({ type: "auto-labels" })}
 							onChanged={onChanged}
 						/>
 					)}
-					{draft && rights.send && (
+					{composing && rights.send && (
 						<Composer
-							key={draft.key}
-							draft={draft}
+							key={composing.draft.key}
+							draft={composing.draft}
 							mailDomains={profile?.mail_domains ?? null}
-							from={mailboxId ? { display_name: mailboxName ?? "", address: myAddress } : null}
-							onClose={() => setDraft(null)}
+							fromOptions={senders}
+							initialFrom={composing.from}
+							signature={composing.signature}
+							onClose={() => setComposing(null)}
 							onSent={sent}
 						/>
 					)}
