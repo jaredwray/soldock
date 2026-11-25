@@ -75,9 +75,11 @@ describe("mail.send to mailboxes of this deployment", () => {
 		const [received] = (await ada.call("mail.list_threads")).threads;
 		expect(received).toMatchObject({ subject: "Kickoff", unread: true, untrusted: false });
 		const thread = await ada.call("mail.get_thread", { thread_id: received?.id as string });
+		// The verdict is only for mail from the internet. The delivery path proves internal mail.
 		expect(thread.messages[0]).toMatchObject({
 			origin: "internal",
 			untrusted: false,
+			sender_verification: null,
 			from: { address: "owner@dock.test" },
 		});
 
