@@ -99,6 +99,7 @@ const RESOURCE_DECIDED: string[] = [
 	"mail.list_threads",
 	"mail.modify_threads",
 	"mail.send",
+	"mail.snooze_threads",
 	"mail.suggest_recipients",
 	"mail.update_mailbox_settings",
 	"sheets.add_tab",

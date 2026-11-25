@@ -41,7 +41,7 @@ export function foldLabelName(name: string): string {
 	return name.normalize("NFC").toLowerCase();
 }
 
-const SYSTEM_IN = new Set(["inbox", "sent", "starred", "reply_later", "spam", "trash", "important", "unread"]);
+const SYSTEM_IN = new Set(["inbox", "sent", "starred", "snoozed", "spam", "trash", "important", "unread"]);
 
 interface Token {
 	text: string;
@@ -218,7 +218,7 @@ function compileTerm(term: Term, options: CompileOptions): { sql: string; params
 			if (lower === "screened_out") return { sql: "coalesce(m.screen, '') = 'out'", params: [] };
 			if (!SYSTEM_IN.has(lower))
 				throw new QueryError(
-					`in:${value} is not a folder. Use inbox, sent, starred, reply_later, spam, trash, screener, screened_out or anywhere.`,
+					`in:${value} is not a folder. Use inbox, sent, starred, snoozed, spam, trash, screener, screened_out or anywhere.`,
 				);
 			return hasLabel(lower.toUpperCase());
 		case "is":

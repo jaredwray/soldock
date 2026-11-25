@@ -21,11 +21,12 @@ const ACTIONS: readonly [action: MailAction, add: string[], remove: string[], be
 	["unread", ["UNREAD"], [], ["INBOX"]],
 	["star", ["STARRED"], [], ["INBOX"]],
 	["unstar", [], ["STARRED"], ["INBOX", "STARRED"]],
-	["replyLater", ["REPLY_LATER"], ["INBOX"], ["INBOX", "UNREAD"]],
-	["replyLaterDone", [], ["REPLY_LATER"], ["REPLY_LATER"]],
 	[{ label: "lbl_1" }, ["lbl_1"], [], ["INBOX"]],
 	[{ unlabel: "lbl_1" }, [], ["lbl_1"], ["INBOX", "lbl_1"]],
 ];
+
+const UNTIL = "2027-01-04T08:00:00.000Z";
+const LATER = "2027-02-01T08:00:00.000Z";
 
 describe("actions", () => {
 	it("makes one label change for each action, and its undo gives back the labels from before", () => {
@@ -45,24 +46,46 @@ describe("actions", () => {
 		expect(undoChanges([{ id: "thr_1", labelIds: ["SENT"] }], actionChange("archive"))).toEqual([]);
 	});
 
-	// Reply later changes two labels. Undo must not put a thread in the inbox that was not in it before.
-	it("undoes Reply later on each thread with only the labels that it changed there", () => {
+	// A snooze changes two labels. Undo must not put a thread in the inbox that was not in it before.
+	it("undoes a snooze on each thread with only the labels that it changed there", () => {
+		const snooze = actionChange({ snooze: UNTIL });
+		expect(snooze).toEqual({ add: ["SNOOZED"], remove: ["INBOX"], until: UNTIL });
 		const undos = undoChanges(
 			[
 				{ id: "thr_inbox", labelIds: ["INBOX", "UNREAD"] },
 				{ id: "thr_archived", labelIds: ["lbl_1"] },
-				{ id: "thr_waiting", labelIds: ["REPLY_LATER"] },
+				{ id: "thr_snoozed", labelIds: ["SNOOZED"], snoozedUntil: LATER },
 				{ id: "thr_inbox2", labelIds: ["INBOX"] },
 			],
-			actionChange("replyLater"),
+			snooze,
 		);
 		expect(undos).toEqual([
-			{ ids: ["thr_inbox", "thr_inbox2"], change: { add: ["INBOX"], remove: ["REPLY_LATER"] } },
-			{ ids: ["thr_archived"], change: { add: [], remove: ["REPLY_LATER"] } },
+			{ ids: ["thr_inbox", "thr_inbox2"], change: { add: ["INBOX"], remove: ["SNOOZED"] } },
+			{ ids: ["thr_archived"], change: { add: [], remove: ["SNOOZED"] } },
 		]);
 	});
 
-	it("keeps the unread and starred flags of a list row in step with its labels", () => {
+	// The server adds SNOOZED only with a time. So the undo of Unsnooze is a snooze with the time from before.
+	// A thread whose time the page does not know gets no undo: without SNOOZED, the undo would only archive it.
+	it("undoes Unsnooze with a snooze until the time that each thread had", () => {
+		const unsnooze = actionChange("unsnooze");
+		expect(unsnooze).toEqual({ add: ["INBOX"], remove: ["SNOOZED"] });
+		const undos = undoChanges(
+			[
+				{ id: "thr_a", labelIds: ["SNOOZED"], snoozedUntil: UNTIL },
+				{ id: "thr_b", labelIds: ["SNOOZED"], snoozedUntil: LATER },
+				{ id: "thr_c", labelIds: ["SNOOZED"], snoozedUntil: UNTIL },
+				{ id: "thr_unknown", labelIds: ["SNOOZED"] },
+			],
+			unsnooze,
+		);
+		expect(undos).toEqual([
+			{ ids: ["thr_a", "thr_c"], change: { add: ["SNOOZED"], remove: ["INBOX"], until: UNTIL } },
+			{ ids: ["thr_b"], change: { add: ["SNOOZED"], remove: ["INBOX"], until: LATER } },
+		]);
+	});
+
+	it("keeps the unread and starred flags and the snooze time of a list row in step with its labels", () => {
 		const row: ThreadSummary = {
 			id: "thr_1",
 			subject: "Plans",
@@ -75,12 +98,19 @@ describe("actions", () => {
 			label_ids: ["INBOX", "UNREAD"],
 			auto_label_ids: [],
 			last_message_at: "2026-11-02T10:00:00.000Z",
+			snoozed_until: null,
 			untrusted: false,
 		};
 		const read = applyToSummary(row, actionChange("read"));
 		expect([read.unread, read.starred]).toEqual([false, false]);
 		const starred = applyToSummary(read, actionChange("star"));
 		expect([starred.unread, starred.starred]).toEqual([false, true]);
+		// A different change keeps the time of a snooze. The time goes away with SNOOZED.
+		const snoozed = applyToSummary(starred, actionChange({ snooze: UNTIL }));
+		expect(snoozed.snoozed_until).toBe(UNTIL);
+		expect(applyToSummary(snoozed, actionChange("unstar")).snoozed_until).toBe(UNTIL);
+		expect(applyToSummary(snoozed, actionChange({ snooze: LATER })).snoozed_until).toBe(LATER);
+		expect(applyToSummary(snoozed, actionChange("unsnooze")).snoozed_until).toBeNull();
 	});
 
 	it("keeps a thread in a view only while its labels match the view", () => {
@@ -91,9 +121,9 @@ describe("actions", () => {
 			[[], inbox, false],
 			[["INBOX", "TRASH"], inbox, false],
 			[["INBOX", "SPAM"], inbox, false],
-			[["REPLY_LATER"], { kind: "system", view: "reply-later" }, true],
-			[["INBOX"], { kind: "system", view: "reply-later" }, false],
-			[["REPLY_LATER", "TRASH"], { kind: "system", view: "reply-later" }, false],
+			[["SNOOZED"], { kind: "system", view: "snoozed" }, true],
+			[["INBOX"], { kind: "system", view: "snoozed" }, false],
+			[["SNOOZED", "TRASH"], { kind: "system", view: "snoozed" }, false],
 			[["STARRED"], { kind: "system", view: "starred" }, true],
 			[["STARRED", "TRASH"], { kind: "system", view: "starred" }, false],
 			[["SENT"], { kind: "system", view: "sent" }, true],

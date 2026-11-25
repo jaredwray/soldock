@@ -24,7 +24,7 @@ export const SHORTCUT_GROUPS: readonly { name: string; shortcuts: readonly Short
 			{ keys: ["e"], action: "Archive" },
 			{ keys: ["#"], action: "Move to Trash" },
 			{ keys: ["s"], action: "Star or remove the star" },
-			{ keys: ["l"], action: "Reply later, or Done in Reply later" },
+			{ keys: ["b"], action: "Snooze until a date and a time" },
 		],
 	},
 	{
@@ -43,7 +43,7 @@ export const SHORTCUT_GROUPS: readonly { name: string; shortcuts: readonly Short
 			{ keys: ["a"], action: "Reply all in the page" },
 			{ keys: ["f"], action: "Forward the conversation" },
 			{ keys: ["e"], action: "Archive, or Done: take the conversation out of the view" },
-			{ keys: ["l"], action: "Move to Reply later, or Done in Reply later" },
+			{ keys: ["b"], action: "Snooze until a date and a time" },
 			{ keys: ["!"], action: "Report spam" },
 			{ keys: ["Ctrl+Enter"], action: "Send the message (Cmd+Enter on a Mac)" },
 			{ keys: ["Esc"], action: "Close the reply" },
