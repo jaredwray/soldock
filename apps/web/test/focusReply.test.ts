@@ -30,9 +30,10 @@ function thread(id: string, messageCount = 1, lastMessageAt = "2026-11-02T10:00:
 		unread: false,
 		starred: false,
 		has_attachments: false,
-		label_ids: ["REPLY_LATER"],
+		label_ids: ["INBOX"],
 		auto_label_ids: [],
 		last_message_at: lastMessageAt,
+		snoozed_until: null,
 		untrusted: false,
 	};
 }
@@ -152,28 +153,27 @@ describe("focusMode", () => {
 
 	// Done takes the conversation out of the view where a label change can. In the inbox, a reply also archives.
 	// A view that keeps a cleared conversation does not count it as waiting (`leaves`). Spam leaves each view.
-	it("gives each view its Done, its Later, its reply change and its count", () => {
+	it("gives each view its Done, its reply change, its count and what leaves it", () => {
 		const table: [MailView, object][] = [
 			[
 				system("inbox"),
 				{
 					done: archive,
 					doneArchives: true,
-					later: true,
 					archiveOnReply: true,
 					countLabel: "INBOX",
-					leaves: { answered: true, archived: true, done: true, later: true, spam: true },
+					leaves: { answered: true, archived: true, done: true, snoozed: true, spam: true },
 				},
 			],
 			[
-				system("reply-later"),
+				// A snooze there changes the time, and the conversation stays in the view.
+				system("snoozed"),
 				{
-					done: { add: [], remove: ["REPLY_LATER"] },
-					doneArchives: false,
-					later: false,
+					done: archive,
+					doneArchives: true,
 					archiveOnReply: false,
-					countLabel: "REPLY_LATER",
-					leaves: { answered: true, archived: false, done: true, later: true, spam: true },
+					countLabel: "SNOOZED",
+					leaves: { answered: false, archived: false, done: false, snoozed: false, spam: true },
 				},
 			],
 			[
@@ -181,10 +181,9 @@ describe("focusMode", () => {
 				{
 					done: { add: [], remove: ["STARRED"] },
 					doneArchives: false,
-					later: true,
 					archiveOnReply: false,
 					countLabel: "STARRED",
-					leaves: { answered: false, archived: false, done: true, later: false, spam: true },
+					leaves: { answered: false, archived: false, done: true, snoozed: false, spam: true },
 				},
 			],
 			[
@@ -192,10 +191,9 @@ describe("focusMode", () => {
 				{
 					done: { add: [], remove: ["lbl_1"] },
 					doneArchives: false,
-					later: true,
 					archiveOnReply: false,
 					countLabel: "lbl_1",
-					leaves: { answered: false, archived: false, done: true, later: false, spam: true },
+					leaves: { answered: false, archived: false, done: true, snoozed: false, spam: true },
 				},
 			],
 			[
@@ -299,7 +297,7 @@ describe("position, progress and finish text", () => {
 		expect(progressFraction(0, 0)).toBe(0);
 	});
 
-	it("says what the person answered, archived, marked as done, moved to Reply later and marked as spam", () => {
+	it("says what the person answered, archived, marked as done, snoozed and marked as spam", () => {
 		const cleared = (how: ClearKind, count: number) =>
 			Array.from({ length: count }, (_, index) => ({
 				id: `${how}${index}`,
@@ -314,16 +312,16 @@ describe("position, progress and finish text", () => {
 			[cleared("done", 1), "You marked 1 conversation as done."],
 			[cleared("done", 2), "You marked 2 conversations as done."],
 			[[...cleared("answered", 4), ...cleared("done", 1)], "You answered 4 conversations and marked 1 as done."],
-			[cleared("later", 2), "You moved 2 conversations to Reply later."],
+			[cleared("snoozed", 2), "You snoozed 2 conversations."],
 			[
-				[...cleared("later", 1), ...cleared("answered", 2), ...cleared("done", 3)],
-				"You answered 2 conversations, marked 3 as done and moved 1 to Reply later.",
+				[...cleared("snoozed", 1), ...cleared("answered", 2), ...cleared("done", 3)],
+				"You answered 2 conversations, marked 3 as done and snoozed 1.",
 			],
 			[cleared("archived", 3), "You archived 3 conversations."],
 			[cleared("spam", 1), "You marked 1 conversation as spam."],
 			[
-				[...cleared("spam", 1), ...cleared("later", 1), ...cleared("archived", 3), ...cleared("answered", 2)],
-				"You answered 2 conversations, archived 3, moved 1 to Reply later and marked 1 as spam.",
+				[...cleared("spam", 1), ...cleared("snoozed", 1), ...cleared("archived", 3), ...cleared("answered", 2)],
+				"You answered 2 conversations, archived 3, snoozed 1 and marked 1 as spam.",
 			],
 		];
 		for (const [log, text] of table) expect(finishSummary(log)).toBe(text);

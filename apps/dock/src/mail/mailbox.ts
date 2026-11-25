@@ -212,7 +212,10 @@ export interface ThreadSummaryRecord {
 	autoLabels: string[];
 	hasAttachments: boolean;
 	untrusted: boolean;
+	/** The time of the order of the list: the newest message that matches, or the end of a snooze when that is later. */
 	lastMessageAt: number;
+	/** The time when the snooze of the thread ends, or null. */
+	snoozedUntil: number | null;
 }
 
 /** An address that the mailbox sent mail to. */
@@ -410,6 +413,34 @@ const MIGRATIONS: string[][] = [
 			name_folded = 'reply_later (' || (SELECT MAX(i) FROM n) || ')'
 		WHERE type = 'user' AND name_folded = 'reply_later'`,
 		"INSERT OR IGNORE INTO labels (id, name, name_folded, type, created_at) VALUES ('REPLY_LATER', 'REPLY_LATER', 'reply_later', 'system', 0)",
+	],
+	// Snooze replaces Reply later. `snoozed_until` is the time when a snoozed thread comes back. `woke_at` is
+	// the time when its last snooze ended at its time: the thread then has that place in the order of a list.
+	// A thread of Reply later has no time. So it goes back to the inbox now, at the top, as a thread whose
+	// snooze ends now, and the label REPLY_LATER goes away. The version grows, so an open client gets the
+	// lists again. A user label with the name snoozed gets a free name, as for REPLY_LATER above.
+	[
+		"ALTER TABLE threads ADD COLUMN snoozed_until INTEGER",
+		"ALTER TABLE threads ADD COLUMN woke_at INTEGER",
+		"CREATE INDEX threads_snoozed ON threads (snoozed_until) WHERE snoozed_until IS NOT NULL",
+		`UPDATE threads SET woke_at = CAST(strftime('%s', 'now') AS INTEGER) * 1000 WHERE id IN (
+			SELECT m.thread_id FROM messages m JOIN message_labels ml ON ml.message_seq = m.seq
+			WHERE ml.label_id = 'REPLY_LATER'
+		)`,
+		`INSERT OR IGNORE INTO message_labels (message_seq, label_id)
+			SELECT message_seq, 'INBOX' FROM message_labels WHERE label_id = 'REPLY_LATER'`,
+		"DELETE FROM message_labels WHERE label_id = 'REPLY_LATER'",
+		"DELETE FROM labels WHERE id = 'REPLY_LATER'",
+		"UPDATE meta SET value = CAST(value AS INTEGER) + 1 WHERE key = 'version'",
+		`WITH RECURSIVE n(i) AS (
+			SELECT 1
+			UNION ALL
+			SELECT i + 1 FROM n WHERE EXISTS (SELECT 1 FROM labels WHERE name_folded = 'snoozed (' || i || ')')
+		)
+		UPDATE labels SET name = name || ' (' || (SELECT MAX(i) FROM n) || ')',
+			name_folded = 'snoozed (' || (SELECT MAX(i) FROM n) || ')'
+		WHERE type = 'user' AND name_folded = 'snoozed'`,
+		"INSERT OR IGNORE INTO labels (id, name, name_folded, type, created_at) VALUES ('SNOOZED', 'SNOOZED', 'snoozed', 'system', 0)",
 	],
 ];
 
@@ -632,8 +663,9 @@ export class MailboxDO extends DurableObject<Env> {
 		this.sql = ctx.storage.sql;
 		ctx.blockConcurrencyWhile(async () => {
 			this.migrate();
-			// send() and deliver() set the alarm after their transaction commits. If the object stopped between
-			// the two, the outbox or the event outbox has rows and no alarm: set one now.
+			// send(), deliver() and snoozeThreads() set the alarm after their transaction commits. If the object
+			// stopped between the two, an outbox has rows or a thread is snoozed, and no alarm is set: set one now.
+			// The alarm then sets itself to the time of the next work.
 			if (this.hasPendingWork() && (await ctx.storage.getAlarm()) === null) await ctx.storage.setAlarm(Date.now());
 		});
 	}
@@ -675,11 +707,12 @@ export class MailboxDO extends DurableObject<Env> {
 		return this.sql.exec<T>(query, ...params).toArray();
 	}
 
-	/** True when the outbox or the event outbox has a row. */
+	/** True when an outbox has a row, or a thread is snoozed. The alarm then has work now or at a later time. */
 	private hasPendingWork(): boolean {
 		return (
 			(this.one<{ n: number }>(
-				"SELECT (SELECT COUNT(*) FROM outbox) + (SELECT COUNT(*) FROM event_outbox) + (SELECT COUNT(*) FROM autolabel_outbox) AS n",
+				`SELECT (SELECT COUNT(*) FROM outbox) + (SELECT COUNT(*) FROM event_outbox) + (SELECT COUNT(*) FROM autolabel_outbox)
+					+ (SELECT COUNT(*) FROM threads WHERE snoozed_until IS NOT NULL) AS n`,
 			)?.n ?? 0) > 0
 		);
 	}
@@ -780,6 +813,8 @@ export class MailboxDO extends DurableObject<Env> {
 				if (outcome === "archived") inInbox = false;
 				if (outcome === "queued") classify = true;
 			}
+			// New mail in the inbox ends the snooze of its thread: the person sees the thread now.
+			if (inInbox) this.endSnooze(inserted.threadId, null);
 			this.bump();
 			if (inInbox || released > 0) eventAt = this.queueInboxEvent();
 			return inserted;
@@ -1247,6 +1282,17 @@ export class MailboxDO extends DurableObject<Env> {
 			.sort((a, b) => a.created_at - b.created_at || a.id.localeCompare(b.id));
 		const [target, ...others] = ordered.map((row) => row.id);
 		for (const other of others) {
+			// The snooze of a thread that merges stays: the thread that remains gets the earliest time.
+			this.sql.exec(
+				`UPDATE threads SET snoozed_until = (SELECT MIN(snoozed_until) FROM threads WHERE id IN (?, ?)),
+					woke_at = (SELECT MAX(woke_at) FROM threads WHERE id IN (?, ?))
+				WHERE id = ?`,
+				target as string,
+				other,
+				target as string,
+				other,
+				target as string,
+			);
 			this.sql.exec("UPDATE messages SET thread_id = ? WHERE thread_id = ?", target as string, other);
 			this.sql.exec("DELETE FROM threads WHERE id = ?", other);
 		}
@@ -1409,8 +1455,11 @@ export class MailboxDO extends DurableObject<Env> {
 			}
 			if (!after) return { error: { code: "invalid", message: "The cursor is not valid." } };
 		}
+		// A thread whose snooze ended at its time has the place of that time, so it shows at the top of the inbox.
 		const rows = this.all<{ thread_id: string; last_date: number }>(
-			`SELECT m.thread_id AS thread_id, MAX(m.internal_date) AS last_date FROM messages m
+			`SELECT m.thread_id AS thread_id,
+				MAX(MAX(m.internal_date), COALESCE((SELECT t.woke_at FROM threads t WHERE t.id = m.thread_id), 0)) AS last_date
+			FROM messages m
 			WHERE ${compiled.where}
 			GROUP BY m.thread_id
 			HAVING ? = 0 OR last_date < ? OR (last_date = ? AND m.thread_id < ?)
@@ -1432,7 +1481,10 @@ export class MailboxDO extends DurableObject<Env> {
 	}
 
 	private summarize(threadId: string, lastDate: number): ThreadSummaryRecord {
-		const thread = this.one<{ subject: string }>("SELECT subject FROM threads WHERE id = ?", threadId);
+		const thread = this.one<{ subject: string; snoozed_until: number | null }>(
+			"SELECT subject, snoozed_until FROM threads WHERE id = ?",
+			threadId,
+		);
 		const messages = this.all<{
 			from_name: string | null;
 			from_addr: string | null;
@@ -1466,6 +1518,7 @@ export class MailboxDO extends DurableObject<Env> {
 			hasAttachments: messages.some((message) => message.has_attachments === 1),
 			untrusted: messages.some((message) => message.origin === "external"),
 			lastMessageAt: lastDate,
+			snoozedUntil: thread?.snoozed_until ?? null,
 		};
 	}
 
@@ -1474,8 +1527,13 @@ export class MailboxDO extends DurableObject<Env> {
 	 * `THREAD_BODY_CHARS`: an RPC result can be at most 32 MiB, so the bodies of older messages in a
 	 * very large thread are left out (`omitted`), and `getMessage` returns each one.
 	 */
-	getThread(threadId: string): { id: string; subject: string; messages: StoredMessage[] } | null {
-		const thread = this.one<{ id: string; subject: string }>("SELECT id, subject FROM threads WHERE id = ?", threadId);
+	getThread(
+		threadId: string,
+	): { id: string; subject: string; snoozedUntil: number | null; messages: StoredMessage[] } | null {
+		const thread = this.one<{ id: string; subject: string; snoozed_until: number | null }>(
+			"SELECT id, subject, snoozed_until FROM threads WHERE id = ?",
+			threadId,
+		);
 		if (!thread) return null;
 		const rows = this.all<MessageMetaRow>(
 			`SELECT ${MESSAGE_META_COLUMNS}, length(text_body) AS text_chars, length(html_body) AS html_chars
@@ -1495,6 +1553,7 @@ export class MailboxDO extends DurableObject<Env> {
 		return {
 			id: thread.id,
 			subject: thread.subject,
+			snoozedUntil: thread.snoozed_until,
 			messages: rows.map((row) => {
 				const body = withBody.has(row.seq)
 					? this.one<{ text_body: string | null; html_body: string | null }>(
@@ -1770,6 +1829,8 @@ export class MailboxDO extends DurableObject<Env> {
 			}
 			if (changed) threadsChanged++;
 		}
+		// A thread without SNOOZED has no time. The time of a thread that loses SNOOZED goes with the label.
+		const endsSnooze = params.remove.includes("SNOOZED");
 		const learning = !params.dryRun && params.learn === true && this.autoLabelsOn();
 		const corrections = learning ? this.correctionsOfChange(threadIds, params.add, params.remove) : [];
 		// A person who adds a label that auto labels applied confirms it: the mark goes.
@@ -1799,10 +1860,106 @@ export class MailboxDO extends DurableObject<Env> {
 						this.sql.exec("DELETE FROM message_labels WHERE message_seq = ? AND label_id = ?", change.seq, label);
 					}
 				}
+				if (endsSnooze) {
+					for (const threadId of threadIds) {
+						this.sql.exec("UPDATE threads SET snoozed_until = NULL WHERE id = ?", threadId);
+					}
+				}
 				this.bump();
 			});
 		}
 		return { threads_changed: threadsChanged, messages_changed: changes.length, dry_run: params.dryRun };
+	}
+
+	// --- Snooze ---------------------------------------------------------------------------------
+
+	/**
+	 * Snoozes threads until `until`: each message gets SNOOZED and loses INBOX, and the thread gets the time.
+	 * A thread that is snoozed already gets the new time. The alarm brings each thread back at its time.
+	 */
+	async snoozeThreads(params: {
+		threadIds: string[];
+		until: number;
+	}): Promise<{ threads_changed: number; until: number } | Refusal> {
+		if (params.until <= Date.now()) {
+			return { error: { code: "invalid", message: "until must be later than now." } };
+		}
+		const threadIds = [...new Set(params.threadIds)];
+		for (const threadId of threadIds) {
+			if (!this.one("SELECT 1 AS found FROM threads WHERE id = ?", threadId)) {
+				return { error: { code: "not_found", message: `No thread has the id ${threadId}.` } };
+			}
+			// Held mail is in no view, so it cannot leave one. A person screens the sender in or out first.
+			if (this.one("SELECT 1 AS found FROM messages WHERE thread_id = ? AND screen IS NOT NULL", threadId)) {
+				return {
+					error: {
+						code: "conflict",
+						message: `The Screener holds the thread ${threadId}. To snooze the mail, a person first screens the sender in (mail.screen_sender).`,
+					},
+				};
+			}
+		}
+		let changed = 0;
+		this.ctx.storage.transactionSync(() => {
+			for (const threadId of threadIds) {
+				const written =
+					this.sql.exec(
+						"INSERT OR IGNORE INTO message_labels (message_seq, label_id) SELECT seq, 'SNOOZED' FROM messages WHERE thread_id = ?",
+						threadId,
+					).rowsWritten +
+					this.sql.exec(
+						"DELETE FROM message_labels WHERE label_id = 'INBOX' AND message_seq IN (SELECT seq FROM messages WHERE thread_id = ?)",
+						threadId,
+					).rowsWritten +
+					// A new snooze removes the place of an earlier one: `woke_at` is for a thread that came back only.
+					this.sql.exec(
+						"UPDATE threads SET snoozed_until = ?, woke_at = NULL WHERE id = ? AND (snoozed_until IS NOT ? OR woke_at IS NOT NULL)",
+						params.until,
+						threadId,
+						params.until,
+					).rowsWritten;
+				if (written > 0) changed++;
+			}
+			if (changed > 0) this.bump();
+		});
+		await this.alarmBy(params.until);
+		return { threads_changed: changed, until: params.until };
+	}
+
+	/**
+	 * Ends the snooze of a thread, if it has one: each message loses SNOOZED and gets INBOX. `wokeAt` is the
+	 * time of a snooze that ended at its time, and the thread then has the place of that time in a list. It is
+	 * null when new mail ends the snooze: the new message gives the thread its place.
+	 */
+	private endSnooze(threadId: string, wokeAt: number | null): void {
+		if (!this.one("SELECT 1 AS found FROM threads WHERE id = ? AND snoozed_until IS NOT NULL", threadId)) return;
+		this.sql.exec(
+			"DELETE FROM message_labels WHERE label_id = 'SNOOZED' AND message_seq IN (SELECT seq FROM messages WHERE thread_id = ?)",
+			threadId,
+		);
+		this.sql.exec(
+			"INSERT OR IGNORE INTO message_labels (message_seq, label_id) SELECT seq, 'INBOX' FROM messages WHERE thread_id = ?",
+			threadId,
+		);
+		this.sql.exec(
+			"UPDATE threads SET snoozed_until = NULL, woke_at = COALESCE(?, woke_at) WHERE id = ?",
+			wokeAt,
+			threadId,
+		);
+	}
+
+	/** Brings back each thread whose snooze time came. The watch sockets get the inbox signal. */
+	private wakeSnoozed(): void {
+		const due = this.all<{ id: string; snoozed_until: number }>(
+			"SELECT id, snoozed_until FROM threads WHERE snoozed_until <= ?",
+			Date.now(),
+		);
+		if (due.length === 0) return;
+		this.ctx.storage.transactionSync(() => {
+			for (const thread of due) this.endSnooze(thread.id, thread.snoozed_until);
+			this.bump();
+		});
+		this.signalInbox();
 	}
 
 	// --- Auto labels ------------------------------------------------------------------------------
@@ -1822,14 +1979,6 @@ export class MailboxDO extends DurableObject<Env> {
 		this.sql.exec(
 			"DELETE FROM message_labels WHERE label_id = ? AND message_seq IN (SELECT seq FROM messages WHERE thread_id = ?)",
 			row.label_id,
-			threadId,
-		);
-	}
-
-	/** Removes REPLY_LATER from each message of a thread. */
-	private clearReplyLater(threadId: string): void {
-		this.sql.exec(
-			"DELETE FROM message_labels WHERE label_id = 'REPLY_LATER' AND message_seq IN (SELECT seq FROM messages WHERE thread_id = ?)",
 			threadId,
 		);
 	}
@@ -2424,8 +2573,9 @@ export class MailboxDO extends DurableObject<Env> {
 			);
 			// A reply answers the thread, so its Needs reply label goes.
 			if (this.autoLabelsOn()) this.clearNeedsReply(stored.threadId);
-			// A reply also takes the thread out of Reply later. A forward or a new message does not.
-			if (input.replyThreadId !== null) this.clearReplyLater(stored.threadId);
+			// A message to the mailbox itself is new mail in the inbox, so it ends the snooze of its thread, as in
+			// deliver(). A different send does not: the time of the snooze decides.
+			if (selfDelivery) this.endSnooze(stored.threadId, null);
 			const recipients: DeliveryRecord[] = [];
 			for (const recipient of input.recipients) {
 				const status = recipient.self ? "delivered" : "queued";
@@ -2489,7 +2639,9 @@ export class MailboxDO extends DurableObject<Env> {
 	}
 
 	private async runAlarm(): Promise<void> {
-		// Events first: each one is one quick queue send, and a slow outbox must not delay them.
+		// The snoozes first: they need no network. Then the events: each one is one quick queue send, and a slow
+		// outbox must not delay them.
+		this.wakeSnoozed();
 		await this.drainEvents();
 		await this.drainOutbox();
 		await this.drainAutoLabels();
@@ -2498,7 +2650,8 @@ export class MailboxDO extends DurableObject<Env> {
 			this.one<{ at: number | null }>(
 				`SELECT MIN(at) AS at FROM (SELECT MIN(next_attempt_at) AS at FROM outbox
 				UNION ALL SELECT MIN(next_attempt_at) FROM event_outbox
-				UNION ALL SELECT MIN(next_attempt_at) FROM autolabel_outbox)`,
+				UNION ALL SELECT MIN(next_attempt_at) FROM autolabel_outbox
+				UNION ALL SELECT MIN(snoozed_until) FROM threads WHERE snoozed_until IS NOT NULL)`,
 			)?.at ?? null;
 		if (next !== null) await this.ctx.storage.setAlarm(Math.max(next, Date.now()));
 	}

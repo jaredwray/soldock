@@ -160,10 +160,11 @@ MCP clients. The app has no UI-only path.
   - The loading, empty and error states of the list and of the thread view are in the center of the
     page. The empty state and the error state have an icon on a tile.
   - The toolbar acts on the selection or on the open thread: archive, report spam, trash, mark as
-    read or unread, star, Reply later, apply a label and remove a label. The spam and trash views show "Not
+    read or unread, star, Snooze, apply a label and remove a label. The spam and trash views show "Not
     spam" and "Restore". An action that moves threads shows a toast with "Undo". Undo gives each thread
     back only the labels that the action changed on it (`undoChanges` in `actions.ts`). An open thread that
-    still loads gets no undo, because the app does not know its labels yet.
+    still loads gets no undo, because the app does not know its labels yet. A change of only the time of a
+    snooze has no undo.
   - The thread view shows each message with its sender, recipients, date, labels, body,
     attachments and, for sent mail, the delivery status of each recipient. External mail gets an
     "External sender" notice with the SPF, DKIM and DMARC results. A message with the SPAM label
@@ -270,25 +271,34 @@ MCP clients. The app has no UI-only path.
     the line `Attachments (not included): …`. Inline images are not in this line.
   - The app polls `mail.get_profile` every 15 seconds while the tab is visible, and on window
     focus. When the version changes, it gets the labels, the list and the open thread again.
-  - Keyboard shortcuts: `j`, `k`, `o`, Enter, `u`, `e`, `#`, `s`, `l`, `x`, `c`, `r`, `/` and `?`. Press `?`
+  - Keyboard shortcuts: `j`, `k`, `o`, Enter, `u`, `e`, `#`, `s`, `b`, `x`, `c`, `r`, `/` and `?`. Press `?`
     to see the list, in five groups (`SHORTCUT_GROUPS` in
     [`ShortcutHelp.tsx`](src/features/mail/ShortcutHelp.tsx)). Shortcuts do not work while the focus is in a text field.
-- **Reply later** (`/mail/reply-later`, [`FocusReply.tsx`](src/features/mail/FocusReply.tsx)). A place for
-  the conversations that the person answers later.
-  - **Reply later** in the toolbar, or the `l` key, adds `REPLY_LATER` and removes `INBOX`
-    (`mail.modify_threads`). The conversation leaves the inbox.
-  - When each target is in Reply later already, the button is **Done** (a check), and `l` removes
-    `REPLY_LATER`. In the inbox, the button and `l` always move the conversation out. A conversation there
-    with `REPLY_LATER` got new mail. The spam and trash views have neither action.
-  - The sidebar shows **Reply later** after the inbox, with the number of all its conversations (`navCount`
-    in `views.ts`). Its list uses the query `in:reply_later`.
-  - At the end of the inbox list, a pile tells how many conversations wait for an answer. It has links to the
-    list and to Focus. The pile shows only when the count is more than 0.
-  - The Reply later list has a banner with **Focus** above its rows.
+- **Snooze** (`/mail/snoozed`, [`SnoozeDialog.tsx`](src/features/mail/SnoozeDialog.tsx), with the rules in
+  [`snooze.ts`](src/features/mail/snooze.ts)). A snooze takes a conversation out of the inbox until a time that
+  the person picks.
+  - **Snooze** in the toolbar opens a list of times under the button
+    ([`SnoozePicker.tsx`](src/features/mail/SnoozePicker.tsx)), so one more click snoozes: **In 3 hours**,
+    **Tomorrow** (8:00) and **Next week** (the next Monday, 8:00), each with its time (`snoozePresets`). On a
+    Sunday, **Tomorrow** is that Monday, so **Next week** does not show. The control is the list control of
+    "Label as…" (`Select`).
+  - The last option of the list, **Pick a date and time…**, opens the dialog **Snooze until**. The `b` key
+    opens the dialog too, because it also acts on a row with no selection. The dialog has the same times and a
+    field for a date and a time (`datetime-local`), which starts at tomorrow, 8:00. The times are in the time
+    zone of the browser. A time that is not later than now shows an error, and the dialog stays open.
+  - A time calls `mail.snooze_threads`. The conversation leaves the inbox, and a toast tells the time, with
+    **Undo**. The server puts the conversation back at the top of the inbox at that time.
+  - The sidebar shows **Snoozed** after the inbox, with the number of all its conversations (`navCount` in
+    `views.ts`). Its list uses the query `in:snoozed`.
+  - A row of a snoozed conversation shows a clock and its time before the date, in each list (`snoozeTime`).
+  - When each target is snoozed, the button changes the time, and **Unsnooze** shows after it. Unsnooze removes
+    `SNOOZED` and adds `INBOX` (`mail.modify_threads`). Its Undo snoozes the conversation again until the time
+    that it had. A conversation whose time the page does not know gets no Undo. The spam and trash views have
+    neither action, and a search of the mail that the Screener holds has neither.
 - **Focus** ([`FocusReply.tsx`](src/features/mail/FocusReply.tsx), with the rules in
   [`focusReply.ts`](src/features/mail/focusReply.ts)) shows the conversations of a list one at a time, in the order
   of the list, newest first. The conversation is in one column of 760px.
-  - Each list except Spam and Trash has Focus: the inbox, Reply later, Starred, Sent, All mail, each label and each
+  - Each list except Spam and Trash has Focus: the inbox, Snoozed, Starred, Sent, All mail, each label and each
     search. A search of the mail that the Screener holds has no Focus, because the server does not move that mail.
     A search that names spam, trash or anywhere, and the label path of Spam or Trash, have no Focus either. The
     Focus path of such a list goes to the list. The label path of a different system label with a view, for
@@ -296,9 +306,7 @@ MCP clients. The app has no UI-only path.
   - The path is the path of the list and `/focus`, for example `/mail/inbox/focus`, `/mail/label/<id>/focus` or
     `/mail/search/focus?q=…`. A team or agent mailbox has the same paths under its own path (`focusPath`).
   - The header row of a list with rows has **Focus** at its right, with the icon `focus` (the Iconoir file
-    `position.svg`). At 900px and below, the button shows its icon only. The Reply later list also has its
-    banner, and the inbox has its pile. The link of the pile has the name "Focus in Reply later", because the
-    header row of the inbox has its own Focus.
+    `position.svg`). At 900px and below, the button shows its icon only.
   - The header row of Focus shows the name of the list after the title. A phone does not show it: the Back button
     names the list. In a search, the search box shows the query.
   - A strip under the header row has **Previous**, the position and **Next** at its left. The position is, for
@@ -307,21 +315,24 @@ MCP clients. The app has no UI-only path.
     of 2px on the border of the strip shows the part of this visit that is done (`progressFraction`).
   - At 600px and below, Previous and Next are icons at the two ends of the strip. The actions are in a bar at the
     bottom of the page, as the actions of a selection in the list. The bar does not show while the reply is open.
-  - The actions, from left to right: **Spam**, a second **Archive** in some lists, **Later**, and the primary
+  - The actions, from left to right: **Spam**, a second **Archive** in some lists, **Snooze**, and the primary
     button. Reply, Reply all and Forward are under the message. The primary button and the second Archive follow
     the list and the labels of the conversation (`primaryAction`, `showsArchive`), so two buttons never do the
     same change:
 
-    | List | Primary button (`e`) | Second Archive | Later (`l`) | After a reply |
+    | List | Primary button (`e`) | Second Archive | Snooze (`b`) | After a reply |
     | --- | --- | --- | --- | --- |
-    | Inbox | Archive | No | Moves to Reply later | The page archives the conversation |
-    | Sent, All mail, a search | Archive when the conversation is in the inbox. Else Done, which changes nothing and shows the next conversation | No | Moves to Reply later | No change |
-    | Reply later | Done: removes `REPLY_LATER` | When the conversation is in the inbox | None: `l` is Done | The server removes `REPLY_LATER` |
-    | Starred | Done: removes the star | When the conversation is in the inbox | Moves to Reply later | The star stays |
-    | A label | Done: removes the label | When the conversation is in the inbox | Moves to Reply later | The label stays |
+    | Inbox | Archive | No | The conversation leaves the list | The page archives the conversation |
+    | Sent, All mail, a search | Archive when the conversation is in the inbox. Else Done, which changes nothing and shows the next conversation | No | The conversation stays in the list | No change |
+    | Snoozed | Done, which changes nothing and shows the next conversation | No | The conversation gets the new time and stays in the list | No change: the time of the snooze decides |
+    | Starred | Done: removes the star | When the conversation is in the inbox | The conversation stays in the list | The star stays |
+    | A label | Done: removes the label | When the conversation is in the inbox | The conversation stays in the list | The label stays |
 
+  - **Snooze** is the list of times of the toolbar (`SnoozePicker`), and `b` opens the dialog. After the person
+    picks a time, the conversation is cleared in this visit, and the focus goes to the subject of the next one.
+    While the reply has text, a time of the list asks before it snoozes, and the `b` key does nothing.
   - **Spam** adds `SPAM` in each list. The conversation then leaves each list except Spam.
-  - After Archive, Spam, Later, Done or a send, the next conversation shows. At the end of the list, the previous
+  - After Archive, Spam, Snooze, Done or a send, the next conversation shows. At the end of the list, the previous
     one shows. When no conversation stays, the page shows the finish state. Previous and Next stop at the two
     ends. They have `aria-disabled` there, not `disabled`, so they keep the focus.
   - After a send, the reply of the next conversation opens with the focus in the message. So the person answers
@@ -336,7 +347,7 @@ MCP clients. The app has no UI-only path.
     11: Hiring plan, from Ana Lopez.". After a send, the text starts with "Reply sent.".
   - The new conversation comes in with a short motion: from the right after Next and after an action, and from the
     left after Previous and after Undo. With `prefers-reduced-motion`, it shows at once.
-  - Archive, Spam, Later and Done each show a toast. The toast has **Undo** when the change altered the
+  - Archive, Spam, Snooze and Done each show a toast. The toast has **Undo** when the change altered the
     conversation. **Undo** puts the conversation back at its old place and shows it, with its reply closed. While
     the reply on screen has text, Undo only puts the conversation back into the order. When the Undo fails, the
     next conversation shows. Undo and the end of a request read the state of the page at that time, not at the
@@ -373,18 +384,17 @@ MCP clients. The app has no UI-only path.
     list and the thread that the page showed, with one more after a reply. A new visit shows it again. A
     conversation that comes back goes to the end of the order.
   - A refresh does not change the conversation on screen. When that conversation left the list, for example after
-    a reply by a different member, it stays with the note "This conversation is not in Reply later now.". It leaves
+    a reply by a different member, it stays with the note "This conversation is not in Starred now.". It leaves
     the order when the person moves away.
   - When no conversation stays, the page shows **All caught up.**, what the person answered, archived, marked as
-    done, moved to Reply later and marked as spam in this visit, and a list of those conversations (at most 8, then
-    a count). Each is a link to the conversation. **Go to the inbox** follows. After the inbox or Reply later,
-    **Reply later list** is second. After a different list, the link back to that list is second. A page that
-    opens with no conversation shows the empty state.
+    done, snoozed and marked as spam in this visit, and a list of those conversations (at most 8, then
+    a count). Each is a link to the conversation. **Go to the inbox** follows. After a list that is not the
+    inbox, the link back to that list is second. A page that opens with no conversation shows the empty state.
   - Focus does not mark a conversation as read.
   - The shortcuts work in Focus: `j` or `→` for Next, `k` or `←` for Previous, `r`, `a`, `f`, `e` for the primary
-    button, `l` for Later (Done in Reply later), `!` for Spam, `o`, `c`, `/` and `?`. `u` goes back to the list.
+    button, `b` for Snooze, `!` for Spam, `o`, `c`, `/` and `?`. `u` goes back to the list.
     Shift with an arrow key does not move: it selects text. The shortcut help has a Focus group.
-  - Without `mail.modify`, Focus has no Spam, Archive, Later or Done, and a reply in the inbox does not archive.
+  - Without `mail.modify`, Focus has no Spam, Archive, Snooze or Done, and a reply in the inbox does not archive.
     Without `mail.send`, it has no Reply. The notice of the list says why. The mailbox of an agent shows the
     notice of a read-only mailbox, because each conversation that shows is opened, and the audit log records it.
 - **Mailbox tree.** When the person can use more than the own mailbox, the sidebar shows a row for
@@ -2015,7 +2025,7 @@ dock Worker serves `index.html` for each app path, so a deep link works on reloa
 | Path | Page |
 | --- | --- |
 | `/`, `/mail` | Goes to `/mail/inbox` |
-| `/mail/<view>` | The thread list of a view: `inbox`, `reply-later`, `starred`, `sent`, `spam`, `trash` or `all` |
+| `/mail/<view>` | The thread list of a view: `inbox`, `snoozed`, `starred`, `sent`, `spam`, `trash` or `all` |
 | `/mail/<view>/focus`, `/mail/label/<lbl_id>/focus`, `/mail/search/focus?q=<query>` | Focus: the conversations of that view, one at a time. Spam and Trash go to their list |
 | `/mail/label/<lbl_id>` | The thread list of a user label |
 | `/mail/search?q=<query>` | The search results |
@@ -2045,7 +2055,7 @@ dock Worker serves `index.html` for each app path, so a deep link works on reloa
 | `/settings` | Goes to the Account section of Settings |
 | `/settings/<section>` | One section of Settings: `account`, `notifications`, `security` or `api-keys` |
 
-Each view uses one search query: Inbox `in:inbox`, Reply later `in:reply_later`, Starred `is:starred`,
+Each view uses one search query: Inbox `in:inbox`, Snoozed `in:snoozed`, Starred `is:starred`,
 Sent `in:sent`, Spam `in:spam`, Trash `in:trash`, All mail an empty string, and a user label `label:"<name>"`.
 
 ## Layout

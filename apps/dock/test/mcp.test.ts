@@ -256,6 +256,7 @@ describe("the MCP endpoint", () => {
 			"mail_list_webhook_subscriptions",
 			"mail_modify_threads",
 			"mail_send",
+			"mail_snooze_threads",
 			"mail_suggest_recipients",
 			"mail_update_mailbox_settings",
 			"sheets_add_tab",

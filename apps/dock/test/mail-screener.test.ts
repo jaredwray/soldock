@@ -474,6 +474,9 @@ describe("decisions in the Screener", () => {
 		}
 		expect(await codeOf(modify({ add_label_ids: ["INBOX"], dry_run: true }))).toBe("conflict");
 		expect(await codeOf(modify({ remove_label_ids: ["STARRED", "INBOX"] }))).toBe("conflict");
+		// A snooze moves the mail out of a view and back, so it is refused too.
+		const until = new Date(Date.now() + 3_600_000).toISOString();
+		expect(await codeOf(ada.call("mail.snooze_threads", { thread_ids: [threadId], until }))).toBe("conflict");
 		// An agent with mail.modify gets the same refusal.
 		const support = await createSupport([{ id: bot.id, scopes: ["mail.read", "mail.modify"] }]);
 		await receive("stranger@outside.example", "Held for the team", { to: "support@dock.test" });
@@ -685,6 +688,10 @@ describe("the Screener in a mailbox from before", () => {
 					sql.exec("DROP INDEX messages_from");
 					sql.exec("ALTER TABLE messages DROP COLUMN screen");
 					sql.exec("ALTER TABLE recipients DROP COLUMN person_sent");
+					// Snooze (migration 8) adds columns, and a column cannot be added two times.
+					sql.exec("DROP INDEX threads_snoozed");
+					sql.exec("ALTER TABLE threads DROP COLUMN snoozed_until");
+					sql.exec("ALTER TABLE threads DROP COLUMN woke_at");
 					// Schema 5 is the schema before the Screener (migration 6). Later migrations run again too.
 					sql.exec("UPDATE meta SET value = '5' WHERE key = 'schema_version'");
 					await state.storage.sync();
