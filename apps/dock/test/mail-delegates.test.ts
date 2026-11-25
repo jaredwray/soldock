@@ -1,6 +1,8 @@
+import { createExecutionContext } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import { MAILBOX_DELEGATE_LIMITS } from "@asterra/contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import worker from "../src/index.ts";
 import {
 	type Actor,
 	api,
@@ -9,8 +11,11 @@ import {
 	createActor,
 	drainOutbox,
 	inject,
+	ORIGIN,
 	PASSWORD,
 	rawMessage,
+	request,
+	SETUP_TOKEN,
 	seedOrg,
 	setLegacyScopes,
 } from "./helpers.ts";
@@ -195,7 +200,90 @@ describe("the delegates of the own mailbox of a person", () => {
 				ben.call("mail.create_auto_label", { mailbox_id: ada.id, name: "Deals", description: "Mail about deals" }),
 			),
 		).toBe("forbidden");
+		expect(
+			await codeOf(ben.call("mail.delete_auto_label", { mailbox_id: ada.id, auto_label_id: `alb_${"0".repeat(26)}` })),
+		).toBe("forbidden");
 		expect((await ada.call("mail.get_mailbox_settings")).signature).toBe("");
+	});
+
+	// A grant stays after a key ends. So an owner or an admin who manages the keys of a person must not get a
+	// key that gives access to the mailbox of that person.
+	it("gives the secret of a key with mail.share to the person only", async () => {
+		const forAda = (scopes: ("mail.read" | "mail.share")[]) =>
+			owner.call("account.create_api_key", { principal_id: ada.id, label: "For Ada", scopes });
+		expect(await codeOf(forAda(["mail.read", "mail.share"]))).toBe("forbidden");
+		// A key without the scope still works for an admin, and cannot add a delegate.
+		const reader = api((await forAda(["mail.read"])).api_key.secret);
+		expect(await codeOf(reader("mail.set_delegate", { principal_id: owner.id, scopes: ["mail.read"] }))).toBe(
+			"forbidden",
+		);
+		// The person creates such a key. An admin cannot take its secret with a rotation.
+		const { api_key: own } = await ada.call("account.create_api_key", {
+			label: "Own",
+			scopes: ["account.keys", "mail.read", "mail.share"],
+		});
+		expect(await codeOf(owner.call("account.rotate_api_key", { key_id: own.id }))).toBe("forbidden");
+		const rotated = await api(own.secret)("account.rotate_api_key", { key_id: own.id });
+		expect(rotated.api_key.id).toBe(own.id);
+		expect(await ada.call("mail.list_delegates")).toEqual({ delegates: [] });
+	});
+
+	// A send writes the message to R2 before the mailbox stores it. A removal in that time must stop the send.
+	it("refuses a send when the owner removes the delegate while the send is in progress", async () => {
+		await grant(ben, ["mail.read", "mail.send"]);
+		const blobs = new Proxy(env.BLOBS, {
+			get(target, property) {
+				if (property === "put") {
+					return async (...args: Parameters<R2Bucket["put"]>) => {
+						await ada.call("mail.remove_delegate", { principal_id: ben.id });
+						return target.put(...args);
+					};
+				}
+				const value = Reflect.get(target, property);
+				return typeof value === "function" ? value.bind(target) : value;
+			},
+		});
+		const res = await (worker as unknown as Required<Pick<ExportedHandler<Env>, "fetch">>).fetch(
+			new Request(`${ORIGIN}/api/v1/mail/messages`, {
+				method: "POST",
+				headers: { authorization: `Bearer ${ben.key}`, "content-type": "application/json" },
+				body: JSON.stringify({ mailbox_id: ada.id, to: ["owner@dock.test"], text: "Too late" }),
+			}),
+			{ ...env, BLOBS: blobs } as unknown as Env,
+			createExecutionContext(),
+		);
+		expect(res.status).toBe(403);
+		expect((await ada.call("mail.list_threads", { query: "in:anywhere" })).threads).toEqual([]);
+	});
+
+	// A webhook tells when mail arrives, and it stays after a grant ends. A delegate watches the inbox with a
+	// stream, which checks the grant before each notification.
+	it("lets no delegate create a webhook for the mailbox", async () => {
+		await grant(ben, ["mail.read", "mail.modify", "mail.send"]);
+		const { endpoint } = await ben.call("webhooks.create_endpoint", { url: "https://hooks.example/mail" });
+		expect(
+			await codeOf(ben.call("mail.create_webhook_subscription", { endpoint_id: endpoint.id, mailbox_id: ada.id })),
+		).toBe("forbidden");
+		expect(await codeOf(ben.call("mail.list_webhook_subscriptions", { mailbox_id: ada.id }))).toBe("forbidden");
+	});
+
+	// The grants name the principals. A fresh start must drop them before it drops the principals.
+	it("removes each grant in a fresh start of the directory", async () => {
+		await grant(ben, ["mail.read"]);
+		const reset = await request("/auth/setup", {
+			method: "POST",
+			headers: { authorization: `Bearer ${SETUP_TOKEN}`, "content-type": "application/json", origin: ORIGIN },
+			body: JSON.stringify({
+				display_name: "New owner",
+				mail_domain: "dock.test",
+				address: "owner@dock.test",
+				password: PASSWORD,
+				start_fresh: "DELETE DIRECTORY",
+			}),
+		});
+		expect(reset.status).toBe(201);
+		const rows = await env.DIRECTORY.prepare("SELECT COUNT(*) AS n FROM mailbox_delegates").first<number>("n");
+		expect(rows).toBe(0);
 	});
 
 	it("needs mail.share, and gives no scope that the credential does not hold", async () => {
@@ -332,6 +420,27 @@ describe("an agent as a delegate", () => {
 		const sent = await send("owner@dock.test");
 		const [copy] = (await ada.call("mail.get_thread", { thread_id: sent.thread_id })).messages;
 		expect(copy?.sent_by).toEqual({ principal_id: bot.id, kind: "agent", display_name: "Billing Bot" });
+	});
+
+	// A service account is an agent in mail. The grant alone decides, and its account scopes do not count.
+	it("lets a service account use the mailbox with the grant alone, and never change its settings", async () => {
+		await mailForAda();
+		const { principal: service } = await owner.call("directory.create_service_account", {
+			display_name: "Mail Sorter",
+			address: "sorter@dock.test",
+		});
+		await setLegacyScopes(service.id, ["account.read"]);
+		const { api_key } = await owner.call("account.create_api_key", { principal_id: service.id, label: "sorter" });
+		const sorter = api(api_key.secret);
+		expect(await codeOf(sorter("mail.list_threads", { mailbox_id: ada.id }))).toBe("forbidden");
+
+		await ada.call("mail.set_delegate", { principal_id: service.id, scopes: ["mail.read", "mail.modify"] });
+		const { threads } = await sorter("mail.list_threads", { mailbox_id: ada.id });
+		expect(threads.map((thread) => thread.subject)).toEqual(["Contract"]);
+		expect(await codeOf(sorter("mail.update_mailbox_settings", { mailbox_id: ada.id, signature: "Bot" }))).toBe(
+			"forbidden",
+		);
+		expect(await codeOf(sorter("mail.list_threads", { mailbox_id: ben.id }))).toBe("forbidden");
 	});
 
 	it("shows the grant in the access of the agent, and keeps a grant between two people private", async () => {

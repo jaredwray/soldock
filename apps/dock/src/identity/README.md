@@ -199,7 +199,8 @@ The directory stores these fields in `chat_status_json`. Each read checks the en
   `account.whoami` show the kind `service`. [Service accounts](#service-accounts) has the rules.
 - `directory.create_principal` gives a new human a first password and no API key (`api_key` is
   null). The person signs in, and creates keys in Settings with `account.create_api_key`. An owner
-  or an admin can also create a key for the person. A new agent needs `scopes`: the scopes of the
+  or an admin can also create a key for the person, but not a key with `mail.share`
+  ([Mailbox delegates](#mailbox-delegates)). A new agent needs `scopes`: the scopes of the
   agent, inside `AGENT_SCOPES`. The credential of the call must hold each one (`grantableScopes`). The
   agent also gets a first key, `First key`, with no scopes of its own. Its secret shows once. A human
   with `scopes` is `invalid`. The input is strict, and it has no `limits`: a call that sends `limits`
@@ -811,6 +812,12 @@ This module owns the grants and the check of each call (`mailbox-delegates.ts`).
 - Only the owner of the mailbox writes its rows (`mail.set_delegate`, `mail.remove_delegate`). The
   operations accept people only and need `mail.share`. An agent holds no `mail.share`, so it cannot give
   access to its own mailbox. The role of an owner or an admin of the organization gives no right here.
+- Only the person gets a key of the person with `mail.share` (`OWN_KEY_SCOPES`). `account.create_api_key`
+  and `account.rotate_api_key` refuse an owner or an admin who acts for a different person, when the key
+  holds that scope (`requireOwnShareKey`). A grant stays after a key ends, so a key that an admin made must
+  not make one. An owner or an admin can still set a new password for a person and sign in as that person:
+  the person sees that, because the old password stops.
+- An archived principal can be a delegate. The grant has an effect only after a restore.
 - A delegate is a person, an agent or a service account. A principal is never a delegate of the own
   mailbox: a CHECK in D1 refuses the row.
 - A mailbox can have 25 delegates (`MAILBOX_DELEGATE_LIMITS.delegates`). The count is in the SQL of the

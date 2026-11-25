@@ -111,13 +111,19 @@ export const SETTINGS_PATH = "/settings";
  * The ids of the people whose mailbox the person can use as a delegate. A person and an agent both have a
  * `prn_` id, so the id alone does not tell the mailbox of a person from the mailbox of an agent. The id of a
  * principal never changes its kind, so an id stays here. The list of the mailboxes adds the ids
- * (`markPersonMailboxes`), and so does a path of such a mailbox (`parseRoute`).
+ * (`markPersonMailboxes`), and so does a path of such a mailbox (`parseRoute`). The list knows the kind, so
+ * it also removes an id that a wrong path added for an agent (`agentIds`).
  */
 const personMailboxes = new Set<string>();
 
-/** Records the ids of people whose mailbox the person can use: the `delegated` mailboxes of `mail.list_mailboxes`. */
-export function markPersonMailboxes(ids: Iterable<string>): void {
+/**
+ * Records the ids of people whose mailbox the person can use: the `delegated` mailboxes of
+ * `mail.list_mailboxes`. `agentIds` are the ids that the list shows as the mailbox of an agent. They are never
+ * the mailbox of a person, also after a `/mail/person/…` path named one of them.
+ */
+export function markPersonMailboxes(ids: Iterable<string>, agentIds: Iterable<string> = []): void {
 	for (const id of ids) personMailboxes.add(id);
+	for (const id of agentIds) personMailboxes.delete(id);
 }
 
 /** True for the mailbox of a different person, which that person lets the person use (the kind `delegated`). */

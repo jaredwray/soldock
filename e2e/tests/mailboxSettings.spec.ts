@@ -177,10 +177,13 @@ test("a person lets a member use their mailbox, and the mail views of the member
 		await expect(access.getByText("Only you can use this mailbox.")).toBeVisible();
 		expect(await delegatedOf()).toEqual([]);
 
-		// The person gives Ingrid the rights to read and change, without the right to send.
+		// The form selects only Read at first. The person adds Change for Ingrid, and not Send.
 		await access.getByRole("combobox", { name: "Give access to" }).click();
 		await page.getByRole("option", { name: /^Ingrid/ }).click();
-		await access.getByRole("group", { name: "The person or the agent can" }).getByLabel("Send").uncheck();
+		const fresh = access.getByRole("group", { name: "The person or the agent can" });
+		await expect(fresh.getByLabel("Read")).toBeChecked();
+		await expect(fresh.getByLabel("Send")).not.toBeChecked();
+		await fresh.getByLabel("Change").check();
 		await access.getByRole("button", { name: "Give access" }).click();
 		await expect(page.getByText("can now read and change in your mailbox.")).toBeVisible();
 		const ingridCan = access.getByRole("group", { name: /^What Ingrid .* can do in your mailbox$/ });

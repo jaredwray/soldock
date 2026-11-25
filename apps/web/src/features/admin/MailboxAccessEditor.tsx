@@ -54,6 +54,8 @@ interface MailboxAccessEditorProps {
 	exclude?: readonly string[];
 	/** The most principals that the list can have. */
 	limit: number;
+	/** The scopes that the form selects for a new principal. The default is each scope. */
+	newScopes?: readonly MailboxMemberScope[];
 	text: AccessEditorText;
 	/** A line under the form, for example about a different way to share mail. */
 	note?: ReactNode;
@@ -75,6 +77,7 @@ export function MailboxAccessEditor({
 	principals,
 	exclude = [],
 	limit,
+	newScopes: startScopes = MAILBOX_MEMBER_SCOPES,
 	text,
 	note,
 	onSet,
@@ -82,7 +85,7 @@ export function MailboxAccessEditor({
 }: MailboxAccessEditorProps) {
 	const toast = useToast();
 	const [candidateId, setCandidateId] = useState("");
-	const [newScopes, setNewScopes] = useState<MailboxMemberScope[]>([...MAILBOX_MEMBER_SCOPES]);
+	const [newScopes, setNewScopes] = useState<MailboxMemberScope[]>([...startScopes]);
 	const [busy, setBusy] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 	const [removing, setRemoving] = useState<AccessMember | null>(null);
@@ -99,7 +102,7 @@ export function MailboxAccessEditor({
 			await onSet(member.id, scopes);
 			if (added) {
 				setCandidateId("");
-				setNewScopes([...MAILBOX_MEMBER_SCOPES]);
+				setNewScopes([...startScopes]);
 			}
 			toast({ message: `${member.name} can now ${scopesText(scopes)} in ${mailboxName}.` });
 		} catch (caught) {

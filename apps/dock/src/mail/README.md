@@ -120,9 +120,15 @@ delegate until its owner adds one, so the mailbox of a person is private by defa
 - `mail.set_delegate` adds a delegate with scopes, or replaces the scopes of a delegate: `mail.read`,
   `mail.modify` and `mail.send` (`MAILBOX_MEMBER_SCOPES`). A grant has at least one scope.
   `mail.remove_delegate` removes a delegate. `mail.list_delegates` returns the delegates.
-- Only the owner of the mailbox calls them, and only a person. They take no `mailbox_id`, so an owner or
-  an admin of the organization cannot give access to the mailbox of a different person. An agent cannot
-  give access to its own mailbox.
+- Only the owner of the mailbox calls them, and only a person. They take no `mailbox_id`, so the role of
+  an owner or an admin of the organization gives no access to the mailbox of a different person. An agent
+  cannot give access to its own mailbox.
+- Only the person gets a key of the person with `mail.share`. An owner or an admin who manages the keys of
+  a different person cannot create or rotate such a key (`OWN_KEY_SCOPES`,
+  [identity](../identity/README.md#mailbox-delegates)). A grant stays after a key ends, so a key from an
+  admin must not make one.
+- Known limit: an owner or an admin can set a new password for a person, and can then sign in as that
+  person. That power is not new. The person sees it, because the old password stops.
 - `mail.set_delegate` and `mail.remove_delegate` need the scope `mail.share`. In the web app, a new key
   of a person does not get this scope unless the person selects it. `mail.list_delegates` needs
   `mail.read`.
@@ -130,6 +136,12 @@ delegate until its owner adds one, so the mailbox of a person is private by defa
   cannot give `mail.send`.
 - A delegate is a person, an agent or a service account. A mailbox can have 25 delegates
   (`MAILBOX_DELEGATE_LIMITS.delegates`). The owner is never a delegate of the own mailbox.
+- An archived principal can be a delegate, as it can be a member of a team mailbox. It cannot sign in or
+  use a key, so the grant has an effect only after a restore. The web app does not offer an archived
+  account.
+- A grant to an agent or a service account is also for the people who manage its keys: the sponsor of an
+  agent, and each owner and admin. Each of them can create a key and act as the account. The editor of the
+  web app says so.
 - `mail.list_mailboxes` shows the mailbox to the delegate with the kind `delegated`, the id of the owner
   and the scopes of the grant. The delegate passes that id as `mailbox_id`.
 - The scope rules of a team mailbox apply. A person needs the scope in the credential and in the grant.
@@ -1014,9 +1026,10 @@ Backups: not built yet. mbox/EML export comes with Takeout.
 - Aliases, groups and send-as with a different address. A person has one address for the own mailbox, one
   for each team mailbox and one for each delegated mailbox with `mail.send`, so the From of the web composer
   chooses a mailbox
-- For delegated mailboxes: a webhook of a delegate, a notice to a new delegate, a way for a delegate to
-  remove the own grant, a grant with an end date, an audit line for each read by a delegate, and a setting
-  of the organization that turns the feature off
+- For delegated mailboxes: a webhook of a delegate, a notice to the owner and to the delegate for each new
+  grant, a way for a delegate to remove the own grant, a grant with an end date, an audit line for each read
+  by a delegate, a setting of the organization that turns the feature off, and a `Sender` header or a mark
+  that tells a recipient which delegate sent a message
 - A reply from a mailbox that is not the mailbox of its conversation
 - For signatures: a signature for each member of a team mailbox, a signature with formatting or
   pictures, and a signature that `mail.send` adds

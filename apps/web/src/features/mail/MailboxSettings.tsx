@@ -53,10 +53,7 @@ export interface MailboxSettingsProps {
 	onSettingsSaved: (settings: MailboxSettingsData) => void;
 	/** Called with the mail settings of the person that a save returned, so the next draft has the new From. */
 	onMailSettingsSaved: (settings: MailSettings) => void;
-	/**
-	 * Called after a change of the members of a team mailbox or of the delegates of the own mailbox, so the
-	 * list of the mailboxes of the person loads again.
-	 */
+	/** Called after a change of the members of a team mailbox, so the rights of the person load again. */
 	onMembersChanged: () => void;
 	/** Opens the dialog of the auto labels. */
 	onOpenAutoLabels: () => void;
@@ -397,11 +394,11 @@ const DELEGATE_TEXT: AccessEditorText = {
 	empty: "Only you can use this mailbox. To let a person or an agent use it, add them here.",
 	addLabel: "Give access to",
 	addHint:
-		"The person or the agent then sees your mailbox in Mail. An agent sends from your address only to the recipients that its own policy allows.",
+		"The person or the agent then sees your mailbox in Mail. An agent sends from your address only to the recipients that its own policy allows. The people who manage the keys of an agent can use what you give to the agent.",
 	full: `A mailbox can have at most ${MAILBOX_DELEGATE_LIMITS.delegates} delegates.`,
 	newLegend: "The person or the agent can",
 	scopesHint:
-		"Read shows your mail and your labels. Change sets labels, the read state, archive and trash. Send sends from your name and your address. Only you change the settings of your mailbox and this list.",
+		"Read shows your mail and your labels. Change sets labels, the read state, archive and trash, and screens senders in or out. Send sends from your name and your address. Only you change the settings of your mailbox and this list.",
 	addButton: "Give access",
 	removeLabel: (member) => `Remove the access of ${member} to your mailbox`,
 	removeTitle: "Remove access?",
@@ -438,6 +435,8 @@ function DelegateAccess({ selfId, admin }: { selfId: string; admin: boolean }) {
 			principals={principals}
 			exclude={[selfId]}
 			limit={MAILBOX_DELEGATE_LIMITS.delegates}
+			// The person adds each right that the delegate needs. Send lets the delegate write as the person.
+			newScopes={["mail.read"]}
 			text={DELEGATE_TEXT}
 			note={
 				<>

@@ -164,7 +164,9 @@ export function useMailboxes(page: string): { mailboxes: Mailbox[] | null; reloa
 				if (request < applied.current) return;
 				applied.current = request;
 				// The paths of a delegated mailbox need its kind, which the id alone does not tell.
-				markPersonMailboxes(result.mailboxes.filter((mailbox) => mailbox.kind === "delegated").map(({ id }) => id));
+				const idsOf = (kind: Mailbox["kind"]) =>
+					result.mailboxes.filter((mailbox) => mailbox.kind === kind).map(({ id }) => id);
+				markPersonMailboxes(idsOf("delegated"), idsOf("agent"));
 				setMailboxes(result.mailboxes);
 			},
 			() => {

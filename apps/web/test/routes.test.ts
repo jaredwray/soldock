@@ -136,6 +136,14 @@ describe("routes", () => {
 			false,
 		]);
 		expect(parseRoute(`/mail/person/${TEAM}/inbox`)).toEqual({ page: "not-found" });
+		// A wrong path can name the id of an agent. The list of the mailboxes knows the kind, so the mailbox of
+		// that agent is read only again after the list loads.
+		const agent = "prn_01JD00000000000000000AGENT2";
+		parseRoute(`/mail/person/${agent}/inbox`);
+		expect(isAgentMailbox(agent)).toBe(false);
+		markPersonMailboxes([], [agent]);
+		expect(isAgentMailbox(agent)).toBe(true);
+		expect(viewPath(inbox, agent)).toBe(`/mail/agent/${agent}/inbox`);
 	});
 
 	// The settings view of a mailbox has its own path under the mailbox, so a reload and a deep link stay on it.

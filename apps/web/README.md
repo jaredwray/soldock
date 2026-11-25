@@ -421,7 +421,7 @@ MCP clients. The app has no UI-only path.
     - In the own mailbox, the person changes the delegates (`mail.list_delegates`, `mail.set_delegate`,
       `mail.remove_delegate`). At first the part says that only the person can use the mailbox.
       **Give access to** selects a person or an agent, with **Read**, **Change** and **Send**, and
-      **Give access** adds it. The check boxes of a row change the scopes, and **Remove** asks first.
+      **Give access** adds it. The form selects only **Read** at first. The check boxes of a row change the scopes, and **Remove** asks first.
     - The member editor and the delegate editor are one component with different words
       ([`MailboxAccessEditor.tsx`](src/features/admin/MailboxAccessEditor.tsx)).
     - In the mailbox of a different person, the part tells whose mailbox it is and what the person can do
@@ -466,8 +466,9 @@ MCP clients. The app has no UI-only path.
   the name of its owner and the icon of a person.
   - The mailbox has its own paths (`/mail/person/<prn_id>/…`). A person and an agent both have a `prn_`
     id, so `routes.ts` keeps the ids that name the mailbox of a person (`markPersonMailboxes`). The list
-    of the mailboxes adds them, and so does a `/mail/person/…` path. `mailboxKindOf` gives the kind of a
-    mailbox id for the paths and the views.
+    of the mailboxes adds them, and so does a `/mail/person/…` path. The list also removes an id that it
+    shows as the mailbox of an agent. `mailboxKindOf` gives the kind of a mailbox id for the paths and the
+    views.
   - The views follow the scopes of the grant, as for a shared mailbox (`mailboxRights`). The notice above
     the list says what the person cannot do, and that the owner of the mailbox sets it.
   - A sent message shows **Sent by** and the person who sent it, as in a shared mailbox.
@@ -719,7 +720,7 @@ MCP clients. The app has no UI-only path.
     (`shell/SectionSidebar.tsx`).
   - Settings does not list webhooks. A new password
   (`account.set_password`) ends your sessions on other browsers. A new key can hold only the scopes
-  of the session. A new key does not get `account.keys`, `directory.write`, `mail.webhooks`, `chat.webhooks` or `drive.webhooks`
+  of the session. A new key does not get `account.keys`, `directory.write`, `mail.share`, `mail.webhooks`, `chat.webhooks` or `drive.webhooks`
   unless the person selects them. A new key has a label, an optional description and a lifetime: 1, 7,
   30, 90 or 180 days, a custom last day (from tomorrow to 729 days), or Never (`settings/ttl.ts`).
   The list shows the end of each key, and **Expired** or **Revoked**. The secret dialog shows the end.

@@ -38,6 +38,13 @@ export type Scope = keyof typeof SCOPES;
 export const ALL_SCOPES = Object.keys(SCOPES) as Scope[];
 
 /**
+ * The scopes that only the person gives to a key of the person. An owner or an admin who creates or rotates a
+ * key of a different person cannot give them. `mail.share` gives other principals access to the mailbox of
+ * the person, and that access stays after the key ends.
+ */
+export const OWN_KEY_SCOPES: readonly Scope[] = ["mail.share"];
+
+/**
  * The account scopes of a new agent, and the most that an agent can hold. An agent cannot manage keys or the
  * directory, so it can never change its own policy or mint a wider token. An agent has its own drive, as it
  * has its own mailbox. An agent is a member of rooms, as a person is.

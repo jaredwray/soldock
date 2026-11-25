@@ -23,6 +23,7 @@ import {
 	isAdmin,
 	missingScopes,
 	recordServiceChange,
+	requireOwnShareKey,
 } from "./access.ts";
 import type { AuthContext, CallContext } from "./auth.ts";
 import { delegatedMailboxesOf } from "./mailbox-delegates.ts";
@@ -744,6 +745,7 @@ export const identityHandlers: Pick<HandlerMap<CallContext>, IdentityOperation |
 			scopes = [];
 		} else {
 			if (input.scopes === undefined) throw new OperationError("invalid", "Send scopes: the scopes of the new key.");
+			requireOwnShareKey(call.caller, target, input.scopes);
 			scopes = grantableScopes(call.caller, target, input.scopes);
 		}
 		const created = await createApiKey(call.env.DIRECTORY, target.id, {
@@ -776,6 +778,8 @@ export const identityHandlers: Pick<HandlerMap<CallContext>, IdentityOperation |
 		// The new secret gives each scope of the key: for a key of an agent or a service account, each scope of
 		// the agent. So the caller must hold each one, as for a new key.
 		const given = owner.kind === "agent" ? owner.agent_scopes : key.scopes;
+		// The new secret of a key of a person with mail.share goes to that person only.
+		if (owner.kind !== "agent") requireOwnShareKey(call.caller, owner, given);
 		const notHeld = given.filter((scope) => !call.caller.scopes.has(scope));
 		if (notHeld.length > 0) {
 			throw new OperationError(

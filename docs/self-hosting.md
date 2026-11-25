@@ -745,8 +745,13 @@ and agents use the own mailbox, in the settings of the mailbox in Mail (`mail.se
 - The scope `mail.share` is new. `mail.set_delegate` and `mail.remove_delegate` need it. A browser
   session has it. An API key of a person from before the upgrade does not have it: create a new key with
   the scope. An agent and a service account cannot hold it.
+- An owner or an admin cannot create or rotate a key of a different person that holds `mail.share`: the
+  call gets `forbidden`. A script that creates a key with each scope for a different person must leave out
+  `mail.share`. The person creates such a key in **Settings › API keys**.
 - A rollback to a Worker from before this change works. That Worker does not read the table, so no
   delegate can use a mailbox, and the rows stay for the next upgrade.
+- That Worker does not drop the table in [Start fresh from setup](#start-fresh-from-setup). Delete the rows
+  of `mailbox_delegates` before you start fresh with it, or the reset fails.
 - [Agents](agents.md#the-mailbox-of-a-person) has the rules for an agent.
 
 ### Recover a sign-in

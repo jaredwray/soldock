@@ -1,5 +1,6 @@
 import {
 	canTargetSharedResource,
+	OWN_KEY_SCOPES,
 	operationList,
 	operationNeedsScope,
 	RESOURCE_SCOPES,
@@ -96,6 +97,26 @@ export function grantableScopes(
 		);
 	}
 	return [...new Set(requested)];
+}
+
+/**
+ * `mail.share` lets a credential give other principals access to the mailbox of its person. A grant stays
+ * after the credential ends. So only the person gets the secret of a key with a scope of `OWN_KEY_SCOPES`: an
+ * owner or an admin who manages the keys of a different person cannot create or rotate such a key. Throws
+ * `forbidden`.
+ */
+export function requireOwnShareKey(
+	caller: AuthContext,
+	target: Pick<PrincipalRecord, "id">,
+	scopes: readonly string[],
+): void {
+	if (target.id === caller.principal.id) return;
+	const own = OWN_KEY_SCOPES.filter((scope) => scopes.includes(scope));
+	if (own.length === 0) return;
+	throw new OperationError(
+		"forbidden",
+		`Only the person can create or rotate a key of the person that holds ${own.join(", ")}. That scope gives other people and agents access to the mailbox of the person.`,
+	);
 }
 
 /** A scope that the credential does not hold, and the operations of the caller kind that need it. */

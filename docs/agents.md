@@ -416,7 +416,7 @@ a person who manages that account must agree.
 A person can let you use their own mailbox. The person opens the settings of the mailbox in Mail (the
 gear), and adds you under **Access** with **Read**, **Change** and **Send** (`mail.set_delegate`). Nobody
 else can give this access: not an owner, not an admin and not your sponsor. You cannot ask for it with a
-tool.
+tool. The people who manage your keys can use what the person gives to you.
 
 1. Call `mail_list_mailboxes`. The mailbox of the person has the kind `delegated`. Its `id` is the id of
    the person, and `scopes` says what you can do in it.

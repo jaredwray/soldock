@@ -461,6 +461,7 @@ export const createApiKey = defineOperation({
 	description: [
 		"Creates an API key for yourself, or for an agent that you sponsor. Owners and admins can create a key for anyone except the owner, and they alone create the tokens of a service account.",
 		"scopes is necessary for a key of a person. The secret is shown only once.",
+		"Only the person creates a key of the person with mail.share: that scope gives other people and agents access to the mailbox of the person.",
 		"Do not send scopes for a key of an agent or a token of a service account: the key only proves the identity. The memberships of the agent and its account scopes decide what it can do. The credential of the call must hold each account scope of the agent.",
 		`Set expires_in_days (1 to ${API_KEY_LIMITS.maxDays}), or expires_at for a custom end, to make the key stop at that time. Without them, the key has no end.`,
 	].join(" "),
@@ -509,7 +510,7 @@ export const rotateApiKey = defineOperation({
 		"Gives the key a new secret and returns it once. The key keeps its id, label, scopes and end.",
 		`The old secret works for overlap_minutes more (default ${API_KEY_LIMITS.rotationOverlapMinutes.default}, at most ${API_KEY_LIMITS.rotationOverlapMinutes.max}; 0 stops it at once), so a script can change to the new secret first.`,
 		"A key has one rotation at a time: a rotation while the old secret still works gets conflict. account.end_api_key_rotation stops the old secret before its time.",
-		"The same principals that can revoke a key can rotate it, and the credential of the call must hold each scope of the key (for a key of an agent or a service account: each scope of the agent). A revoked or expired key cannot rotate.",
+		"The same principals that can revoke a key can rotate it, and the credential of the call must hold each scope of the key (for a key of an agent or a service account: each scope of the agent). Only the person rotates a key of the person that holds mail.share. A revoked or expired key cannot rotate.",
 	].join(" "),
 	http: { method: "POST", path: "/api/v1/account/api-keys/{key_id}/rotate" },
 	scopes: ["account.keys"],
