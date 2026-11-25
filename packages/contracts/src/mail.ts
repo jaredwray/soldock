@@ -566,10 +566,10 @@ export const updateSettings = defineOperation({
 
 /**
  * The control characters, except a line break and a tab, the Unicode line and paragraph separators, and
- * the controls that change the direction of text (embeddings, overrides and isolates). A signature goes
- * into the mail of each member, so it must not hide or move text there.
+ * the characters that change the direction of text (the marks, embeddings, overrides and isolates). A
+ * signature goes into the mail of each member, so it must not hide or move text there.
  */
-const SIGNATURE_REFUSED = /[^\P{Cc}\n\r\t]|[\u2028\u2029\u202A-\u202E\u2066-\u2069]/u;
+const SIGNATURE_REFUSED = /[^\P{Cc}\n\r\t]|[\u2028\u2029]|[\u061C\u200E\u200F\u202A-\u202E\u2066-\u2069]/u;
 
 /**
  * The plain-text signature of a mailbox. A line break and a tab are the only control characters that it
@@ -615,17 +615,21 @@ export const getMailboxSettings = defineOperation({
 export const updateMailboxSettings = defineOperation({
 	name: "mail.update_mailbox_settings",
 	summary: "Change the settings of a mailbox",
-	description: `Changes the settings that the request names, and keeps the others. Returns all the settings of the mailbox. signature is plain text of at most ${MAIL_LIMITS.signatureChars} characters. An empty string removes it. ${IN_MAILBOX} The members of a team mailbox share its settings, so only a person changes them there. An agent or a service account can change only the settings of its own mailbox. ${AGENT_READ_ONLY} A change does not change the mailbox version that mail.get_profile returns.`,
+	description: `Changes the settings that the request names, and keeps the others. Returns all the settings of the mailbox. Name at least one setting: to read the settings, use mail.get_mailbox_settings. signature is plain text of at most ${MAIL_LIMITS.signatureChars} characters. An empty string removes it. ${IN_MAILBOX} The members of a team mailbox share its settings, so only a person changes them there. An agent or a service account can change only the settings of its own mailbox. ${AGENT_READ_ONLY} A change does not change the mailbox version that mail.get_profile returns.`,
 	http: { method: "POST", path: "/api/v1/mail/mailbox-settings" },
 	scopes: ["mail.modify"],
 	callers: ["human", "agent", "service"],
 	annotations: { readOnly: false, destructive: false, idempotent: true, openWorld: false },
-	input: z.strictObject({
-		mailbox_id: MailboxParam,
-		signature: Signature.optional().describe(
-			`The plain-text signature, at most ${MAIL_LIMITS.signatureChars} characters. An empty string removes it.`,
-		),
-	}),
+	input: z
+		.strictObject({
+			mailbox_id: MailboxParam,
+			signature: Signature.optional().describe(
+				`The plain-text signature, at most ${MAIL_LIMITS.signatureChars} characters. An empty string removes it.`,
+			),
+		})
+		// A change returns the settings. Without a setting to change, the call would only read them, with the
+		// scope to change and not the scope to read. Use mail.get_mailbox_settings to read them.
+		.refine((input) => input.signature !== undefined, "name a setting to change"),
 	output: MailboxSettings,
 	errors: [],
 });

@@ -178,7 +178,8 @@ settings view of the mailbox (the gear in the header of Mail), with the AI switc
   in the membership: `mail.read` to read and `mail.modify` to change.
 - The signature is plain text of at most 2,000 characters. A line break and a tab are the only control
   characters that it can hold. It cannot hold a Unicode line or paragraph separator (U+2028, U+2029), or
-  a control that changes the direction of text (U+202A to U+202E, U+2066 to U+2069): the signature goes
+  a character that changes the direction of text (U+061C, U+200E, U+200F, U+202A to U+202E, U+2066 to
+  U+2069): the signature goes
   into the mail of each member, so it must not hide or move text there. Such a signature gets `invalid`.
   The mailbox stores `\n` for each line break. It removes the spaces at the end of each line, and the
   empty lines at the start and the end. An empty string removes the signature.
@@ -193,8 +194,10 @@ settings view of the mailbox (the gear in the header of Mail), with the AI switc
 - An owner or an admin reads the settings of an agent mailbox, and cannot change them.
 - A read writes no audit line, as for `mail.get_profile`: the settings hold no mail content. A change
   writes the line `mail.update_mailbox_settings` with the mailbox as `target`, and `mailbox` for a team
-  mailbox. The line never holds the signature. A request that names no setting writes nothing: no
-  `meta` row and no audit line.
+  mailbox. The line never holds the signature.
+- `mail.update_mailbox_settings` must name a setting, or it gets `invalid`. A change returns the
+  settings, so a request with no change would read them with `mail.modify` only: a member without
+  `mail.read` would get the shared signature.
 - A change does not change the mailbox `version`, so the poll of a different open tab does not see it.
   The web app reads the settings when a mailbox opens and each time the window gets the focus. So that
   tab has the new signature for the next draft after it gets the focus.

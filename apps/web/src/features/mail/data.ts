@@ -131,10 +131,15 @@ export interface LabelsState {
 export function useMailboxes(page: string): { mailboxes: Mailbox[] | null; reload: () => void } {
 	const [mailboxes, setMailboxes] = useState<Mailbox[] | null>(null);
 
-	// The shell lives as long as the session, so an answer never comes after it unmounts.
+	// The shell lives as long as the session, so an answer never comes after it unmounts. Only the answer to
+	// the newest request counts: an older answer can still list a membership that ended after it.
+	const latest = useRef(0);
 	const reload = useCallback(() => {
+		const request = ++latest.current;
 		api.call("mail.list_mailboxes").then(
-			(result) => setMailboxes(result.mailboxes),
+			(result) => {
+				if (request === latest.current) setMailboxes(result.mailboxes);
+			},
 			() => {
 				// The list stays as it is. A 401 shows the sign-in page through lib/api.ts.
 			},

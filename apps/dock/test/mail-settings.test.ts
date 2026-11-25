@@ -138,8 +138,9 @@ describe("the settings of a mailbox", () => {
 		const saved = await ada.call("mail.update_mailbox_settings", { signature: "Ada Lovelace  \r\nAnalyst\r\n\r\n" });
 		expect(saved).toEqual({ mailbox_id: ada.id, signature: "Ada Lovelace\nAnalyst" });
 		expect(await ada.call("mail.get_mailbox_settings", { mailbox_id: ada.id })).toEqual(saved);
-		// A request that names no setting changes nothing.
-		expect(await ada.call("mail.update_mailbox_settings", {})).toEqual(saved);
+		// A request must name a setting. It cannot read the settings with the scope to change them.
+		expect(await codeOf(ada.call("mail.update_mailbox_settings", {}))).toBe("invalid");
+		expect(await ada.call("mail.get_mailbox_settings")).toEqual(saved);
 		expect((await ada.call("mail.get_profile")).version).toBe(version);
 		// Each mailbox has its own signature.
 		expect((await owner.call("mail.get_mailbox_settings")).signature).toBe("");
@@ -160,6 +161,8 @@ describe("the settings of a mailbox", () => {
 		expect(await codeOf(ada.call("mail.update_mailbox_settings", { signature: "Ada\u0007" }))).toBe("invalid");
 		// A control that changes the direction of text could hide or move text in the mail of each member.
 		expect(await codeOf(ada.call("mail.update_mailbox_settings", { signature: "Ada\u202Egro.live" }))).toBe("invalid");
+		// The invisible direction marks move text too.
+		expect(await codeOf(ada.call("mail.update_mailbox_settings", { signature: "Ada\u200Fgro.live" }))).toBe("invalid");
 		expect(
 			(await ada.call("mail.update_mailbox_settings", { signature: "x".repeat(MAIL_LIMITS.signatureChars) })).signature,
 		).toHaveLength(MAIL_LIMITS.signatureChars);
@@ -185,9 +188,13 @@ describe("the settings of a mailbox", () => {
 		const line = lines.find((entry) => entry.op === "mail.update_mailbox_settings");
 		expect(line).toMatchObject({ actor: ada.id, target: support, mailbox: support, result: "ok" });
 		expect(JSON.stringify(lines)).not.toContain("Private line");
-		// A request that names no setting changes nothing, so it writes no line.
-		const empty = await auditLines(() => ada.call("mail.update_mailbox_settings", { mailbox_id: support }));
-		expect(empty.filter((entry) => entry.op === "mail.update_mailbox_settings")).toEqual([]);
+		// A request that names no setting is refused, so it writes no line of a change.
+		const empty = await auditLines(() =>
+			codeOf(ada.call("mail.update_mailbox_settings", { mailbox_id: support })).then((code) =>
+				expect(code).toBe("invalid"),
+			),
+		);
+		expect(empty.filter((entry) => entry.op === "mail.update_mailbox_settings" && entry.result === "ok")).toEqual([]);
 	});
 
 	it("is shared by the members of a team mailbox, and each member needs the scope in the membership", async () => {
