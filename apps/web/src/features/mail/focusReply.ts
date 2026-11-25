@@ -7,8 +7,8 @@ import { showsHeldMail } from "./screener.ts";
 // when the queue refreshes, the conversation that shows next, the conversation that comes back after Undo, and
 // the text of the position and of the finish state.
 
-/** How the person cleared a conversation: a sent reply, Archive, Done, a move to Reply later, or Spam. */
-export type ClearKind = "answered" | "archived" | "done" | "later" | "spam";
+/** How the person cleared a conversation: a sent reply, Archive, Done, a snooze, or Spam. */
+export type ClearKind = "answered" | "archived" | "done" | "snoozed" | "spam";
 
 /** What Focus does in one view. */
 export interface FocusMode {
@@ -20,8 +20,6 @@ export interface FocusMode {
 	doneNotice: string;
 	/** What Done does to the conversation with this subject, for the hidden text of the button. */
 	doneText: (subject: string) => string;
-	/** True when Later shows, which moves the conversation to Reply later: each view but Reply later. */
-	later: boolean;
 	/** True when a sent reply also archives the conversation: in the inbox only. */
 	archiveOnReply: boolean;
 	/** The label whose thread total is the size of the view, or null when no label counts the view. */
@@ -36,19 +34,18 @@ const ARCHIVE_MODE: FocusMode = {
 	doneArchives: true,
 	doneNotice: "Conversation archived.",
 	doneText: (subject) => `archive “${subject}”`,
-	later: true,
 	archiveOnReply: false,
 	countLabel: null,
-	leaves: { answered: false, archived: false, done: false, later: false, spam: true },
+	leaves: { answered: false, archived: false, done: false, snoozed: false, spam: true },
 };
 
 /** A search that names spam, trash or anywhere. The server then shows spam and trash too (`namesSpamOrTrash`). */
 const SPAM_OR_TRASH_QUERY = /(^|[\s(])-?(in|label):"?(spam|trash|anywhere)"?(?=$|[\s)])/i;
 
 /** The system labels that have a system view. Their label path gets the mode of that view. */
-const LABEL_VIEWS: Readonly<Record<string, "inbox" | "reply-later" | "starred" | "sent" | "spam" | "trash">> = {
+const LABEL_VIEWS: Readonly<Record<string, "inbox" | "snoozed" | "starred" | "sent" | "spam" | "trash">> = {
 	INBOX: "inbox",
-	REPLY_LATER: "reply-later",
+	SNOOZED: "snoozed",
 	STARRED: "starred",
 	SENT: "sent",
 	SPAM: "spam",
@@ -75,7 +72,7 @@ export function focusMode(view: MailView, labelName: string | null = null): Focu
 			doneNotice: labelName === null ? "Label removed." : `Label “${labelName}” removed.`,
 			doneText: (subject) => `remove ${name} from “${subject}”`,
 			countLabel: view.labelId,
-			leaves: { answered: false, archived: false, done: true, later: false, spam: true },
+			leaves: { answered: false, archived: false, done: true, snoozed: false, spam: true },
 		};
 	}
 	switch (view.view) {
@@ -87,20 +84,12 @@ export function focusMode(view: MailView, labelName: string | null = null): Focu
 				...ARCHIVE_MODE,
 				archiveOnReply: true,
 				countLabel: "INBOX",
-				leaves: { answered: true, archived: true, done: true, later: true, spam: true },
+				leaves: { answered: true, archived: true, done: true, snoozed: true, spam: true },
 			};
-		case "reply-later":
-			return {
-				done: actionChange("replyLaterDone"),
-				doneArchives: false,
-				doneNotice: "Conversation removed from Reply later.",
-				doneText: (subject) => `remove “${subject}” from Reply later`,
-				later: false,
-				// The server takes a thread out of Reply later when the mailbox replies in it.
-				archiveOnReply: false,
-				countLabel: "REPLY_LATER",
-				leaves: { answered: true, archived: false, done: true, later: true, spam: true },
-			};
+		case "snoozed":
+			// A snoozed conversation is not in the inbox, so Done only shows the next one. A snooze there gives
+			// the conversation a different time, and the conversation stays in the view.
+			return { ...ARCHIVE_MODE, countLabel: "SNOOZED" };
 		case "starred":
 			return {
 				...ARCHIVE_MODE,
@@ -109,7 +98,7 @@ export function focusMode(view: MailView, labelName: string | null = null): Focu
 				doneNotice: "Star removed.",
 				doneText: (subject) => `remove the star from “${subject}”`,
 				countLabel: "STARRED",
-				leaves: { answered: false, archived: false, done: true, later: false, spam: true },
+				leaves: { answered: false, archived: false, done: true, snoozed: false, spam: true },
 			};
 		case "sent":
 			return { ...ARCHIVE_MODE, countLabel: "SENT" };
@@ -130,7 +119,7 @@ export function primaryAction(mode: FocusMode, labelIds: readonly string[]): "ar
 
 /**
  * True when a second Archive shows: the conversation is in the inbox, and the primary button does a different
- * change, for example in Reply later, Starred and a label. So two buttons never do the same change.
+ * change, for example in Starred and a label. So two buttons never do the same change.
  */
 export function showsArchive(mode: FocusMode, labelIds: readonly string[]): boolean {
 	return labelIds.includes("INBOX") && primaryAction(mode, labelIds) !== "archive";
@@ -218,7 +207,7 @@ export function moveActive(ids: readonly string[], activeId: string | null, step
 
 /**
  * The message that Reply answers: the newest message that the mailbox got, so the reply goes to the person who
- * waits. A forward can join the thread and stay in Reply later, and a reply to it would go to its recipients.
+ * waits. A forward can join the thread, and a reply to it would go to its recipients.
  */
 export function replyTarget(messages: readonly Message[]): Message | null {
 	return messages.findLast((message) => message.origin !== "sent") ?? messages.at(-1) ?? null;
@@ -284,12 +273,12 @@ const CLEAR_TEXT: readonly { how: ClearKind; text: (what: string) => string }[] 
 	{ how: "answered", text: (what) => `answered ${what}` },
 	{ how: "archived", text: (what) => `archived ${what}` },
 	{ how: "done", text: (what) => `marked ${what} as done` },
-	{ how: "later", text: (what) => `moved ${what} to Reply later` },
+	{ how: "snoozed", text: (what) => `snoozed ${what}` },
 	{ how: "spam", text: (what) => `marked ${what} as spam` },
 ];
 
 /**
- * The text of the finish state: what the person answered, archived, marked as done, moved to Reply later and
+ * The text of the finish state: what the person answered, archived, marked as done, snoozed and
  * marked as spam in this visit. The first part names the conversations, and the parts after it give only the
  * number.
  */

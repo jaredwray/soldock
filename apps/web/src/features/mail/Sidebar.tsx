@@ -269,7 +269,9 @@ function MailboxContents({
 									{count > 0 && (
 										<span className="nav-count">
 											{count}
-											<span className="visually-hidden">{item.count?.of === "total" ? " to answer" : " unread"}</span>
+											<span className="visually-hidden">
+												{item.count?.of === "total" ? " conversations" : " unread"}
+											</span>
 										</span>
 									)}
 								</Link>
