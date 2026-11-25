@@ -124,7 +124,35 @@ describe("parseMail", () => {
 				"Authentication-Results: mx.cloudflare.net; spf=pass smtp.mailfrom=sender.example; dkim=fail; dmarc=fail\r\nAuthentication-Results: mx.cloudflare.net; dmarc=pass",
 			),
 		);
-		expect(real.authentication).toEqual({ spf: "pass", dkim: "fail", dmarc: "fail" });
+		expect(real.authentication).toEqual({ spf: "pass", dkim: "fail", dmarc: "fail", dmarcFrom: null });
+	});
+
+	// The receiving server can copy text of the sender into a comment or into a property of a result.
+	it("reads a result only at the start of a part of the header, never from a comment or a property", async () => {
+		const results = async (value: string) =>
+			(await parse(raw(`Authentication-Results: mx.cloudflare.net; ${value}`))).authentication;
+		expect(await results("dkim=fail (sig dmarc=pass) header.d=x; dmarc=fail header.from=Bank.Example")).toEqual({
+			spf: null,
+			dkim: "fail",
+			dmarc: "fail",
+			dmarcFrom: "bank.example",
+		});
+		expect(await results('dkim=fail header.s=x dmarc=pass; spf=none smtp.mailfrom="a; dmarc=pass"@x.example')).toEqual({
+			spf: "none",
+			dkim: "fail",
+			dmarc: null,
+			dmarcFrom: null,
+		});
+	});
+
+	// One header can hold two SPF results and one DKIM result for each signature.
+	it("keeps the SPF result of the envelope sender, and a DKIM pass of any signature", async () => {
+		const parsed = await parse(
+			raw(
+				"Authentication-Results: mx.cloudflare.net; dkim=fail header.d=a.example; dkim=pass header.d=sender.example; spf=none smtp.helo=mta.sender.example; spf=pass smtp.mailfrom=b@sender.example; dmarc=pass header.from=sender.example",
+			),
+		);
+		expect(parsed.authentication).toEqual({ spf: "pass", dkim: "pass", dmarc: "pass", dmarcFrom: "sender.example" });
 	});
 
 	// In a reply, such an ID would need a header line over 998 characters.

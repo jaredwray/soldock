@@ -136,7 +136,7 @@ export const Authentication = z.object({
 
 /**
  * The answer to one question: did the From domain send this message? `verified`: the receiving server
- * recorded a DMARC pass. `failed`: it recorded a DMARC failure, so the sender is probably forged.
+ * recorded a DMARC pass for the domain of `from`. `failed`: it recorded a DMARC failure, so the sender is probably forged.
  * `unverified`: each other result, and no result. An SPF pass or a DKIM pass alone proves nothing
  * about the From address. `verified` does not mean that the content is safe.
  */

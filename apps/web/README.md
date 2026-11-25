@@ -168,11 +168,14 @@ MCP clients. The app has no UI-only path.
   - The thread view shows each message with its sender, recipients, date, labels, body,
     attachments and, for sent mail, the delivery status of each recipient.
   - External mail gets a sender notice. It tells the verdict of the server (`sender_verification`) in
-    plain words and names the domain of the sender: "Verified sender" (quiet, with a green shield),
-    "Unverified sender" (a warning) or "Sender check failed" (red). A verified sender is not a safe
-    message, so that notice keeps the caution about links, attachments and requests. "Details" opens
-    the SPF, DKIM and DMARC results, each with a name and one sentence (`senderCheck.ts`). A result
-    that is not a pass and not a failure is muted, not red.
+    plain words, and it names the domain of the sender:
+    - "Verified sender": a quiet notice with a green shield. A verified sender is not a safe message,
+      so the notice keeps the caution about links, attachments and requests.
+    - "Unverified sender": a warning. A server that sends no verdict gives this notice too.
+    - "Sender check failed": a red notice.
+
+    "Details" opens the SPF, DKIM and DMARC results (`senderCheck.ts`). Each result has a name and one
+    sentence. A result that is not a pass and not a failure is muted, not red.
   - A message with the SPAM label gets a "This message is in Spam" notice, because it can be in a
     thread with other messages. The notice of a failed sender tells it, so such a message gets one notice.
   - The last message and each unread message are open. Each other message is collapsed: one line

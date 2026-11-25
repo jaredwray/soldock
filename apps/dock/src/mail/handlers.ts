@@ -229,6 +229,8 @@ async function safeHtml(stored: StoredMessage): Promise<{ html: string; remoteIm
 
 async function toMessage(stored: StoredMessage): Promise<Message> {
 	const html = await safeHtml(stored);
+	const external = stored.origin === "external";
+	const auth = stored.authentication;
 	return {
 		id: stored.id,
 		thread_id: stored.threadId,
@@ -245,9 +247,9 @@ async function toMessage(stored: StoredMessage): Promise<Message> {
 		auto_label_ids: stored.autoLabels,
 		snippet: stored.snippet,
 		origin: stored.origin,
-		untrusted: stored.origin === "external",
-		authentication: stored.origin === "external" ? stored.authentication : null,
-		sender_verification: stored.origin === "external" ? senderVerification(stored.authentication) : null,
+		untrusted: external,
+		authentication: external && auth ? { spf: auth.spf, dkim: auth.dkim, dmarc: auth.dmarc } : null,
+		sender_verification: external ? senderVerification(auth, stored.from?.address) : null,
 		body: {
 			// When the HTML cannot be sanitized and the message has no text part, a text form keeps it readable.
 			text: stored.text ?? (html === null && stored.html !== null ? htmlToText(stored.html) : null),

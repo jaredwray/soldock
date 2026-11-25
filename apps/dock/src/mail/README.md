@@ -871,15 +871,27 @@ A disabled endpoint stays disabled. Delete it and create a new one.
   `allow-same-origin`, under a CSP that refuses each remote load.
 - Only the topmost `Authentication-Results` header from `MAIL_AUTHSERV_ID` counts. A sender cannot
   forge a pass with its own header.
+- A result counts only at the start of a part of that header (`method=result` after a `;`). The parser
+  removes comments and quoted strings first, because the receiving server can copy text of the sender
+  into them. With two SPF results, the result for the envelope sender (`smtp.mailfrom`) counts. A DKIM
+  pass of one signature is a DKIM pass.
 - Each external message has a verdict, `sender_verification`. It answers one question: did the From
   domain send this message? The rule is `senderVerification()` in `mime/parse.ts`:
-  - `verified`: the receiving server recorded a DMARC pass.
+  - `verified`: the receiving server recorded a DMARC pass for the domain of the stored From address.
   - `failed`: it recorded a DMARC failure. Such mail goes to Spam.
   - `unverified`: each other result, and no result.
 
   Only DMARC ties a result to the From domain, so an SPF pass or a DKIM pass alone is `unverified`.
   Spam, auto labels and the verdict use this one rule. Internal mail and sent mail have `null`.
   `verified` proves the domain only. The content stays `untrusted: true`.
+- A person sees the domain of the stored From address beside the verdict. The receiving server can
+  read a From header in a different way than the mailbox, for example a header with two addresses. So
+  a DMARC pass counts only when its `header.from` is equal to that domain. A domain with other
+  characters than ASCII letters, digits, `-` and `.` is never `verified`, because it can look like a
+  different domain. An internationalized domain is `verified` only in its `xn--` form.
+- Assumption: the receiving server names the domain in `header.from`. A DMARC pass without
+  `header.from` is `verified` for the domain of the stored From address. Results that the mailbox
+  stored before `dmarcFrom` are in this group.
 - Attachments are returned as base64 JSON, never served as active content on the origin.
 - Auto labels: the classifier gets the message as delimited data, with a nonce for each call. Its
   answer can only choose candidate labels of the mailbox, which the mailbox checks again. It can

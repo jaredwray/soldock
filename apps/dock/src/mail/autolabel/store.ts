@@ -222,11 +222,11 @@ interface FactsRow extends Row {
 	auth_json: string | null;
 }
 
-/** True when the receiving server recorded a DMARC pass for the message. */
-function dmarcPassed(authJson: string | null): boolean {
+/** True when the receiving server recorded a DMARC pass for the domain of the From address. */
+function dmarcPassed(authJson: string | null, from: string | null): boolean {
 	if (!authJson) return false;
 	try {
-		return senderVerification(JSON.parse(authJson) as AuthenticationResults | null) === "verified";
+		return senderVerification(JSON.parse(authJson) as AuthenticationResults | null, from) === "verified";
 	} catch {
 		return false;
 	}
@@ -279,7 +279,7 @@ export function messageFacts(sql: SqlStorage, seq: number, ownerAddress: string)
 		threadHasSent: (thread?.sent ?? 0) > 0,
 		threadMessages: thread?.earlier ?? 0,
 		ownerAddress,
-		authenticated: row.origin === "internal" || dmarcPassed(row.auth_json),
+		authenticated: row.origin === "internal" || dmarcPassed(row.auth_json, row.from_addr),
 	};
 }
 

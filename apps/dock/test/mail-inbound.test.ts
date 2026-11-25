@@ -148,18 +148,19 @@ describe("the inbound queue consumer", () => {
 	});
 
 	// People and agents read the verdict as "the From domain sent this". Only DMARC ties a result to the
-	// From domain, so an SPF pass or a DKIM pass alone, or a header that the sender wrote, proves nothing.
-	it("calls a sender verified only for a DMARC pass that the receiving server recorded", async () => {
+	// From domain. An SPF pass or a DKIM pass alone proves nothing about it.
+	it("calls a sender verified only for a DMARC pass for the domain of the From address", async () => {
 		const { ada } = await seedOrg();
 		const cases: [subject: string, results: string | null][] = [
 			["Pass", "mx.cloudflare.net; spf=none; dkim=pass; dmarc=pass header.from=sender.example"],
 			["No policy", "mx.cloudflare.net; spf=pass; dkim=pass; dmarc=none"],
-			["Forged header", "attacker.example; spf=pass; dkim=pass; dmarc=pass"],
+			// The server proved a different domain than the one that the mailbox reads from the From header.
+			["Other domain", "mx.cloudflare.net; spf=pass; dkim=pass; dmarc=pass header.from=evil.example"],
 			["No header", null],
 		];
 		for (const [subject, results] of cases) {
 			const headers: [string, string][] = results ? [["Authentication-Results", results]] : [];
-			await inject(rawMessage({ from: "bob@sender.example", to: "ada@dock.test", subject, headers }), "ada@dock.test");
+			await inject(rawMessage({ from: "Bob@Sender.Example", to: "ada@dock.test", subject, headers }), "ada@dock.test");
 		}
 		const verdicts: Record<string, unknown> = {};
 		for (const summary of await inbox(ada.call)) {
@@ -169,7 +170,7 @@ describe("the inbound queue consumer", () => {
 		expect(verdicts).toEqual({
 			Pass: "verified",
 			"No policy": "unverified",
-			"Forged header": "unverified",
+			"Other domain": "unverified",
 			"No header": "unverified",
 		});
 	});

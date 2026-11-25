@@ -1,6 +1,6 @@
 import type { SenderVerification } from "@asterra/contracts";
 import PostalMime, { type Address as PostalAddress } from "postal-mime";
-import { extractSignals, type MailSignals } from "../autolabel/signals.ts";
+import { domainOfAddress, extractSignals, type MailSignals } from "../autolabel/signals.ts";
 
 export interface MailAddress {
 	name: string | null;
@@ -18,6 +18,12 @@ export interface AuthenticationResults {
 	spf: string | null;
 	dkim: string | null;
 	dmarc: string | null;
+	/**
+	 * The From domain that the DMARC result is for (`header.from`), in lowercase. Null when the header
+	 * does not name it. An empty string when the header names it in a form that the mailbox cannot read.
+	 * A result that the mailbox stored before this field does not have it.
+	 */
+	dmarcFrom?: string | null;
 }
 
 /** The parts of a message that the mailbox stores and indexes. */
@@ -83,9 +89,49 @@ function flatten(addresses: PostalAddress[] | PostalAddress | undefined): MailAd
 }
 
 /**
+ * Splits the value of an Authentication-Results header at each `;`. It removes each comment and the
+ * text of each quoted string first. The receiving server can copy text of the sender into them, and
+ * such text must never read as a result.
+ */
+function resultParts(value: string): string[] {
+	const parts = [""];
+	let depth = 0;
+	let quoted = false;
+	for (let index = 0; index < value.length; index++) {
+		const char = value[index] as string;
+		if (char === "\\" && (quoted || depth > 0)) index++;
+		else if (quoted) quoted = char !== '"';
+		else if (depth > 0) depth += char === "(" ? 1 : char === ")" ? -1 : 0;
+		else if (char === ";") parts.push("");
+		else if (char === '"' || char === "(") {
+			if (char === '"') quoted = true;
+			else depth = 1;
+			// Each one leaves a mark that is not part of a word, so the text around it does not join.
+			parts[parts.length - 1] += ' " ';
+		} else parts[parts.length - 1] += char;
+	}
+	return parts.map((part) => part.trim());
+}
+
+const RESULT = /^(spf|dkim|dmarc)(?:\/\d+)?=([a-z]+)(?=\s|$)/i;
+const PLAIN_DOMAIN = /^[a-z0-9.-]+$/;
+
+/** Each value of one property of a result, for example `header.from`, in lowercase. */
+function propertyValues(part: string, name: string): string[] {
+	return part
+		.toLowerCase()
+		.split(/\s+/)
+		.filter((token) => token.startsWith(`${name}=`))
+		.map((token) => token.slice(name.length + 1));
+}
+
+/**
  * Reads SPF, DKIM and DMARC results from the topmost Authentication-Results header that the
  * receiving server (`authservId`) added. A receiving server puts its header above the headers that
  * the sender wrote, and headers from any other server are ignored, so a sender cannot forge a pass.
+ *
+ * A result counts only at the start of a part of the header. With two SPF results, the result for
+ * the envelope sender (`smtp.mailfrom`) counts. A DKIM pass of one signature is a DKIM pass.
  */
 export function readAuthenticationResults(
 	headers: { key: string; value: string }[],
@@ -94,24 +140,54 @@ export function readAuthenticationResults(
 	const wanted = authservId.toLowerCase();
 	for (const header of headers) {
 		if (header.key !== "authentication-results") continue;
-		const [server] = header.value.split(";", 1);
-		if (server?.trim().split(/\s+/)[0]?.toLowerCase() !== wanted) continue;
-		const result = (method: string): string | null =>
-			new RegExp(`(?:^|[;\\s])${method}=([a-z]+)`, "i").exec(header.value)?.[1]?.toLowerCase() ?? null;
-		return { spf: result("spf"), dkim: result("dkim"), dmarc: result("dmarc") };
+		const [server, ...parts] = resultParts(header.value);
+		if (server?.split(/\s+/)[0]?.toLowerCase() !== wanted) continue;
+		const found = parts.flatMap((text) => {
+			// A name, its `=` and its value can have spaces between them.
+			const part = text.replace(/\s*([=/])\s*/g, "$1");
+			const match = RESULT.exec(part);
+			return match
+				? [{ method: (match[1] as string).toLowerCase(), result: (match[2] as string).toLowerCase(), part }]
+				: [];
+		});
+		const of = (method: string) => found.filter((entry) => entry.method === method);
+		const spf = of("spf").find((entry) => propertyValues(entry.part, "smtp.mailfrom").length > 0) ?? of("spf")[0];
+		const dkim = of("dkim").find((entry) => entry.result === "pass") ?? of("dkim")[0];
+		const dmarc = of("dmarc")[0];
+		const named = dmarc ? propertyValues(dmarc.part, "header.from") : [];
+		// One domain in plain characters is the domain. Each other form is equal to no domain.
+		const domain = named.length === 1 && PLAIN_DOMAIN.test(named[0] as string) ? (named[0] as string) : "";
+		return {
+			spf: spf?.result ?? null,
+			dkim: dkim?.result ?? null,
+			dmarc: dmarc?.result ?? null,
+			dmarcFrom: named.length === 0 ? null : domain,
+		};
 	}
 	return null;
 }
 
 /**
- * The verdict on the sender of mail from the internet. Only DMARC ties a result to the From domain,
- * so only a DMARC pass proves the sender, and only a DMARC failure shows a forged sender. Spam, auto
- * labels and the `sender_verification` field of a message all use this one rule.
+ * The verdict on the sender of mail from the internet. Only DMARC ties a result to the From domain.
+ * So only a DMARC pass proves the sender, and only a DMARC failure shows a forged sender.
+ * Spam, auto labels and the `sender_verification` field of a message all use this one rule.
+ *
+ * `from` is the From address that the mailbox stored. A person sees its domain beside the verdict, so a
+ * pass counts only for that domain. The receiving server can read a From header in a different way
+ * than this parser. A domain with other characters than ASCII letters, digits, `-` and `.` is never
+ * verified: such a domain can look like a different domain.
  */
-export function senderVerification(authentication: AuthenticationResults | null): SenderVerification {
-	if (authentication?.dmarc === "pass") return "verified";
+export function senderVerification(
+	authentication: AuthenticationResults | null,
+	from: string | null | undefined,
+): SenderVerification {
 	if (authentication?.dmarc === "fail") return "failed";
-	return "unverified";
+	if (authentication?.dmarc !== "pass") return "unverified";
+	const domain = domainOfAddress(from);
+	if (!domain || !PLAIN_DOMAIN.test(domain)) return "unverified";
+	// A result that the mailbox stored before `dmarcFrom`, or a server that does not name the domain.
+	if (authentication.dmarcFrom == null) return "verified";
+	return authentication.dmarcFrom === domain ? "verified" : "unverified";
 }
 
 function byteLength(content: ArrayBuffer | Uint8Array | string): number {

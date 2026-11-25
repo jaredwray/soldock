@@ -6,7 +6,7 @@ import { messageNotices, senderChecks, senderDomain } from "../src/features/mail
 describe("the sender notice of a message", () => {
 	it("shows one notice for a failed sender in Spam, and the Spam notice for each other message in Spam", () => {
 		const notices = (label_ids: string[], sender_verification: "verified" | "unverified" | "failed" | null) =>
-			messageNotices({ label_ids, sender_verification });
+			messageNotices({ label_ids, untrusted: sender_verification !== null, sender_verification });
 		// The failed notice tells that the message is in Spam. A second notice would say it again.
 		expect(notices(["SPAM"], "failed")).toEqual({ sender: "failed", inSpam: true, spamNotice: false });
 		// A person can move such a message out of Spam. The verdict stays.
@@ -14,6 +14,11 @@ describe("the sender notice of a message", () => {
 		// A person reported a message of a verified sender, or internal mail, as spam.
 		expect(notices(["SPAM"], "verified")).toEqual({ sender: "verified", inSpam: true, spamNotice: true });
 		expect(notices(["SPAM"], null)).toEqual({ sender: null, inSpam: true, spamNotice: true });
+	});
+
+	// After a rollback, a new page can talk to a server that does not send the verdict.
+	it("shows external mail as unverified when the server sends no verdict", () => {
+		expect(messageNotices({ label_ids: ["INBOX"], untrusted: true }).sender).toBe("unverified");
 	});
 
 	it("puts DMARC first, and marks as a failure only a result that is one", () => {
@@ -33,8 +38,8 @@ describe("the sender notice of a message", () => {
 	it("explains a result that it does not know, and leaves out a check with no result", () => {
 		const checks = senderChecks({ spf: null, dkim: "temperror", dmarc: "bestguesspass" }, null);
 		expect(checks.map((check) => [check.chip, check.tone, check.text])).toEqual([
-			["DMARC: bestguesspass", "none", "The receiving server did not complete this check."],
-			["DKIM: temperror", "none", "The receiving server did not complete this check."],
+			["DMARC: bestguesspass", "none", "This result is not a pass and not a failure."],
+			["DKIM: temperror", "none", "This result is not a pass and not a failure."],
 		]);
 		expect(senderChecks(null, "sender.example")).toEqual([]);
 	});

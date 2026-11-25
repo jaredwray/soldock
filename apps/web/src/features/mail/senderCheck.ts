@@ -5,14 +5,17 @@ type Verdict = Message["sender_verification"];
 /**
  * The notices above the body of a message. `sender` is the verdict on the sender of external mail. The
  * notice of a failed sender tells that the message is in Spam, so such a message gets no Spam notice.
+ * An older server sends no verdict. External mail is then unverified, so it always gets a notice.
  */
-export function messageNotices(message: Pick<Message, "label_ids" | "sender_verification">): {
+export function messageNotices(
+	message: Pick<Message, "label_ids" | "untrusted"> & Partial<Pick<Message, "sender_verification">>,
+): {
 	sender: Verdict;
 	inSpam: boolean;
 	spamNotice: boolean;
 } {
 	const inSpam = message.label_ids.includes("SPAM");
-	const sender = message.sender_verification;
+	const sender = message.untrusted ? (message.sender_verification ?? "unverified") : null;
 	return { sender, inSpam, spamNotice: inSpam && sender !== "failed" };
 }
 
@@ -35,7 +38,7 @@ export interface SenderCheck {
 	text: string;
 }
 
-const INCOMPLETE = "The receiving server did not complete this check.";
+const OTHER_RESULT = "This result is not a pass and not a failure.";
 
 /**
  * The checks of the receiving server, for the details of the sender notice. DMARC comes first, because
@@ -73,7 +76,7 @@ export function senderChecks(authentication: Message["authentication"], domain: 
 		if (result === null) return [];
 		const tone = result === "pass" ? "pass" : result === "fail" || result === "softfail" ? "fail" : "none";
 		// `Object.hasOwn` keeps a result such as `constructor` away from the prototype of the table.
-		const text = Object.hasOwn(texts[key], result) ? (texts[key][result] as string) : INCOMPLETE;
+		const text = Object.hasOwn(texts[key], result) ? (texts[key][result] as string) : OTHER_RESULT;
 		return [{ key, name, chip: `${label}: ${result}`, tone, text }];
 	});
 }

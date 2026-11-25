@@ -55,7 +55,8 @@ export async function deliverStoredRaw(
 ) {
 	const parsed = await parseMail(input.bytes, { authservId: authservId(env) });
 	// A DMARC failure on mail from the internet goes to Spam. Internal mail has no such header.
-	const spam = input.origin === "external" && senderVerification(parsed.authentication) === "failed";
+	const spam =
+		input.origin === "external" && senderVerification(parsed.authentication, parsed.from?.address) === "failed";
 	// One read of the AI settings. The mailbox applies auto labels only when its own setting is on too.
 	const owner = !spam && (await autoLabelActive(env)) ? await getMailbox(env.DIRECTORY, input.mailboxId) : null;
 	// The Screener applies only to mail from outside that is not spam, and never in the mailbox of an agent.
