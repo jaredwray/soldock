@@ -83,30 +83,6 @@ export async function createShareRequest(
 	return { request: row, created: inserted.meta.changes === 1 && row.id === id };
 }
 
-/**
- * Puts back a request that an approval deleted, when the approval failed before a decision: the drive did not
- * answer. A request that a new call made in the meantime stays.
- */
-export async function restoreShareRequest(db: D1Database, request: ShareRequestRow): Promise<void> {
-	await db
-		.prepare(
-			`INSERT INTO drive_share_requests (id, space_id, item_id, item_name, principal_id, requested_by, role, notified_id, created_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING`,
-		)
-		.bind(
-			request.id,
-			request.space_id,
-			request.item_id,
-			request.item_name,
-			request.principal_id,
-			request.requested_by,
-			request.role,
-			request.notified_id,
-			request.created_at,
-		)
-		.run();
-}
-
 /** Deletes a request. Returns false when a different call deleted it first. */
 export async function deleteShareRequest(db: D1Database, id: string): Promise<boolean> {
 	const result = await db.prepare("DELETE FROM drive_share_requests WHERE id = ?").bind(id).run();

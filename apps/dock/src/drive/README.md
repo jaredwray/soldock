@@ -367,10 +367,12 @@ grant.
   the role that it does not hold, as for `drive.share_item`. The credential must hold `directory.write` for
   that. The result has `agent_access_changes` and `agent_access_pending`. `assertMemberGrants` refuses
   the call before the delete when the credential cannot give a scope.
-- **A failed write.** When the drive does not answer after the delete, nobody decided. The handler puts
-  the request back with the same id, sends its activity item again, and returns the error. The person can
-  approve again. A request that a new call made in the meantime stays. The directory can also fail after
-  the grant. Then the account can be without its scopes, and a person who manages it sets them.
+- **A failed write.** The drive can fail after the delete. Then the request is gone, and an audit line with
+  `result: "error"` and `code: "internal"` keeps the person who removed it. The request does not come
+  back: the drive can have written the grant before the error, and a denial could not remove that grant.
+  The agent asks again, and `drive.list_permissions` tells if the account has the grant. The directory can
+  also fail after the grant. Then the account can be without its scopes, and a person who manages it sets
+  them.
 - **A denial.** `drive.deny_share_request` deletes the request. The account gets no grant.
 - **The activity item.** One person gets an item of the kind `share_request` in `chat.list_activity`
   (`deciderOf` of `identity`). For an agent, that person is its sponsor. For a service account, that

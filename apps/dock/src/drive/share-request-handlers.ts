@@ -19,7 +19,6 @@ import {
 	getShareRequest,
 	listShareRequestsBy,
 	listShareRequestsFor,
-	restoreShareRequest,
 	type ShareRequestRow,
 	setShareRequestNotified,
 	shareRequestActivityId,
@@ -37,7 +36,13 @@ type ShareRequestOperation =
 const NO_REQUEST = "No request has that id, or you cannot decide it.";
 
 /** The audit line of a call that changed state and then failed, as `auditOk` writes a call that succeeded. */
-function auditFailed(call: CallContext, opened: OpenSpace, op: string, target: string): void {
+function auditFailed(
+	call: CallContext,
+	opened: OpenSpace,
+	op: string,
+	target: string,
+	code: "conflict" | "internal",
+): void {
 	audit({
 		op,
 		actor: call.caller.id,
@@ -46,7 +51,7 @@ function auditFailed(call: CallContext, opened: OpenSpace, op: string, target: s
 		target,
 		...(opened.own ? {} : { space: opened.spaceId }),
 		result: "error",
-		code: "conflict",
+		code,
 		requestId: call.requestId,
 	});
 }
@@ -76,12 +81,7 @@ function agentToAgent(call: CallContext, target: PrincipalRecord): boolean {
 }
 
 /** Puts a request into the activity list of the person who decides it. A second call changes nothing. */
-async function notifyDecider(
-	call: CallContext,
-	request: ShareRequestRow,
-	target: PrincipalRecord,
-	actor: ReturnType<typeof actorOf>,
-): Promise<void> {
+async function notifyDecider(call: CallContext, request: ShareRequestRow, target: PrincipalRecord): Promise<void> {
 	if (request.notified_id === null) return;
 	await call.env.PRINCIPAL.get(call.env.PRINCIPAL.idFromName(request.notified_id)).recordChatActivity([
 		{
@@ -94,7 +94,7 @@ async function notifyDecider(
 			parent_id: null,
 			seq: 0,
 			parent_seq: null,
-			actor,
+			actor: actorOf(call),
 			emoji: null,
 			preview: `Asks to share ${request.item_name} with ${target.display_name}`,
 			// The agent that asked chose the name of the item, and an agent chose the name of each account.
@@ -207,7 +207,7 @@ export const driveShareRequestHandlers: Pick<HandlerMap<CallContext>, ShareReque
 		}
 		// Each call sends the item again. The write has the id of the request, so a second one changes nothing,
 		// and it completes a write that failed.
-		await notifyDecider(call, request, target, actorOf(call));
+		await notifyDecider(call, request, target);
 		return { request: toShareRequest(request), created: stored.created };
 	},
 
@@ -238,7 +238,7 @@ export const driveShareRequestHandlers: Pick<HandlerMap<CallContext>, ShareReque
 		const line = `${request.item_id}:${target.id}:${request.role}`;
 		// The request is gone after each of these refusals. The log keeps the person who removed it.
 		const gone = (message: string): OperationError => {
-			auditFailed(call, opened, "drive.approve_share_request", line);
+			auditFailed(call, opened, "drive.approve_share_request", line, "conflict");
 			return new OperationError("conflict", `${message} The request is gone.`);
 		};
 		const asker = await getPrincipal(call.env.DIRECTORY, request.requested_by);
@@ -255,17 +255,10 @@ export const driveShareRequestHandlers: Pick<HandlerMap<CallContext>, ShareReque
 				request.role,
 			);
 		} catch (error) {
-			// The drive did not answer, so nobody decided. The request and its activity item come back, and the
-			// person can approve again.
-			try {
-				await restoreShareRequest(call.env.DIRECTORY, request);
-				await notifyDecider(call, request, target, toActor(asker));
-			} catch (restoreError) {
-				// The agent can ask again. The error of the drive is the answer of the call.
-				log("warn", "drive: a share request did not come back after a failed approval", {
-					error: restoreError instanceof Error ? restoreError.message : String(restoreError),
-				});
-			}
+			// The drive did not answer. It can have written the grant before the error, so the request does not come
+			// back: a denial of it could not remove such a grant. The log keeps the person who removed the request.
+			// The agent asks again, and drive.list_permissions tells if the account has the grant.
+			auditFailed(call, opened, "drive.approve_share_request", line, "internal");
 			throw error;
 		}
 		// The item is gone or in the trash, or the agent that asked cannot share it now.

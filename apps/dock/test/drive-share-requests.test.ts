@@ -650,7 +650,9 @@ describe("a request of an agent to share an item with an agent", () => {
 
 	// A drive that does not answer did not decide. The person must be able to approve again, and must still see
 	// the request in the activity list.
-	it("puts the request and its activity item back when the drive fails during the approval", async () => {
+	// The drive can write the grant and then fail. A request that came back could then get a denial that does not
+	// remove the grant, so the request stays gone, and the log keeps the person who removed it.
+	it("removes the request and logs the person when the drive fails during the approval", async () => {
 		const helper = await newAgent("Helper");
 		const item = await upload(bot, "plan.txt");
 		const request = await ask(bot, item.id, helper);
@@ -667,6 +669,7 @@ describe("a request of an agent to share an item with an agent", () => {
 					},
 				}),
 		} as unknown as Env["DRIVE_SPACE"];
+		const logged = vi.spyOn(console, "log");
 		const approved = await withEnv({ DRIVE_SPACE: failing }, `/api/v1/drive/share-requests/${request.id}/approve`, {
 			method: "POST",
 			headers: { authorization: `Bearer ${ada.key}`, "content-type": "application/json" },
@@ -675,16 +678,32 @@ describe("a request of an agent to share an item with an agent", () => {
 		expect(approved.status).toBeGreaterThanOrEqual(500);
 		expect(await grantsOf(bot, item.id)).toEqual([]);
 		expect(await scopesOf(helper.id)).toEqual(["account.read"]);
-		// The request is back with its id, for the person and for the agent, and the person sees it again.
-		expect(await requestsOf(ada)).toEqual([request]);
-		expect(await requestsOf(bot)).toEqual([request]);
-		expect(await requestItems(ada)).toMatchObject([
-			{ message_id: request.id, actor: { principal_id: bot.id }, subject: { principal_id: helper.id } },
-		]);
-		// A later approval completes the request.
-		const done = await ada.call("drive.approve_share_request", { request_id: request.id });
-		expect(done.permission).toMatchObject({ principal_id: helper.id, role: "viewer" });
+		// The request is gone for the person and for the agent, and the audit log has the person who removed it.
+		expect(await requestsOf(ada)).toEqual([]);
+		expect(await requestsOf(bot)).toEqual([]);
 		expect(await requestItems(ada)).toEqual([]);
+		const lines = logged.mock.calls
+			.map(([line]) => {
+				try {
+					return JSON.parse(String(line)) as Record<string, unknown>;
+				} catch {
+					return null;
+				}
+			})
+			.filter((line) => line?.audit === true && line.op === "drive.approve_share_request");
+		expect(lines).toEqual([
+			expect.objectContaining({
+				actor: ada.id,
+				target: `${item.id}:${helper.id}:viewer`,
+				result: "error",
+				code: "internal",
+			}),
+		]);
+		// The agent asks again, and a person approves the new request.
+		const again = await ask(bot, item.id, helper);
+		expect(again.id).not.toBe(request.id);
+		const done = await ada.call("drive.approve_share_request", { request_id: again.id });
+		expect(done.permission).toMatchObject({ principal_id: helper.id, role: "viewer" });
 	});
 
 	// The object of each principal adds a column to its activity table for the new kind. A person must not lose
