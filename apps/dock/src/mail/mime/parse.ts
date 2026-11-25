@@ -1,3 +1,4 @@
+import type { SenderVerification } from "@asterra/contracts";
 import PostalMime, { type Address as PostalAddress } from "postal-mime";
 import { extractSignals, type MailSignals } from "../autolabel/signals.ts";
 
@@ -100,6 +101,17 @@ export function readAuthenticationResults(
 		return { spf: result("spf"), dkim: result("dkim"), dmarc: result("dmarc") };
 	}
 	return null;
+}
+
+/**
+ * The verdict on the sender of mail from the internet. Only DMARC ties a result to the From domain,
+ * so only a DMARC pass proves the sender, and only a DMARC failure shows a forged sender. Spam, auto
+ * labels and the `sender_verification` field of a message all use this one rule.
+ */
+export function senderVerification(authentication: AuthenticationResults | null): SenderVerification {
+	if (authentication?.dmarc === "pass") return "verified";
+	if (authentication?.dmarc === "fail") return "failed";
+	return "unverified";
 }
 
 function byteLength(content: ArrayBuffer | Uint8Array | string): number {

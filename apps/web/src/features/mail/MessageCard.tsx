@@ -9,6 +9,7 @@ import { isAgentMailbox } from "../../routes.ts";
 import { AUTO_MARK_TEXT, AUTO_MARK_TITLE } from "./autoLabels.ts";
 import { MessageBody } from "./MessageBody.tsx";
 import { mailboxInput, useMailboxId, useMailboxRights } from "./mailbox.tsx";
+import { messageNotices, senderChecks, senderDomain } from "./senderCheck.ts";
 import { labelChipName } from "./views.ts";
 
 export type ReplyMode = "reply" | "replyAll" | "forward";
@@ -89,7 +90,7 @@ export function MessageCard({
 	const selfAddress = mailboxId === null ? myAddress : "";
 	// Reply and Forward quote the full body. They wait for a body that mail.get_thread left out.
 	const withBody = body ? { ...message, body } : null;
-	const spam = message.label_ids.includes("SPAM");
+	const notices = messageNotices(message);
 	const sender = message.from;
 	const senderName = sender
 		? sameAddress(sender.address, selfAddress)
@@ -165,8 +166,8 @@ export function MessageCard({
 								))}
 							</ul>
 						)}
-						{spam && <SpamNotice />}
-						{message.untrusted && <ExternalNotice message={message} />}
+						{notices.spamNotice && <SpamNotice />}
+						{notices.sender && <SenderNotice message={message} verdict={notices.sender} inSpam={notices.inSpam} />}
 						{body ? (
 							<MessageBody body={body} subject={message.subject} />
 						) : full.status === "error" ? (
@@ -264,31 +265,73 @@ function SpamNotice() {
 	);
 }
 
-function ExternalNotice({ message }: { message: Message }) {
-	const auth = message.authentication;
-	const results: [name: string, value: string][] = [];
-	if (auth) {
-		if (auth.spf !== null) results.push(["SPF", auth.spf]);
-		if (auth.dkim !== null) results.push(["DKIM", auth.dkim]);
-		if (auth.dmarc !== null) results.push(["DMARC", auth.dmarc]);
-	}
+const SENDER_NOTICES = {
+	verified: { icon: "shield", className: "external-notice sender-verified" },
+	unverified: { icon: "warning", className: "external-notice" },
+	failed: { icon: "spam", className: "external-notice spam-notice" },
+} as const;
+
+/**
+ * The notice of external mail. It answers one question in plain words: did the From domain send this
+ * message? The SPF, DKIM and DMARC results are in the details. A verified sender is not a safe message,
+ * so that notice is quiet and keeps the caution.
+ */
+function SenderNotice({
+	message,
+	verdict,
+	inSpam,
+}: {
+	message: Message;
+	verdict: NonNullable<Message["sender_verification"]>;
+	inSpam: boolean;
+}) {
+	const domain = senderDomain(message.from?.address);
+	const checks = senderChecks(message.authentication, domain);
+	const from = domain ? <strong>{domain}</strong> : "the domain of its sender";
+	const { icon, className } = SENDER_NOTICES[verdict];
 	return (
-		<div className="external-notice">
-			<Icon name="warning" size={18} />
-			<div>
-				<p>
-					<strong>External sender.</strong> This message came from outside your organization. Be careful with links,
-					attachments and requests in it.
-				</p>
-				{results.length > 0 && (
-					<ul className="auth-results" aria-label="Sender authentication">
-						{results.map(([name, value]) => (
-							<li key={name} className={value.toLowerCase() === "pass" ? "auth-pass" : "auth-fail"}>
-								{name}: {value}
-							</li>
-						))}
-					</ul>
+		<div className={className}>
+			<Icon name={icon} size={18} />
+			<div className="sender-notice-text">
+				{verdict === "verified" && (
+					<p>
+						<strong>Verified sender.</strong> This message came from {from}. That domain is outside your organization,
+						so be careful with links, attachments and requests.
+					</p>
 				)}
+				{verdict === "unverified" && (
+					<p>
+						<strong>Unverified sender.</strong> No check confirms that this message came from {from}. Be careful with
+						links, attachments and requests in it.
+					</p>
+				)}
+				{verdict === "failed" && (
+					<p>
+						<strong>Sender check failed.</strong> This message says that it is from {from}, but it failed the checks of
+						that domain. The sender is probably forged.{inSpam ? " The message is in Spam." : ""}
+					</p>
+				)}
+				<details className="sender-details">
+					<summary>
+						Details
+						<Icon name="chevronDown" size={14} />
+					</summary>
+					{checks.length > 0 ? (
+						<ul className="sender-checks" aria-label="Sender checks">
+							{checks.map((check) => (
+								<li key={check.key}>
+									<span className="sender-check-text">
+										<strong>{check.name}</strong>
+										<span>{check.text}</span>
+									</span>
+									<span className={`auth-result auth-${check.tone}`}>{check.chip}</span>
+								</li>
+							))}
+						</ul>
+					) : (
+						<p className="sender-checks-empty">The receiving server recorded no checks for this message.</p>
+					)}
+				</details>
 			</div>
 		</div>
 	);

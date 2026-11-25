@@ -143,7 +143,35 @@ describe("the inbound queue consumer", () => {
 		const [spam] = await inbox(ada.call, "in:spam");
 		const thread = await ada.call("mail.get_thread", { thread_id: spam?.id as string });
 		expect(thread.messages[0]?.authentication).toEqual({ spf: "fail", dkim: "none", dmarc: "fail" });
+		expect(thread.messages[0]?.sender_verification).toBe("failed");
 		expect(thread.messages[0]?.label_ids).toContain("SPAM");
+	});
+
+	// People and agents read the verdict as "the From domain sent this". Only DMARC ties a result to the
+	// From domain, so an SPF pass or a DKIM pass alone, or a header that the sender wrote, proves nothing.
+	it("calls a sender verified only for a DMARC pass that the receiving server recorded", async () => {
+		const { ada } = await seedOrg();
+		const cases: [subject: string, results: string | null][] = [
+			["Pass", "mx.cloudflare.net; spf=none; dkim=pass; dmarc=pass header.from=sender.example"],
+			["No policy", "mx.cloudflare.net; spf=pass; dkim=pass; dmarc=none"],
+			["Forged header", "attacker.example; spf=pass; dkim=pass; dmarc=pass"],
+			["No header", null],
+		];
+		for (const [subject, results] of cases) {
+			const headers: [string, string][] = results ? [["Authentication-Results", results]] : [];
+			await inject(rawMessage({ from: "bob@sender.example", to: "ada@dock.test", subject, headers }), "ada@dock.test");
+		}
+		const verdicts: Record<string, unknown> = {};
+		for (const summary of await inbox(ada.call)) {
+			const thread = await ada.call("mail.get_thread", { thread_id: summary.id });
+			verdicts[summary.subject] = thread.messages[0]?.sender_verification;
+		}
+		expect(verdicts).toEqual({
+			Pass: "verified",
+			"No policy": "unverified",
+			"Forged header": "unverified",
+			"No header": "unverified",
+		});
 	});
 });
 

@@ -165,9 +165,15 @@ MCP clients. The app has no UI-only path.
     back only the labels that the action changed on it (`undoChanges` in `actions.ts`). An open thread that
     still loads gets no undo, because the app does not know its labels yet.
   - The thread view shows each message with its sender, recipients, date, labels, body,
-    attachments and, for sent mail, the delivery status of each recipient. External mail gets an
-    "External sender" notice with the SPF, DKIM and DMARC results. A message with the SPAM label
-    gets a "This message is in Spam" notice, because it can be in a thread with other messages.
+    attachments and, for sent mail, the delivery status of each recipient.
+  - External mail gets a sender notice. It tells the verdict of the server (`sender_verification`) in
+    plain words and names the domain of the sender: "Verified sender" (quiet, with a green shield),
+    "Unverified sender" (a warning) or "Sender check failed" (red). A verified sender is not a safe
+    message, so that notice keeps the caution about links, attachments and requests. "Details" opens
+    the SPF, DKIM and DMARC results, each with a name and one sentence (`senderCheck.ts`). A result
+    that is not a pass and not a failure is muted, not red.
+  - A message with the SPAM label gets a "This message is in Spam" notice, because it can be in a
+    thread with other messages. The notice of a failed sender tells it, so such a message gets one notice.
   - The last message and each unread message are open. Each other message is collapsed: one line
     with the initials of the sender, the name, the snippet, a paperclip when it has attachments,
     and a short date. A click on the line opens or closes the message.
@@ -2121,7 +2127,7 @@ Start `pnpm --filter @asterra/dock dev` in a second terminal for the API.
   `<a download>`, never into a frame.
 - **A link preview is data.** Its title, description and site are text nodes. Its picture comes from
   the server, so the site of the link never sees a reader. Only an http or https address gets a link.
-- **External content is marked.** External mail shows the "External sender" notice. The server
+- **External content is marked.** External mail shows the sender notice. The server
   blocks remote images, and the app shows "Remote images are hidden to protect your privacy".
 - **The CSP is in [`public/_headers`](public/_headers).** It allows no inline script, no `eval`, and
   no external font or CDN. `connect-src 'self'` keeps each call on the dock host. `media-src 'self'

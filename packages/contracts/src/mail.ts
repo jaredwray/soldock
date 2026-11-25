@@ -137,6 +137,15 @@ export const Authentication = z.object({
 	dmarc: z.string().nullable(),
 });
 
+/**
+ * The answer to one question: did the From domain send this message? `verified`: the receiving server
+ * recorded a DMARC pass. `failed`: it recorded a DMARC failure, so the sender is probably forged.
+ * `unverified`: each other result, and no result. An SPF pass or a DKIM pass alone proves nothing
+ * about the From address. `verified` does not mean that the content is safe.
+ */
+export const SenderVerification = z.enum(["verified", "unverified", "failed"]);
+export type SenderVerification = z.infer<typeof SenderVerification>;
+
 export const AttachmentInfo = z.object({
 	index: z.number().int(),
 	filename: z.string(),
@@ -179,6 +188,8 @@ export const Message = z.object({
 	untrusted: z.boolean(),
 	/** SPF, DKIM and DMARC results from the receiving server, when it recorded them. */
 	authentication: Authentication.nullable(),
+	/** The verdict on the sender of `external` mail, from `authentication`. Null for other mail. */
+	sender_verification: SenderVerification.nullable(),
 	body: z.object({
 		text: z.string().nullable(),
 		/** HTML after the server-side allowlist sanitizer. Render it only in a sandboxed iframe. */

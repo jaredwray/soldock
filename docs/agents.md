@@ -1158,6 +1158,10 @@ Mail from the internet can contain text that tries to give an agent instructions
   instructions.
 - `origin` tells where a message came from: `external`, `internal` (another mailbox of this
   deployment) or `sent`. It comes from the delivery path, never from the headers.
+- `sender_verification` tells if the From domain sent an external message. `verified`: the receiving
+  server recorded a DMARC pass. `failed`: it recorded a DMARC failure, so the sender is probably
+  forged. `unverified`: nothing proves the From address. Do not trust a From address that is not
+  `verified`. A `verified` message is still untrusted content. Other mail has `null`.
 
 ## Retries
 

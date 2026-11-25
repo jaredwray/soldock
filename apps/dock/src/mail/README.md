@@ -591,6 +591,8 @@ message of a run has `may_archive` 0, so the classifier stage keeps the message 
   and RPC allows 32 MiB. The bodies of a thread share a budget of 6,000,000 characters.
 - The newest bodies get the budget first. A message without its body has `body.omitted: true`.
   `mail.get_message` returns that message with its body.
+- An external message has `authentication` (the SPF, DKIM and DMARC results of the receiving server)
+  and `sender_verification` (the verdict from them, see [Safety](#safety)). REST and MCP return both.
 - Each message is sanitized alone. When the sanitizer fails on one message, that message gets
   `body.html: null` and a text body from its HTML. The other messages of the thread do not change.
 
@@ -851,6 +853,15 @@ A disabled endpoint stays disabled. Delete it and create a new one.
   `allow-same-origin`, under a CSP that refuses each remote load.
 - Only the topmost `Authentication-Results` header from `MAIL_AUTHSERV_ID` counts. A sender cannot
   forge a pass with its own header.
+- Each external message has a verdict, `sender_verification`. It answers one question: did the From
+  domain send this message? The rule is `senderVerification()` in `mime/parse.ts`:
+  - `verified`: the receiving server recorded a DMARC pass.
+  - `failed`: it recorded a DMARC failure. Such mail goes to Spam.
+  - `unverified`: each other result, and no result.
+
+  Only DMARC ties a result to the From domain, so an SPF pass or a DKIM pass alone is `unverified`.
+  Spam, auto labels and the verdict use this one rule. Internal mail and sent mail have `null`.
+  `verified` proves the domain only. The content stays `untrusted: true`.
 - Attachments are returned as base64 JSON, never served as active content on the origin.
 - Auto labels: the classifier gets the message as delimited data, with a nonce for each call. Its
   answer can only choose candidate labels of the mailbox, which the mailbox checks again. It can

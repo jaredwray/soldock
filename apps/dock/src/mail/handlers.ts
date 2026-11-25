@@ -35,7 +35,7 @@ import {
 import { mailboxStub, storeRaw } from "./delivery.ts";
 import type { Refusal, SendInput, SettingsPatch, StoredMessage } from "./mailbox.ts";
 import { composeMessage } from "./mime/compose.ts";
-import { parseMail, readAttachment } from "./mime/parse.ts";
+import { parseMail, readAttachment, senderVerification } from "./mime/parse.ts";
 import { readOrgSettings, screenerDefault, updateOrgSettings } from "./org-settings.ts";
 import { deniedOutboundAddresses, outboundMode, outboundPolicyDenial } from "./outbound.ts";
 import { sanitizeHtml } from "./sanitize.ts";
@@ -246,6 +246,7 @@ async function toMessage(stored: StoredMessage): Promise<Message> {
 		origin: stored.origin,
 		untrusted: stored.origin === "external",
 		authentication: stored.origin === "external" ? stored.authentication : null,
+		sender_verification: stored.origin === "external" ? senderVerification(stored.authentication) : null,
 		body: {
 			// When the HTML cannot be sanitized and the message has no text part, a text form keeps it readable.
 			text: stored.text ?? (html === null && stored.html !== null ? htmlToText(stored.html) : null),

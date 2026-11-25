@@ -1,5 +1,6 @@
 import { AUTO_LABELS, type AutoLabelSettings, MAIL_LIMITS } from "@asterra/contracts";
 import { newId } from "../../platform/index.ts";
+import { type AuthenticationResults, senderVerification } from "../mime/parse.ts";
 import { foldLabelName } from "../search.ts";
 import { type Correction, FREE_MAIL_DOMAINS, type LabelDef, type MailFacts } from "./rules.ts";
 import { domainOfAddress } from "./signals.ts";
@@ -225,7 +226,7 @@ interface FactsRow extends Row {
 function dmarcPassed(authJson: string | null): boolean {
 	if (!authJson) return false;
 	try {
-		return (JSON.parse(authJson) as { dmarc?: unknown } | null)?.dmarc === "pass";
+		return senderVerification(JSON.parse(authJson) as AuthenticationResults | null) === "verified";
 	} catch {
 		return false;
 	}
