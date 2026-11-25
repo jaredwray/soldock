@@ -33,6 +33,7 @@ import { endEventSockets } from "./principal.ts";
 import { confirmPassword } from "./signin.ts";
 import {
 	addMailDomain,
+	addressTaken,
 	archivePrincipal,
 	assertPrimaryAddress,
 	countSponsoredAgents,
@@ -95,6 +96,7 @@ type IdentityOperation =
 	| "directory.create_principal"
 	| "directory.create_invite"
 	| "directory.list_mail_domains"
+	| "directory.check_address"
 	| "directory.add_mail_domain"
 	| "directory.remove_mail_domain"
 	| "directory.update_agent_policy"
@@ -328,6 +330,31 @@ export const identityHandlers: Pick<HandlerMap<CallContext>, IdentityOperation |
 		if (!isAdmin(call.caller))
 			throw new OperationError("forbidden", "Only owners and admins can read mail domain settings.");
 		return { mail_domains: [...(await mailDomains(call.env.DIRECTORY))] };
+	},
+
+	async "directory.check_address"(call, input) {
+		if (!isAdmin(call.caller)) throw new OperationError("forbidden", "Only owners and admins can check addresses.");
+		const address = input.address.toLowerCase();
+		// The checks of a create. The insert of the create does the unique check again.
+		const unavailable = (reason: "plus_tag" | "domain_not_saved" | "taken", message: string) => ({
+			address,
+			available: false,
+			reason,
+			message,
+		});
+		if (address.slice(0, address.lastIndexOf("@")).includes("+")) {
+			return unavailable("plus_tag", "An address cannot contain +. Mail to user+tag goes to user.");
+		}
+		if (!(await mailDomains(call.env.DIRECTORY)).has(domainOf(address))) {
+			return unavailable(
+				"domain_not_saved",
+				"The domain is not a saved email domain. Add it in Admin › Email domains.",
+			);
+		}
+		if (await addressTaken(call.env.DIRECTORY, address)) {
+			return unavailable("taken", "That address belongs to another member or a shared mailbox.");
+		}
+		return { address, available: true, reason: null, message: null };
 	},
 
 	async "directory.add_mail_domain"(call, input) {

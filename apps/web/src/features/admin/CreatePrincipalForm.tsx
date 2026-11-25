@@ -1,5 +1,8 @@
 import {
+	type AddressAvailability,
+	type AddressFormat,
 	API_KEY_LIMITS,
+	addressLocalPart,
 	type CreatedApiKey,
 	EmailAddress,
 	INVITE_DAYS,
@@ -16,7 +19,10 @@ import { Dialog } from "../../lib/Dialog.tsx";
 import { KIND_NAMES } from "../../lib/principalKind.ts";
 import { Select } from "../../lib/Select.tsx";
 import { McpEndpointBanner } from "./McpEndpointBanner.tsx";
-import { defaultMailDomain } from "./memberAddress.ts";
+import { addressToCheck, defaultMailDomain } from "./memberAddress.ts";
+
+/** The wait after the last key press before the form checks the address. */
+const CHECK_DELAY_MS = 300;
 
 const ROLE_OPTIONS = [
 	{ value: "member", label: "Member" },
@@ -76,6 +82,11 @@ const KIND_HINTS: Record<Kind, string> = {
  * result of an agent holds a first API key, which shows once. A person gets an invite link, or a first password
  * from the admin, and no key: the person signs in with the password and creates keys in Settings. A service account gets its tokens on its page, with a lifetime
  * for each. The address is a mailbox name and a saved mail domain, which the admin selects from a list.
+ *
+ * When the address format of the organization is on (Admin › Mail), the mailbox name of a person follows the
+ * display name, until the admin types a different mailbox name. If the admin clears the field, it follows the
+ * display name again. The form checks each address with `directory.check_address` and shows the result. The
+ * result is advice only: the create can still fail if a different request takes the address first.
  */
 function CreatePrincipalForm({ me, humans, onBusy, onCancel, onCreated }: CreatePrincipalFormProps) {
 	const [kind, setKind] = useState<Kind>("human");
@@ -86,6 +97,15 @@ function CreatePrincipalForm({ me, humans, onBusy, onCancel, onCreated }: Create
 	const [domains, setDomains] = useState<readonly string[] | null>(null);
 	const [domainsError, setDomainsError] = useState<string | null>(null);
 	const [domain, setDomain] = useState("");
+	// The address format of the organization, or null when it is off or did not load. Then the admin types each name.
+	const [addressFormat, setAddressFormat] = useState<AddressFormat | null>(null);
+	// True while the mailbox name follows the display name.
+	const [followName, setFollowName] = useState(true);
+	// The last address check: `result` is null while the check runs.
+	const [availability, setAvailability] = useState<{
+		address: string;
+		result: AddressAvailability | null;
+	} | null>(null);
 	const [firstSignIn, setFirstSignIn] = useState<FirstSignIn>("invite");
 	const [password, setPassword] = useState("");
 	const [role, setRole] = useState<"member" | "admin">("member");
@@ -97,6 +117,7 @@ function CreatePrincipalForm({ me, humans, onBusy, onCancel, onCreated }: Create
 		name: useId(),
 		address: useId(),
 		addressHint: useId(),
+		availability: useId(),
 		password: useId(),
 		passwordHint: useId(),
 		role: useId(),
@@ -118,12 +139,58 @@ function CreatePrincipalForm({ me, humans, onBusy, onCancel, onCreated }: Create
 				if (live) setDomainsError(errorMessage(caught));
 			},
 		);
+		// Without the settings, the form works as before: the admin types each mailbox name.
+		api.call("mail.get_org_settings").then(
+			({ address_format }) => {
+				if (live) setAddressFormat(address_format.enabled ? address_format.format : null);
+			},
+			() => {},
+		);
 		return () => {
 			live = false;
 		};
 	}, [me.address]);
 
 	const address = `${localPart.trim()}@${domain}`;
+	const checked = addressToCheck(localPart, domain);
+
+	useEffect(() => {
+		if (checked === null) return setAvailability(null);
+		setAvailability({ address: checked, result: null });
+		let live = true;
+		const timer = setTimeout(() => {
+			api.call("directory.check_address", { address: checked }).then(
+				(result) => {
+					if (live) setAvailability({ address: checked, result });
+				},
+				// The check is advice only. If it fails, the form shows nothing and the create checks the address.
+				() => {
+					if (live) setAvailability(null);
+				},
+			);
+		}, CHECK_DELAY_MS);
+		return () => {
+			live = false;
+			clearTimeout(timer);
+		};
+	}, [checked]);
+
+	// The result of the check of the address in the form. A result for an earlier address does not show.
+	const current = availability?.address === checked ? availability : null;
+
+	/** Fills in the mailbox name from the display name, for a person, while the name follows the display name. */
+	function fillAddress(displayName: string, principalKind: Kind, format = addressFormat) {
+		if (followName && format !== null && principalKind === "human") {
+			setLocalPart(addressLocalPart(displayName, format));
+		}
+	}
+
+	// The admin can type the display name before the settings load. When the format arrives, fill in the name.
+	const [formatSeen, setFormatSeen] = useState<AddressFormat | null>(null);
+	if (addressFormat !== formatSeen) {
+		setFormatSeen(addressFormat);
+		if (name.trim()) fillAddress(name, kind, addressFormat);
+	}
 
 	async function submit(event: FormEvent<HTMLFormElement>) {
 		event.preventDefault();
@@ -131,6 +198,8 @@ function CreatePrincipalForm({ me, humans, onBusy, onCancel, onCreated }: Create
 		if (!domain) return setError("Add an email domain in Admin › Email domains first.");
 		if (localPart.includes("@")) return setError("Enter only the part before @. Select the domain from the list.");
 		if (!EmailAddress.safeParse(address).success) return setError("Enter a mailbox name, such as ada.");
+		if (current?.result?.available === false)
+			return setError(current.result.message ?? "That address is not available.");
 		if (kind === "human" && firstSignIn === "password" && !Password.safeParse(password).success) {
 			return setError(`Enter a first password of ${PASSWORD_MIN_LENGTH} to ${PASSWORD_MAX_LENGTH} characters.`);
 		}
@@ -190,7 +259,10 @@ function CreatePrincipalForm({ me, humans, onBusy, onCancel, onCreated }: Create
 								name="principal-kind"
 								value={value}
 								checked={kind === value}
-								onChange={() => setKind(value)}
+								onChange={() => {
+									setKind(value);
+									fillAddress(name, value);
+								}}
 								disabled={busy}
 							/>
 							{KIND_NAMES[value]}
@@ -215,7 +287,10 @@ function CreatePrincipalForm({ me, humans, onBusy, onCancel, onCreated }: Create
 						className="input"
 						value={name}
 						maxLength={100}
-						onChange={(event) => setName(event.target.value)}
+						onChange={(event) => {
+							setName(event.target.value);
+							fillAddress(event.target.value, kind);
+						}}
 						disabled={busy}
 						placeholder={kind === "agent" ? "Invoice assistant" : kind === "service" ? "CI pipeline" : "Ada Lovelace"}
 					/>
@@ -232,8 +307,12 @@ function CreatePrincipalForm({ me, humans, onBusy, onCancel, onCreated }: Create
 							autoCapitalize="none"
 							spellCheck={false}
 							value={localPart}
-							onChange={(event) => setLocalPart(event.target.value)}
-							aria-describedby={ids.addressHint}
+							onChange={(event) => {
+								setLocalPart(event.target.value);
+								// A name that the admin types stops the fill. An empty field starts it again.
+								setFollowName(event.target.value.trim() === "");
+							}}
+							aria-describedby={`${ids.availability} ${ids.addressHint}`}
 							disabled={busy}
 							placeholder={kind === "agent" ? "invoices" : kind === "service" ? "ci" : "ada"}
 						/>
@@ -251,6 +330,27 @@ function CreatePrincipalForm({ me, humans, onBusy, onCancel, onCreated }: Create
 							aria-describedby={ids.addressHint}
 						/>
 					</div>
+					<p
+						id={ids.availability}
+						aria-live="polite"
+						className={
+							current === null
+								? undefined
+								: current.result === null
+									? "field-hint"
+									: current.result.available
+										? "field-ok"
+										: "field-error"
+						}
+					>
+						{current === null
+							? null
+							: current.result === null
+								? `Checking ${current.address}…`
+								: current.result.available
+									? `${current.result.address} is available.`
+									: current.result.message}
+					</p>
 					<p id={ids.addressHint} className={domainsError ? "form-error" : "field-hint"}>
 						{domainsError
 							? `The email domains did not load. ${domainsError}`

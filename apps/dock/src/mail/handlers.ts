@@ -426,17 +426,23 @@ export const mailHandlers: Pick<HandlerMap<CallContext>, MailOperation> = {
 
 	async "mail.update_org_settings"(call, input) {
 		requireAdmin(call, "change the mail settings of the organization");
-		const settings = await updateOrgSettings(call.env.DIRECTORY, input.screener.default_enabled, Date.now());
-		audit({
-			op: "mail.update_org_settings",
-			actor: call.caller.id,
-			actorKind: call.caller.kind,
-			credential: call.caller.credential,
-			target: "screener",
-			code: settings.screener.default_enabled ? "on" : "off",
-			result: "ok",
-			requestId: call.requestId,
-		});
+		const settings = await updateOrgSettings(call.env.DIRECTORY, input, Date.now());
+		// One audit line for each setting in the request.
+		const auditSetting = (target: string, code: string) =>
+			audit({
+				op: "mail.update_org_settings",
+				actor: call.caller.id,
+				actorKind: call.caller.kind,
+				credential: call.caller.credential,
+				target,
+				code,
+				result: "ok",
+				requestId: call.requestId,
+			});
+		if (input.screener) auditSetting("screener", settings.screener.default_enabled ? "on" : "off");
+		if (input.address_format) {
+			auditSetting("address_format", settings.address_format.enabled ? settings.address_format.format : "off");
+		}
 		return settings;
 	},
 

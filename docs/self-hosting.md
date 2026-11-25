@@ -291,6 +291,20 @@ in the mailbox screens the sender in or out, and the sender is not told.
 On upgrade, migration `0031_mail_settings.sql` adds the table `mail_settings` with the Screener off.
 The deploy applies it. No mailbox changes until an owner, an admin or a member turns the Screener on.
 
+### Address format
+
+**Admin › Mail** also has **Address format**. When it is on, **New member** fills in the address of a new
+person from the display name. It is on at the start.
+
+- Select the format: `ada.lovelace`, `ada` or `alovelace` for Ada Lovelace.
+- You can change the address before you create the person. When you clear the field, the fill starts again.
+- The form does not fill the address of an agent or a service account.
+- Under the address, green text tells you that the address is available. Red text tells you why it is not.
+  The address can belong to a different member, a shared mailbox or an archived member, or it can use a
+  domain that is not saved.
+
+On upgrade, migration `0036_address_format.sql` adds the format to `mail_settings`, on, with `first.last`.
+
 ### Start fresh from setup
 
 A valid `SETUP_TOKEN` shows the setup page even when accounts exist or the directory has an old schema.
