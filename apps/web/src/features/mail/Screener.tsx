@@ -60,7 +60,7 @@ export function Screener(props: ScreenerProps) {
 						</p>
 					)}
 					{!props.rights.modify && (
-						<p className="field-hint">
+						<p className="field-hint screener-line">
 							{mailboxId?.startsWith("prn_")
 								? "You can only read the mailbox of an agent."
 								: "Your membership does not let you screen senders in this mailbox."}
@@ -224,12 +224,12 @@ function SenderList(props: ScreenerProps & { status: "pending" | "in" | "out" })
 								{sender.name?.trim() && <span className="row-note">{sender.address}</span>}
 							</div>
 							{sender.latest && (
-								<p className="screener-preview">
+								<p className="screener-preview screener-line">
 									<span className="screener-subject">{sender.latest.subject || "(no subject)"}</span>
 									{sender.latest.snippet && <span className="row-note"> – {sender.latest.snippet}</span>}
 								</p>
 							)}
-							<p className="row-note">
+							<p className="row-note screener-line">
 								{status === "in" || status === "out"
 									? decidedText(sender)
 									: `${plural(sender.messages_held, "message")}${
@@ -330,7 +330,7 @@ function ScreenOutForm({ mailboxId, onChanged }: ScreenerProps) {
 			<label htmlFor={ids.field} className="field-label">
 				Screen out a sender
 			</label>
-			<p id={ids.hint} className="field-hint">
+			<p id={ids.hint} className="field-hint screener-line">
 				New mail from this address stays out of each view. Mail that is in a view already stays there.
 			</p>
 			<div className="screener-form-row">
@@ -350,7 +350,7 @@ function ScreenOutForm({ mailboxId, onChanged }: ScreenerProps) {
 				</button>
 			</div>
 			{error && (
-				<p className="form-error" role="alert">
+				<p className="form-error screener-line" role="alert">
 					{error}
 				</p>
 			)}

@@ -7,9 +7,11 @@ import {
 	api,
 	autoLabelOutbox,
 	callTool,
+	captureWebhookEvents,
 	codeOf,
 	consume,
 	createActor,
+	drainWebhookEvents,
 	enableAi,
 	fakeEmailService,
 	inject,
@@ -144,6 +146,7 @@ describe("the Screener at delivery", () => {
 		await ada.call("mail.update_auto_labels", { enabled: true });
 		// A webhook watches the mailbox: new mail in the inbox makes an event.
 		await env.MAILBOX.get(env.MAILBOX.idFromName(ada.id)).enableWebhookEvents(ada.id);
+		const events = await captureWebhookEvents(ada.id);
 		await receive("Stranger <stranger@outside.example>", "Can we talk?");
 
 		expect(await subjects(ada, "in:inbox")).toEqual([]);
@@ -175,10 +178,12 @@ describe("the Screener at delivery", () => {
 		expect((await ada.call("mail.get_thread", { thread_id: latest?.thread_id as string })).messages).toHaveLength(1);
 		// Held mail makes no webhook event, and does not go to the classifier.
 		expect(await webhookEventRows(ada.id)).toBe(0);
+		expect(events).toEqual([]);
 		expect(await autoLabelOutbox(ada.id)).toEqual([]);
 		// When a person screens the sender in, the mail is new in the inbox, so it makes one event.
 		await ada.call("mail.screen_sender", { address: "stranger@outside.example", decision: "in" });
-		expect(await webhookEventRows(ada.id)).toBe(1);
+		await drainWebhookEvents(ada.id);
+		expect(events).toHaveLength(1);
 	});
 
 	it("does not hold internal mail, spam, a sender that the mailbox wrote to, a reply to sent mail, or a known sender", async () => {

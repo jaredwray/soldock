@@ -5617,8 +5617,12 @@ fieldset {
 }
 
 .screener > .panel-intro,
-.screener > .notice,
-.screener > .field-hint {
+.screener > .notice {
+	margin: 0;
+}
+
+/* A line of text in the Screener view, without the margin of its paragraph. */
+.screener-line {
 	margin: 0;
 }
 
@@ -5657,10 +5661,6 @@ fieldset {
 	border-bottom: 0;
 }
 
-.screener-row > p {
-	margin: 0;
-}
-
 .screener-sender {
 	display: flex;
 	flex-wrap: wrap;
@@ -5690,10 +5690,6 @@ fieldset {
 	display: flex;
 	flex-direction: column;
 	gap: 6px;
-}
-
-.screener-form > p {
-	margin: 0;
 }
 
 .screener-form-row {
