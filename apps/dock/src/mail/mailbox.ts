@@ -351,10 +351,20 @@ const MIGRATIONS: string[][] = [
 	// Auto labels: marks, signals, settings, corrections and the classifier outbox (autolabel/store.ts).
 	AUTOLABEL_MIGRATION,
 	// The system label REPLY_LATER. Label names are unique (labels_name), and a failed migration stops the
-	// mailbox. So a user label with the same folded name first gets its id in its name.
+	// mailbox. So no statement here can fail on a name. A user label with the same folded name first gets a
+	// number in its name: the smallest number that no label name has. The recursion counts up while a label
+	// has the name with that number, so its last row is the free number.
 	[
-		"UPDATE labels SET name = name || ' (' || id || ')', name_folded = name_folded || ' (' || lower(id) || ')' WHERE type = 'user' AND name_folded = 'reply_later'",
-		"INSERT INTO labels (id, name, name_folded, type, created_at) VALUES ('REPLY_LATER', 'REPLY_LATER', 'reply_later', 'system', 0)",
+		`WITH RECURSIVE taken(n) AS (
+			SELECT 1
+			UNION ALL
+			SELECT n + 1 FROM taken WHERE EXISTS (SELECT 1 FROM labels WHERE name_folded = 'reply_later (' || n || ')')
+		)
+		UPDATE labels SET
+			name = name || ' (' || (SELECT max(n) FROM taken) || ')',
+			name_folded = 'reply_later (' || (SELECT max(n) FROM taken) || ')'
+		WHERE type = 'user' AND name_folded = 'reply_later'`,
+		"INSERT OR IGNORE INTO labels (id, name, name_folded, type, created_at) VALUES ('REPLY_LATER', 'REPLY_LATER', 'reply_later', 'system', 0)",
 	],
 ];
 

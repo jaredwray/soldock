@@ -311,7 +311,8 @@ Reply later is a queue of the threads that need an answer. The queue is the syst
 - `label:REPLY_LATER` lists the queue, newest first. `mail.list_labels` gives its count in
   `threads_total`.
 - The migration to schema version 6 adds the label to each mailbox. A user label with the folded name
-  `reply_later` first gets its id in its name, because label names are unique.
+  `reply_later` first gets a number in its name, for example `Reply_Later (1)`, because label names are
+  unique. The number is the smallest one that no label name has, so the migration cannot fail on a name.
 
 ## Auto labels
 

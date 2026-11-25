@@ -284,6 +284,8 @@ describe("labels", () => {
 		expect(await code(ada.call("mail.delete_label", { label_id: label.id }))).toBe("not_found");
 	});
 
+	// A failed migration stops the mailbox for good. So the new name of the user label must be free, also when
+	// a person made labels with the names that the migration can give.
 	it("a mailbox from before Reply later gets the label, and a user label with its name keeps its threads", async () => {
 		const thread = await receive({ subject: "Tagged" });
 		const mailbox = env.MAILBOX.get(env.MAILBOX.idFromName(ada.id));
@@ -291,19 +293,22 @@ describe("labels", () => {
 			// Back to schema 5: before the system label REPLY_LATER, with a user label of that name.
 			const sql = state.storage.sql;
 			sql.exec("DELETE FROM labels WHERE id = 'REPLY_LATER'");
-			sql.exec(
-				"INSERT INTO labels (id, name, name_folded, type, created_at) VALUES ('lbl_old', 'Reply_Later', 'reply_later', 'user', 1)",
-			);
+			const insert = "INSERT INTO labels (id, name, name_folded, type, created_at) VALUES (?, ?, ?, 'user', 1)";
+			sql.exec(insert, "lbl_old", "Reply_Later", "reply_later");
+			// Labels that have the names that a rename can try first: with the id of the label, and with 1.
+			sql.exec(insert, "lbl_id", "reply_later (lbl_old)", "reply_later (lbl_old)");
+			sql.exec(insert, "lbl_one", "Reply_Later (1)", "reply_later (1)");
 			sql.exec("INSERT INTO message_labels (message_seq, label_id) SELECT seq, 'lbl_old' FROM messages");
 			sql.exec("UPDATE meta SET value = '5' WHERE key = 'schema_version'");
 		});
 		await evictDurableObject(mailbox);
 		const { labels } = await ada.call("mail.list_labels");
 		expect(labels.filter((l) => l.id === "REPLY_LATER").map((l) => l.type)).toEqual(["system"]);
-		expect(labels.find((l) => l.id === "lbl_old")).toMatchObject({ name: "Reply_Later (lbl_old)", threads_total: 1 });
+		expect(labels.find((l) => l.id === "lbl_old")).toMatchObject({ name: "Reply_Later (2)", threads_total: 1 });
+		expect(labels.find((l) => l.id === "lbl_one")?.name).toBe("Reply_Later (1)");
 		await ada.call("mail.modify_threads", { thread_ids: [thread.id], add_label_ids: ["REPLY_LATER"] });
 		expect(await subjects("label:REPLY_LATER")).toEqual(["Tagged"]);
-		expect(await subjects('label:"Reply_Later (lbl_old)"')).toEqual(["Tagged"]);
+		expect(await subjects('label:"Reply_Later (2)"')).toEqual(["Tagged"]);
 	});
 });
 
