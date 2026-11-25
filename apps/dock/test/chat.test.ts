@@ -251,6 +251,33 @@ describe("the owner of a room", () => {
 		expect((await bot.call("chat.get_room", { room_id: room.id })).room.role).toBe("owner");
 	});
 
+	// An owner has each scope. An agent that can only read in the room must not get each scope with the role.
+	// This holds for an agent from before migration 0031 that the room narrowed to read only, too.
+	it("hands the room to an agent only when its membership can post", async () => {
+		const reader = await createActor(owner, {
+			kind: "agent",
+			display_name: "Reader",
+			address: "reader@dock.test",
+			sponsor_id: ada.id,
+		});
+		const room = await createRoom(ada, "private", "Hiring", [reader.id, bot.id]);
+		await ada.call("chat.set_member_scopes", { room_id: room.id, principal_id: reader.id, scopes: ["chat.read"] });
+		const roles = async () =>
+			Object.fromEntries(
+				(await reader.call("chat.get_room", { room_id: room.id })).members.map((member) => [
+					member.principal_id,
+					member.role,
+				]),
+			);
+		await ada.call("chat.remove_member", { room_id: room.id, principal_id: ada.id });
+		expect(await roles()).toEqual({ [reader.id]: "member", [bot.id]: "owner" });
+		// The bot leaves too. The reader cannot post, so the room has no owner, and an admin can assign one
+		// (`chat.admin_assign_owner`).
+		await bot.call("chat.remove_member", { room_id: room.id, principal_id: bot.id });
+		expect(await roles()).toEqual({ [reader.id]: "member" });
+		expect(await codeOf(reader.call("chat.update_room", { room_id: room.id, name: "Mine" }))).toBe("forbidden");
+	});
+
 	// An archived person cannot sign in. As the owner, it would stop each change of the room, and an admin
 	// can assign an owner only to a room without one.
 	it("does not hand the room to an archived person when it leaves", async () => {

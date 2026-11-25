@@ -710,9 +710,13 @@ const AGENT_DM =
 /**
  * The member that becomes the owner when the owner leaves: the person that joined first, or the member that
  * joined first in a room without a person. The owner has each scope, so a person comes before an agent: an
- * agent adds members only when a person decided that.
+ * agent adds members only when a person decided that. For the same reason, an agent becomes the owner only
+ * when its membership has `chat.write`: an agent that can only read must not get each scope with the role. A
+ * membership without stored scopes has the scopes of its kind, and an agent has `chat.write` then.
  */
-const NEXT_OWNER_FROM = "SELECT principal_id FROM members";
+const NEXT_OWNER_FROM = `SELECT principal_id FROM members WHERE json_extract(actor_json, '$.kind') = 'human' OR scopes IS NULL
+	OR CASE WHEN json_valid(scopes) THEN CASE WHEN json_type(scopes) = 'array'
+		THEN EXISTS (SELECT 1 FROM json_each(scopes) WHERE value = 'chat.write') ELSE 0 END ELSE 0 END`;
 const NEXT_OWNER_SORT = "ORDER BY json_extract(actor_json, '$.kind') = 'human' DESC, joined_at, principal_id";
 const NEXT_OWNER_ORDER = `${NEXT_OWNER_SORT} LIMIT 1`;
 /** The key in `meta` of the one-time step `narrowAgentMembers`. */

@@ -189,7 +189,8 @@ closes the sockets of the member in the same step.
   to the next agent with no person in the decision.
 - **The next owner.** When the owner leaves, the person that joined first becomes the owner. An agent
   becomes the owner only in a room without a person (`NEXT_OWNER_ORDER`). The owner has each scope, so a
-  person comes first. The room does not know if a principal is archived or deleted. So the room reads
+  person comes first. An agent becomes the owner only when its membership has `chat.write`. An agent that
+  can only read never gets each scope with the role, and a room without such a member has no owner. The room does not know if a principal is archived or deleted. So the room reads
   its members in the directory one time, and gives itself to the first member that can act
   (`settleOwner`). The remove, that read and the write of the owner are one step of the room, so each
   member is in the read. Without this, an archived person as the owner stops each change of the room.
