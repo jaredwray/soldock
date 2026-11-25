@@ -102,6 +102,8 @@ export function FocusReply(props: FocusReplyProps) {
 	const [dirtyIds, setDirtyIds] = useState<ReadonlySet<string>>(() => new Set());
 	const [activeId, setActiveId] = useState<string | null>(null);
 	const [request, setRequest] = useState<CardRequest | null>(null);
+	/** The token of the last request. It only grows. */
+	const requestTokens = useRef(0);
 	/** Grows each time a key, a send or Done changes the active card. That card then gets the focus. */
 	const [scrollToken, setScrollToken] = useState(0);
 	/** The cards in their exit motion. They stay on the page, inert, until the motion ends. */
@@ -240,7 +242,10 @@ export function FocusReply(props: FocusReplyProps) {
 	}
 
 	function ask(threadId: string, mode: ReplyMode) {
-		setRequest((current) => ({ threadId, mode, token: (current?.token ?? 0) + 1 }));
+		// A card remembers the last token that it handled, and activate() can end a request. So each request gets
+		// a new token for the life of the page: a token that counts from the current request could come again.
+		requestTokens.current += 1;
+		setRequest({ threadId, mode, token: requestTokens.current });
 	}
 
 	/**

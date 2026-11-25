@@ -92,6 +92,14 @@ test("a member puts mail in Reply later and answers it in Focus & Reply", async 
 		const thirdMessage = thirdReply.getByRole("textbox", { name: "Message" });
 		await expect(thirdMessage).toBeFocused();
 		await expect(page.getByRole("dialog")).toHaveCount(0);
+		// A card that the person leaves and comes back to opens its reply again with r.
+		await page.keyboard.press("Escape");
+		await expect(thirdReply).toHaveCount(0);
+		await page.keyboard.press("j");
+		await page.keyboard.press("k");
+		await expect(thirdCard).toHaveAttribute("aria-current", "true");
+		await page.keyboard.press("r");
+		await expect(thirdMessage).toBeFocused();
 		await thirdMessage.pressSequentially("Pizza, please.");
 
 		// Ctrl+Enter in the link dialog of the editor does not send the message. The card and its text stay.
