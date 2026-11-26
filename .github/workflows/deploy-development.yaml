@@ -80,8 +80,9 @@ jobs:
           pnpm release:build
           pnpm --filter asterra build
 
-      # The CLI uses the wrangler of apps/dock: `pnpm exec` puts it on PATH. The CLI writes the URL and the
-      # version to GITHUB_OUTPUT.
+      # The CLI uses the wrangler of apps/dock: `pnpm exec` puts it on PATH. The CLI starts wrangler in a
+      # folder of its own, and PATH stays. The CLI writes the URL, the version and the result to
+      # GITHUB_OUTPUT. The result is `passed`, `rolled_back` or `failed`.
       - name: Upgrade the development instance with the CLI
         id: deploy
         working-directory: apps/dock
@@ -97,7 +98,7 @@ jobs:
         env:
           URL: ${{ steps.deploy.outputs.url }}
           VERSION: ${{ steps.deploy.outputs.version }}
-          OUTCOME: ${{ steps.deploy.outcome }}
+          RESULT: ${{ steps.deploy.outputs.result }}
         run: |
           # GET /auth/setup is public. Before setup it returns setup_needed: true.
           setup=$(curl --silent --max-time 10 "$URL/auth/setup" | jq -r '.setup_needed | tostring' 2> /dev/null || true)
@@ -106,9 +107,12 @@ jobs:
             false) setup_line="done" ;;
             *) setup_line="unknown" ;;
           esac
-          case "$OUTCOME" in
-            success) upgrade_line="passed" ;;
-            *) upgrade_line="failed. The CLI rolled back to the earlier version when the smoke check failed. See the step log." ;;
+          # The CLI writes the result. The summary does not guess it from the outcome of the step.
+          case "$RESULT" in
+            passed) upgrade_line="passed" ;;
+            rolled_back) upgrade_line="failed. The smoke check failed, and the CLI rolled back to the earlier version. See the step log." ;;
+            failed) upgrade_line="failed. The CLI did not roll back. The step log tells which version serves the host." ;;
+            *) upgrade_line="unknown. The CLI wrote no result. See the step log." ;;
           esac
           {
             echo "## Development deploy"
