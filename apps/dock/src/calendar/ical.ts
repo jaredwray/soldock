@@ -162,7 +162,7 @@ function mailto(value: string): string | null {
 		.replace(/^mailto:/i, "")
 		.trim()
 		.toLowerCase();
-	return EMAIL.test(address) && address.length <= 254 ? address : null;
+	return address.length <= 254 && EMAIL.test(address) ? address : null;
 }
 
 function nameOf(params: Map<string, string>): string {
@@ -176,6 +176,15 @@ function partstat(value: string | undefined): PartStat {
 
 /** A date-time or a date value. */
 type TimeValue = { kind: "date"; date: string } | { kind: "instant"; ms: number; zone: string } | null;
+
+/** The longest DURATION that the parser reads: longer than the longest event. */
+const MAX_DURATION_MS = 1000 * 86_400_000;
+
+/** True for a real day of the calendar. `Date.UTC` changes a day such as month 13 into a different day. */
+function realDate(y: number, mo: number, d: number): boolean {
+	const date = new Date(Date.UTC(y, mo - 1, d));
+	return date.getUTCFullYear() === y && date.getUTCMonth() === mo - 1 && date.getUTCDate() === d;
+}
 
 const DATE_VALUE = /^(\d{4})(\d{2})(\d{2})$/;
 const DATE_TIME_VALUE = /^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})(Z?)$/;
@@ -191,11 +200,14 @@ function timeValue(line: ContentLine | undefined): TimeValue {
 	const value = line.value.trim();
 	const date = DATE_VALUE.exec(value);
 	if (date && (line.params.get("VALUE") ?? "DATE").toUpperCase() === "DATE") {
+		if (!realDate(Number(date[1]), Number(date[2]), Number(date[3]))) return null;
 		return { kind: "date", date: `${date[1]}-${date[2]}-${date[3]}` };
 	}
 	const match = DATE_TIME_VALUE.exec(value);
 	if (!match) return null;
 	const [, y, mo, d, h, mi, s, utc] = match;
+	// A sender can write each digit. A value that is not a real time gives no time, never an error.
+	if (!realDate(Number(y), Number(mo), Number(d)) || Number(h) > 23 || Number(mi) > 59 || Number(s) > 60) return null;
 	if (utc) {
 		const ms = Date.UTC(Number(y), Number(mo) - 1, Number(d), Number(h), Number(mi), Number(s));
 		return Number.isNaN(ms) ? null : { kind: "instant", ms, zone: "UTC" };
@@ -215,7 +227,7 @@ function durationMs(value: string | undefined): number | null {
 	if (!match) return null;
 	const [, w, d, h, m, s] = match.map((part) => Number(part ?? 0));
 	const ms = ((((w ?? 0) * 7 + (d ?? 0)) * 24 + (h ?? 0)) * 60 + (m ?? 0)) * 60_000 + (s ?? 0) * 1000;
-	return ms > 0 ? ms : null;
+	return ms > 0 && ms <= MAX_DURATION_MS ? ms : null;
 }
 
 function whenOf(start: TimeValue, end: TimeValue, duration: number | null): EventWhenValue | null {
@@ -299,6 +311,7 @@ export function parseICalendar(text: string): ICalInvite | null {
 		seen.add(email);
 		attendeeList.push({ email, name: nameOf(line.params), partstat: partstat(line.params.get("PARTSTAT")) });
 	}
+	const duration = durationMs(props.get("DURATION")?.value);
 	const title = clean(unescapeText(props.get("SUMMARY")?.value ?? ""), CALENDAR_LIMITS.titleChars);
 	return {
 		method,
@@ -308,11 +321,11 @@ export function parseICalendar(text: string): ICalInvite | null {
 		title: title === "" ? "(No title)" : title,
 		description: clean(unescapeText(props.get("DESCRIPTION")?.value ?? ""), CALENDAR_LIMITS.descriptionChars, true),
 		location: clean(unescapeText(props.get("LOCATION")?.value ?? ""), CALENDAR_LIMITS.locationChars),
-		when: whenOf(
-			timeValue(props.get("DTSTART")),
-			timeValue(props.get("DTEND")),
-			durationMs(props.get("DURATION")?.value),
-		),
+		// A DURATION that the parser cannot read gives no time: a guess of the end is not exact.
+		when:
+			props.has("DURATION") && !props.has("DTEND") && duration === null
+				? null
+				: whenOf(timeValue(props.get("DTSTART")), timeValue(props.get("DTEND")), duration),
 		organizer: organizerLine && organizerEmail ? { email: organizerEmail, name: nameOf(organizerLine.params) } : null,
 		attendees: attendeeList,
 		recurring: recurring || events > 1,
@@ -402,7 +415,8 @@ export function buildICalendar(input: ICalOutput): string {
 		"CALSCALE:GREGORIAN",
 		`METHOD:${input.method}`,
 		"BEGIN:VEVENT",
-		`UID:${escapeText(input.uid)}`,
+		// The parser keeps the UID of a mail as its sender wrote it, so an answer writes it back with no new escape.
+		`UID:${input.uid.replace(/\p{Cc}/gu, "")}`,
 		`SEQUENCE:${input.sequence}`,
 		`DTSTAMP:${utcStamp(input.stamp)}`,
 	];

@@ -134,6 +134,23 @@ describe("the iCalendar parser", () => {
 		expect(parseICalendar(googleTimed.replace("BEGIN:VEVENT\r\n", `BEGIN:VEVENT\r\n${padding}`))).toBeNull();
 	});
 
+	// The mail module gives each calendar part to the parser at the delivery. An error there fails the delivery
+	// job of the message again and again, so a time that is not real gives no time, never an error.
+	it("gives no time, and no error, for a time or a duration that is not real", () => {
+		const withStart = (start: string, end = "") =>
+			googleTimed.replace("DTSTART:20261203T150000Z", start).replace("DTEND:20261203T160000Z\r\n", end);
+		for (const text of [
+			withStart("DTSTART;TZID=America/New_York:99999999T999999"),
+			withStart("DTSTART:20261345T250000Z"),
+			withStart("DTSTART;VALUE=DATE:20261345"),
+			withStart("DTSTART:20261203T150000Z", "DURATION:P99999999999999999999W\r\n"),
+			withStart("DTSTART;VALUE=DATE:20261203", "DURATION:P99999999999999999999D\r\n"),
+		]) {
+			expect(text).not.toBe(googleTimed);
+			expect(parse(text).when).toBeNull();
+		}
+	});
+
 	it("cleans and cuts hostile text, and accepts only plain addresses", () => {
 		const hostile = googleTimed
 			.replace("SUMMARY:Façade review", `SUMMARY:${"x".repeat(20_000)}\u0007`)
@@ -230,5 +247,10 @@ describe("the iCalendar builder", () => {
 			attendees: [{ email: "ada@dock.test", partstat: "TENTATIVE" }],
 		});
 		expect(reply).not.toContain("RSVP");
+		// The organizer finds the meeting by its UID. The parser keeps a UID as the sender wrote it, so the answer
+		// writes the same characters back.
+		const uid = "a\\,b;c@partner.example";
+		expect(parse(`BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\nUID:${uid}\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n`).uid).toBe(uid);
+		expect(buildICalendar({ ...base, method: "REPLY", uid })).toContain(`\r\nUID:${uid}\r\n`);
 	});
 });
