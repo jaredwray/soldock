@@ -1,25 +1,36 @@
 import {
 	addDays,
+	allDayBounds,
 	CALENDAR_LIMITS,
 	type CalendarEvent,
 	canonicalTimeZone,
 	checkWhen,
 	DAY_MS,
+	DEFAULT_REMINDER_MINUTES,
 	dateToUtcMs,
 	type EventWhenValue,
 	type OperationName,
+	occurrenceId,
+	parseOccurrenceId,
+	type RecurrenceInput,
+	type RecurrenceRule,
 	zonedDate,
 	zonedDayStart,
 } from "@asterra/contracts";
-import { auditOk, type CallContext } from "../identity/index.ts";
+import { auditOk, type CallContext, getPrincipals } from "../identity/index.ts";
 import { decodeCursor, encodeCursor, type HandlerMap, newId, OperationError, sha256Hex } from "../platform/index.ts";
-import type { CalendarCall, EventFields, EventRecord, EventTime, Refusal } from "./calendar.ts";
+import type {
+	CalendarCall,
+	EventFields,
+	EventTime,
+	EventView,
+	OrganizerRef,
+	PrincipalRef,
+	Refusal,
+} from "./calendar.ts";
 
 type CalendarOperation = Extract<OperationName, `calendar.${string}`>;
 
-/** The bounds of the days of an all-day event in each time zone: from UTC+14 to UTC-12. */
-const EARLIEST_ZONE_MS = 14 * 60 * 60 * 1000;
-const LATEST_ZONE_MS = 12 * 60 * 60 * 1000;
 /**
  * No event in a range starts more than this before the range: the longest event, and the widest day of an
  * all-day event in each time zone, with a margin.
@@ -70,11 +81,19 @@ function timeOf(when: EventWhenValue): EventTime {
 	}
 	return {
 		all_day: true,
-		start_at: dateToUtcMs(when.start_date) - EARLIEST_ZONE_MS,
-		end_at: dateToUtcMs(when.end_date) + LATEST_ZONE_MS,
+		...allDayBounds(when.start_date, when.end_date),
 		start_date: when.start_date,
 		end_date: when.end_date,
 		time_zone: null,
+	};
+}
+
+function ruleOf(input: RecurrenceInput): RecurrenceRule {
+	return {
+		frequency: input.frequency,
+		interval: input.interval,
+		until: input.until ?? null,
+		count: input.count ?? null,
 	};
 }
 
@@ -82,24 +101,43 @@ function iso(ms: number): string {
 	return new Date(ms).toISOString();
 }
 
-function toEvent(record: EventRecord): CalendarEvent {
+function toEvent(view: EventView): CalendarEvent {
 	return {
-		id: record.id,
-		title: record.title,
-		description: record.description,
-		location: record.location,
+		id: view.id,
+		title: view.title,
+		description: view.description,
+		location: view.location,
 		when:
-			record.all_day && record.start_date !== null && record.end_date !== null
-				? { kind: "all_day", start_date: record.start_date, end_date: record.end_date }
+			view.all_day && view.start_date !== null && view.end_date !== null
+				? { kind: "all_day", start_date: view.start_date, end_date: view.end_date }
 				: {
 						kind: "timed",
-						start: iso(record.start_at),
-						end: iso(record.end_at),
-						time_zone: record.time_zone ?? "UTC",
+						start: iso(view.start_at),
+						end: iso(view.end_at),
+						time_zone: view.time_zone ?? "UTC",
 					},
-		revision: record.revision,
-		created_at: iso(record.created_at),
-		updated_at: iso(record.updated_at),
+		revision: view.revision,
+		created_at: iso(view.created_at),
+		updated_at: iso(view.updated_at),
+		recurrence: view.recurrence,
+		occurrence_id: view.occurrence_key === null ? null : occurrenceId(view.id, view.occurrence_key),
+		original_start:
+			view.occurrence_key === null
+				? null
+				: (view.original_date ?? (view.original_start_at === null ? null : iso(view.original_start_at))),
+		is_exception: view.is_exception,
+		role: view.role,
+		organizer:
+			view.organizer === null
+				? null
+				: { principal_id: view.organizer.principal_id, display_name: view.organizer.display_name },
+		attendees: view.attendees.map(({ principal_id, display_name, response }) => ({
+			principal_id,
+			display_name,
+			response,
+		})),
+		my_response: view.my_response,
+		reminder_minutes: view.reminder_minutes,
 	};
 }
 
@@ -107,6 +145,56 @@ function toEvent(record: EventRecord): CalendarEvent {
 function firstDateFrom(ms: number, zone: string): string {
 	const date = zonedDate(ms, zone);
 	return zonedDayStart(date, zone) >= ms ? date : addDays(date, 1);
+}
+
+/** The organizer of a new event: the caller. */
+function organizerOf(call: CallContext): OrganizerRef {
+	const { principal } = call.caller;
+	return {
+		principal_id: principal.id,
+		display_name: principal.display_name,
+		kind: principal.kind === "human" ? "human" : "agent",
+	};
+}
+
+/**
+ * The attendees of an event. Only a person invites, and only active people of the organization can be
+ * invited. Agent invitations need rules that are not built yet.
+ */
+async function resolveAttendees(
+	call: CallContext,
+	ids: readonly string[] | undefined,
+): Promise<PrincipalRef[] | undefined> {
+	if (ids === undefined) return undefined;
+	const unique = [...new Set(ids)];
+	if (unique.length === 0) return [];
+	if (call.caller.kind !== "human") {
+		throw new OperationError(
+			"forbidden",
+			"Only a person can invite attendees. An agent can add events to its own calendar.",
+		);
+	}
+	if (unique.includes(call.caller.principal.id)) {
+		throw new OperationError("invalid", "You are the organizer of the event. Do not put yourself in attendee_ids.");
+	}
+	const found = await getPrincipals(call.env.DIRECTORY, unique);
+	const byId = new Map(found.map((principal) => [principal.id, principal]));
+	return unique.map((id) => {
+		const principal = byId.get(id);
+		if (!principal || principal.archived_at !== null) {
+			throw new OperationError("invalid", `No active principal of your organization has the id ${id}.`);
+		}
+		if (principal.kind !== "human" || principal.service) {
+			throw new OperationError("invalid", `${principal.display_name} is not a person. Only people can be invited now.`);
+		}
+		return { principal_id: principal.id, display_name: principal.display_name };
+	});
+}
+
+function occurrenceOf(id: string): { eventId: string; key: string } {
+	const parsed = parseOccurrenceId(id);
+	if (!parsed) throw new OperationError("not_found", "The event has no occurrence with that id.");
+	return parsed;
 }
 
 export const calendarHandlers: Pick<HandlerMap<CallContext>, CalendarOperation> = {
@@ -137,9 +225,10 @@ export const calendarHandlers: Pick<HandlerMap<CallContext>, CalendarOperation> 
 			}),
 		);
 		const last = page.events.at(-1);
+		const lastId = last && (last.occurrence_key === null ? last.id : occurrenceId(last.id, last.occurrence_key));
 		return {
 			events: page.events.map(toEvent),
-			next_cursor: page.more && last ? encodeCursor([last.start_at, last.id]) : null,
+			next_cursor: page.more && last && lastId ? encodeCursor([last.start_at, lastId]) : null,
 		};
 	},
 
@@ -155,6 +244,7 @@ export const calendarHandlers: Pick<HandlerMap<CallContext>, CalendarOperation> 
 			location: input.location,
 			...timeOf(input.when),
 		};
+		const attendees = (await resolveAttendees(call, input.attendee_ids)) ?? [];
 		const { idempotency_key: key, ...request } = input;
 		const idempotency =
 			key === undefined
@@ -165,7 +255,17 @@ export const calendarHandlers: Pick<HandlerMap<CallContext>, CalendarOperation> 
 					};
 		const id = newId("evt");
 		const { stub, ctx } = openCalendar(call);
-		const record = accept(await stub.create(ctx, { id, fields, idempotency }));
+		const record = accept(
+			await stub.create(ctx, {
+				id,
+				fields,
+				recurrence: input.recurrence === undefined ? null : ruleOf(input.recurrence),
+				organizer: organizerOf(call),
+				attendees,
+				reminderMinutes: input.reminder_minutes === undefined ? DEFAULT_REMINDER_MINUTES : input.reminder_minutes,
+				idempotency,
+			}),
+		);
 		// A retry with the key returns the first event: only the call that added it audits.
 		if (record.id === id) auditOk(call, "calendar.create_event", id);
 		return { event: toEvent(record) };
@@ -178,8 +278,17 @@ export const calendarHandlers: Pick<HandlerMap<CallContext>, CalendarOperation> 
 			...(input.location !== undefined ? { location: input.location } : {}),
 			...(input.when !== undefined ? timeOf(input.when) : {}),
 		};
+		const attendees = await resolveAttendees(call, input.attendee_ids);
 		const { stub, ctx } = openCalendar(call);
-		const result = accept(await stub.update(ctx, input.event_id, patch, input.base_revision));
+		const result = accept(
+			await stub.update(ctx, input.event_id, {
+				patch,
+				recurrence:
+					input.recurrence === undefined ? undefined : input.recurrence === null ? null : ruleOf(input.recurrence),
+				attendees,
+				baseRevision: input.base_revision,
+			}),
+		);
 		if (result.changed) auditOk(call, "calendar.update_event", input.event_id);
 		return { event: toEvent(result.event) };
 	},
@@ -189,5 +298,71 @@ export const calendarHandlers: Pick<HandlerMap<CallContext>, CalendarOperation> 
 		const record = accept(await stub.remove(ctx, input.event_id, input.base_revision, input.dry_run));
 		if (!input.dry_run) auditOk(call, "calendar.delete_event", input.event_id);
 		return { event: toEvent(record), dry_run: input.dry_run };
+	},
+
+	async "calendar.update_occurrence"(call, input) {
+		const { eventId, key } = occurrenceOf(input.occurrence_id);
+		const patch: Partial<EventFields> = {
+			...(input.title !== undefined ? { title: input.title } : {}),
+			...(input.description !== undefined ? { description: input.description } : {}),
+			...(input.location !== undefined ? { location: input.location } : {}),
+			...(input.when !== undefined ? timeOf(input.when) : {}),
+		};
+		const { stub, ctx } = openCalendar(call);
+		const result = accept(await stub.updateOccurrence(ctx, eventId, key, patch, input.base_revision));
+		if (result.changed) auditOk(call, "calendar.update_occurrence", input.occurrence_id);
+		return { event: toEvent(result.event) };
+	},
+
+	async "calendar.cancel_occurrence"(call, input) {
+		const { eventId, key } = occurrenceOf(input.occurrence_id);
+		const { stub, ctx } = openCalendar(call);
+		const record = accept(await stub.cancelOccurrence(ctx, eventId, key, input.base_revision, input.dry_run));
+		if (!input.dry_run) auditOk(call, "calendar.cancel_occurrence", input.occurrence_id);
+		return { event: toEvent(record), dry_run: input.dry_run };
+	},
+
+	async "calendar.respond_to_event"(call, input) {
+		let key: string | null = null;
+		if (input.occurrence_id !== undefined) {
+			const parsed = occurrenceOf(input.occurrence_id);
+			if (parsed.eventId !== input.event_id) {
+				throw new OperationError("invalid", "occurrence_id must be an occurrence of event_id.");
+			}
+			key = parsed.key;
+		}
+		const { stub, ctx } = openCalendar(call);
+		const record = accept(await stub.respond(ctx, input.event_id, key, input.response));
+		auditOk(call, "calendar.respond_to_event", input.occurrence_id ?? input.event_id);
+		return { event: toEvent(record) };
+	},
+
+	async "calendar.set_reminder"(call, input) {
+		const { stub, ctx } = openCalendar(call);
+		const record = accept(await stub.setReminder(ctx, input.event_id, input.minutes));
+		return { event: toEvent(record) };
+	},
+
+	async "calendar.query_free_busy"(call, input) {
+		const ids = [...new Set(input.principal_ids.split(",").flatMap((entry) => entry.trim() || []))];
+		const found = await getPrincipals(call.env.DIRECTORY, ids);
+		const active = new Set(
+			found.filter((principal) => principal.archived_at === null).map((principal) => principal.id),
+		);
+		const missing = ids.find((id) => !active.has(id));
+		if (missing)
+			throw new OperationError("not_found", `No active principal of your organization has the id ${missing}.`);
+		const min = Math.max(Date.parse(input.time_min), WINDOW_START_MS);
+		const max = Math.min(Date.parse(input.time_max), WINDOW_END_MS);
+		const calendars = await Promise.all(
+			ids.map(async (id) => {
+				const busy = min < max ? await calendarStub(call.env, id).freeBusy(id, min, max) : [];
+				return {
+					principal_id: id,
+					busy: busy.map((interval) => ({ start: iso(interval.start), end: iso(interval.end) })),
+				};
+			}),
+		);
+		return { calendars };
 	},
 };

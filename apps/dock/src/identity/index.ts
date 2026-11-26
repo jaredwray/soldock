@@ -23,6 +23,7 @@ export {
 export { type AuthContext, authenticate, type CallContext, isSameOrigin, SESSION_COOKIE } from "./auth.ts";
 export type {
 	ActivityActor,
+	ActivityEventRef,
 	ActivityInsert,
 	ActivityItemRef,
 	ActivityRecord,
@@ -56,6 +57,7 @@ export { mountOAuthRoutes, protectedResourceMetadataUrl } from "./oauth-routes.t
 export { toPrincipalOutput } from "./output.ts";
 export { chatPresenceHandlers } from "./presence.ts";
 export {
+	type CalendarReminderInput,
 	type ChatAddressedEntry,
 	type ChatAddressedQuery,
 	type ChatAddressedState,

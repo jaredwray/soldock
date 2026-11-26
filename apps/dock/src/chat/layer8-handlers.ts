@@ -174,6 +174,16 @@ function toActivity(record: ActivityRecord): ChatActivityItem {
 		untrusted: record.untrusted,
 		subject: record.subject,
 		item: record.item,
+		event:
+			record.event === null
+				? null
+				: {
+						event_id: record.event.event_id,
+						occurrence_id: record.event.occurrence_id,
+						title: record.event.title,
+						start: iso(record.event.start_at),
+						minutes: record.event.minutes,
+					},
 		read_at: record.read_at === null ? null : iso(record.read_at),
 		created_at: iso(record.created_at),
 	};
@@ -342,7 +352,8 @@ export const chatLayer8Handlers: Pick<HandlerMap<CallContext>, Layer8ChatOperati
 		);
 		const byRoom = new Map<string, string[]>();
 		for (const item of shown) {
-			if (item.kind === "member_request" || item.kind === "share_request") continue;
+			if (item.kind === "member_request" || item.kind === "share_request" || item.kind === "calendar_reminder")
+				continue;
 			const list = byRoom.get(item.room_id);
 			if (list) list.push(item.message_id);
 			else byRoom.set(item.room_id, [item.message_id]);
@@ -360,6 +371,11 @@ export const chatLayer8Handlers: Pick<HandlerMap<CallContext>, Layer8ChatOperati
 		const liveItems: ActivityRecord[] = [];
 		const staleIds: string[] = [];
 		for (const item of shown) {
+			// A calendar reminder is about an occurrence of the own calendar, not about a message: it stays.
+			if (item.kind === "calendar_reminder") {
+				liveItems.push(item);
+				continue;
+			}
 			const live =
 				item.kind === "member_request"
 					? liveRequests

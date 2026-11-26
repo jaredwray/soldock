@@ -28,8 +28,19 @@ export interface ActivityRecord {
 	subject: ActivityActor | null;
 	/** For `share_request`: the item that the actor wants to share with `subject`. Null for each other kind. */
 	item: ActivityItemRef | null;
+	/** For `calendar_reminder`: the occurrence that starts soon. Null for each other kind. */
+	event: ActivityEventRef | null;
 	created_at: number;
 	read_at: number | null;
+}
+
+/** The occurrence of a `calendar_reminder`. `start_at` is UTC ms. */
+export interface ActivityEventRef {
+	event_id: string;
+	occurrence_id: string | null;
+	title: string;
+	start_at: number;
+	minutes: number;
 }
 
 /** The Drive item of a `share_request`, with the role of the request. */
@@ -57,6 +68,8 @@ export interface ActivityInsert {
 	subject?: ActivityActor | null | undefined;
 	/** For `share_request`: the item that the actor wants to share. */
 	item?: ActivityItemRef | null | undefined;
+	/** For `calendar_reminder`: the occurrence that starts soon. */
+	event?: ActivityEventRef | null | undefined;
 	created_at: number;
 }
 
@@ -155,6 +168,9 @@ export const CHAT_ACTIVITY_SUBJECT_MIGRATION: string[] = [
 
 /** The activity list gets the column `item_json`, for the kind `share_request`. */
 export const CHAT_ACTIVITY_ITEM_MIGRATION: string[] = ["ALTER TABLE chat_activity ADD COLUMN item_json TEXT"];
+
+/** The activity list gets the column `event_json`, for the kind `calendar_reminder`. */
+export const CHAT_ACTIVITY_EVENT_MIGRATION: string[] = ["ALTER TABLE chat_activity ADD COLUMN event_json TEXT"];
 
 export const CHAT_PERSONAL_MIGRATION: string[] = [
 	`CREATE TABLE chat_activity (
@@ -263,6 +279,7 @@ interface ActivityRow extends Row {
 	read_at: number | null;
 	subject_json: string | null;
 	item_json: string | null;
+	event_json: string | null;
 }
 
 interface ScheduledRow extends Row {
@@ -317,6 +334,7 @@ function toActivity(row: ActivityRow): ActivityRecord {
 		untrusted: row.untrusted === 1,
 		subject: row.subject_json == null ? null : (JSON.parse(row.subject_json) as ActivityActor),
 		item: row.item_json == null ? null : (JSON.parse(row.item_json) as ActivityItemRef),
+		event: row.event_json == null ? null : (JSON.parse(row.event_json) as ActivityEventRef),
 		created_at: row.created_at,
 		read_at: row.read_at,
 	};
@@ -348,8 +366,8 @@ export class ChatPersonalStore {
 			.exec<{ id: string }>(
 				`INSERT OR IGNORE INTO chat_activity (
 					id, kind, room_id, room_name, message_id, parent_id, seq, parent_seq,
-					actor_json, emoji, preview, untrusted, created_at, read_at, subject_json, item_json
-				) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?) RETURNING id`,
+					actor_json, emoji, preview, untrusted, created_at, read_at, subject_json, item_json, event_json
+				) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?) RETURNING id`,
 				item.id,
 				item.kind,
 				item.room_id,
@@ -365,6 +383,7 @@ export class ChatPersonalStore {
 				item.created_at,
 				item.subject ? JSON.stringify(item.subject) : null,
 				item.item ? JSON.stringify(item.item) : null,
+				item.event ? JSON.stringify(item.event) : null,
 			)
 			.toArray();
 		if (inserted.length === 0) return false;

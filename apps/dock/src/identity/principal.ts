@@ -26,6 +26,7 @@ import {
 	type ActivityActor,
 	type ActivityInsert,
 	type ActivityRecord,
+	CHAT_ACTIVITY_EVENT_MIGRATION,
 	CHAT_ACTIVITY_ITEM_MIGRATION,
 	CHAT_ACTIVITY_SUBJECT_MIGRATION,
 	CHAT_PERSONAL_MIGRATION,
@@ -54,6 +55,19 @@ import {
 	viewsRoom,
 } from "./socket-presence.ts";
 import { getPrincipal } from "./store.ts";
+
+/** A calendar reminder that fired. The CalendarDO of the principal sends it. */
+export interface CalendarReminderInput {
+	/** The idempotency key: `calrem:<event id>:<occurrence key>:<start ms>`. */
+	id: string;
+	event_id: string;
+	occurrence_id: string | null;
+	title: string;
+	start_at: number;
+	minutes: number;
+	/** The organizer of the event. */
+	actor: ActivityActor;
+}
 
 // Each person, agent and service account has one PrincipalDO. It holds their room state, notification
 // settings, registered push devices and events sockets, and the activity log of a service account. Its
@@ -355,6 +369,7 @@ const MIGRATIONS: string[][] = [
 	SERVICE_ACTIVITY_MIGRATION,
 	CHAT_ACTIVITY_SUBJECT_MIGRATION,
 	CHAT_ACTIVITY_ITEM_MIGRATION,
+	CHAT_ACTIVITY_EVENT_MIGRATION,
 ];
 
 const COLUMNS = `room_id, kind, name, name_key, topic, created_at, created_by_json, member_count, role, last_seq,
@@ -835,6 +850,79 @@ export class PrincipalDO extends DurableObject<Env> {
 
 	expirePushSubscription(id: string): void {
 		this.notifications.expire(id);
+	}
+
+	/**
+	 * Records a calendar reminder in the Activity of the principal. The id of the item is the idempotency key,
+	 * so a retry adds no second item. Only the CalendarDO of the principal calls it. Returns the devices that
+	 * get a push: none during the quiet hours.
+	 */
+	recordCalendarReminder(item: CalendarReminderInput): string[] {
+		const now = Date.now();
+		let added = false;
+		this.ctx.storage.transactionSync(() => {
+			added = this.personal.recordActivity({
+				id: item.id,
+				kind: "calendar_reminder",
+				room_id: "",
+				room_name: null,
+				message_id: item.occurrence_id ?? item.event_id,
+				parent_id: null,
+				seq: 0,
+				parent_seq: null,
+				actor: item.actor,
+				emoji: null,
+				preview: item.title,
+				event: {
+					event_id: item.event_id,
+					occurrence_id: item.occurrence_id,
+					title: item.title,
+					start_at: item.start_at,
+					minutes: item.minutes,
+				},
+				created_at: now,
+			});
+		});
+		if (added && this.ctx.getWebSockets().length > 0) {
+			const unread = this.personal.activityUnreadCount();
+			const reminder: PrincipalEvent = {
+				type: "calendar.reminder",
+				event_id: item.event_id,
+				occurrence_id: item.occurrence_id,
+				title: item.title,
+				start: new Date(item.start_at).toISOString(),
+				minutes: item.minutes,
+			};
+			this.ctx.waitUntil(this.publish(() => [reminder, { type: "chat.activity", unread_count: unread }]));
+		}
+		if (this.notifications.quiet(now)) return [];
+		return this.notifications.credentials(now).map(({ id }) => id);
+	}
+
+	/**
+	 * The device of a calendar push, after a check of the credential that registered it, of the quiet hours, and
+	 * of the reminder: a reminder that the principal read or deleted gets no push.
+	 */
+	async calendarPushTarget(id: string, reminderId: string) {
+		const now = Date.now();
+		const device = this.notifications.device(id, now);
+		if (!device) return null;
+		const credential = JSON.parse(device.credential) as CredentialRef;
+		const [state] = await checkCredentials(this.env.DIRECTORY, [credential]);
+		if (state !== "live") {
+			this.expirePushSubscription(id);
+			return null;
+		}
+		if (this.notifications.quiet(now) || !this.notifications.device(id, now)) return null;
+		const unread = this.sql
+			.exec("SELECT 1 FROM chat_activity WHERE id = ? AND read_at IS NULL", reminderId)
+			.toArray().length;
+		if (unread === 0) return null;
+		return {
+			endpoint: device.endpoint,
+			keys: { p256dh: device.p256dh, auth: device.auth },
+			sound: this.notifications.sound(),
+		};
 	}
 
 	/** The room outbox holds each post until the queue accepts it. A retry keeps the device ids. */

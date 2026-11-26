@@ -68,6 +68,12 @@ to it, so a list of that state reads one object and not the directory.
   and it has no room: its `room_id` is empty. `subject_json` has the account to share with. The column
   `item_json` has the item: the space id, the item id, the name and the role. It is null for each other
   kind.
+- An item of the kind `calendar_reminder` gets no such check either. It is a
+  [reminder of Calendar](../calendar/README.md#reminders), and it has no room. `recordCalendarReminder`
+  adds it, with the id of the reminder as the idempotency key. The column `event_json` has the event id,
+  the occurrence id, the title, the start and the minutes. It is null for each other kind. The method
+  returns the push devices of the principal, or none during the quiet hours. `calendarPushTarget` checks
+  the device, its credential, the quiet hours and the Activity item before each push.
 - `CHAT_ACTIVITY_ITEM_MIGRATION` (`chat-personal.ts`) adds the column `item_json` with
   `ALTER TABLE … ADD COLUMN`. The rows stay, and each row from before gets null.
 - `CHAT_ACTIVITY_SUBJECT_MIGRATION` (`chat-personal.ts`) makes the table `chat_activity` again with the

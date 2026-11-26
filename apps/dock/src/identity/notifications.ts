@@ -127,6 +127,17 @@ export class ChatNotifications {
 		return { allowed, sound: settings.sound };
 	}
 
+	/** True while the quiet hours of the principal apply at `at` or now. */
+	quiet(at: number): boolean {
+		const { dnd } = this.preferences();
+		return dnd !== null && quietHours(dnd, at);
+	}
+
+	/** The sound setting of the principal. */
+	sound(): boolean {
+		return this.preferences().sound;
+	}
+
 	register(device: PushDevice, credential: CredentialRef): boolean {
 		const previous = this.sql
 			.exec<DeviceRow>("SELECT * FROM chat_push_devices WHERE endpoint = ?", device.endpoint)

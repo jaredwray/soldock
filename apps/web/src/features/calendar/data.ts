@@ -89,3 +89,23 @@ export function updateEvent(input: InputOf<"calendar.update_event">) {
 export function deleteEvent(eventId: string, baseRevision: number) {
 	return api.call("calendar.delete_event", { event_id: eventId, base_revision: baseRevision });
 }
+
+export function getEvent(eventId: string) {
+	return api.call("calendar.get_event", { event_id: eventId });
+}
+
+export function updateOccurrence(input: InputOf<"calendar.update_occurrence">) {
+	return api.call("calendar.update_occurrence", input);
+}
+
+export function cancelOccurrence(occurrenceId: string, baseRevision: number) {
+	return api.call("calendar.cancel_occurrence", { occurrence_id: occurrenceId, base_revision: baseRevision });
+}
+
+export function respondToEvent(input: InputOf<"calendar.respond_to_event">) {
+	return api.call("calendar.respond_to_event", input);
+}
+
+export function setReminder(eventId: string, minutes: 5 | 10 | 30 | null) {
+	return api.call("calendar.set_reminder", { event_id: eventId, minutes });
+}

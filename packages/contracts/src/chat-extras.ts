@@ -44,6 +44,7 @@ export const CHAT_ACTIVITY_KINDS = [
 	"card_action",
 	"member_request",
 	"share_request",
+	"calendar_reminder",
 ] as const;
 export type ChatActivityKind = (typeof CHAT_ACTIVITY_KINDS)[number];
 
@@ -73,6 +74,20 @@ export const ChatActivityItem = z.object({
 	 */
 	item: z
 		.object({ space_id: z.string(), item_id: z.string(), name: z.string(), role: z.enum(["editor", "viewer"]) })
+		.nullable()
+		.default(null),
+	/**
+	 * For `calendar_reminder`: the occurrence that starts soon. `room_id` and `message_id` are empty and
+	 * `room_name` is null for this kind. Null for each other kind.
+	 */
+	event: z
+		.object({
+			event_id: z.string(),
+			occurrence_id: z.string().nullable(),
+			title: z.string(),
+			start: Timestamp,
+			minutes: z.number().int(),
+		})
 		.nullable()
 		.default(null),
 	created_at: Timestamp,

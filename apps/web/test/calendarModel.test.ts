@@ -10,7 +10,10 @@ import {
 	periodOf,
 	periodTitle,
 	placeSegments,
+	recurrenceOf,
+	repeatText,
 	sameTimeFields,
+	seriesWhen,
 	shiftPeriod,
 	shiftTarget,
 	weekDays,
@@ -30,6 +33,15 @@ function event(id: string, when: CalendarEvent["when"], title = id): CalendarEve
 		revision: 1,
 		created_at: "2026-11-01T00:00:00.000Z",
 		updated_at: "2026-11-01T00:00:00.000Z",
+		recurrence: null,
+		occurrence_id: null,
+		original_start: null,
+		is_exception: false,
+		role: "organizer",
+		organizer: null,
+		attendees: [],
+		my_response: null,
+		reminder_minutes: null,
 	};
 }
 
@@ -194,5 +206,46 @@ describe("the form of an event", () => {
 			expect(sameTimeFields({ ...opened, ...change }, opened), JSON.stringify(change)).toBe(false);
 		}
 		expect(newEventForm("2026-12-01", 23)).toMatchObject({ endDate: "2026-12-02", endTime: "00:00" });
+	});
+});
+
+describe("the repeat of the form", () => {
+	const LA = "America/Los_Angeles";
+
+	it("makes the rule of each choice, with its end", () => {
+		const form = { ...newEventForm("2030-10-22"), repeat: "biweekly" as const };
+		expect(recurrenceOf(form)).toEqual({ frequency: "weekly", interval: 2 });
+		expect(recurrenceOf({ ...form, ends: "until", until: "2030-12-31" })).toEqual({
+			frequency: "weekly",
+			interval: 2,
+			until: "2030-12-31",
+		});
+		expect(recurrenceOf({ ...form, repeat: "monthly", ends: "count", count: "6" })).toEqual({
+			frequency: "monthly",
+			interval: 1,
+			count: 6,
+		});
+		expect(recurrenceOf({ ...form, repeat: "none" })).toBeNull();
+		expect(repeatText({ frequency: "weekly", interval: 2, until: null, count: 5 })).toBe("Every 2 weeks, 5 times");
+		// The dialog and the server use the same check.
+		expect(formProblem({ ...form, ends: "until", until: "2030-10-01" }, LA)).toMatch(/before the first day/);
+		expect(formProblem({ ...form, ends: "until", until: "" }, LA)).toBe("Give the last day of the repeat.");
+	});
+
+	it("moves the first occurrence of the series as the edited occurrence moved, in wall clock time", () => {
+		// The series starts at 09:00 PDT. The person opens the occurrence after the change of the clock and moves it
+		// from 09:00 to 10:00 on the next day, for all events.
+		const master = {
+			...timed("evt", "2030-10-22T16:00:00Z", "2030-10-22T17:00:00Z"),
+			when: { kind: "timed" as const, start: "2030-10-22T16:00:00Z", end: "2030-10-22T17:00:00Z", time_zone: LA },
+		};
+		const opened = { ...newEventForm("2030-11-05"), startTime: "09:00", endTime: "10:00" };
+		const moved = { ...opened, startDate: "2030-11-06", endDate: "2030-11-06", startTime: "10:00", endTime: "11:00" };
+		expect(seriesWhen(master, opened, moved, LA)).toEqual({
+			kind: "timed",
+			start: "2030-10-23T17:00:00.000Z", // 10:00 PDT
+			end: "2030-10-23T18:00:00.000Z",
+			time_zone: LA,
+		});
 	});
 });
