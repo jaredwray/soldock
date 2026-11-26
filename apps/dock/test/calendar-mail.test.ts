@@ -1,7 +1,7 @@
 import { runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import type { CalendarEvent, InputOf } from "@asterra/contracts";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import appleAllDay from "../../../fixtures/calendar/apple-request-all-day.ics?raw";
 import googleCancel from "../../../fixtures/calendar/google-cancel.ics?raw";
 import googleReply from "../../../fixtures/calendar/google-reply-accepted.ics?raw";
@@ -16,6 +16,7 @@ import {
 	type Actor,
 	api,
 	base64,
+	calendarOutbox,
 	calendarStub,
 	callTool,
 	codeOf,
@@ -661,6 +662,76 @@ describe("invitations by mail from outside the organization", () => {
 			my_response: "tentative",
 			untrusted: true,
 		});
+	});
+
+	it("tries an answer again after a pause of the mailbox, and drops it when the meeting goes away", async () => {
+		const mailbox = env.MAILBOX.get(env.MAILBOX.idFromName(ada.id));
+		const pause = (on: boolean) =>
+			runInDurableObject(mailbox, (_instance, state) => {
+				if (on) state.storage.sql.exec("INSERT OR REPLACE INTO meta (key, value) VALUES ('delivery_pause', '1')");
+				else state.storage.sql.exec("DELETE FROM meta WHERE key = 'delivery_pause'");
+			});
+		/** Answers Yes while the mailbox is paused. The answer waits in the outbox of the calendar. */
+		const acceptWhilePaused = async (messageId: string) => {
+			await pause(true);
+			await ada.call("calendar.respond_to_mail_invitation", { message_id: messageId, response: "accepted" });
+			await vi.waitFor(async () =>
+				expect((await calendarOutbox(ada.id)).find((row) => row.kind === "mail")?.attempts).toBe(1),
+			);
+			await pause(false);
+		};
+		const waitingMail = async () => (await calendarOutbox(ada.id)).filter((row) => row.kind === "mail");
+
+		// A verified cancellation drops the answer that waits.
+		await acceptWhilePaused(await receive(googleTimed, "Invitation: Façade review"));
+		await receive(googleCancel, "Cancelled: Façade review");
+		expect(await waitingMail()).toEqual([]);
+		// The owner removes a meeting by mail: its answer that waits goes too.
+		await acceptWhilePaused(await receive(appleAllDay, "Offsite", "sam@icloud.example"));
+		const offsite = (await eventsOf(ada)).find((event) => event.title === "Offsite") as CalendarEvent;
+		await ada.call("calendar.delete_event", { event_id: offsite.id });
+		expect(await waitingMail()).toEqual([]);
+		await deliverAll(ada.id);
+		expect(email.sent).toEqual([]);
+
+		// After the pause, an answer that waits goes out.
+		await acceptWhilePaused(await receive(outlookTimed, "Budget sync", "tunde.okafor@contoso.example"));
+		await deliverAll(ada.id);
+		expect(email.sent).toEqual([{ from: "ada@dock.test", to: "tunde.okafor@contoso.example" }]);
+	});
+
+	it("refuses the uid of a cancelled meeting from a different organizer", async () => {
+		const first = await receive(googleTimed, "Invitation: Façade review");
+		await ada.call("calendar.respond_to_mail_invitation", { message_id: first, response: "accepted" });
+		await receive(googleCancel, "Cancelled: Façade review");
+		const reused = googleUpdate
+			.replaceAll("priya@partner.example", "other@partner.example")
+			.replace("SEQUENCE:1", "SEQUENCE:9");
+		const second = await receive(reused, "Reused id", "other@partner.example");
+		expect(
+			await codeOf(ada.call("calendar.respond_to_mail_invitation", { message_id: second, response: "accepted" })),
+		).toBe("conflict");
+		expect(await eventsOf(ada)).toEqual([]);
+	});
+
+	it("answers an invitation to an alias from that alias", async () => {
+		await owner.call("directory.add_mailbox_alias", { mailbox_id: ada.id, address: "countess@second.test" });
+		const ics = googleTimed.replaceAll("ada@dock.test", "countess@second.test");
+		await inject(
+			invitationMail({ from: "priya@partner.example", to: "countess@second.test", subject: "To the alias", ics }),
+			"countess@second.test",
+			{ from: "priya@partner.example" },
+		);
+		const messageId = await messageWith(ada, "To the alias");
+		const { invitation } = await ada.call("calendar.get_mail_invitation", { message_id: messageId });
+		expect(invitation?.attendees.find((attendee) => attendee.self)?.email).toBe("countess@second.test");
+		await ada.call("calendar.respond_to_mail_invitation", { message_id: messageId, response: "accepted" });
+		await deliverAll(ada.id);
+		// The attendee of the answer is its From address, so the organizer can match it.
+		expect(email.sent).toEqual([{ from: "countess@second.test", to: "priya@partner.example" }]);
+		expect((await sentInvites(ada))[0]?.ical.attendees).toEqual([
+			expect.objectContaining({ email: "countess@second.test", partstat: "ACCEPTED" }),
+		]);
 	});
 
 	it("gives an invitation to a team mailbox to no calendar", async () => {

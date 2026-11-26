@@ -189,6 +189,8 @@ export interface MailPayload {
 	text: string;
 	/** The idempotency key of the send. The same message has the same key, so a retry sends it one time. */
 	key: string;
+	/** For an answer: the address of the owner that the invitation names, also an alias. It sends the answer. */
+	from?: string;
 }
 
 /** A calendar part of a mail that the mailbox of the owner received. Each value comes from the sender. */
@@ -707,6 +709,7 @@ export class CalendarDO extends DurableObject<Env> {
 			subject: `${label}: ${record.title}`,
 			text: mailText(`${myEmail} answered: ${label}.`, ical),
 			key,
+			from: myEmail,
 		};
 		this.enqueue("mail", mailKey(organizer.email), record.uid, payload);
 	}
@@ -952,6 +955,8 @@ export class CalendarDO extends DurableObject<Env> {
 			this.ctx.storage.transactionSync(() => {
 				this.sql.exec("DELETE FROM events WHERE id = ?", eventId);
 				this.addToCount(-1);
+				// An answer that waits goes with the meeting. Only answers of the owner use this uid in the outbox.
+				this.sql.exec("DELETE FROM outbox WHERE kind = 'mail' AND uid = ?", event.uid);
 				this.writeTombstone(event.uid, mailKey(event.organizer?.email ?? ""), event.sequence, "removed");
 			});
 			return event;
@@ -1286,6 +1291,8 @@ export class CalendarDO extends DurableObject<Env> {
 				}
 				this.sql.exec("DELETE FROM events WHERE id = ?", record.id);
 				this.addToCount(-1);
+				// An answer that waits is for a cancelled meeting, so it does not go.
+				this.sql.exec("DELETE FROM outbox WHERE kind = 'mail' AND uid = ?", invite.uid);
 				this.writeTombstone(invite.uid, mailKey(record.organizer?.email ?? ""), invite.sequence, "cancelled");
 				result = { applied: true };
 				return;
@@ -1391,6 +1398,11 @@ export class CalendarDO extends DurableObject<Env> {
 		const stored = this.stored("uid", invite.uid);
 		if (!stored && tomb && tomb.sequence >= invite.sequence) {
 			return refuse("conflict", "The organizer cancelled this meeting, or you removed it from your calendar.");
+		}
+		// A uid is the identity of one meeting of one organizer. A different organizer cannot reuse it while its
+		// tombstone stays, also with a larger SEQUENCE.
+		if (!stored && tomb && tomb.organizer !== mailKey(organizer.email)) {
+			return refuse("conflict", "A different organizer made the meeting with this id on your calendar.");
 		}
 		const now = Date.now();
 		let eventId: string | null = null;
@@ -1589,7 +1601,10 @@ export class CalendarDO extends DurableObject<Env> {
 						method: payload.method,
 						ics: buildICalendar(payload.ical),
 						idempotencyKey: payload.key,
+						fromAddress: payload.from,
 					});
+					// A paused mailbox waits for a directory reset that can stop. The message tries again later.
+					if (sent.status === "refused" && sent.reason === "paused") throw new Error("the mailbox is paused");
 					if (sent.status === "refused") log("info", "calendar mail not sent", { reason: sent.reason });
 					this.sql.exec("DELETE FROM outbox WHERE id = ? AND gen = ?", row.id, row.gen);
 					continue;

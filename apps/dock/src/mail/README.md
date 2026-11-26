@@ -778,7 +778,8 @@ web app uses it to complete an address while the person types it.
    The key keeps a SHA-256 hash of the request. The same key with a different request gets
    `conflict`.
 5. The outbox alarm delivers:
-   - Before each delivery, it checks the original sender ID and address against the current directory.
+   - Before each delivery, it checks the original sender ID and address against the current directory. The
+     address is the primary address of the sender, or an alias of the same mailbox (an answer of Calendar).
      A deleted sender or an address change fails the delivery without a retry.
      A directory error uses the normal retry path and sends no mail.
    - a local recipient: a copy of the raw bytes in R2 for that mailbox, then `MailboxDO.deliver()`.
@@ -804,7 +805,9 @@ Agent mail carries `X-Asterra-Agent: true`. It also carries `X-Soldock-Agent: tr
 Calendar sends its invitations, changes, cancellations and answers by mail with `sendCalendarMail`: from the
 own mailbox of the principal, with the agent headers of `mail.send`, an idempotency key from Calendar, and the
 same outbox, retries, policy check and delivery status as `mail.send`. The message is
-`multipart/alternative` of a plain text part and a `text/calendar; method=<METHOD>` part (base64). A REQUEST
+`multipart/alternative` of a plain text part and a `text/calendar; method=<METHOD>` part (base64). An answer
+to an invitation that names an alias of the sender goes from that alias, so the organizer can match it. Before
+each delivery, the outbox accepts the primary address of the sender or an alias of the same mailbox. A REQUEST
 and a CANCEL also have an `invite.ics` attachment with the same bytes. `composeMessage` writes these parts for
 its `calendar` field, and refuses a line break in the method. A message without `calendar` has the same parts
 as before.

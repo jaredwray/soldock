@@ -1,5 +1,5 @@
 import { MAIL_LIMITS } from "@asterra/contracts";
-import { domainOf, getPrincipal } from "../identity/index.ts";
+import { domainOf, getPrincipal, resolveMailboxAddress } from "../identity/index.ts";
 import { newId, sha256Hex } from "../platform/index.ts";
 import { type CalendarSenderCheck, calendarPartIndex, senderCheck } from "./calendar-part.ts";
 import { mailboxStub, storeRaw } from "./delivery.ts";
@@ -24,6 +24,12 @@ export interface CalendarMailInput {
 	ics: string;
 	/** One key for one message: a second send with the key sends nothing. */
 	idempotencyKey: string;
+	/**
+	 * The address that sends: an alias of the sender, for the answer to an invitation that names the alias. The
+	 * attendee of an answer must be its From address. An address that is not an alias of the sender gives the
+	 * primary address.
+	 */
+	fromAddress?: string | undefined;
 }
 
 export type CalendarMailResult =
@@ -40,10 +46,16 @@ export async function sendCalendarMail(env: Env, input: CalendarMailInput): Prom
 	if (!principal || principal.archived_at !== null) return { status: "refused", reason: "sender" };
 	const to = input.to.toLowerCase();
 	if (deniedOutboundAddresses(principal, [to]).length > 0) return { status: "refused", reason: "policy" };
+	let from = principal.address;
+	const wanted = input.fromAddress?.toLowerCase();
+	if (wanted && wanted !== principal.address.toLowerCase()) {
+		const holder = await resolveMailboxAddress(env.DIRECTORY, wanted);
+		if (holder?.kind === "personal" && holder.id === principal.id) from = wanted;
+	}
 	const messageId = newId("msg");
 	const now = new Date();
 	const raw = composeMessage({
-		from: { name: principal.display_name, address: principal.address },
+		from: { name: principal.display_name, address: from },
 		to: [to],
 		cc: [],
 		subject: input.subject,

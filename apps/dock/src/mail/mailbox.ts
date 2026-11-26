@@ -12,7 +12,7 @@ import {
 	SYSTEM_LABELS,
 	WEBHOOK_LIMITS,
 } from "@asterra/contracts";
-import { addressTag, getMailbox, getPrincipal } from "../identity/index.ts";
+import { addressTag, getMailbox, getPrincipal, resolveMailboxAddress } from "../identity/index.ts";
 import { log, newId } from "../platform/index.ts";
 import type { WebhookEventJob } from "../webhooks/index.ts";
 import type { AutoLabelJob } from "./autolabel/consumer.ts";
@@ -2794,7 +2794,14 @@ export class MailboxDO extends DurableObject<Env> {
 				const senderId = mailboxIdOfRawKey(row.raw_key);
 				const sender = senderId ? await getMailbox(this.env.DIRECTORY, senderId) : null;
 				if (this.meta("delivery_pause")) return;
-				if (!sender || sender.address !== row.from_addr) {
+				// An answer of Calendar to an invitation can come from an alias of the sender. The alias must still be
+				// an address of the same mailbox.
+				const owned =
+					sender !== null &&
+					(sender.address === row.from_addr ||
+						(row.from_addr !== null &&
+							(await resolveMailboxAddress(this.env.DIRECTORY, row.from_addr))?.id === senderId));
+				if (!sender || !owned) {
 					throw new SenderUnavailable("The sender account no longer owns this address.");
 				}
 				if (row.kind === "deliver") {

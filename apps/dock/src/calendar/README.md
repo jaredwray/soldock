@@ -199,6 +199,9 @@ message that replaces an older one.
   (base64, CRLF line ends). A REQUEST and a CANCEL also have the same bytes as an `invite.ics` attachment.
 - The idempotency key of each message is `asterra-calendar:<uid>:<METHOD>:<sequence>:<address>`, so a retry
   of the drain stores one message and sends one mail.
+- A paused mailbox (a directory reset) is a failure to try again with the backoff of the outbox. Each other
+  refusal of `sendCalendarMail` (a sender that is gone, the outbound policy, the size) drops the message with
+  an `info` log.
 - A call that queues mail needs `mail.send` in the credential (`forbidden`), and the outbound policy of an
   agent must allow each address (`policy_denied`). The handler checks the old and the new attendees outside
   the organization before an update, and each one before a delete. A change of the policy after the enqueue
@@ -232,7 +235,12 @@ message that replaces an older one.
   answer goes to the organizer as `METHOD:REPLY` from the own address, with the address of the caller that the
   invitation names. The same answer again changes nothing and sends nothing. A second mail with the same
   invitation finds the same copy by its `uid`, so it adds no second event. A tombstone of this version or a
-  newer one gives `conflict`. A copy of the same `uid` from a different organizer or sender gives `conflict`.
+  newer one gives `conflict`. A copy of the same `uid` from a different organizer or sender gives `conflict`,
+  and so does a tombstone of a different organizer, also for a larger `SEQUENCE`.
+- The answer goes from the address of the caller that the invitation names, also an alias, because the
+  organizer matches the `ATTENDEE` of an answer with its From address.
+- A cancellation by mail that applies, and the delete of a copy by mail by the owner, drop an answer of the
+  owner that waits in the outbox.
 - The copy keeps the `ORGANIZER` and the From address of the accepted mail. Later mail changes or cancels it
   by itself only when both are the same and the receiving server verified the sender. The owner can delete a
   copy by mail: it goes away from the own calendar only, with no mail, and a tombstone stops the same version.
