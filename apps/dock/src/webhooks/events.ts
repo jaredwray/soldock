@@ -23,6 +23,7 @@ import {
 	type EventSubscribeInput,
 	type EventSubscriptionRef,
 	type EventSubscriptions,
+	isSealed,
 	newId,
 	OperationError,
 	openSecret,
@@ -330,6 +331,12 @@ export function createEventSubscriptions(prepare: EventTargetHooks = {}): EventS
 			const endpointId = endpoint.id;
 			const current = await openSecret(call.env, ENDPOINT_SEAL.secret, endpoint.secret);
 			const changed = !current.ok || !sameSecret(current.value, input.secret);
+			// The current secret becomes the previous secret. A plaintext secret from before ENCRYPTION_KEY is
+			// sealed on the way, so the refresh leaves no plaintext copy.
+			const previous =
+				current.ok && !isSealed(endpoint.secret)
+					? await sealSecret(call.env, ENDPOINT_SEAL.secret, current.value)
+					: endpoint.secret;
 			const results = await db.batch<{ id: string }>([
 				db
 					.prepare(
@@ -360,7 +367,7 @@ export function createEventSubscriptions(prepare: EventTargetHooks = {}): EventS
 				db
 					.prepare(
 						`UPDATE webhook_endpoints SET
-							previous_secret = CASE WHEN (?9 OR secret IS NOT ?10) THEN secret
+							previous_secret = CASE WHEN secret IS NOT ?10 THEN secret WHEN ?9 THEN ?11
 								WHEN previous_secret_until <= ?8 THEN NULL ELSE previous_secret END,
 							previous_secret_until = CASE WHEN (?9 OR secret IS NOT ?10) THEN ?2
 								WHEN previous_secret_until <= ?8 THEN NULL ELSE previous_secret_until END,
@@ -380,6 +387,7 @@ export function createEventSubscriptions(prepare: EventTargetHooks = {}): EventS
 						nowText,
 						changed ? 1 : 0,
 						endpoint.secret,
+						previous,
 					),
 			]);
 			return (results[0]?.results.length ?? 0) > 0;

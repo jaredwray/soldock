@@ -314,6 +314,17 @@ describe("the API token and ENCRYPTION_KEY", () => {
 		expect(changed.status).toBe(200);
 		expect(await storedToken()).toBe(sealed);
 		expect(await owner.call("ai.get_settings")).toMatchObject({ token_source: "settings", monthly_budget_usd: 20 });
+
+		// An admin removes the token that does not open. The removal writes its audit line.
+		const spy = vi.spyOn(console, "log");
+		const removed = await withBindings({ ENCRYPTION_KEY: OTHER_KEY }, "/api/v1/ai/settings", { api_token: null });
+		expect(removed.status).toBe(200);
+		expect(await storedToken()).toBeNull();
+		const targets = spy.mock.calls
+			.map((args) => args.map(String).join(" "))
+			.filter((line) => line.startsWith("{") && line.includes('"audit":true'))
+			.map((line) => (JSON.parse(line) as { target?: string }).target);
+		expect(targets).toContain("api_token_removed");
 	});
 
 	it("saves no token while ENCRYPTION_KEY is too short", async () => {

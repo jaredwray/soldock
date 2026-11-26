@@ -205,8 +205,14 @@ const UPDATE_ATTEMPTS = 5;
  *
  * With ENCRYPTION_KEY, the write seals the API token. A change that does not name the token keeps a sealed
  * token as it is, also one that does not open now, and seals a plaintext token from before ENCRYPTION_KEY.
+ *
+ * `tokenChange` tells how the write changed the stored token. It uses the stored column, so the removal of
+ * a sealed token that does not open is also a change.
  */
-export async function updateConfig(env: Env, patch: ConfigPatch): Promise<{ config: AiConfig; previous: AiConfig }> {
+export async function updateConfig(
+	env: Env,
+	patch: ConfigPatch,
+): Promise<{ config: AiConfig; previous: AiConfig; tokenChange: "set" | "removed" | null }> {
 	const db = env.DIRECTORY;
 	for (let attempt = 0; attempt < UPDATE_ATTEMPTS; attempt++) {
 		const { config, updatedAt, storedToken } = await readVersioned(env);
@@ -243,7 +249,19 @@ export async function updateConfig(env: Env, patch: ConfigPatch): Promise<{ conf
 						)
 						.bind(...values, now, updatedAt)
 						.run();
-		if ((result.meta.changes ?? 0) > 0) return { config: next, previous: config };
+		if ((result.meta.changes ?? 0) > 0) {
+			const tokenChange =
+				patch.api_token === undefined
+					? null
+					: patch.api_token === null
+						? storedToken === null
+							? null
+							: "removed"
+						: storedToken === null || config.apiToken !== patch.api_token
+							? "set"
+							: null;
+			return { config: next, previous: config, tokenChange };
+		}
 	}
 	throw new OperationError("conflict", "Other changes of the AI settings came at the same time. Try again.");
 }

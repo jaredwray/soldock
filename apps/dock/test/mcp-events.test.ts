@@ -487,6 +487,12 @@ describe("events/subscribe", () => {
 		// The refresh sealed the plaintext secret.
 		expect((await rows())[0]?.secret).toMatch(SEALED);
 
+		// A row from before ENCRYPTION_KEY can also get a new secret in one refresh. The old secret goes to
+		// previous_secret sealed, not as plaintext.
+		await env.DIRECTORY.prepare("UPDATE webhook_endpoints SET secret = ? WHERE protocol = 'mcp_events'")
+			.bind(SECRET)
+			.run();
+
 		// A new secret must be proven at the receiver.
 		const third = resultOf(
 			await subscribe(ada.key, "chat.message.created", { arguments: { room_id: room.id }, secret: OTHER_SECRET }),
