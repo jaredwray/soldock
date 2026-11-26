@@ -1238,9 +1238,11 @@ MCP clients. The app has no UI-only path.
     while it has no answer, else "Meeting". It shows the title, the time, the place, the organizer, the
     description and each attendee with the answer, as text. **Yes**, **Maybe** and **No** in the group
     "Your answer" call `calendar.respond_to_invitation` (`aria-pressed` on the current answer). It has no
-    **Save** and no **Delete**. The open dialog shows the newest copy of each poll. When a poll does not
-    have the copy, or an answer gets `not_found`, the dialog says that the organizer cancelled the meeting
-    or removed the person, and hides the answers.
+    **Save** and no **Delete**. The open dialog shows the newest copy of each poll. A poll has only the
+    events of the open period, so for a copy that it does not have, the page reads the copy by its id
+    (`calendar.get_event`): a meeting that the organizer moved to a different week shows its new time. When
+    that read or an answer gets `not_found`, the dialog says that the organizer cancelled the meeting or
+    removed the person, and hides the answers.
   - **Attendees** also takes an address outside the organization: a typed address that no principal of the
     list has gives the option "Invite <address> by mail". Its row says "Outside your organization, by mail".
   - A meeting that came by mail from outside the organization opens the invitation dialog with a notice that
