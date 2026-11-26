@@ -338,6 +338,12 @@ describe("the access to a meeting", () => {
 				),
 			),
 		).toBe("invalid");
+		// A team mailbox has no calendar.
+		const { team_mailbox: support } = await owner.call("directory.create_team_mailbox", {
+			display_name: "Support",
+			address: "support@dock.test",
+		});
+		expect(await codeOf(ada.call("calendar.create_event", meeting([{ email: support.address }])))).toBe("invalid");
 		await owner.call("directory.archive_principal", { principal_id: grace.id });
 		expect(await codeOf(ada.call("calendar.create_event", meeting([{ principal_id: grace.id }])))).toBe("invalid");
 		// Nothing was added.
@@ -348,6 +354,13 @@ describe("the access to a meeting", () => {
 			meeting([{ principal_id: ada.id }, { principal_id: owner.id }, { email: "owner@dock.test" }]),
 		);
 		expect(event.attendees.map((attendee) => attendee.principal_id)).toEqual([owner.id]);
+
+		// An alias of a person invites that person, with the primary address.
+		await owner.call("directory.add_mailbox_alias", { mailbox_id: owner.id, address: "olive@second.test" });
+		const { event: byAlias } = await ada.call("calendar.create_event", meeting([{ email: "olive@second.test" }]));
+		expect(byAlias.attendees.map((attendee) => [attendee.principal_id, attendee.email])).toEqual([
+			[owner.id, "owner@dock.test"],
+		]);
 	});
 });
 
@@ -622,6 +635,12 @@ describe("revisions, idempotency and the stored calendar", () => {
 		const input = { ...meeting([{ principal_id: grace.id }]), idempotency_key: "review-2" };
 		const first = await ada.call("calendar.create_event", input);
 		await settleCalendars(ada.id, grace.id);
+		// A team mailbox has no calendar.
+		const { team_mailbox: support } = await owner.call("directory.create_team_mailbox", {
+			display_name: "Support",
+			address: "support@dock.test",
+		});
+		expect(await codeOf(ada.call("calendar.create_event", meeting([{ email: support.address }])))).toBe("invalid");
 		await owner.call("directory.archive_principal", { principal_id: grace.id });
 		const second = await ada.call("calendar.create_event", input);
 		expect(second.event.id).toBe(first.event.id);

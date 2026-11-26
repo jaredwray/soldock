@@ -82,8 +82,9 @@ A meeting is an event with attendees. The organizer adds `attendees` to `calenda
 - **Find a person.** The web app and an agent use `directory.list_principals` with `query` and
   `order: "match"`. Calendar has no search operation of its own. An invitation needs no directory scope:
   the handler resolves each `principal_id` or `email` in the directory itself.
-- **Attendee input.** Each entry has `principal_id` or `email`, not the two. An unknown principal, an
-  address of no principal of the organization, and an archived principal give `invalid`. The organizer
+- **Attendee input.** Each entry has `principal_id` or `email`, not the two. An alias of a person finds that
+  person, and the meeting shows the primary address. An unknown principal, an address of no principal of the
+  organization, the address of a team mailbox, and an archived principal give `invalid`. The organizer
   and a second entry of the same principal are left out. A meeting has at most 100 attendees. An address
   outside the organization gives `invalid` in this layer.
 - **The authority.** The event of the organizer is the authority. Each attendee gets a copy with its own

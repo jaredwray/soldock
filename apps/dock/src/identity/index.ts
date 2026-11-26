@@ -83,7 +83,6 @@ export {
 	normalizeAddress,
 	type OutboundMode,
 	type PrincipalRecord,
-	resolveAddress,
 	scopeCeiling,
 	unknownPrincipalIds,
 } from "./store.ts";

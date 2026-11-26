@@ -11,7 +11,7 @@ import {
 	zonedDate,
 	zonedDayStart,
 } from "@asterra/contracts";
-import { auditOk, type CallContext, getPrincipals, normalizeAddress, resolveAddress } from "../identity/index.ts";
+import { auditOk, type CallContext, getPrincipals, resolveMailboxAddress } from "../identity/index.ts";
 import { decodeCursor, encodeCursor, type HandlerMap, newId, OperationError, sha256Hex } from "../platform/index.ts";
 import type { AttendeeRef, CalendarCall, EventFields, EventRecord, EventTime, Refusal } from "./calendar.ts";
 
@@ -71,7 +71,9 @@ async function resolveAttendees(call: CallContext, inputs: readonly AttendeeInpu
 			);
 		}
 		if (input.email !== undefined) {
-			const found = await resolveAddress(db, normalizeAddress(input.email));
+			// The address of a person, also an alias. A team mailbox has no calendar.
+			const mailbox = await resolveMailboxAddress(db, input.email);
+			const found = mailbox?.kind === "personal" ? (await getPrincipals(db, [mailbox.id]))[0] : undefined;
 			if (!found) {
 				throw new OperationError(
 					"invalid",
