@@ -62,7 +62,9 @@ Public surface: `index.ts` only. Other domains must not import files from this f
   are in `packages/contracts`. The server and the web app use the same code and the same texts.
 - workerd has the full IANA data for `Intl`. A day of a zone starts at `zonedDayStart`. Do not add 24
   hours to get the next day: a day can have 23 or 25 hours. In a zone that skips 00:00 for a change
-  of the clock, `zonedDayStart` gives the nearest instant.
+  of the clock, the day starts at 01:00: `zonedDayStart` gives the instant of the change. `zonedTime` gives
+  the first instant for a time that the clock shows two times. For a time that the clock skips, it gives
+  the same time after the skip: 02:30 gives 03:30.
 
 ## Range query
 
@@ -80,6 +82,9 @@ Public surface: `index.ts` only. Other domains must not import files from this f
 - The query reads only rows with `start_at` from `time_min` minus 369 days to `time_max`. The longest
   event is 366 days, and the widest day of an all-day event adds less than 3 days, so the query
   loses no event and stays on the index.
+- An event is from 1970-01-01 to 2100-12-31, so the handler first cuts the range to that window, with one
+  more day on each side for the days of an all-day event in each zone. A range outside the window gives an
+  empty page.
 - The order is `start_at`, then `id`. A page has `limit` events (default 100, at most 250).
   `next_cursor` holds the `start_at` and the `id` of the last event of the page.
 
@@ -94,7 +99,8 @@ Public surface: `index.ts` only. Other domains must not import files from this f
   event can become an all-day event. A call that changes nothing writes nothing and keeps the
   revision.
 - `calendar.update_event` and `calendar.delete_event` take `base_revision`. A different revision
-  gives `conflict` and changes nothing. The web app always sends it.
+  gives `conflict` and changes nothing. Without it, the change applies to the current event. The web app
+  always sends it.
 - `calendar.delete_event` takes `dry_run`. With `dry_run`, it returns the event and changes nothing.
 - Each change that writes gets an `audit()` line with the event id. A retry with an idempotency key
   and a `dry_run` get none. The invoker audits each refused change.
@@ -109,6 +115,9 @@ Public surface: `index.ts` only. Other domains must not import files from this f
 - D1 migration 0038 gives an account from before Calendar `calendar.read` when it holds `mail.read`,
   and `calendar.write` when it holds `mail.modify`. A narrow account stays narrow. A second run
   changes nothing.
+- A credential that creates an agent or a service account, or a key or a token of one, must hold each
+  account scope of that account. So a key of a person from before Calendar cannot do this after the
+  upgrade: the person makes a new key with the calendar scopes.
 - A mailbox delegate, the sponsor of an agent, and an owner or an admin get no access to a different
   calendar.
 - No content of a calendar comes from outside the organization in this layer, so the output marks

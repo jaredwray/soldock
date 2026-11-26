@@ -128,26 +128,36 @@ export function zonedDate(ms: number, timeZone: string): string {
 }
 
 /**
- * The instant of 00:00 of a date in a time zone, in ms. Do not add 24 hours to get the next day: a day
- * can have 23 or 25 hours. In a zone that skips 00:00 for a change of the clock, the result is the
- * nearest instant.
+ * The instant of a wall clock time in a time zone, in ms. `wallMs` is the wall clock time as if it was UTC.
+ * A time that the clock shows two times gives the first instant. A time that the clock skips gives the same
+ * time after the skip: 02:30 gives 03:30 when the clock goes from 02:00 to 03:00.
+ */
+function wallToInstant(wallMs: number, timeZone: string): number {
+	// The offsets on the two sides of a change of the clock near the time. They are equal on most days.
+	const before = wallMs - zoneOffsetMs(wallMs - DAY_MS, timeZone);
+	const after = wallMs - zoneOffsetMs(wallMs + DAY_MS, timeZone);
+	const early = Math.min(before, after);
+	const late = Math.max(before, after);
+	return early + zoneOffsetMs(early, timeZone) === wallMs ? early : late;
+}
+
+/**
+ * The first instant of a date in a time zone, in ms. This is 00:00 on almost each day. Do not add 24 hours
+ * to get the next day: a day can have 23 or 25 hours. In a zone that skips 00:00 for a change of the clock,
+ * the result is the instant of the change: the day starts at 01:00 there.
  */
 export function zonedDayStart(date: string, timeZone: string): number {
-	const guess = dateToUtcMs(date);
-	const first = guess - zoneOffsetMs(guess, timeZone);
-	const second = guess - zoneOffsetMs(first, timeZone);
-	return second;
+	return wallToInstant(dateToUtcMs(date), timeZone);
 }
 
 /**
  * The instant of a date and a wall clock time (HH:MM) in a time zone, in ms. The web app uses it to make
- * the `when` of an event from the fields of the form.
+ * the `when` of an event from the fields of the form. A time that the clock shows two times gives the first
+ * instant. A time that the clock skips gives the same time after the skip: 02:30 gives 03:30.
  */
 export function zonedTime(date: string, time: string, timeZone: string): number {
 	const [hour, minute] = time.split(":").map(Number);
-	const guess = dateToUtcMs(date) + ((hour ?? 0) * 60 + (minute ?? 0)) * 60_000;
-	const first = guess - zoneOffsetMs(guess, timeZone);
-	return guess - zoneOffsetMs(first, timeZone);
+	return wallToInstant(dateToUtcMs(date) + ((hour ?? 0) * 60 + (minute ?? 0)) * 60_000, timeZone);
 }
 
 /** The time of an event. `timed` has two instants. `all_day` has days, without a time zone. */
@@ -232,7 +242,9 @@ const TimeZone = z
 	.refine(isTimeZone, "must be an IANA time zone, such as America/New_York, Europe/Berlin or UTC");
 
 const WHEN_NOTE = [
-	'A timed event has kind "timed", start and end as ISO 8601 times with an offset or Z (for example 2026-12-01T09:00:00-05:00), and time_zone, the IANA time zone of the event (for example America/New_York). The output gives start and end in UTC.',
+	'A timed event has kind "timed", start, end and time_zone.',
+	"start and end are ISO 8601 times with an offset or Z, for example 2026-12-01T09:00:00-05:00.",
+	"time_zone is the IANA time zone of the event, for example America/New_York. The output gives start and end in UTC.",
 	'An all-day event has kind "all_day", start_date and end_date in YYYY-MM-DD form, and no time zone: it is on the same days in each time zone.',
 	"end_date is the day after the last day of the event, as in iCalendar. A one-day event on 2026-12-01 has start_date 2026-12-01 and end_date 2026-12-02.",
 	`An event can be at most ${CALENDAR_LIMITS.eventDays} days long, from ${CALENDAR_LIMITS.firstDate} to ${CALENDAR_LIMITS.lastDate}.`,
@@ -386,6 +398,8 @@ export const updateEvent = defineOperation({
 		"Changes the fields that you give. A field that you do not give stays. when replaces the whole time of the event, so you can change a timed event to an all-day event.",
 		WHEN_NOTE,
 		"A call that changes nothing keeps the revision.",
+		"Set base_revision to the revision that you read. When the event has a different revision now, the call fails with conflict and changes nothing: read the event again.",
+		"Without base_revision, the change applies to the current event.",
 		OWN_NOTE,
 	].join(" "),
 	http: { method: "POST", path: "/api/v1/calendar/events/{event_id}" },
@@ -410,6 +424,8 @@ export const deleteEvent = defineOperation({
 	description: [
 		"Deletes an event of your calendar. This cannot be undone.",
 		"Set dry_run to true to get the event without a change.",
+		"Set base_revision to the revision that you read. When the event has a different revision now, the call fails with conflict and deletes nothing: read the event again.",
+		"Without base_revision, the call deletes the current event.",
 		OWN_NOTE,
 	].join(" "),
 	http: { method: "DELETE", path: "/api/v1/calendar/events/{event_id}" },

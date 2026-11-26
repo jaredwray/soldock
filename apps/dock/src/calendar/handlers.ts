@@ -26,6 +26,13 @@ const LATEST_ZONE_MS = 12 * 60 * 60 * 1000;
  */
 const LOOK_BACK_MS = (CALENDAR_LIMITS.eventDays + 3) * DAY_MS;
 
+/**
+ * The window of the ranges that can hold an event. It has one more day on each side, for the days of an
+ * all-day event in each time zone. The date helpers work only for the years near this window.
+ */
+const WINDOW_START_MS = dateToUtcMs(CALENDAR_LIMITS.firstDate) - DAY_MS;
+const WINDOW_END_MS = dateToUtcMs(CALENDAR_LIMITS.lastDate) + 2 * DAY_MS;
+
 function calendarStub(env: Pick<Env, "CALENDAR">, principalId: string) {
 	return env.CALENDAR.get(env.CALENDAR.idFromName(principalId));
 }
@@ -106,14 +113,16 @@ export const calendarHandlers: Pick<HandlerMap<CallContext>, CalendarOperation> 
 	async "calendar.list_events"(call, input) {
 		const zone = canonicalTimeZone(input.time_zone ?? "UTC");
 		if (!zone) throw new OperationError("invalid", "time_zone must be an IANA time zone, such as America/New_York.");
-		const min = Date.parse(input.time_min);
-		const max = Date.parse(input.time_max);
+		// The input accepts each year from 0000 to 9999. No event is outside the window.
+		const min = Math.max(Date.parse(input.time_min), WINDOW_START_MS);
+		const max = Math.min(Date.parse(input.time_max), WINDOW_END_MS);
 		let after: { start_at: number; id: string } | null = null;
 		if (input.cursor !== undefined) {
 			const values = decodeCursor<[number, string]>(input.cursor, ["number", "string"]);
 			if (!values) throw new OperationError("invalid", "The cursor is not valid. Start again without a cursor.");
 			after = { start_at: values[0], id: values[1] };
 		}
+		if (min >= max) return { events: [], next_cursor: null };
 		const limit = input.limit ?? CALENDAR_LIMITS.defaultPageSize;
 		const { stub, ctx } = openCalendar(call);
 		const page = accept(

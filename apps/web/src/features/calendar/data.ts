@@ -1,11 +1,11 @@
-import type { CalendarEvent, InputOf, OutputOf } from "@asterra/contracts";
+import { CALENDAR_LIMITS, type CalendarEvent, type InputOf, type OutputOf } from "@asterra/contracts";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../../lib/api.ts";
 
 /** The page polls while it is visible, so a change from a different tab or an agent shows. */
 const POLL_MS = 30_000;
-/** The most pages of one range. A range of a month has far fewer events than this. */
-const MAX_PAGES = 20;
+/** The most pages of one range: the pages of a full calendar. The loop stops there if a cursor never ends. */
+const MAX_PAGES = Math.ceil(CALENDAR_LIMITS.events / CALENDAR_LIMITS.pageSize);
 
 export type EventsState =
 	| { status: "loading"; events: readonly CalendarEvent[] }
@@ -21,14 +21,14 @@ async function loadRange(timeMin: string, timeMax: string, zone: string): Promis
 			time_min: timeMin,
 			time_max: timeMax,
 			time_zone: zone,
-			limit: 250,
+			limit: CALENDAR_LIMITS.pageSize,
 			...(cursor ? { cursor } : {}),
 		});
 		events.push(...result.events);
 		cursor = result.next_cursor;
-		if (!cursor) break;
+		if (!cursor) return events;
 	}
-	return events;
+	throw new Error("The calendar has more events than the page can load.");
 }
 
 /**

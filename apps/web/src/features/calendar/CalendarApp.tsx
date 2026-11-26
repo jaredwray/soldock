@@ -9,7 +9,7 @@ import { type CalendarView, calendarPath } from "../../routes.ts";
 import { PageHeader } from "../../shell/PageHeader.tsx";
 import { useEvents } from "./data.ts";
 import { EventDialog } from "./EventDialog.tsx";
-import { type EventForm, type FirstDay, newEventForm, periodOf, periodTitle, shiftPeriod } from "./model.ts";
+import { type EventForm, type FirstDay, newEventForm, periodOf, periodTitle, shiftTarget } from "./model.ts";
 import { AgendaList, MonthView, WeekView } from "./views.tsx";
 
 /** The first day of a week in the grid. The dates of the web app use en-US, which starts a week on Sunday. */
@@ -96,22 +96,25 @@ export function CalendarApp({ view, date }: CalendarAppProps) {
 				<Link to={calendarPath(view, today)} className="button">
 					Today
 				</Link>
-				<Link
-					to={calendarPath(view, shiftPeriod(view, anchor, -1))}
-					className="icon-button"
-					aria-label={`Previous ${unit}`}
-					title={`Previous ${unit}`}
-				>
-					<Icon name="chevronLeft" />
-				</Link>
-				<Link
-					to={calendarPath(view, shiftPeriod(view, anchor, 1))}
-					className="icon-button"
-					aria-label={`Next ${unit}`}
-					title={`Next ${unit}`}
-				>
-					<Icon name="chevronRight" />
-				</Link>
+				{(
+					[
+						["Previous", -1, "chevronLeft"],
+						["Next", 1, "chevronRight"],
+					] as const
+				).map(([name, steps, icon]) => {
+					// The calendar has no period before 1970 or after 2100: the control has no link there.
+					const target = shiftTarget(view, anchor, steps, FIRST_DAY);
+					const label = `${name} ${unit}`;
+					return target ? (
+						<Link key={name} to={calendarPath(view, target)} className="icon-button" aria-label={label} title={label}>
+							<Icon name={icon} />
+						</Link>
+					) : (
+						<button key={name} type="button" className="icon-button" aria-label={label} aria-disabled="true" disabled>
+							<Icon name={icon} />
+						</button>
+					);
+				})}
 				<h2 className="cal-period" aria-live="polite">
 					{title}
 				</h2>

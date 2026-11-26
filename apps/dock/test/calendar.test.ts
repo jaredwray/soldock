@@ -1,7 +1,7 @@
 import { runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import { CALENDAR_LIMITS, type InputOf } from "@asterra/contracts";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import calendarScopesMigration from "../migrations/0038_calendar_scopes.sql?raw";
 import { type Actor, api, codeOf, createActor, request, seedOrg, setLegacyScopes } from "./helpers.ts";
 
@@ -35,6 +35,19 @@ const timed = (title: string, start: string, end: string): CreateInput => ({
 	title,
 	when: { kind: "timed", start, end, time_zone: "UTC" },
 });
+
+/** The audit lines that the Worker wrote while `run` ran. */
+async function auditLines(run: () => Promise<unknown>): Promise<Record<string, unknown>[]> {
+	const spy = vi.spyOn(console, "log");
+	try {
+		await run();
+		return spy.mock.calls
+			.map(([line]) => (typeof line === "string" && line.startsWith("{") ? JSON.parse(line) : null))
+			.filter((line): line is Record<string, unknown> => line?.audit === true);
+	} finally {
+		spy.mockRestore();
+	}
+}
 
 /** The titles of the events of a range, in order. */
 async function titles(actor: Actor, time_min: string, time_max: string, time_zone?: string) {
@@ -85,6 +98,23 @@ describe("the events of a calendar", () => {
 		}
 		// One hour of the day is enough.
 		expect(await titles(ada, "2026-12-01T10:00:00Z", "2026-12-01T11:00:00Z")).toEqual(["Holiday"]);
+
+		// Havana has no 00:00 on 2026-03-08: the clock goes from 00:00 to 01:00, and the day starts at 05:00 UTC.
+		await ada.call("calendar.create_event", { ...holiday("2026-03-08", "2026-03-09"), title: "Havana" });
+		expect(await titles(ada, "2026-03-07T05:00:00Z", "2026-03-08T05:00:00Z", "America/Havana")).toEqual([]);
+		expect(await titles(ada, "2026-03-08T05:00:00Z", "2026-03-09T04:00:00Z", "America/Havana")).toEqual(["Havana"]);
+	});
+
+	it("lists a range that goes outside the years of events, in each year that the input accepts", async () => {
+		await ada.call("calendar.create_event", { ...holiday("1970-01-01", "1970-01-02"), title: "First" });
+		await ada.call("calendar.create_event", { ...holiday("2100-12-31", "2101-01-01"), title: "Last" });
+		expect(await titles(ada, "0050-01-01T00:00:00Z", "0050-12-01T00:00:00Z", "America/New_York")).toEqual([]);
+		expect(await titles(ada, "9999-01-01T00:00:00Z", "9999-12-31T23:59:59Z", "Pacific/Kiritimati")).toEqual([]);
+		// The first day starts on 1969-12-31 at UTC+14, and the last day ends on 2101-01-01 at UTC-12.
+		expect(await titles(ada, "1969-06-01T00:00:00Z", "1969-12-31T12:00:00Z", "Etc/GMT-14")).toEqual(["First"]);
+		expect(await titles(ada, "1969-06-01T00:00:00Z", "1969-12-31T09:00:00Z", "Etc/GMT-14")).toEqual([]);
+		expect(await titles(ada, "2101-01-01T11:00:00Z", "2101-06-01T00:00:00Z", "Etc/GMT+12")).toEqual(["Last"]);
+		expect(await titles(ada, "2101-01-01T12:00:00Z", "2101-06-01T00:00:00Z", "Etc/GMT+12")).toEqual([]);
 	});
 
 	it("lists each event that overlaps the range, and no event that only touches it", async () => {
@@ -219,6 +249,32 @@ describe("calendar.update_event and calendar.delete_event", () => {
 		expect(await codeOf(ada.call("calendar.create_event", standup))).toBe("invalid");
 		await ada.call("calendar.delete_event", { event_id: event.id });
 		await ada.call("calendar.create_event", standup);
+	});
+});
+
+describe("the audit log of a calendar", () => {
+	it("has one line for each change that writes, and none for a call that writes nothing", async () => {
+		const input = { ...standup, idempotency_key: "audit-1" };
+		let id = "";
+		const created = await auditLines(async () => {
+			id = (await ada.call("calendar.create_event", input)).event.id;
+		});
+		expect(created).toMatchObject([
+			{ op: "calendar.create_event", actor: ada.id, actorKind: "human", target: id, result: "ok" },
+		]);
+		expect(created).toHaveLength(1);
+		// A retry with the key adds nothing.
+		expect(await auditLines(() => ada.call("calendar.create_event", input))).toEqual([]);
+
+		const updated = await auditLines(() => ada.call("calendar.update_event", { event_id: id, title: "Daily" }));
+		expect(updated).toMatchObject([{ op: "calendar.update_event", actor: ada.id, target: id, result: "ok" }]);
+		expect(updated).toHaveLength(1);
+		expect(await auditLines(() => ada.call("calendar.update_event", { event_id: id, title: "Daily" }))).toEqual([]);
+
+		expect(await auditLines(() => ada.call("calendar.delete_event", { event_id: id, dry_run: true }))).toEqual([]);
+		const deleted = await auditLines(() => ada.call("calendar.delete_event", { event_id: id }));
+		expect(deleted).toMatchObject([{ op: "calendar.delete_event", actor: ada.id, target: id, result: "ok" }]);
+		expect(deleted).toHaveLength(1);
 	});
 });
 

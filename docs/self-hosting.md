@@ -786,6 +786,9 @@ caller. The calendar of each principal is a new Durable Object class, `CalendarD
   know.
 - A browser session has both scopes. An API key of a person from before the upgrade does not have them:
   create a new key with the scopes.
+- A key that creates agents or service accounts, or their keys and tokens, must hold each account scope of
+  the account. After the upgrade, the accounts hold the calendar scopes, so an old key gets `forbidden`.
+  Create the key again with the calendar scopes. A browser session already has them.
 - A rollback to a Worker from before this change works. That Worker has no calendar routes, and the
   events stay in the objects for the next upgrade.
 - [Agents](agents.md#calendar) has the rules for an agent.

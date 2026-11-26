@@ -9,7 +9,9 @@ import {
 	periodOf,
 	periodTitle,
 	placeSegments,
+	sameTimeFields,
 	shiftPeriod,
+	shiftTarget,
 	weekDays,
 	whenOf,
 	whenText,
@@ -56,9 +58,22 @@ describe("the days of a period", () => {
 		// The week of 2026-03-08 has a day of 23 hours in New York.
 		const week = periodOf("week", "2026-03-10", NY, 0);
 		expect([week.timeMin, week.timeMax]).toEqual(["2026-03-08T05:00:00.000Z", "2026-03-15T04:00:00.000Z"]);
+	});
+
+	it("moves to the period before or after, and to no period outside the days that an event can use", () => {
 		expect(shiftPeriod("month", "2026-12-17", 1)).toBe("2027-01-01");
 		expect(shiftPeriod("month", "2026-01-31", -1)).toBe("2025-12-01");
 		expect(shiftPeriod("week", "2026-12-30", 1)).toBe("2027-01-06");
+		expect(shiftTarget("week", "2026-12-30", 1, 0)).toBe("2027-01-06");
+		expect(shiftTarget("month", "2026-01-31", -1, 0)).toBe("2025-12-01");
+		// The route accepts 1970-01-01 to 2100-12-31. 1970-01-01 is a Thursday and 2100-12-31 is a Friday.
+		expect(shiftTarget("month", "1970-01-20", -1, 0)).toBeNull();
+		expect(shiftTarget("month", "2100-12-05", 1, 0)).toBeNull();
+		expect(shiftTarget("week", "1970-01-02", -1, 0)).toBeNull();
+		expect(shiftTarget("week", "2100-12-27", 1, 0)).toBeNull();
+		// The first week has days before 1970, so the step to it opens its first day in the window.
+		expect(shiftTarget("week", "1970-01-05", -1, 0)).toBe("1970-01-01");
+		expect(shiftTarget("week", "2100-12-25", 1, 0)).toBe("2100-12-31");
 	});
 });
 
@@ -88,6 +103,27 @@ describe("the events of each day", () => {
 		expect(parts("2026-12-03")).toEqual([]);
 		expect(whenText(late, NY)).toBe("Dec 1, 10:00 PM – Dec 2, 2:00 AM");
 		expect(whenText(trip, NY)).toBe("All day, Dec 1 – Dec 2");
+	});
+
+	it("puts each part at its time on the wall clock, also on a day of 23 or 25 hours", () => {
+		const parts = (item: CalendarEvent, day: string) =>
+			(eventsByDay([item], [day], NY).get(day) ?? []).map((part) => [part.start, part.end, part.continues]);
+		// 2026-03-08 has no 02:00 in New York. 09:00 is 8 hours after the start of the day.
+		expect(parts(timed("a", "2026-03-08T13:00:00Z", "2026-03-08T14:00:00Z"), "2026-03-08")).toEqual([
+			[9 * 60, 10 * 60, false],
+		]);
+		// 2026-11-01 has 01:00 two times. 23:00 is 24 hours after the start of the day.
+		expect(parts(timed("b", "2026-11-02T04:00:00Z", "2026-11-02T04:30:00Z"), "2026-11-01")).toEqual([
+			[23 * 60, 23 * 60 + 30, false],
+		]);
+		expect(parts(timed("c", "2026-11-02T04:00:00Z", "2026-11-02T06:00:00Z"), "2026-11-01")).toEqual([
+			[23 * 60, 1440, true],
+		]);
+		// From 01:30 before the change to 01:10 after it: the part keeps a length in the grid.
+		expect(parts(timed("d", "2026-11-01T05:30:00Z", "2026-11-01T06:10:00Z"), "2026-11-01")).toEqual([[90, 105, false]]);
+		// A new event from a click on the 9 AM line is at that line.
+		const clicked = whenOf(newEventForm("2026-03-08", 9), NY);
+		expect(parts(event("e", clicked as CalendarEvent["when"]), "2026-03-08")).toEqual([[9 * 60, 10 * 60, false]]);
 	});
 
 	it("puts overlapping events side by side, and keeps a later free event at full width", () => {
@@ -133,6 +169,23 @@ describe("the form of an event", () => {
 			endTime: "03:30",
 		});
 		expect(formProblem({ ...form, endTime: "01:00" }, NY)).toBe("The end of an event must be after its start.");
+
+		// An event at the second 01:15 of 2026-11-01, with seconds. The form cannot give these instants back.
+		const second = timed("z", "2026-11-01T06:15:20Z", "2026-11-01T06:45:00Z");
+		const opened = formOf(second, NY);
+		expect(opened).toMatchObject({ startDate: "2026-11-01", startTime: "01:15", endTime: "01:45" });
+		expect(whenOf(opened, NY)).toMatchObject({ start: "2026-11-01T05:15:00.000Z" });
+		// So a save with a new title only does not send the time, and a save with a new time field does.
+		expect(sameTimeFields({ ...opened, title: "New title", location: "Room 3" }, opened)).toBe(true);
+		for (const change of [
+			{ allDay: true },
+			{ startDate: "2026-11-02" },
+			{ startTime: "01:30" },
+			{ endDate: "2026-11-02" },
+			{ endTime: "02:00" },
+		]) {
+			expect(sameTimeFields({ ...opened, ...change }, opened), JSON.stringify(change)).toBe(false);
+		}
 		expect(newEventForm("2026-12-01", 23)).toMatchObject({ endDate: "2026-12-02", endTime: "00:00" });
 	});
 });

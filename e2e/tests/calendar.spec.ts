@@ -8,9 +8,19 @@ const JSON_HEADERS = { origin: BASE_URL, "content-type": "application/json" };
 // its clock. The tests share the calendar of one seed person: each one uses its own far week and its own title.
 test.use({ timezoneId: "America/New_York" });
 
-/** A day in a far week of a month, so no other test and no seed event uses it. */
+/**
+ * A random day of a month in a far year, so no other test and no seed event uses it. An event that a failed
+ * run left is almost never on the same day.
+ */
 function farDay(month: "01" | "02"): string {
-	return `${2090 + Math.floor(Math.random() * 10)}-${month}-14`;
+	const year = 2090 + Math.floor(Math.random() * 10);
+	const day = 1 + Math.floor(Math.random() * 28);
+	return `${year}-${month}-${String(day).padStart(2, "0")}`;
+}
+
+/** The day after a date in YYYY-MM-DD form. */
+function nextDay(day: string): string {
+	return new Date(Date.parse(`${day}T00:00:00Z`) + 86_400_000).toISOString().slice(0, 10);
 }
 
 interface ApiEvent {
@@ -20,8 +30,8 @@ interface ApiEvent {
 	when: { kind: string; start?: string; end?: string; time_zone?: string; start_date?: string; end_date?: string };
 }
 
-/** The events of one day in New York, from the server. */
-async function eventsOn(context: BrowserContext, day: string): Promise<ApiEvent[]> {
+/** The events of one day in New York that have a title of this test, from the server. */
+async function eventsOn(context: BrowserContext, day: string, title: string): Promise<ApiEvent[]> {
 	const params = new URLSearchParams({
 		time_min: `${day}T00:00:00-05:00`,
 		time_max: `${day}T23:59:59-05:00`,
@@ -29,7 +39,7 @@ async function eventsOn(context: BrowserContext, day: string): Promise<ApiEvent[
 	});
 	const response = await context.request.get(`/api/v1/calendar/events?${params}`);
 	expect(response.ok(), await response.text()).toBe(true);
-	return ((await response.json()) as { events: ApiEvent[] }).events;
+	return ((await response.json()) as { events: ApiEvent[] }).events.filter((event) => event.title.startsWith(title));
 }
 
 test("a person adds, changes and deletes an event in the week and the month views", async ({ browser }) => {
@@ -60,8 +70,9 @@ test("a person adds, changes and deletes an event in the week and the month view
 		const event = page.getByRole("button", { name: `${title}, 10:00 AM – 11:30 AM, Studio floor` });
 		await expect(event).toBeVisible();
 		// The server has the instants of the clock of New York, in UTC, with the zone of the browser.
-		const [stored] = await eventsOn(context, day);
-		expect(stored).toMatchObject({
+		const stored = await eventsOn(context, day, title);
+		expect(stored).toHaveLength(1);
+		expect(stored[0]).toMatchObject({
 			title,
 			location: "Studio floor",
 			when: {
@@ -75,7 +86,7 @@ test("a person adds, changes and deletes an event in the week and the month view
 		// The month view shows the same event on its day.
 		await page.getByRole("navigation", { name: "Calendar view" }).getByRole("link", { name: "Month" }).click();
 		await expect(page).toHaveURL(new RegExp(`/calendar/month/${day}$`));
-		const cell = page.getByRole("region", { name: new RegExp(`January 14, ${day.slice(0, 4)}`) });
+		const cell = page.getByRole("region", { name: new RegExp(`January ${Number(day.slice(8))}, ${day.slice(0, 4)}`) });
 		await expect(cell.getByRole("button", { name: new RegExp(title) })).toBeVisible();
 
 		// A change of the title stays after a reload.
@@ -98,7 +109,7 @@ test("a person adds, changes and deletes an event in the week and the month view
 		await page.getByRole("dialog", { name: "Delete this event?" }).getByRole("button", { name: "Delete" }).click();
 		await expect(page.getByText("Event deleted.")).toBeVisible();
 		await expect(cell.getByRole("button", { name: new RegExp(title) })).toBeHidden();
-		expect(await eventsOn(context, day)).toEqual([]);
+		expect(await eventsOn(context, day, title)).toEqual([]);
 	} finally {
 		await context.close();
 	}
@@ -106,15 +117,16 @@ test("a person adds, changes and deletes an event in the week and the month view
 
 test("a phone shows the days with events as a list, and an all-day event on its own day", async ({ browser }) => {
 	const context = await signIn(browser, "meiling");
+	let eventId: string | null = null;
 	try {
 		const day = farDay("02");
 		const title = unique("Fabric delivery");
 		const response = await context.request.post("/api/v1/calendar/events", {
 			headers: JSON_HEADERS,
-			data: { title, when: { kind: "all_day", start_date: day, end_date: `${day.slice(0, 8)}15` } },
+			data: { title, when: { kind: "all_day", start_date: day, end_date: nextDay(day) } },
 		});
 		expect(response.ok(), await response.text()).toBe(true);
-		const { event } = (await response.json()) as { event: ApiEvent };
+		eventId = ((await response.json()) as { event: ApiEvent }).event.id;
 
 		const page = await context.newPage();
 		await page.setViewportSize({ width: 390, height: 800 });
@@ -135,8 +147,11 @@ test("a phone shows the days with events as a list, and an all-day event on its 
 
 		// The page has no horizontal scroll at the width of a phone.
 		expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
-		await context.request.delete(`/api/v1/calendar/events/${event.id}`, { headers: JSON_HEADERS, data: {} });
 	} finally {
+		// The delete also runs after a failed step, so the event does not stay in the shared calendar.
+		if (eventId) {
+			await context.request.delete(`/api/v1/calendar/events/${eventId}`, { headers: JSON_HEADERS, data: {} });
+		}
 		await context.close();
 	}
 });

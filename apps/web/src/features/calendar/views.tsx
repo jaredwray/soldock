@@ -1,8 +1,9 @@
-import { type CalendarEvent, zonedDayStart } from "@asterra/contracts";
+import { type CalendarEvent, zonedDate } from "@asterra/contracts";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Link } from "../../lib/router.tsx";
 import { calendarPath } from "../../routes.ts";
 import {
+	DAY_MINUTES,
 	type DaySegment,
 	eventLabel,
 	eventsByDay,
@@ -11,6 +12,7 @@ import {
 	longDate,
 	placeSegments,
 	timeText,
+	wallMinutes,
 	weekdayName,
 } from "./model.ts";
 
@@ -73,14 +75,17 @@ function EventButton({
 	);
 }
 
-/** The minutes from 00:00 of today to now, updated each minute. */
-function useNowMinutes(today: string, zone: string): number {
+/**
+ * The minutes of now on the wall clock of the zone, updated each minute. Null when `today` is not the date
+ * of now.
+ */
+function useNowMinutes(today: string, zone: string): number | null {
 	const [now, setNow] = useState(() => Date.now());
 	useEffect(() => {
 		const timer = window.setInterval(() => setNow(Date.now()), 60_000);
 		return () => window.clearInterval(timer);
 	}, []);
-	return (now - zonedDayStart(today, zone)) / 60_000;
+	return zonedDate(now, zone) === today ? wallMinutes(now, zone) : null;
 }
 
 /** The week view: a row of all-day events, and a grid of hours with the timed events of each day. */
@@ -129,7 +134,7 @@ export function WeekView({ days, events, zone, today, onOpen, onCreate }: ViewPr
 					})}
 				</div>
 			</div>
-			<div className="cal-week-grid" style={{ height: 24 * HOUR_PX }}>
+			<div className="cal-week-grid" style={{ height: DAY_MINUTES * MINUTE_PX }}>
 				<div className="cal-gutter cal-hours" aria-hidden="true">
 					{HOURS.slice(1).map((hour) => (
 						<span key={hour} className="cal-hour-label" style={{ top: hour * HOUR_PX }}>
@@ -176,7 +181,7 @@ export function WeekView({ days, events, zone, today, onOpen, onCreate }: ViewPr
 									))}
 								</ul>
 							)}
-							{day === today && nowMinutes >= 0 && nowMinutes < 24 * 60 && (
+							{day === today && nowMinutes !== null && (
 								<span className="cal-now" style={{ top: nowMinutes * MINUTE_PX }} aria-hidden="true" />
 							)}
 						</section>

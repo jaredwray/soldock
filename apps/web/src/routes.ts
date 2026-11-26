@@ -1,5 +1,5 @@
 // The app routes. Each path is a deep link: the dock Worker serves index.html for it.
-import { isRealDate } from "@asterra/contracts";
+import { CALENDAR_LIMITS, isRealDate } from "@asterra/contracts";
 
 export const SYSTEM_VIEWS = ["inbox", "snoozed", "starred", "sent", "spam", "trash", "all"] as const;
 export type SystemView = (typeof SYSTEM_VIEWS)[number];
@@ -312,8 +312,10 @@ function isCalendarView(value: string | undefined): value is CalendarView {
 }
 
 /** A real date in YYYY-MM-DD form, from 1970 to 2100: the days that an event can use. */
-function isCalendarDate(value: string | undefined): value is string {
-	return value !== undefined && isRealDate(value) && value >= "1970-01-01" && value <= "2100-12-31";
+export function isCalendarDate(value: string | undefined): value is string {
+	return (
+		value !== undefined && isRealDate(value) && value >= CALENDAR_LIMITS.firstDate && value <= CALENDAR_LIMITS.lastDate
+	);
 }
 
 function isAdminSection(value: string | undefined): value is AdminSection {

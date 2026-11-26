@@ -24,6 +24,16 @@ describe("the days of a time zone", () => {
 		expect(iso(zonedDayStart("2026-12-01", "Pacific/Kiritimati"))).toBe("2026-11-30T10:00:00.000Z");
 		expect(iso(zonedDayStart("2026-12-01", "Etc/GMT+12"))).toBe("2026-12-01T12:00:00.000Z");
 		expect(iso(zonedDayStart("2026-12-01", "Asia/Kolkata"))).toBe("2026-11-30T18:30:00.000Z");
+		// These zones change the clock at 00:00, so the day has no 00:00: it starts at 01:00.
+		expect(iso(zonedDayStart("2026-03-08", "America/Havana"))).toBe("2026-03-08T05:00:00.000Z");
+		expect(iso(zonedDayStart("2026-09-06", "America/Santiago"))).toBe("2026-09-06T04:00:00.000Z");
+		for (const [date, zone] of [
+			["2026-03-08", "America/Havana"],
+			["2026-09-06", "America/Santiago"],
+		] as const) {
+			const start = zonedDayStart(date, zone);
+			expect([zonedDate(start - 1, zone), zonedDate(start, zone)], zone).toEqual([addDays(date, -1), date]);
+		}
 	});
 
 	it("gives the date and the instant of a wall clock time in a zone", () => {
@@ -31,6 +41,9 @@ describe("the days of a time zone", () => {
 		expect(zonedDate(Date.parse("2026-12-01T03:00:00Z"), "Asia/Tokyo")).toBe("2026-12-01");
 		expect(iso(zonedTime("2026-03-08", "09:30", "America/New_York"))).toBe("2026-03-08T13:30:00.000Z");
 		expect(iso(zonedTime("2026-03-07", "09:30", "America/New_York"))).toBe("2026-03-07T14:30:00.000Z");
+		// The clock of New York has no 02:30 on 2026-03-08, and has 01:30 two times on 2026-11-01.
+		expect(iso(zonedTime("2026-03-08", "02:30", "America/New_York"))).toBe("2026-03-08T07:30:00.000Z");
+		expect(iso(zonedTime("2026-11-01", "01:30", "America/New_York"))).toBe("2026-11-01T05:30:00.000Z");
 	});
 
 	it("keeps the name of a known zone, and refuses a name that is not an IANA zone", () => {

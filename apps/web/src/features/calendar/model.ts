@@ -2,6 +2,7 @@
 // Day boundaries come from the time zone (`zonedDayStart`): a day can have 23 or 25 hours.
 import {
 	addDays,
+	CALENDAR_LIMITS,
 	type CalendarEvent,
 	checkWhen,
 	DAY_MS,
@@ -12,7 +13,7 @@ import {
 	zonedTime,
 	zoneOffsetMs,
 } from "@asterra/contracts";
-import type { CalendarView } from "../../routes.ts";
+import { type CalendarView, isCalendarDate } from "../../routes.ts";
 
 /** The first day of a week: 0 is Sunday, 1 is Monday. */
 export type FirstDay = 0 | 1;
@@ -74,7 +75,31 @@ export function shiftPeriod(view: CalendarView, date: string, steps: number): st
 	return `${String(Math.floor(index / 12)).padStart(4, "0")}-${String((index % 12) + 1).padStart(2, "0")}-01`;
 }
 
-/** The part of an event on one day. `start` and `end` are minutes from 00:00 of the day. */
+/**
+ * The day that the Previous or the Next control opens, or null when no period is there. The route accepts
+ * only the days that an event can use. The period at an end of that window opens on the last day in it.
+ */
+export function shiftTarget(view: CalendarView, date: string, steps: number, firstDay: FirstDay): string | null {
+	const target = shiftPeriod(view, date, steps);
+	if (isCalendarDate(target)) return target;
+	const edge = steps < 0 ? CALENDAR_LIMITS.firstDate : CALENDAR_LIMITS.lastDate;
+	const periodStart = (day: string) => (view === "week" ? weekStart(day, firstDay) : monthStart(day));
+	return periodStart(edge) === periodStart(date) ? null : edge;
+}
+
+/** The length in the grid of a part that ends at or before its start on the wall clock. */
+const BACK_PART_MINUTES = 15;
+
+/** The minutes from 00:00 to an instant on the wall clock of a time zone: 540 for 09:00. */
+export function wallMinutes(ms: number, zone: string): number {
+	const local = new Date(ms + zoneOffsetMs(ms, zone));
+	return local.getUTCHours() * 60 + local.getUTCMinutes() + local.getUTCSeconds() / 60;
+}
+
+/**
+ * The part of an event on one day. `start` and `end` are minutes on the wall clock of the zone, from 0 to
+ * 1440, so a part is at the line of its hour also on a day of 23 or 25 hours.
+ */
 export interface DaySegment {
 	event: CalendarEvent;
 	allDay: boolean;
@@ -103,7 +128,7 @@ export function eventsByDay(events: readonly CalendarEvent[], days: readonly str
 						event,
 						allDay: true,
 						start: 0,
-						end: (dayEnd - dayStart) / 60_000,
+						end: DAY_MINUTES,
 						continued: day > event.when.start_date,
 						continues: addDays(day, 1) < event.when.end_date,
 					});
@@ -113,12 +138,16 @@ export function eventsByDay(events: readonly CalendarEvent[], days: readonly str
 			const start = Date.parse(event.when.start);
 			const end = Date.parse(event.when.end);
 			if (start >= dayEnd || end <= dayStart) continue;
+			const continued = start < dayStart;
+			const from = continued ? 0 : wallMinutes(start, zone);
+			const to = end >= dayEnd ? DAY_MINUTES : wallMinutes(end, zone);
 			segments.push({
 				event,
 				allDay: false,
-				start: (Math.max(start, dayStart) - dayStart) / 60_000,
-				end: (Math.min(end, dayEnd) - dayStart) / 60_000,
-				continued: start < dayStart,
+				start: from,
+				// When the clock goes back, an event can end at an earlier time on the wall clock than its start.
+				end: to > from ? to : Math.min(from + BACK_PART_MINUTES, DAY_MINUTES),
+				continued,
 				continues: end > dayEnd,
 			});
 		}
@@ -246,19 +275,19 @@ export function formProblem(form: EventForm, zone: string): string | null {
 	return checkWhen(whenOf(form, zone));
 }
 
-/** True when the time of the form is the time of the event, so a save does not send it. */
-export function sameWhen(form: EventForm, event: CalendarEvent, zone: string): boolean {
-	const when = whenOf(form, zone);
-	if (when.kind !== event.when.kind) return false;
-	if (when.kind === "all_day" && event.when.kind === "all_day") {
-		return when.start_date === event.when.start_date && when.end_date === event.when.end_date;
-	}
-	if (when.kind === "timed" && event.when.kind === "timed") {
-		return (
-			Date.parse(when.start) === Date.parse(event.when.start) && Date.parse(when.end) === Date.parse(event.when.end)
-		);
-	}
-	return false;
+/**
+ * True when the time fields of the form are the fields of the form that the dialog opened with, so a save
+ * does not send the time. The dialog does not compare instants: the form has no seconds, and it cannot tell
+ * the second 01:15 of a day that has that time two times.
+ */
+export function sameTimeFields(form: EventForm, opened: EventForm): boolean {
+	return (
+		form.allDay === opened.allDay &&
+		form.startDate === opened.startDate &&
+		form.startTime === opened.startTime &&
+		form.endDate === opened.endDate &&
+		form.endTime === opened.endTime
+	);
 }
 
 const formats = new Map<string, Intl.DateTimeFormat>();

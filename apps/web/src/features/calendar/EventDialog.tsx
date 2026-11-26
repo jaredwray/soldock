@@ -5,7 +5,7 @@ import { ConfirmDialog } from "../../lib/ConfirmDialog.tsx";
 import { Dialog } from "../../lib/Dialog.tsx";
 import { useToast } from "../../lib/toast.tsx";
 import { createEvent, deleteEvent, updateEvent } from "./data.ts";
-import { type EventForm, formOf, formProblem, sameWhen, whenOf } from "./model.ts";
+import { type EventForm, formOf, formProblem, sameTimeFields, whenOf } from "./model.ts";
 
 interface EventDialogProps {
 	/** The event to change, or null for a new event. */
@@ -21,19 +21,29 @@ interface EventDialogProps {
 /** The dialog that adds an event, or changes or deletes one. */
 export function EventDialog({ event, initial, zone, onChanged, onClose }: EventDialogProps) {
 	const toast = useToast();
-	const [form, setForm] = useState<EventForm>(() => (event ? formOf(event, zone) : initial));
+	// The form that the dialog opened with. A save sends the time only when a time field is different.
+	const [opened] = useState<EventForm>(() => (event ? formOf(event, zone) : initial));
+	const [form, setForm] = useState<EventForm>(opened);
 	const [busy, setBusy] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 	const [conflict, setConflict] = useState(false);
 	const [confirmDelete, setConfirmDelete] = useState(false);
-	// One key for each dialog: a second click on Save, or a retry after a lost answer, adds one event.
+	// One key for each form: a second click on Save, or a retry after a lost answer, adds one event.
 	const idempotencyKey = useRef(crypto.randomUUID());
+	// True after a save that failed. The server refuses the key of that save with a different form.
+	const saveFailed = useRef(false);
 	// Cancel in the delete question goes back to the form. After the delete, the whole dialog closes.
 	const deleted = useRef(false);
 	const ids = { title: useId(), allDay: useId(), location: useId(), notes: useId() };
 
-	const set = <K extends keyof EventForm>(key: K, value: EventForm[K]) =>
+	const set = <K extends keyof EventForm>(key: K, value: EventForm[K]) => {
+		// A changed form after a failed save is a new request, so it gets a new key. A retry keeps the key.
+		if (saveFailed.current) {
+			saveFailed.current = false;
+			idempotencyKey.current = crypto.randomUUID();
+		}
 		setForm((current) => ({ ...current, [key]: value }));
+	};
 
 	async function save(submitted: FormEvent) {
 		submitted.preventDefault();
@@ -56,7 +66,7 @@ export function EventDialog({ event, initial, zone, onChanged, onClose }: EventD
 					title,
 					location: form.location.trim(),
 					description: form.description,
-					...(sameWhen(form, event, zone) ? {} : { when: whenOf(form, zone) }),
+					...(sameTimeFields(form, opened) ? {} : { when: whenOf(form, zone) }),
 					base_revision: event.revision,
 				});
 				toast({ message: "Event saved." });
@@ -74,6 +84,7 @@ export function EventDialog({ event, initial, zone, onChanged, onClose }: EventD
 			}
 			onClose();
 		} catch (caught) {
+			saveFailed.current = true;
 			setBusy(false);
 			if (caught instanceof ApiError && caught.code === "conflict" && event) {
 				setConflict(true);
