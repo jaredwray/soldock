@@ -149,7 +149,8 @@ test("an open invitation follows a move to a different week, and tells a cancell
 	const organizer = await signIn(browser, "nadia");
 	const teammate = await signIn(browser, "chidi");
 	try {
-		const day = farDay();
+		// The two days are in February, so New York has no change of the clock between them.
+		const day = `${farDay().slice(0, 8)}0${1 + Math.floor(Math.random() * 9)}`;
 		const later = new Date(Date.parse(`${day}T00:00:00Z`) + 14 * 86_400_000).toISOString().slice(0, 10);
 		const title = unique("Kiln walkthrough");
 		const created = await organizer.request.post("/api/v1/calendar/events", {
