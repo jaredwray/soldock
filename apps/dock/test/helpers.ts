@@ -798,6 +798,9 @@ export function withEnv(
 	overrides: {
 		SETUP_TOKEN?: string | undefined;
 		AI_GATEWAY_TOKEN?: string | undefined;
+		VAPID_PUBLIC_KEY?: string | undefined;
+		VAPID_PRIVATE_KEY?: string | undefined;
+		VAPID_SUBJECT?: string | undefined;
 		DIRECTORY?: D1Database;
 		DRIVE_SPACE?: Env["DRIVE_SPACE"];
 	},

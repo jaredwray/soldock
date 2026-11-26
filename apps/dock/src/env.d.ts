@@ -3,10 +3,14 @@
 interface Env {
 	/** Permits setup and a directory reset at 32 characters or more. Delete it after setup. */
 	SETUP_TOKEN?: string;
-	/** Web Push uses an uncompressed P-256 public key and a 32-byte private key, both in base64url. */
+	/**
+	 * Deprecated. Admin › Chat keeps the Web Push key pair in the database. These secrets apply only until the
+	 * first change there, which copies them. The pair is an uncompressed P-256 public key and a 32-byte
+	 * private key, both in base64url.
+	 */
 	VAPID_PUBLIC_KEY?: string;
 	VAPID_PRIVATE_KEY?: string;
-	/** A mailto or https contact address for the push service. */
+	/** Deprecated, as the key pair. A mailto or https contact address for the push service. */
 	VAPID_SUBJECT?: string;
 	/**
 	 * The Cloudflare API token for Workers AI through AI Gateway, when an owner or an admin did not save one in

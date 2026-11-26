@@ -1,6 +1,7 @@
 import { CHAT_EVENT_REASONS, type ChatEventReason } from "@asterra/contracts";
 import { checkPublicHost, log } from "../platform/index.ts";
 import { fanOutPush, isChatPushFanout } from "./push-fanout.ts";
+import { activeVapid, type VapidConfig } from "./push-settings.ts";
 import { encryptPush, pushAuthorization } from "./web-push.ts";
 
 export const CHAT_PUSH_QUEUE = "soldock-chat-push";
@@ -35,7 +36,7 @@ function isPushJob(body: unknown): body is ChatPushJob {
 	);
 }
 
-async function deliverPush(job: ChatPushJob, env: Env): Promise<void> {
+async function deliverPush(job: ChatPushJob, env: Env, vapid: VapidConfig): Promise<void> {
 	const remaining = job.occurredAt + PUSH_LIFETIME_MS - Date.now();
 	if (remaining <= 0) return;
 	const room = env.CHAT_ROOM.get(env.CHAT_ROOM.idFromName(job.roomId));
@@ -72,7 +73,7 @@ async function deliverPush(job: ChatPushJob, env: Env): Promise<void> {
 	const response = await fetch(endpoint.href, {
 		method: "POST",
 		headers: {
-			authorization: await pushAuthorization(env, endpoint.origin),
+			authorization: await pushAuthorization(vapid, endpoint.origin),
 			"content-encoding": "aes128gcm",
 			"content-type": "application/octet-stream",
 			ttl: String(Math.ceil(remaining / 1000)),
@@ -90,13 +91,20 @@ async function deliverPush(job: ChatPushJob, env: Env): Promise<void> {
 }
 
 export async function handleChatPushBatch(batch: MessageBatch<unknown>, env: Env): Promise<void> {
+	// One read of the settings for each batch. While an admin has push off, the jobs go and do not come back.
+	let settings: Promise<VapidConfig | null> | undefined;
+	const vapid = () => {
+		settings ??= activeVapid(env);
+		return settings;
+	};
 	for (const message of batch.messages) {
 		const job = message.body;
 		try {
 			if (isChatPushFanout(job)) {
-				if (Date.now() - job.occurredAt < PUSH_LIFETIME_MS) await fanOutPush(job, env);
+				if (Date.now() - job.occurredAt < PUSH_LIFETIME_MS && (await vapid())) await fanOutPush(job, env);
 			} else if (isPushJob(job)) {
-				await deliverPush(job, env);
+				const config = await vapid();
+				if (config) await deliverPush(job, env, config);
 			} else {
 				log("warn", "invalid chat push job", { jobId: message.id });
 			}

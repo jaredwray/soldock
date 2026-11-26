@@ -78,12 +78,12 @@ The entire backend as one deployable Worker (modular monolith): `fetch`, `email`
 | Binding | Type | Use |
 | --- | --- | --- |
 | `ASSETS` | Static assets | The SPA (`../web/dist`) |
-| `DIRECTORY` | D1 `soldock-directory` | Principals (with password hashes and TOTP secrets), addresses, API keys, sessions, OAuth clients, requests and grants, mail domains, the room index of Chat, the index of the shared drives of Drive, the webhooks of Mail and Chat, and the AI settings and usage ledger |
+| `DIRECTORY` | D1 `soldock-directory` | Principals (with password hashes and TOTP secrets), addresses, API keys, sessions, OAuth clients, requests and grants, mail domains, the room index of Chat, the index of the shared drives of Drive, the webhooks of Mail and Chat, the Web Push settings of Chat (with the VAPID key pair), and the AI settings and usage ledger |
 | `BLOBS` | R2 `soldock-blobs` | Raw MIME of each message, the bytes and the small picture of each version of each Drive file, the parts of an upload in progress, the images of docs, and the pictures of link previews of Chat |
 | `MAIL_INBOUND`, `MAIL_INBOUND_DLQ` | Queue producers | Inbound jobs and their dead letters. The Worker consumes `soldock-mail-inbound` |
 | `WEBHOOKS`, `WEBHOOKS_DLQ` | Queue producers | Webhook events of mailboxes and chat rooms, one POST job for each webhook, and their dead letters. The Worker consumes `soldock-webhooks` |
 | `CHAT_PUSH` | Queue producer | Recipient groups and one delivery job per eligible device. The consumer checks current access before each attempt |
-| `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`, `VAPID_SUBJECT` | Worker secrets | The VAPID key pair and contact address for browser push. See [Web Push setup](../../docs/self-hosting.md#web-push) |
+| `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`, `VAPID_SUBJECT` | Worker secrets (deprecated) | The VAPID key pair and contact address of an older deployment. They apply only until the first change in Admin › Chat, which copies them to D1. See [Web Push setup](../../docs/self-hosting.md#upgrade-from-the-vapid-secrets) |
 | `CHAT_PREVIEWS` | Queue producer | The jobs of link previews of Chat: a room id and a message id. The Worker consumes `soldock-chat-previews`. The room sends a job again without a result, so the queue has no dead letter queue |
 | `MAIL_AUTOLABEL` | Queue producer | The jobs of the classifier of auto labels: a mailbox id and a message id. The Worker consumes `soldock-mail-autolabel`. The mailbox sends a job again without a result, so the queue has no dead letter queue. See [auto labels](src/mail/README.md#auto-labels) |
 | `AI_GATEWAY_TOKEN` | Worker secret (optional) | The Cloudflare API token for Workers AI through AI Gateway, when it is not saved in Admin › AI. A token of the settings wins. Never in an answer. See [AI setup](../../docs/self-hosting.md#ai) |

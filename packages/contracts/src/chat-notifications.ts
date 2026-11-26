@@ -82,12 +82,36 @@ export const ChatActivity = z.strictObject({
 });
 export type ChatActivity = z.infer<typeof ChatActivity>;
 
+/** The contact address in each VAPID token (RFC 8292): a mailto: address or an https: URL. */
+export const ChatPushSubject = z
+	.string()
+	.trim()
+	.max(200)
+	.regex(/^(?:mailto:[^\s@]+@[^\s@]+|https:\/\/\S+)$/, "Enter a mailto: address or an https: URL.");
+
+/** The Web Push settings of the organization. No answer contains the private key. */
+export const ChatPushSettings = z.object({
+	enabled: z.boolean(),
+	subject: z.string().nullable(),
+	public_key: z.string().nullable().describe("The public VAPID key in unpadded base64url, or null."),
+	key_source: z
+		.enum(["settings", "secret"])
+		.nullable()
+		.describe(
+			"settings: the database keeps the key pair. secret: the deprecated Worker secrets VAPID_* supply it. null: no key pair.",
+		),
+	keys_created_at: Timestamp.nullable().describe("The time of the key pair in the database. null for a secret."),
+});
+export type ChatPushSettings = z.infer<typeof ChatPushSettings>;
+
+const ADMIN_ONLY = "Owners and admins of the organization only.";
+
 export const chatNotificationOperations = {
 	"chat.get_notification_settings": defineOperation({
 		name: "chat.get_notification_settings",
 		summary: "Read your notification settings and unread count",
 		description:
-			"Returns your default level, room overrides, sound setting and quiet hours. The public VAPID key is null when Web Push is unavailable.",
+			"Returns your default level, room overrides, sound setting and quiet hours. The public VAPID key is null when an admin did not turn on notifications to devices.",
 		http: { method: "GET", path: "/api/v1/chat/notifications" },
 		scopes: ["chat.read"],
 		callers: ["human", "agent"],
@@ -196,5 +220,46 @@ export const chatNotificationOperations = {
 		input: z.strictObject({ status: ChatStatus.nullable() }),
 		output: z.object({ status: ChatStatus.nullable() }),
 		errors: [],
+	}),
+	"chat.get_push_settings": defineOperation({
+		name: "chat.get_push_settings",
+		summary: "Read the Web Push settings of the organization",
+		description: `${ADMIN_ONLY} Returns whether chat notifications go to the devices of the members, the contact address, the public VAPID key and where the key pair comes from. No answer contains the private key.`,
+		http: { method: "GET", path: "/api/v1/chat/admin/push" },
+		scopes: ["chat.read"],
+		callers: ["human"],
+		annotations: READ,
+		auditDenied: true,
+		input: z.strictObject({}),
+		output: ChatPushSettings,
+		errors: [],
+	}),
+	"chat.update_push_settings": defineOperation({
+		name: "chat.update_push_settings",
+		summary: "Turn on, turn off or change Web Push for the organization",
+		description: `${ADMIN_ONLY} Changes the settings that the request names and keeps the others. To turn on notifications, set a contact address. The first change makes a VAPID key pair and keeps it in the database. If the deprecated Worker secrets VAPID_* are set, the first change copies their key pair, so the devices stay subscribed. No answer contains the private key.`,
+		http: { method: "POST", path: "/api/v1/chat/admin/push" },
+		scopes: ["chat.write"],
+		callers: ["human"],
+		annotations: CHANGE,
+		auditDenied: true,
+		input: z
+			.strictObject({ enabled: z.boolean().optional(), subject: ChatPushSubject.optional() })
+			.refine((patch) => Object.keys(patch).length > 0, "Set at least one field."),
+		output: ChatPushSettings,
+		errors: ["invalid"],
+	}),
+	"chat.rotate_push_keys": defineOperation({
+		name: "chat.rotate_push_keys",
+		summary: "Replace the VAPID key pair of the organization",
+		description: `${ADMIN_ONLY} Makes a new VAPID key pair and keeps it in the database. The previous key pair stops at once. Each browser subscribes again with the new key at its next start, and until then it gets no notifications. No answer contains the private key.`,
+		http: { method: "POST", path: "/api/v1/chat/admin/push/rotate" },
+		scopes: ["chat.write"],
+		callers: ["human"],
+		annotations: { readOnly: false, destructive: true, idempotent: false, openWorld: false },
+		auditDenied: true,
+		input: z.strictObject({}),
+		output: ChatPushSettings,
+		errors: ["invalid"],
 	}),
 } as const;

@@ -21,7 +21,9 @@ The same applies to `chat_member_requests` (migration `0030`): see
 the [`mail`](../mail/README.md#the-screener) module. It holds the default of the Screener. A fresh start
 of the directory drops it and replays `0031`, so the default is off again. The same applies to
 `drive_share_requests` (migration `0032`), which belongs to the [`drive`](../drive/README.md#data-inventory)
-module.
+module. It also applies to `chat_push_settings` (migration `0037`), which belongs to the
+[`chat`](../chat/README.md#web-push-settings) module. It holds the Web Push settings and the VAPID key pair.
+A fresh start drops it and replays `0037`, so push is off and the key pair is gone.
 `mailboxOwnerKind` (`team-mailboxes.ts`) tells the `mail` module who owns a mailbox: a team, a person
 or an agent. The Screener never applies to the mailbox of an agent.
 

@@ -126,23 +126,38 @@ adds a binding, it adds the permission to this table too.
 
 ## Web Push
 
-To enable browser notifications, set one VAPID key pair for each environment.
-Generate the pair on a trusted computer. Keep its private key in your secret store.
+Browser notifications for Chat are off until an owner or an admin turns them on in **Admin › Chat**.
 
-```sh
-node --input-type=module <<'JS'
-import { generateKeyPairSync } from "node:crypto";
-const { privateKey } = generateKeyPairSync("ec", { namedCurve: "prime256v1" });
-const { x, y, d } = privateKey.export({ format: "jwk" });
-const point = Buffer.concat([Buffer.from([4]), Buffer.from(x, "base64url"), Buffer.from(y, "base64url")]);
-console.log("VAPID_PUBLIC_KEY=" + point.toString("base64url"));
-console.log("VAPID_PRIVATE_KEY=" + d);
-JS
-```
+1. Open **Admin › Chat**. Find **Device notifications**.
+2. Enter a contact address, such as `mailto:admin@example.org`. The push services of the browsers use it
+   to contact you about a problem. An `https:` URL is also correct.
+3. Select **Turn on notifications**. The Worker makes a VAPID key pair (ECDSA P-256) and keeps it in the
+   D1 table `chat_push_settings`.
+4. Each member turns on notifications for a device in **Settings › Chat notifications**.
 
-In the Cloudflare dashboard, open the dock Worker. Select **Settings › Variables and Secrets**.
-Add `VAPID_PUBLIC_KEY` and `VAPID_PRIVATE_KEY` as secrets. Add `VAPID_SUBJECT` with a contact address, such as `mailto:admin@example.org`.
-Keep the same pair across deploys. After a key change, each browser must subscribe with the new public key.
+- No answer, log or audit line contains the private key. A backup of D1 holds it, so keep a backup of D1
+  as a secret.
+- **Turn off** stops all deliveries at once. The key pair stays, so a later **Turn on notifications** uses the
+  same key and the devices stay subscribed. While push is off, the queue drops each delivery job.
+- **Replace keys** makes a new key pair. The previous pair stops at once. Each browser subscribes again with
+  the new key when Asterra opens next. Until then, that browser gets no notifications.
+- A directory reset deletes the key pair. Turn on notifications again after the reset.
+
+### Upgrade from the VAPID secrets
+
+Older deployments set the Worker secrets `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY` and `VAPID_SUBJECT`.
+These secrets are deprecated.
+
+On upgrade, migration `0037_chat_push_settings.sql` adds the table `chat_push_settings` with no key pair.
+The deploy applies it. While the table has no key pair and all three secrets are set, the secrets stay in use.
+
+1. Open **Admin › Chat**. The card tells you that the Worker secrets supply the key pair.
+2. Select **Store in database**. The Worker copies the key pair and the contact address of the secrets.
+   The devices stay subscribed.
+3. Delete the three secrets in **Settings › Variables and Secrets** of the dock Worker.
+
+The first change in Admin › Chat copies the secrets, also **Turn off** or **Replace keys**. After that, the
+Worker does not read the secrets.
 
 The deploy creates the queue `soldock-chat-push`. The room sends its recipients in groups of up to ten.
 Each eligible device then gets a separate delivery job.

@@ -7,7 +7,7 @@ import {
 } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import { Buffer } from "node:buffer";
-import { createDecipheriv, createECDH, generateKeyPairSync, hkdfSync, randomBytes, verify } from "node:crypto";
+import { createDecipheriv, createECDH, createPublicKey, hkdfSync, randomBytes, verify } from "node:crypto";
 import { afterEach, expect, it, vi } from "vitest";
 import { CHAT_PUSH_QUEUE, type ChatPushJob } from "../src/chat/push.ts";
 import worker from "../src/index.ts";
@@ -48,6 +48,12 @@ function device(path: string) {
 
 it("delivers an offline mention, retries only the failed device and removes expired subscriptions", async () => {
 	const { ada, owner } = await seedOrg();
+	// An admin turns on Web Push. The Worker makes the key pair and keeps it in the database.
+	const subject = "mailto:admin@example.com";
+	const push = await owner.call("chat.update_push_settings", { enabled: true, subject });
+	const publicKey = push.public_key;
+	if (!publicKey) throw new Error("Web Push has no public key.");
+	expect((await ada.call("chat.get_notification_settings")).vapid_public_key).toBe(publicKey);
 	const active = device("/active");
 	const expired = [device("/404"), device("/410")];
 	await ada.call("chat.set_notification_settings", { default_level: "mentions", sound: false });
@@ -77,21 +83,7 @@ it("delivers an offline mention, retries only the failed device and removes expi
 		expect(jobs).toContainEqual(expect.objectContaining({ messageId: message.id }));
 	});
 
-	const vapid = generateKeyPairSync("ec", { namedCurve: "prime256v1" });
-	const { x, y, d } = vapid.privateKey.export({ format: "jwk" });
-	if (!x || !y || !d) throw new Error("The test requires an EC key pair.");
-	const publicKey = Buffer.concat([
-		Buffer.from([4]),
-		Buffer.from(x, "base64url"),
-		Buffer.from(y, "base64url"),
-	]).toString("base64url");
-	const testEnv = {
-		...env,
-		VAPID_PUBLIC_KEY: publicKey,
-		VAPID_PRIVATE_KEY: d,
-		VAPID_SUBJECT: "mailto:admin@example.com",
-		CHAT_PUSH: queue,
-	} as Env;
+	const testEnv = { ...env, CHAT_PUSH: queue } as Env;
 	async function consume(bodies: unknown[], attempts = 1) {
 		const batch = createMessageBatch(
 			CHAT_PUSH_QUEUE,
@@ -139,16 +131,27 @@ it("delivers an offline mention, retries only the failed device and removes expi
 	const [, header, payload, signature, key] = auth ?? [];
 	if (!header || !payload || !signature) throw new Error("The VAPID header has no signed token.");
 	expect(key).toBe(publicKey);
+	// The stored private key signs the token, so the public key of the settings verifies it.
+	const point = Buffer.from(publicKey, "base64url");
+	const verifier = createPublicKey({
+		format: "jwk",
+		key: {
+			kty: "EC",
+			crv: "P-256",
+			x: point.subarray(1, 33).toString("base64url"),
+			y: point.subarray(33).toString("base64url"),
+		},
+	});
 	expect(
 		verify(
 			"sha256",
 			Buffer.from(`${header}.${payload}`),
-			{ key: vapid.publicKey.export({ type: "spki", format: "pem" }), dsaEncoding: "ieee-p1363" },
+			{ key: verifier.export({ type: "spki", format: "pem" }), dsaEncoding: "ieee-p1363" },
 			Buffer.from(signature, "base64url"),
 		),
 	).toBe(true);
 	const claims = JSON.parse(Buffer.from(payload, "base64url").toString());
-	expect(claims).toMatchObject({ aud: origin, sub: testEnv.VAPID_SUBJECT });
+	expect(claims).toMatchObject({ aud: origin, sub: subject });
 	expect(claims.exp).toBeGreaterThan(Date.now() / 1000);
 	expect(claims.exp).toBeLessThanOrEqual(Date.now() / 1000 + 86_400);
 	expect(active.open(Buffer.from(await last.arrayBuffer()))).toEqual({
@@ -173,6 +176,13 @@ it("delivers an offline mention, retries only the failed device and removes expi
 	expect((await consume([retry], 3)).explicitAcks).toEqual(["0"]);
 	expect(posts).toHaveLength(4);
 	await ada.call("chat.mark_thread_read", { room_id: room.id, message_id: parent.id, seq: 0 });
+
+	// While an admin has push off, a delivery goes and does not come back.
+	await owner.call("chat.update_push_settings", { enabled: false });
+	expect((await consume([retry], 3)).explicitAcks).toEqual(["0"]);
+	expect(posts).toHaveLength(4);
+	await owner.call("chat.update_push_settings", { enabled: true });
+
 	await ada.call("chat.remove_member", { room_id: room.id, principal_id: ada.id });
 	await consume([retry], 3);
 	expect(posts).toHaveLength(4);
