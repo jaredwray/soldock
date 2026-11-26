@@ -892,6 +892,22 @@ caller. The calendar of each principal is a new Durable Object class, `CalendarD
   events stay in the objects for the next upgrade.
 - [Agents](agents.md#calendar) has the rules for an agent.
 
+### Calendar changes
+
+Calendar sends its changes through MCP Events, with the new scope `calendar.webhooks`. The web app gets its
+changes from the events socket and `calendar.list_changes`, and stops its poll of 30 seconds.
+
+- Migration `0041_calendar_webhooks.sql` builds `webhook_subscriptions` again, because SQLite cannot change
+  the CHECK of its `domain` column. It keeps each row, each `sequence`, the indexes and the mirror triggers.
+  Apply it before the deploy. The old Worker reads and writes the same columns, so it keeps working between
+  the migration and the deploy.
+- The migration gives `calendar.webhooks` to each agent that holds `calendar.read` and `mail.webhooks`. A
+  narrow agent stays narrow. A service account never holds a webhook scope. A second run changes nothing.
+- An API key of a person from before the upgrade does not have `calendar.webhooks`: create a new key with it.
+- During the deploy, the old queue consumer sends a calendar job, which it does not know, to the dead-letter
+  queue. That change stays in `calendar.list_changes`.
+- A rollback to a Worker from before this change works. The `changes` table stays in each `CalendarDO`.
+
 ### Recover a sign-in
 
 - A person whose invite link expired asks an owner or an admin for a new link: **New invite link** under

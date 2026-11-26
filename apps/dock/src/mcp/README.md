@@ -229,14 +229,16 @@ A modern client sends `subscriptions/listen` with the resource URIs in
 MCP Events sends an event to a URL of the client. It needs no open stream, so it works in each
 protocol era. ChatGPT uses it for Work chats and for dots: see
 [MCP Events](https://developers.openai.com/plugins/build/mcp-events). The endpoint implements the
-webhook delivery of that integration. It has no polling, no stream and no replay.
+webhook delivery of that integration. It has no polling and no stream. Only Calendar has a replay: the
+tool `calendar_list_changes` reads its changes from the `cursor` in `data` of a calendar POST.
 
 - `initialize` and `server/discover` name the capability `events: {}`.
 - `events/list` gives the events that the credential can subscribe to. Each event has `name`,
   `description`, `delivery: ["webhook"]`, `inputSchema` (the arguments of a subscription) and
   `payloadSchema` (`data` of each POST). An event shows only when the credential holds the webhook
-  scope of its product: `mail.webhooks`, `chat.webhooks` or `drive.webhooks`. The catalog is one
-  page, so a `cursor` other than `null` gets error `-32602`.
+  scope of its product: `mail.webhooks`, `chat.webhooks`, `drive.webhooks` or `calendar.webhooks`. A
+  calendar event also needs `calendar.read`. The catalog is one page, so a `cursor` other than `null`
+  gets error `-32602`.
 - `events/subscribe` takes `name`, `arguments`, `delivery` (`mode: "webhook"`, `url`, `secret`),
   `cursor` and `ttlMs`. The result has `id`, `refreshBefore`, `cursor: null` and `truncated: false`.
   The same call again refreshes the subscription. A `cursor` other than `null` gets `-32602`,
@@ -247,6 +249,9 @@ webhook delivery of that integration. It has no polling, no stream and no replay
   for the caller sends the event. A refresh without `filter` keeps a filter that the client set. Each
   other subscription gets the default of the caller. Each chat POST has `reason`, `author_id` and `version` in `data`. See
   [Chat events](../webhooks/README.md#chat-events).
+- A calendar event takes the argument `calendar_id`: only your own calendar. Each calendar POST has the
+  ids of one change and its `cursor` in `data`, and no title, time or answer. See
+  [Calendar changes](../calendar/README.md#changes).
 - Errors: params that are not valid, an unknown event and an event without its scope get `-32602`.
   A callback URL that is not accepted gets `-32015` with `data.reason`: `invalid_url`,
   `challenge_failed`, `timeout` or `unreachable`. Each other refusal gets `-32603` with the error

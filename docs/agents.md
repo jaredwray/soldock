@@ -82,7 +82,7 @@ Use an API key for a client that cannot use OAuth.
    ```
 
 An agent can hold only `account.read`, `directory.read`, `mail.read`,
-`mail.modify`, `mail.send`, `mail.webhooks`, `drive.read`, `drive.write`, `drive.share`, `drive.webhooks`, `chat.read`, `chat.write`, `chat.webhooks`, `calendar.read` and `calendar.write`.
+`mail.modify`, `mail.send`, `mail.webhooks`, `drive.read`, `drive.write`, `drive.share`, `drive.webhooks`, `chat.read`, `chat.write`, `chat.webhooks`, `calendar.read`, `calendar.write` and `calendar.webhooks`.
 A new agent holds each of them as account scopes. An agent can never manage keys or connections, create
 principals, or change its own policy or access.
 
@@ -725,6 +725,7 @@ shared.
 | `calendar_update_event` | `calendar.write` | Change the fields that you give. Takes `base_revision` and `attendees` |
 | `calendar_delete_event` | `calendar.write` | Delete an event. Takes `base_revision` and `dry_run`. Cancels a meeting for each attendee |
 | `calendar_respond_to_invitation` | `calendar.write` | Answer an invitation: `accepted`, `tentative` or `declined` |
+| `calendar_list_changes` | `calendar.read` | The changes of your calendar after a cursor, oldest first, with ids only |
 
 - **Timed events.** Give `start` and `end` as ISO 8601 times with an offset or `Z`, and `time_zone`, an
   IANA name such as `America/New_York`. The output gives `start` and `end` in UTC, with `time_zone`.
@@ -748,6 +749,19 @@ shared.
   change the `revision` of the event of the organizer.
 - **Delivery.** A change of a meeting reaches the other calendars in a few seconds, through an outbox
   with retries. A list right after a change can still show the state before it.
+- **Changes.** Each committed change of your calendar has a record with a stable `id`, the `event_id`,
+  the `uid`, the `revision` after the change, the `actor_id` and a `cursor`. The names are
+  `calendar.event.created`, `calendar.event.updated`, `calendar.event.deleted`,
+  `calendar.invitation.received`, `calendar.invitation.updated`, `calendar.invitation.cancelled` and
+  `calendar.rsvp.changed`. Do these steps to follow your calendar:
+  1. Call `calendar_list_changes` with no cursor. Keep the cursor.
+  2. Read your events with `calendar_list_events`.
+  3. Call `calendar_list_changes` with your cursor. Read each event that changed with
+     `calendar_get_event`. Keep the new cursor.
+  4. When `expired` is true, do step 2 again, and continue from the cursor of that result.
+
+  A change can come two times. Skip a change with an `id` that you know. Subscribe to the same names with
+  MCP Events to get a POST for each change (see [MCP Events](#get-events-in-chatgpt-mcp-events)).
 - **An agent from before Calendar.** Migration `0038` gives an agent `calendar.read` when it holds
   `mail.read`, and `calendar.write` when it holds `mail.modify`. An agent with narrower account scopes
   has no calendar tools, and `account_whoami` names the scopes that it does not hold.
@@ -1128,7 +1142,7 @@ To set it up:
 
 1. Add the MCP endpoint of your Asterra instance to ChatGPT as a plugin, and [connect it with OAuth](#connect-an-agent-with-oauth).
    Select the agent that the dot acts as.
-2. Give the agent the scopes of the events: `mail.webhooks`, `chat.webhooks` or `drive.webhooks`.
+2. Give the agent the scopes of the events: `mail.webhooks`, `chat.webhooks`, `drive.webhooks` or `calendar.webhooks`.
    Give it also the read scope of the product, such as `chat.read`, because an event has no content.
    Select them for a new agent at the approval, or add them in **Permissions** on the page of the agent.
 3. Open the agent in **Admin › Members**, and allow the callback host of ChatGPT in its
@@ -1153,6 +1167,9 @@ The events:
 | `chat.message.deleted` | `room_id` and `filter`, optional | A message is deleted |
 | `drive.item.created`, `.updated`, `.moved`, `.trashed`, `.restored`, `.deleted`, `.shared`, `.unshared` | `space_id`, optional | An item of the drive changes |
 | `drive.members.changed`, `drive.deleted` | `space_id` of a shared drive | The shared drive changes |
+| `calendar.event.created`, `.updated`, `.deleted` | `calendar_id`, optional: only your own calendar | You add, change or delete an own event |
+| `calendar.invitation.received`, `.updated`, `.cancelled` | `calendar_id`, optional | A copy of a meeting arrives, changes or goes away |
+| `calendar.rsvp.changed` | `calendar_id`, optional | An answer to a meeting on your calendar changes |
 
 Without `room_id`, each room that the agent is a member of sends the event, also a room that it
 joins later. Without `mailbox_id` or `space_id`, the event is for the mailbox or the drive of the agent.
@@ -1182,7 +1199,13 @@ For client developers:
   send `filter: "all"`.
   `events/unsubscribe` stops the subscription with each `filter`.
 - The events have no replay: `cursor` is always `null`. After a gap, read the room, the inbox or the
-  drive to find what you did not get.
+  drive to find what you did not get. For Calendar, call `calendar_list_changes` with the `cursor` from
+  `data` of the last POST that you got.
+- A calendar POST has these fields in `data`: `calendar_id`, `event_id`, `uid`, `change_id`,
+  `occurrence_id` (null for now), `revision`, `actor_id` and `cursor`. It has no title, time or answer.
+  Read the event with `calendar_get_event`. A retry has the same `change_id`. Skip a change with your own
+  `actor_id` to prevent a loop. A calendar subscription needs `calendar.read` too. The access is checked
+  again before each POST, so an agent that loses `calendar.read` gets no more POSTs.
 
 If ChatGPT cannot start or change a subscription and shows no reason, find the log line
 `mcp events/subscribe refused` in the logs of the Worker. Its `code` and `detail` give the reason.
