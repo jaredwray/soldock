@@ -1,7 +1,7 @@
 import { SIGN_IN_LOCK_MINUTES, SIGN_IN_MAX_FAILURES } from "@asterra/contracts";
 import { openSecret } from "../platform/index.ts";
 import { verifyPassword } from "./password.ts";
-import { createSessionIf, type PrincipalRecord, resolveAddress, TOTP_SECRET_PURPOSE } from "./store.ts";
+import { createSessionIf, type PrincipalRecord, resolvePrimaryAddress, TOTP_SECRET_PURPOSE } from "./store.ts";
 import { matchTotp } from "./totp.ts";
 
 export type SignInOutcome =
@@ -82,7 +82,7 @@ function finishSignIn(db: D1Database, principalId: string, attempt: Attempt, ste
 /**
  * Checks an address, a password and, when the person turned it on, a TOTP code.
  *
- * - An unknown address, an agent, an archived person, a person without a password, a wrong password,
+ * - An unknown address, an alias, an agent, an archived person, a person without a password, a wrong password,
  *   a wrong or used code and a lock all give `refused`. Each of them runs one password derivation.
  * - A correct password without a code, for a person with two-step verification, gives
  *   `totp_required` and no session.
@@ -95,7 +95,7 @@ export async function signInWithPassword(
 	nowMs = Date.now(),
 ): Promise<SignInOutcome> {
 	const db = env.DIRECTORY;
-	const principal = await resolveAddress(db, input.address);
+	const principal = await resolvePrimaryAddress(db, input.address);
 	if (principal?.kind !== "human") {
 		await verifyPassword(input.password, null);
 		return { result: "refused", principalId: null, reason: "unknown address" };

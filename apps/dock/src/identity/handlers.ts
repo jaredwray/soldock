@@ -5,6 +5,7 @@ import {
 	commaListEntries,
 	DIRECTORY_LIMITS,
 	type DirectoryEntry,
+	MAILBOX_ALIAS_LIMITS,
 	mentionDirectory,
 	mentionHandle,
 	type Scope,
@@ -27,6 +28,7 @@ import {
 } from "./access.ts";
 import type { AuthContext, CallContext } from "./auth.ts";
 import { insertInvite, inviteUrl, type NewInvite, newInvite, replaceInvite } from "./invites.ts";
+import { addMailboxAlias, listMailboxAliases, removeMailboxAlias } from "./mailbox-aliases.ts";
 import { delegatedMailboxesOf } from "./mailbox-delegates.ts";
 import { oauthHandlers } from "./oauth-handlers.ts";
 import { toApiKeyOutput, toPrincipalOutput } from "./output.ts";
@@ -73,12 +75,16 @@ import {
 import {
 	addTeamMailboxMember,
 	createTeamMailbox,
+	getMailbox,
 	getTeamMailbox,
+	isTeamMailboxId,
 	listTeamMailboxes,
+	type MailboxRecord,
 	removeTeamMailboxMember,
 	renameTeamMailbox,
 	type TeamMailboxRecord,
 	teamMailboxesOf,
+	teamMailboxMemberScopes,
 } from "./team-mailboxes.ts";
 import { matchTotp, newTotpSecret, otpauthUri } from "./totp.ts";
 
@@ -111,6 +117,9 @@ type IdentityOperation =
 	| "directory.update_team_mailbox"
 	| "directory.add_team_mailbox_member"
 	| "directory.remove_team_mailbox_member"
+	| "directory.list_mailbox_aliases"
+	| "directory.add_mailbox_alias"
+	| "directory.remove_mailbox_alias"
 	| "directory.create_service_account"
 	| "directory.list_service_account_activity"
 	| "directory.get_member_access"
@@ -362,7 +371,7 @@ export const identityHandlers: Pick<HandlerMap<CallContext>, IdentityOperation |
 			);
 		}
 		if (await addressTaken(call.env.DIRECTORY, address)) {
-			return unavailable("taken", "That address belongs to another member or a shared mailbox.");
+			return unavailable("taken", "That address belongs to another member, a shared mailbox or an alias.");
 		}
 		return { address, available: true, reason: null, message: null };
 	},
@@ -799,6 +808,63 @@ export const identityHandlers: Pick<HandlerMap<CallContext>, IdentityOperation |
 		return { team_mailbox: await teamMailboxAfterChange(call, input.mailbox_id) };
 	},
 
+	async "directory.list_mailbox_aliases"(call, input) {
+		const { DIRECTORY } = call.env;
+		const own = call.caller.principal.id === input.mailbox_id;
+		const member =
+			!own &&
+			isTeamMailboxId(input.mailbox_id) &&
+			(await teamMailboxMemberScopes(DIRECTORY, input.mailbox_id, call.caller.principal.id)) !== null;
+		if (!own && !member && !isAdmin(call.caller)) {
+			throw new OperationError(
+				"forbidden",
+				"Only an owner, an admin, the principal itself or a member of the team mailbox can read its aliases.",
+			);
+		}
+		const mailbox = await getMailbox(DIRECTORY, input.mailbox_id);
+		if (!mailbox) throw new OperationError("not_found", "No mailbox has that id.");
+		return await mailboxAliasesOutput(call, mailbox);
+	},
+
+	async "directory.add_mailbox_alias"(call, input) {
+		const mailbox = await aliasMailboxToManage(call, input.mailbox_id, "add");
+		const { DIRECTORY } = call.env;
+		if (!(await mailDomains(DIRECTORY)).has(domainOf(input.address))) {
+			throw new OperationError("invalid", "The address must use a saved mail domain. Check Admin settings.");
+		}
+		const result = await addMailboxAlias(DIRECTORY, mailbox.id, input.address, call.caller.principal.id);
+		switch (result) {
+			case "primary":
+				throw new OperationError("conflict", "That address is the primary address of the mailbox.");
+			case "taken":
+				throw new OperationError("conflict", "That address belongs to another principal, team mailbox or alias.");
+			case "full":
+				throw new OperationError("invalid", `A mailbox can have at most ${MAILBOX_ALIAS_LIMITS.aliases} aliases.`);
+			case "gone":
+				throw new OperationError("conflict", DIRECTORY_CHANGED);
+			case "added":
+				// A call that changes nothing writes no line, so a script can send the wanted aliases again.
+				auditOk(call, "directory.add_mailbox_alias", `${mailbox.id}:${input.address}`);
+				await recordAliasChange(call, mailbox, "directory.add_mailbox_alias");
+				break;
+			case "exists":
+				break;
+		}
+		return await mailboxAliasesOutput(call, mailbox);
+	},
+
+	async "directory.remove_mailbox_alias"(call, input) {
+		const mailbox = await aliasMailboxToManage(call, input.mailbox_id, "remove");
+		if (mailbox.address === input.address) {
+			throw new OperationError("invalid", "The primary address of a mailbox cannot be removed.");
+		}
+		if (await removeMailboxAlias(call.env.DIRECTORY, mailbox.id, input.address)) {
+			auditOk(call, "directory.remove_mailbox_alias", `${mailbox.id}:${input.address}`);
+			await recordAliasChange(call, mailbox, "directory.remove_mailbox_alias");
+		}
+		return await mailboxAliasesOutput(call, mailbox);
+	},
+
 	async "account.list_api_keys"(call, input) {
 		const target = await credentialOwner(call, input.principal_id);
 		return {
@@ -973,6 +1039,43 @@ async function teamMailboxToManage(
 	const mailbox = await getTeamMailbox(call.env.DIRECTORY, mailboxId);
 	if (!mailbox) throw new OperationError("not_found", "No team mailbox has that id.");
 	return mailbox;
+}
+
+/**
+ * The mailbox whose aliases the caller changes: owners and admins only. An address belongs to the
+ * organization, so a member or an agent cannot take an address such as ceo@ for its own mailbox. Only the
+ * owner changes the aliases of the own mailbox of the owner. Throws `not_found` for a mailbox that does not
+ * exist, and for a deleted principal.
+ */
+async function aliasMailboxToManage(
+	call: CallContext,
+	mailboxId: string,
+	action: "add" | "remove",
+): Promise<MailboxRecord> {
+	if (!isAdmin(call.caller)) {
+		throw new OperationError("forbidden", `Only owners and admins can ${action} the aliases of a mailbox.`);
+	}
+	const mailbox = await getMailbox(call.env.DIRECTORY, mailboxId);
+	if (!mailbox) throw new OperationError("not_found", "No mailbox has that id.");
+	if (mailbox.kind === "personal" && mailbox.id !== call.caller.principal.id) {
+		const target = await getPrincipal(call.env.DIRECTORY, mailbox.id);
+		if (target?.org_role === "owner") {
+			throw new OperationError("forbidden", `Only the owner can ${action} the aliases of the mailbox of the owner.`);
+		}
+	}
+	return mailbox;
+}
+
+async function mailboxAliasesOutput(call: CallContext, mailbox: MailboxRecord) {
+	const aliases = await listMailboxAliases(call.env.DIRECTORY, mailbox.id);
+	return { mailbox_id: mailbox.id, address: mailbox.address, aliases };
+}
+
+/** Records a change of the aliases of a service account in its activity log. */
+async function recordAliasChange(call: CallContext, mailbox: MailboxRecord, op: string): Promise<void> {
+	if (isTeamMailboxId(mailbox.id)) return;
+	const principal = await getPrincipal(call.env.DIRECTORY, mailbox.id);
+	if (principal) recordServiceChange(call, principal, op);
 }
 
 async function principalAfterChange(call: CallContext, principalId: string): Promise<PrincipalRecord> {

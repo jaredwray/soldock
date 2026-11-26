@@ -9,8 +9,8 @@
 | **Purpose** | Principals (humans, agents, service accounts, groups), directory, passkeys, sessions, API keys, OAuth authorization server, `client_credentials`, authorization (`authorize()`), agent policies, audit log, `PrincipalDO`. |
 | **Owns** | D1 `directory` tables, except `chat_rooms`, `chat_members`, `chat_custom_emoji`, `chat_incoming_webhooks`, `chat_slash_commands`, `chat_member_requests` (`chat`), `drive_share_requests` (`drive`) and `webhooks` and `chat_webhooks` (`webhooks`). `PrincipalDO` owns the Chat state, personal Chat views (activity, sections, saved messages, drafts, scheduled messages, reminders), notification settings and events sockets of each principal. Later: R2 `audit`. |
 | **Depends on** | `platform`. |
-| **Operations** | `chat.get_presence`, `chat.set_status`, `account.whoami`, `account.list_api_keys`, `account.create_api_key`, `account.revoke_api_key`, `account.rotate_api_key`, `account.end_api_key_rotation`, `account.set_password`, `account.create_totp_secret`, `account.enable_totp`, `account.disable_totp`, `directory.list_principals`, `directory.get_principals`, `directory.create_principal`, `directory.create_invite`, `directory.update_agent_policy`, `directory.update_principal`, `directory.archive_principal`, `directory.restore_principal`, `directory.delete_principal`, `directory.list_mail_domains`, `directory.check_address`, `directory.add_mail_domain`, `directory.remove_mail_domain`, `directory.list_team_mailboxes`, `directory.create_team_mailbox`, `directory.update_team_mailbox`, `directory.add_team_mailbox_member`, `directory.remove_team_mailbox_member`, `directory.create_service_account`, `directory.list_service_account_activity`, `directory.get_member_access`, `directory.get_agent_access`, `oauth.get_authorization`, `oauth.approve_authorization`, `oauth.deny_authorization`, `oauth.list_grants`, `oauth.revoke_grant` |
-| **Data inventory** | D1 `directory`: `principals` (with `password_hash`, `totp_secret`, `totp_pending_secret`, `totp_last_step`, `sign_in_failures`, `sign_in_locked_until`, `chat_online_until`, `chat_active_until`, `chat_status_json`, `archived_at`, `deleted_at`, and the name aliases of a Chat mention `alias_first`, `alias_full` and `aliases_set`, and the name in the form of a search `name_folded`, which come from the display name, and `service`, `description` and `created_by` of [service accounts](#service-accounts), and the `agent_scopes` of each agent and service account, which apply only to its own mailbox, its own drive, its own calendar and the actions without a resource, and which nothing writes after the creation of the account, and `access_version`, which the Worker does not read or write, and which a later migration removes (jaredwray/soldock#211), see [Access of an agent](#access-of-an-agent); migration `0034` removed the columns `agent_resources`, `service_scopes` and `service_resources`), `addresses`, `api_keys` (with `expires_at`, `description` and `revoked_by`, and for a rotation `prev_key_hash`, `prev_expires_at`, `rotation`, `rotated_at` and `rotated_by`, `expiry_notice_at` for the notice before a token ends, `scopes`, which the Worker reads only for a key of a person since migration `0027`, and `resources`, which is not read since migration `0026`), `sessions`, `invites` (the invite link of a person without a password: the SHA-256 of the secret, the person, who made it, and its end; at most one for each person; migration `0035`, see [Invite links](#invite-links)), `setup_lock`, `mail_domains`, `team_mailboxes` (name, address, creator), `team_mailbox_members` (mailbox, principal, who added the member, and `scopes`: what the member can do in the mailbox; migration `0033` narrowed the scopes of each agent member), `mailbox_delegates` (the person who owns the mailbox, the delegate, `scopes`: what the delegate can do in the mailbox, and the time of the grant; migration `0037`, see [Mailbox delegates](#mailbox-delegates)), `oauth_clients` (registered MCP clients: name, URI, redirect URIs), `oauth_requests` (authorization requests: client, redirect URI, state, PKCE challenge, requested scopes, approval, code hash, the grant that the code made, and `granted_scopes`, which is not read since migration `0027`), `oauth_grants` (approved connections: client, principal, approver, hashes of the access token and of the current, previous and consumed refresh tokens, and `scopes`, which is not read since migration `0027`) ([`migrations/`](../../migrations/)). A server must read the TOTP secrets to check a code, so D1 keeps them in a form that the Worker can read. With the Worker secret `ENCRYPTION_KEY`, they are sealed (`sealSecret` of [`platform`](../platform/README.md#secrets-at-rest)). Without it, they are plain base32. A secret from before `ENCRYPTION_KEY` stays plain until a new setup of two-step verification. When a sealed secret does not open, the Worker refuses the sign-in of that person, and a password alone never signs in. An owner or an admin then turns off two-step verification for the person. Unused and empty since migration `0004`, kept for the Worker from before it: `principals.sign_in_email` and `sign_in_codes`. A later migration removes them. `PrincipalDO` (one for each principal, keyed by the principal id): tables `chat_rooms`, `chat_threads`, `chat_addressed`, `chat_activity` (with `subject_json`: the account to add or to share with, for an item of the kind `member_request` or `share_request`, and `item_json`: the Drive item, for an item of the kind `share_request`), `chat_sections`, `chat_section_rooms`, `chat_saved_messages`, `chat_drafts`, `chat_scheduled_messages`, `chat_reminders`, `chat_notification_levels`, `chat_push_devices`, and `chat_notification_sounds` (see [The object of a principal](#the-object-of-a-principal)), table `service_activity` (the activity log of a service account: at most 10,000 calls, at most 1,000 membership changes by members, its admin changes, and 90 days, see [Service accounts](#service-accounts)), table `meta` (schema version, the owner id in `presence_principal`, `chat_seeded` after the first fill, and `chat_threads_filled` after the first fill of the threads), and the hibernatable sockets of `/ws/events` (not in the database: each keeps the reference to its credential, the time of its open and of its last check, and its latest activity report; no backup). Backups: not built yet. |
+| **Operations** | `chat.get_presence`, `chat.set_status`, `account.whoami`, `account.list_api_keys`, `account.create_api_key`, `account.revoke_api_key`, `account.rotate_api_key`, `account.end_api_key_rotation`, `account.set_password`, `account.create_totp_secret`, `account.enable_totp`, `account.disable_totp`, `directory.list_principals`, `directory.get_principals`, `directory.create_principal`, `directory.create_invite`, `directory.update_agent_policy`, `directory.update_principal`, `directory.archive_principal`, `directory.restore_principal`, `directory.delete_principal`, `directory.list_mail_domains`, `directory.check_address`, `directory.add_mail_domain`, `directory.remove_mail_domain`, `directory.list_team_mailboxes`, `directory.create_team_mailbox`, `directory.update_team_mailbox`, `directory.add_team_mailbox_member`, `directory.remove_team_mailbox_member`, `directory.list_mailbox_aliases`, `directory.add_mailbox_alias`, `directory.remove_mailbox_alias`, `directory.create_service_account`, `directory.list_service_account_activity`, `directory.get_member_access`, `directory.get_agent_access`, `oauth.get_authorization`, `oauth.approve_authorization`, `oauth.deny_authorization`, `oauth.list_grants`, `oauth.revoke_grant` |
+| **Data inventory** | D1 `directory`: `principals` (with `password_hash`, `totp_secret`, `totp_pending_secret`, `totp_last_step`, `sign_in_failures`, `sign_in_locked_until`, `chat_online_until`, `chat_active_until`, `chat_status_json`, `archived_at`, `deleted_at`, and the name aliases of a Chat mention `alias_first`, `alias_full` and `aliases_set`, and the name in the form of a search `name_folded`, which come from the display name, and `service`, `description` and `created_by` of [service accounts](#service-accounts), and the `agent_scopes` of each agent and service account, which apply only to its own mailbox, its own drive, its own calendar and the actions without a resource, and which nothing writes after the creation of the account, and `access_version`, which the Worker does not read or write, and which a later migration removes (jaredwray/soldock#211), see [Access of an agent](#access-of-an-agent); migration `0034` removed the columns `agent_resources`, `service_scopes` and `service_resources`), `addresses` (a row with `is_primary = 0` is an alias of the own mailbox of the principal, see [Mailbox aliases](#mailbox-aliases)), `api_keys` (with `expires_at`, `description` and `revoked_by`, and for a rotation `prev_key_hash`, `prev_expires_at`, `rotation`, `rotated_at` and `rotated_by`, `expiry_notice_at` for the notice before a token ends, `scopes`, which the Worker reads only for a key of a person since migration `0027`, and `resources`, which is not read since migration `0026`), `sessions`, `invites` (the invite link of a person without a password: the SHA-256 of the secret, the person, who made it, and its end; at most one for each person; migration `0035`, see [Invite links](#invite-links)), `setup_lock`, `mail_domains`, `team_mailboxes` (name, address, creator), `team_mailbox_members` (mailbox, principal, who added the member, and `scopes`: what the member can do in the mailbox; migration `0033` narrowed the scopes of each agent member), `team_mailbox_aliases` (the aliases of team mailboxes: address, mailbox, creator and time; migration `0040`, see [Mailbox aliases](#mailbox-aliases)), `mailbox_delegates` (the person who owns the mailbox, the delegate, `scopes`: what the delegate can do in the mailbox, and the time of the grant; migration `0037`, see [Mailbox delegates](#mailbox-delegates)), `oauth_clients` (registered MCP clients: name, URI, redirect URIs), `oauth_requests` (authorization requests: client, redirect URI, state, PKCE challenge, requested scopes, approval, code hash, the grant that the code made, and `granted_scopes`, which is not read since migration `0027`), `oauth_grants` (approved connections: client, principal, approver, hashes of the access token and of the current, previous and consumed refresh tokens, and `scopes`, which is not read since migration `0027`) ([`migrations/`](../../migrations/)). A server must read the TOTP secrets to check a code, so D1 keeps them in a form that the Worker can read. With the Worker secret `ENCRYPTION_KEY`, they are sealed (`sealSecret` of [`platform`](../platform/README.md#secrets-at-rest)). Without it, they are plain base32. A secret from before `ENCRYPTION_KEY` stays plain until a new setup of two-step verification. When a sealed secret does not open, the Worker refuses the sign-in of that person, and a password alone never signs in. An owner or an admin then turns off two-step verification for the person. Unused and empty since migration `0004`, kept for the Worker from before it: `principals.sign_in_email` and `sign_in_codes`. A later migration removes them. `PrincipalDO` (one for each principal, keyed by the principal id): tables `chat_rooms`, `chat_threads`, `chat_addressed`, `chat_activity` (with `subject_json`: the account to add or to share with, for an item of the kind `member_request` or `share_request`, and `item_json`: the Drive item, for an item of the kind `share_request`), `chat_sections`, `chat_section_rooms`, `chat_saved_messages`, `chat_drafts`, `chat_scheduled_messages`, `chat_reminders`, `chat_notification_levels`, `chat_push_devices`, and `chat_notification_sounds` (see [The object of a principal](#the-object-of-a-principal)), table `service_activity` (the activity log of a service account: at most 10,000 calls, at most 1,000 membership changes by members, its admin changes, and 90 days, see [Service accounts](#service-accounts)), table `meta` (schema version, the owner id in `presence_principal`, `chat_seeded` after the first fill, and `chat_threads_filled` after the first fill of the threads), and the hibernatable sockets of `/ws/events` (not in the database: each keeps the reference to its credential, the time of its open and of its last check, and its latest activity report; no backup). Backups: not built yet. |
 
 Public surface: `index.ts` only. Other domains must not import files from this folder directly.
 
@@ -317,7 +317,7 @@ can act on another admin. Only the owner is out of reach, as for credentials.
 - `directory.delete_principal` cannot be undone. The `principals` row stays with `deleted_at`, because
   `api_keys.created_by`, `team_mailboxes.created_by`, `team_mailbox_members.added_by` and the OAuth
   rows of other principals refer to it. One D1 transaction clears the password and the TOTP columns,
-  deletes the addresses, the sessions, the invite link, the team mailbox memberships and the mailbox grants
+  deletes the addresses (also its aliases), the sessions, the invite link, the team mailbox memberships and the mailbox grants
   that the principal got or gave ([Mailbox delegates](#mailbox-delegates)), and revokes the keys and the
   grants. So the address is free for a new principal, and inbound and local mail to it is refused.
   The same transaction deletes the subscriptions for that target, then the endpoints that the principal created
@@ -788,22 +788,72 @@ an agent and a service account. A room has scopes for each member too
   unless `member_ids` names them.
 - Each principal with `directory.read` sees each team mailbox and its members
   (`directory.list_team_mailboxes`), as it sees each principal.
-- Principals and team mailboxes share one set of addresses. Triggers in D1 keep an address out of
-  `addresses` and `team_mailboxes` at the same time, in the transaction of the write. A team
-  address is lowercase, uses a saved mail domain, and cannot contain `+`. A domain with a team
-  mailbox address cannot be removed.
+- Principals, team mailboxes and [mailbox aliases](#mailbox-aliases) share one set of addresses.
+  Triggers in D1 keep an address in one of `addresses`, `team_mailboxes` and `team_mailbox_aliases`
+  only, in the transaction of the write. A team address is lowercase, uses a saved mail domain, and
+  cannot contain `+`. A domain with a team mailbox address cannot be removed.
 - A rename changes only `display_name`. The mail handlers read the name from D1 on each call, so
   the members see the new name at once, and the next send has it in `From`.
 - The address of a team mailbox cannot change. Stored mail names the old address in `To` and `Cc`,
   so Reply all would send to an address that the mailbox no longer owns, and a new holder of the
-  old address would get those replies. A change of address needs aliases first.
+  old address would get those replies. A later change of address can keep the old address as an
+  alias. To receive mail at a different address now, add an alias.
 - A team mailbox can have 100 members (`TEAM_MAILBOX_LIMITS.members`). A second add of the same
   member without `scopes`, and a remove of a principal that is not a member, change nothing.
 - `resolveMailboxAddress` gives the mailbox of an address (the own mailbox of a principal, or a
-  team mailbox) for inbound and local delivery. `teamMailboxFor` is the membership check of each
+  team mailbox, for a primary address or an alias) for inbound and local delivery. `teamMailboxFor` is the membership check of each
   mail operation, with the scopes that the operation needs in the membership. It reads D1 on each
   call, so removed access ends at once.
 - No operation changes the address of a team mailbox or removes it yet.
+
+## Mailbox aliases
+
+An alias is an extra address that receives mail for a mailbox. The own mailbox of a person, an agent or
+a service account can have aliases, and a team mailbox can have aliases. Mail to an alias goes to the same
+mailbox as mail to the primary address. Mail from the mailbox always uses the primary address.
+
+- **Storage.** The alias of the own mailbox of a principal is a row of `addresses` with
+  `is_primary = 0`. The alias of a team mailbox is a row of `team_mailbox_aliases` (migration `0040`).
+  Each read of a principal joins `is_primary = 1`, so an alias never shows as the address of a principal.
+- **One set of addresses.** The unique key of `addresses`, the unique key of each team table and the
+  triggers of migrations `0005` and `0040` keep an address in one place only, in the transaction of the
+  write. So an alias cannot have the address of a principal, a team mailbox or a different alias, and a
+  new principal or team mailbox cannot have the address of an alias.
+- **Who changes them.** Only owners and admins add and remove an alias (`directory.add_mailbox_alias`,
+  `directory.remove_mailbox_alias`). These operations need `directory.write` and accept humans only. An
+  address belongs to the organization, so a member or an agent cannot take an address such as `ceo@`
+  for its own mailbox. An admin can change the aliases of each team mailbox and of each own mailbox,
+  also of the own mailbox of that admin. Only the owner is out of reach: only the owner changes the
+  aliases of the own mailbox of the owner, and an admin gets `forbidden` there.
+- **Sign-in.** An alias is not a sign-in name. `resolvePrimaryAddress` in `store.ts` reads only primary
+  addresses, so a sign-in with an alias gets the same refusal as an unknown address. A wrong password for
+  an alias does not count against its holder, so it cannot lock the holder.
+- **Who reads them.** `directory.list_mailbox_aliases` needs `directory.read`. An owner or an admin reads
+  the aliases of each mailbox. A principal, also an agent or a service account, reads the aliases of its
+  own mailbox. A member of a team mailbox reads the aliases of that mailbox. Each other caller gets
+  `forbidden`, also for a mailbox that does not exist.
+- **Checks.** The address is lowercase. Its local part can contain only letters, digits, dots, hyphens
+  and underscores (`AliasAddress` in the contracts), so it is safe in the path of the remove. It uses a
+  saved mail domain. It cannot contain `+`, because mail to `alias+tag@` reaches `alias@`. A mailbox can
+  have at most 10 aliases (`MAILBOX_ALIAS_LIMITS.aliases`). The insert counts in its statement, so two
+  parallel calls cannot go past the limit. The `setup_lock` row blocks a new alias during a reset.
+- **Idempotent.** An add of an alias that the mailbox has changes nothing. Two parallel calls that add
+  the same alias to the same mailbox give the same result: the call that loses the insert reads the holder
+  of the address again. The primary address of the
+  mailbox, and an address of a different mailbox, give `conflict`. A remove of an alias that the mailbox
+  does not have changes nothing. A remove of the primary address gives `invalid`.
+- **Delivery.** `resolveMailboxAddress` reads aliases, so inbound mail and local mail to an alias go to
+  the mailbox, also with a `+tag`. A local message to the primary address and to an alias of the same
+  mailbox arrives one time. After a remove, inbound mail to the alias gets `5.1.1`, and a different mailbox can
+  have the address. The mail that the alias received stays.
+- **Lifecycle.** A domain with an alias cannot be removed. The deletion of a principal deletes its
+  addresses, so its aliases are free. No operation removes a team mailbox yet. A directory reset drops
+  `team_mailbox_aliases` with the other team mailbox tables.
+- **Audit.** Each add and each remove that changes something writes an audit line with the target
+  `<mailbox id>:<address>`. A change of an alias of a service account also goes in its activity log.
+- **Not built yet.** Send as an alias, a change of the primary address, and the aliases in the outputs of
+  `directory.list_principals`, `directory.list_team_mailboxes` and `mail.list_mailboxes`. Reply all keeps
+  an alias as a recipient. The alias goes to the same mailbox, so the mailbox gets no second copy.
 
 ## Mailbox delegates
 
@@ -873,8 +923,9 @@ principal can get an address. The New member form of the web app calls it while 
 - The checks run in this sequence. The first check that fails gives the reason:
   1. `plus_tag`: the local part has a `+`. Mail to `user+tag@` goes to `user@`.
   2. `domain_not_saved`: the domain is not in `mail_domains`.
-  3. `taken`: the address is in `addresses` or `team_mailboxes` (`addressTaken` in `store.ts`). An
-     archived principal keeps its addresses. A deleted principal has none.
+  3. `taken`: the address is in `addresses`, `team_mailboxes` or `team_mailbox_aliases` (`addressTaken`
+     in `store.ts`), so also an alias is taken. An archived principal keeps its addresses. A deleted
+     principal has none.
 - The result is advice only. The insert of a create still does the unique check. If a different request
   takes the address first, the create gets `conflict`.
 - A check writes no audit line. It reads no data of a principal, and it changes nothing.
@@ -929,8 +980,8 @@ principal can get an address. The New member form of the web app calls it while 
   R2, queues, and mailbox Durable Objects stay in place. New accounts have new IDs and cannot access old mail.
   The reset also drops the AI settings and the AI usage ledger, and makes them again with AI off: the
   ledger names the old mailboxes. The classifier outbox of each old mailbox goes with its other outboxes.
-  The reset also removes each team mailbox and its members, and each grant of a mailbox delegate. It drops the team mailbox tables and the trigger
-  on `mail_domains` first: a table rename in the replay of `0004` fails while a trigger refers to a missing table.
+  The reset also removes each team mailbox with its members and its aliases, and each grant of a mailbox delegate. It drops the two triggers
+  on `mail_domains` that refer to the team mailbox tables first: a table rename in the replay of `0004` fails while a trigger refers to a missing table.
   The `setup_lock` row blocks new principals and new team mailboxes during the reset. Each old mailbox, also each
   team mailbox, persists a pause marker.
   Setup waits for active deliveries before it replaces the directory, then cancels the remaining old outboxes.
