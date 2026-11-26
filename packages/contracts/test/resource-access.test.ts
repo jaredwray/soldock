@@ -114,13 +114,17 @@ const RESOURCE_DECIDED: string[] = [
 ];
 
 describe("the scopes that a resource decides", () => {
-	it("decides the mail scopes in a team mailbox, and none in the own mailbox", () => {
+	it("decides the mail scopes in a team mailbox and in the mailbox of a different principal, and none in the own mailbox", () => {
 		expect(resourceDecidedScopes(operations["mail.send"], { mailbox_id: TEAM }, ME)).toEqual(["mail.send"]);
 		expect(resourceDecidedScopes(operations["mail.list_threads"], { mailbox_id: TEAM }, ME)).toEqual(["mail.read"]);
 		expect(resourceDecidedScopes(operations["mail.send"], {}, ME)).toEqual([]);
 		expect(resourceDecidedScopes(operations["mail.send"], { mailbox_id: ME }, ME)).toEqual([]);
-		// The mailbox of a different principal is not a team mailbox: the handler refuses it for an agent.
-		expect(resourceDecidedScopes(operations["mail.list_threads"], { mailbox_id: OTHER }, ME)).toEqual([]);
+		// The mailbox of a different principal: a grant of its owner decides, and the handler refuses a caller
+		// without one.
+		expect(resourceDecidedScopes(operations["mail.list_threads"], { mailbox_id: OTHER }, ME)).toEqual(["mail.read"]);
+		expect(resourceDecidedScopes(operations["mail.send"], { mailbox_id: OTHER }, ME)).toEqual(["mail.send"]);
+		// An id that is not the id of a mailbox names nothing.
+		expect(resourceDecidedScopes(operations["mail.send"], { mailbox_id: "drv_shared" }, ME)).toEqual([]);
 		// A value that is not a string names nothing.
 		expect(resourceDecidedScopes(operations["mail.send"], { mailbox_id: [TEAM] }, ME)).toEqual([]);
 		expect(resourceDecidedScopes(operations["mail.send"], null, ME)).toEqual([]);

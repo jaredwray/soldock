@@ -1,7 +1,8 @@
 # `mail` module
 
 > Status: **started**. The first end-to-end layer exists: receive, store, thread, label, search,
-> read and send, in the own mailbox of a principal and in team mailboxes. Owners and admins can read
+> read and send, in the own mailbox of a principal and in team mailboxes. A person can let other people
+> and agents use the own mailbox ([Delegated mailboxes](#delegated-mailboxes)). Owners and admins can read
 > the mailbox of each agent. An MCP client can subscribe to an inbox and get a notification for new
 > mail. A [webhook](#webhooks) sends a signed POST to a URL outside Asterra for new mail.
 > [Auto labels](#auto-labels) sort new mail with rules and with a Workers AI model.
@@ -14,7 +15,7 @@
 | **Purpose** | Gmail replacement backend: address routing, inbound pipeline (`email()` → R2 → queue → `MailboxDO`), threading, labels, search, sanitization, outbound pipeline via Email Service, filters, vacation, groups, team mailboxes, delegation, agent outbound policy enforcement, webhooks for new mail. |
 | **Owns** | `MailboxDO` (messages, threads, labels, search index, delivery status, outbox, event outbox, idempotency keys, sent recipients, auto-label settings, corrections, classifier outbox and Screener senders); the D1 table `mail_settings` (the mail settings of the organization); raw MIME in R2 `blobs`. The `webhooks` module owns the D1 subscriptions. The `ai` module owns the AI settings and the usage ledger. |
 | **Depends on** | `platform`, `identity`, `webhooks`, `ai`. Later: `drive` (attachments ↔ Drive). |
-| **Operations** | `mail.list_mailboxes`, `mail.get_settings`, `mail.update_settings`, `mail.get_mailbox_settings`, `mail.update_mailbox_settings`, `mail.get_org_settings`, `mail.update_org_settings`, `mail.list_screener`, `mail.screen_sender`, `mail.get_profile`, `mail.list_labels`, `mail.create_label`, `mail.delete_label`, `mail.list_threads`, `mail.get_thread`, `mail.get_message`, `mail.modify_threads`, `mail.snooze_threads`, `mail.send`, `mail.suggest_recipients`, `mail.get_attachment`, `mail.create_webhook_subscription`, `mail.list_webhook_subscriptions`, `mail.delete_webhook_subscription`, `mail.get_auto_labels`, `mail.update_auto_labels`, `mail.create_auto_label`, `mail.delete_auto_label`, `mail.run_auto_labels` |
+| **Operations** | `mail.list_mailboxes`, `mail.list_delegates`, `mail.set_delegate`, `mail.remove_delegate`, `mail.get_settings`, `mail.update_settings`, `mail.get_mailbox_settings`, `mail.update_mailbox_settings`, `mail.get_org_settings`, `mail.update_org_settings`, `mail.list_screener`, `mail.screen_sender`, `mail.get_profile`, `mail.list_labels`, `mail.create_label`, `mail.delete_label`, `mail.list_threads`, `mail.get_thread`, `mail.get_message`, `mail.modify_threads`, `mail.snooze_threads`, `mail.send`, `mail.suggest_recipients`, `mail.get_attachment`, `mail.create_webhook_subscription`, `mail.list_webhook_subscriptions`, `mail.delete_webhook_subscription`, `mail.get_auto_labels`, `mail.update_auto_labels`, `mail.create_auto_label`, `mail.delete_auto_label`, `mail.run_auto_labels` |
 | **Data inventory** | See [Data inventory](#data-inventory). Backups: not built yet. |
 
 Public surface: `index.ts` only. Other domains must not import files from this folder directly.
@@ -56,8 +57,9 @@ bytes, and the mailbox drops it as a copy.
 
 | Kind | Mailbox id | Who can use it |
 | --- | --- | --- |
-| `personal` | The id of the principal (`prn_…`) | That principal only |
+| `personal` | The id of the principal (`prn_…`) | That principal. Nobody else, until a person adds a delegate |
 | `team` | The id of the team mailbox (`tmb_…`) | Each member of the team mailbox, with the scopes of its membership |
+| `delegated` | The id of a person (`prn_…`) | Each delegate of that person, with the scopes of its grant. It is the `personal` mailbox of the person |
 | `agent` | The id of an agent (`prn_…`) | The agent, as its `personal` mailbox. Each owner and admin can read it, and nothing more |
 
 - Each mail operation takes an optional `mailbox_id`. Without it, the operation uses the own
@@ -69,7 +71,8 @@ bytes, and the mailbox drops it as a copy.
   message. Known limit: this check and the store are not one transaction, so a removal between
   them does not stop that one send. An
   unknown team mailbox gets `not_found`. A team mailbox without membership, and the id of a
-  different principal, get `forbidden`. The `MailboxDO` does not know its callers.
+  different principal who gave the caller no grant, get `forbidden`. The `MailboxDO` does not know its
+  callers.
 - The scopes of the credential apply in each mailbox: a key with only `mail.read` reads a team
   mailbox and cannot send from it.
 - A membership of a team mailbox has scopes too: `mail.read`, `mail.modify` and `mail.send`
@@ -82,9 +85,10 @@ bytes, and the mailbox drops it as a copy.
   in the membership of a team mailbox. The second check of the membership needs it too. Before this rule,
   a key with only `mail.send` got the subject of a message through a reply.
 - `mail.list_mailboxes` has `scopes` for each mailbox: the three for the own mailbox, the scopes of the
-  membership for a team mailbox, and `mail.read` for the mailbox of an agent.
-- The id of a different principal gets `forbidden`, except in the case of
-  [Agent mailboxes](#agent-mailboxes). A credential of an owner or an admin with `mail.read` reads
+  membership for a team mailbox, the scopes of the grant for a delegated mailbox, and `mail.read` for the
+  mailbox of an agent.
+- The id of a different principal gets `forbidden`, except in the cases of
+  [Delegated mailboxes](#delegated-mailboxes) and [Agent mailboxes](#agent-mailboxes). A credential of an owner or an admin with `mail.read` reads
   each agent mailbox, also a narrow API key. The `mail.read` scope text says so.
 - The [`identity`](../identity/README.md#team-mailboxes) module owns the team mailboxes, their
   addresses and their members.
@@ -108,6 +112,69 @@ bytes, and the mailbox drops it as a copy.
   the next send has the new name in `From`. The address cannot change.
 - The audit line of a change in a team mailbox has the field `mailbox` with the team mailbox id.
 
+### Delegated mailboxes
+
+A person can let other people and agents use the own mailbox. Each of them is a delegate. A mailbox has no
+delegate until its owner adds one, so the mailbox of a person is private by default.
+
+- `mail.set_delegate` adds a delegate with scopes, or replaces the scopes of a delegate: `mail.read`,
+  `mail.modify` and `mail.send` (`MAILBOX_MEMBER_SCOPES`). A grant has at least one scope.
+  `mail.remove_delegate` removes a delegate. `mail.list_delegates` returns the delegates.
+- Only the owner of the mailbox calls them, and only a person. They take no `mailbox_id`, so the role of
+  an owner or an admin of the organization gives no access to the mailbox of a different person. An agent
+  cannot give access to its own mailbox.
+- Only the person gets a key of the person with `mail.share`. An owner or an admin who manages the keys of
+  a different person cannot create or rotate such a key (`OWN_KEY_SCOPES`,
+  [identity](../identity/README.md#mailbox-delegates)). A grant stays after a key ends, so a key from an
+  admin must not make one.
+- Known limit: an owner or an admin can set a new password for a person, and can then sign in as that
+  person. That power is not new. The person sees it, because the old password stops.
+- `mail.set_delegate` and `mail.remove_delegate` need the scope `mail.share`. In the web app, a new key
+  of a person does not get this scope unless the person selects it. `mail.list_delegates` needs
+  `mail.read`.
+- The credential must hold each scope that it gives. So a key with only `mail.read` and `mail.share`
+  cannot give `mail.send`.
+- A delegate is a person, an agent or a service account. A mailbox can have 25 delegates
+  (`MAILBOX_DELEGATE_LIMITS.delegates`). The owner is never a delegate of the own mailbox.
+- An archived principal can be a delegate, as it can be a member of a team mailbox. It cannot sign in or
+  use a key, so the grant has an effect only after a restore. The web app does not offer an archived
+  account.
+- A grant to an agent or a service account is also for the people who manage its keys: the sponsor of an
+  agent, and each owner and admin. Each of them can create a key and act as the account. The editor of the
+  web app says so.
+- `mail.list_mailboxes` shows the mailbox to the delegate with the kind `delegated`, the id of the owner
+  and the scopes of the grant. The delegate passes that id as `mailbox_id`.
+- The scope rules of a team mailbox apply. A person needs the scope in the credential and in the grant.
+  For an agent or a service account, the grant alone decides
+  ([identity](../identity/README.md#mailbox-delegates)).
+- The mailbox has one state. A change by a delegate shows for the owner, and the owner sees the mail
+  that a delegate sent.
+- A send by a delegate has the name and the address of the owner in `From`. The sent copy is in the
+  mailbox of the owner, with the delegate in `sent_by`. The mail that leaves has no header that names the
+  delegate. Mail from an agent keeps the header `X-Asterra-Agent: true`.
+- The outbound policy of an agent applies to each send of that agent, also from the mailbox of a person.
+- Each idempotency key of a delegate has the principal id of the delegate in front. The owner keeps the
+  plain key. So the key of one caller cannot return or stop the send of a different caller.
+- `mail.send` checks the grant again just before the mailbox stores the message, as for a team mailbox.
+- Only the owner changes the settings of the mailbox. For a delegate, `mail.update_mailbox_settings`,
+  `mail.update_auto_labels`, `mail.create_auto_label` and `mail.delete_auto_label` get `forbidden`. A
+  delegate reads the settings with `mail.read`, for the signature of a new message.
+- A delegate with `mail.modify` changes the mail and the labels, runs the auto labels
+  (`mail.run_auto_labels`) and, as a person, screens senders.
+- The access check reads the directory on each call, so a removed grant and a removed scope end at once.
+- A grant counts only while the owner is a person who is not archived and not deleted. An archive of the
+  owner stops the access of each delegate, and a restore gives it back.
+- A delete of a principal removes the grants that it got and the grants that it gave.
+- `mail.set_delegate` and `mail.remove_delegate` each write an audit line. The `target` is the id of the
+  delegate, with the scopes for a new grant or a change. A call that changes nothing writes no line. A
+  change in a delegated mailbox has the field `mailbox` in its audit line, as for a team mailbox.
+- A read by a delegate writes no audit line, as for a member of a team mailbox.
+- A delegate can watch the inbox of the mailbox with `subscriptions/listen`, with `mail.read` in the
+  grant. A delegate cannot create a webhook for the mailbox: `mail.create_webhook_subscription` gets
+  `forbidden`.
+- The identity module owns the D1 table of the grants
+  ([identity](../identity/README.md#mailbox-delegates)).
+
 ### Agent mailboxes
 
 An owner or an admin can read the own mailbox of each agent. This gives oversight of what an agent
@@ -123,7 +190,8 @@ who can.
 - The operations that change the mailbox or send from it get `forbidden`: `mail.create_label`,
   `mail.delete_label`, `mail.modify_threads` (also with `dry_run`), `mail.snooze_threads` and `mail.send`. A change would
   change what the agent sees, for example the read state. A send would come from the address of the agent.
-- The mailbox of a person stays private: the id of a person gets `forbidden`, also for the owner.
+- The mailbox of a person stays private: the id of a person gets `forbidden`, also for the owner of the
+  organization. Only a grant of that person opens it ([Delegated mailboxes](#delegated-mailboxes)).
   An unknown principal id gets `not_found`.
 - A member, also the sponsor of the agent, gets `forbidden`. An agent never gets the mailbox of a
   different agent.
@@ -163,19 +231,19 @@ who can.
   A second call with the same values changes nothing.
 - `mail.update_settings` changes `default_from` one mailbox at a time:
   `default_from: { mailbox_id, from_mailbox_id }`. The other entries stay.
-  - `mailbox_id` is the own id, or the id of a team mailbox that the caller is a member of with
+  - `mailbox_id` is the own id, or the id of a team mailbox or a delegated mailbox where the caller has
     `mail.read`.
-  - `from_mailbox_id` is the own id, or the id of a team mailbox that the caller is a member of with
-    `mail.send`. Null, or the same id as `mailbox_id`, removes the entry.
-  - The check reads the directory. An unknown team mailbox gets `not_found`, and a team mailbox without
-    membership or without the scope gets `forbidden`. Any other id gets `invalid`: nobody writes or sends
-    from the mailbox of an agent, and the mailbox of a different person is private.
-  - A removal needs no membership, so a person can remove an entry after a membership ended.
+  - `from_mailbox_id` is the own id, or the id of a team mailbox or a delegated mailbox where the caller
+    has `mail.send`. Null, or the same id as `mailbox_id`, removes the entry.
+  - The check reads the directory. An unknown team mailbox gets `not_found`. A team mailbox without
+    membership, and a mailbox without the scope, get `forbidden`. Any other id gets `invalid`: nobody
+    writes or sends from the mailbox of an agent, and the mailbox of a person who gave no grant is private.
+  - A removal needs no membership and no grant, so a person can remove an entry after the access ended.
 - `mail.get_settings` returns the stored `default_from` without a check. A membership can end after the
   save. The web app then uses the address of the open mailbox: it uses a saved value only when
   `mail.list_mailboxes` has that mailbox with `mail.send`. The server does not clear a stale value. The
-  object has at most one entry for the own mailbox and one for each team mailbox that the person was a
-  member of.
+  object has at most one entry for the own mailbox, and one for each team mailbox and each delegated
+  mailbox that the person could use.
 - A change does not change the mailbox `version`, so the web app does not get the list again.
 - Only people can call them. An agent has no web app. A change writes no audit line, as for
   `chat.mark_read`: it changes the view of the person, not their data.
@@ -208,6 +276,8 @@ in the mailbox.
   composer of each person adds the shared signature. An agent that a message tricks could put text into
   the mail of the people, so a change by an agent there gets `forbidden`. It can read it.
 - An owner or an admin reads the settings of an agent mailbox, and cannot change them.
+- A delegate reads the settings of the mailbox of the person, and cannot change them: only the owner of
+  the mailbox does ([Delegated mailboxes](#delegated-mailboxes)).
 - A read writes no audit line, as for `mail.get_profile`: the settings hold no mail content. A change
   writes the line `mail.update_mailbox_settings` with the mailbox as `target`, and `mailbox` for a team
   mailbox. The line never holds the signature.
@@ -231,7 +301,8 @@ in the mailbox.
 | An agent or a service account, in its own mailbox | `mail.read` in the account scopes | `mail.modify` in the account scopes |
 | An agent or a service account, in a team mailbox | `mail.read` in the membership | `forbidden` |
 | An owner or an admin, in the mailbox of an agent | Yes | `forbidden` |
-| A principal who is not a member, or the id of a different person | `forbidden` | `forbidden` |
+| A delegate, in the mailbox of a person | `mail.read` in the grant, and in the credential of a person | `forbidden` |
+| A principal who is not a member, or the id of a different person who gave no grant | `forbidden` | `forbidden` |
 
 ### Settings of the organization
 
@@ -728,9 +799,10 @@ The inbox of each mailbox is the MCP resource `mail.inbox`, with the URI
 client of protocol 2026-07-28 subscribes to it with `subscriptions/listen`
 ([`mcp`](../mcp/README.md#subscriptions)).
 
-1. The Worker checks the mailboxes: the own mailbox, or a team mailbox that the caller is a member
-   of with `mail.read`. One query reads all team mailboxes of the caller. An owner or an admin can read the mailbox of
-   an agent, but cannot subscribe to it.
+1. The Worker checks the mailboxes: the own mailbox, a team mailbox that the caller is a member
+   of with `mail.read`, or a delegated mailbox with `mail.read` in the grant. One query reads all team
+   mailboxes of the caller, and one reads all its delegated mailboxes. An owner or an admin can read the
+   mailbox of an agent, but cannot subscribe to it.
 2. The Worker opens a watch socket to the `MailboxDO`: a WebSocket that the object accepts with
    `acceptWebSocket` and the tag `watch`. The object can sleep while its sockets wait.
 3. `deliver()` sends the message `inbox` to each watch socket after it stores a message that is not
@@ -741,7 +813,9 @@ client of protocol 2026-07-28 subscribes to it with `subscriptions/listen`
   nothing. A decision of the Screener that moves mail to the inbox sends `inbox`.
 - In a team mailbox, each member with a stream gets the notification. A removed member, and a member
   that lost `mail.read` in the mailbox, stop getting notifications within about one minute, when the
-  stream checks the membership again.
+  stream checks the membership again. A stream on a team mailbox, and a stream of a delegate on the mailbox
+  of a person, also check the access before each notification, so no notification follows the end of the
+  access ([`mcp`](../mcp/README.md#subscriptions)).
 - The signal holds no content. The client reads the inbox with the scope and mailbox checks of REST.
 - `resources/list` gives the inbox of each mailbox of `mail.list_mailboxes`, so an owner or an admin
   also sees the inbox of each agent. The acknowledgment of `subscriptions/listen` leaves those out. A
@@ -765,6 +839,7 @@ on a server, a REST client or an MCP client of an older protocol.
 - A person can watch their own mailbox, a team mailbox that they are a member of, and the mailbox of
   an agent that they sponsor. An agent can watch its own mailbox and its team mailboxes. A webhook
   tells when mail arrives, so the membership of a team mailbox needs `mail.read`.
+- A delegate cannot create a webhook for the mailbox of a person: the call gets `forbidden`.
 - An owner or an admin who is not the sponsor cannot watch the mailbox of an agent: a webhook tells
   when the agent gets mail, without the audit line of a read. The sponsor can create a webhook for
   the agent, and the audit line of the create names the mailbox of the agent.
@@ -956,7 +1031,8 @@ A disabled endpoint stays disabled. Delete it and create a new one.
 | Delivery status of sent mail | `MailboxDO` table `delivery` | |
 | Outbox | `MailboxDO` table `outbox` | Rows are deleted after delivery or after the last retry |
 | Reset pause | `MailboxDO` table `meta`, keys `delivery_pause`, `delivery_pause_generation` | Keeps the old mailbox paused and rejects calls from an older reset |
-| Idempotency keys of `mail.send` | `MailboxDO` table `idempotency` | Kept 24 hours, with the SHA-256 hash of the request. In a team mailbox, the key has the principal id of its caller in front |
+| Idempotency keys of `mail.send` | `MailboxDO` table `idempotency` | Kept 24 hours, with the SHA-256 hash of the request. In a team mailbox, and for a delegate in the mailbox of a person, the key has the principal id of its caller in front |
+| Delegates of the mailbox of a person | D1 table `mailbox_delegates` (migration `0037`) | The [`identity`](../identity/README.md#mailbox-delegates) module owns it. One row for each grant: the owner, the delegate and the scopes |
 | Change counter | `MailboxDO` table `meta` (`version`) | |
 | Sent recipients | `MailboxDO` table `recipients` | One row for each address that the mailbox sent mail to: the address, the number of sent messages, the time of the last one, and `person_sent` (1 when a person sent mail to the address, for the Screener). Rebuildable from the sent messages |
 | Watch sockets | `MailboxDO` hibernatable WebSockets, tag `watch` | Not stored. A socket ends with its `subscriptions/listen` stream, and a restart of the object ends it. No backup |
@@ -1021,8 +1097,13 @@ Backups: not built yet. mbox/EML export comes with Takeout.
   sent), the addresses of the directory that the mailbox never wrote to, and a way to remove a
   suggestion
 - Filters, vacation responder and forwarding
-- Aliases, groups, delegation and send-as. A person has one address for the own mailbox and one for each
-  team mailbox, so the From of the web composer chooses a mailbox
+- Aliases, groups and send-as with a different address. A person has one address for the own mailbox, one
+  for each team mailbox and one for each delegated mailbox with `mail.send`, so the From of the web composer
+  chooses a mailbox
+- For delegated mailboxes: a webhook of a delegate, a notice to the owner and to the delegate for each new
+  grant, a way for a delegate to remove the own grant, a grant with an end date, an audit line for each read
+  by a delegate, a setting of the organization that turns the feature off, and a `Sender` header or a mark
+  that tells a recipient which delegate sent a message
 - A reply from a mailbox that is not the mailbox of its conversation
 - For signatures: a signature for each member of a team mailbox, a signature with formatting or
   pictures, and a signature that `mail.send` adds

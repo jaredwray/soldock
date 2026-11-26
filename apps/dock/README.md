@@ -125,7 +125,7 @@ with injected inbound mail.
 
 | State | Module | Where |
 | --- | --- | --- |
-| Directory (principals with their password hashes and TOTP secrets, service accounts, addresses, API keys with their end, sessions, reset lock, mail domains, team mailboxes and their members, OAuth clients, requests and grants) | [`identity`](src/identity/README.md) | D1 `DIRECTORY` |
+| Directory (principals with their password hashes and TOTP secrets, service accounts, addresses, API keys with their end, sessions, reset lock, mail domains, team mailboxes and their members, the delegates of the mailbox of each person, OAuth clients, requests and grants) | [`identity`](src/identity/README.md) | D1 `DIRECTORY` |
 | Mailboxes (messages, threads, labels, search index, delivery, outbox, event outbox, idempotency keys) | [`mail`](src/mail/README.md) | `MailboxDO` SQLite |
 | Raw MIME | [`mail`](src/mail/README.md) | R2 `BLOBS`, `mail/raw/<mailbox id>/<sha256>` |
 | Inbound jobs | [`mail`](src/mail/README.md) | Queues `soldock-mail-inbound` and `soldock-mail-inbound-dlq` |

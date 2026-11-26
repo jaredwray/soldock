@@ -5,7 +5,7 @@ import { setPageTitle } from "../../lib/pageTitle.ts";
 import { navigate } from "../../lib/router.tsx";
 import { useToast } from "../../lib/toast.tsx";
 import { useOnChange } from "../../lib/useOnChange.ts";
-import { isAgentMailbox, type MailView, type ScreenerTab, viewPath } from "../../routes.ts";
+import { type MailView, mailboxKindOf, type ScreenerTab, viewPath } from "../../routes.ts";
 import { SEARCH_INPUT_ID } from "../../shell/nav.ts";
 import { useSession } from "../auth/session.tsx";
 import { AutoLabelsDialog } from "./AutoLabelsDialog.tsx";
@@ -18,7 +18,7 @@ import { focusMode } from "./focusReply.ts";
 import { DeleteLabelDialog, NewLabelDialog } from "./LabelDialogs.tsx";
 import { MailPane } from "./MailPane.tsx";
 import { MailboxProvider, MailboxRightsProvider } from "./mailbox.tsx";
-import { defaultFromId, fromOptions, mailboxRights } from "./mailboxNav.ts";
+import { defaultFromId, fallbackMailboxName, fromOptions, mailboxRights } from "./mailboxNav.ts";
 import { ShortcutHelp } from "./ShortcutHelp.tsx";
 import { Sidebar } from "./Sidebar.tsx";
 import { showScreener } from "./screener.ts";
@@ -75,8 +75,9 @@ interface MailAppProps {
 }
 
 /**
- * The Mail product, for one mailbox: the own mailbox of the person, a team mailbox, or the mailbox of
- * an agent, which an owner or an admin can only read. It owns the
+ * The Mail product, for one mailbox: the own mailbox of the person, a team mailbox, the mailbox of a
+ * person who lets the person use it, or the mailbox of an agent, which an owner or an admin can only read.
+ * It owns the
  * data that each view shares: the profile poll, the labels, the composer and the dialogs. The pane
  * for the current view has a key, so a new view starts clean. The shell gives this component a key
  * for each mailbox, so no data of one mailbox shows in a different one.
@@ -101,6 +102,8 @@ export function MailApp({
 	const { labels, error: labelsError, reload: reloadLabels } = useLabels(mailboxId);
 	const { settings: mailboxSettings, set: setMailboxSettings } = useMailboxSettings(mailboxId);
 	const listed = mailboxId ? (mailboxes?.find((mailbox) => mailbox.id === mailboxId) ?? null) : null;
+	// The list of the mailboxes names the kind. Before it loads, the path of the mailbox does.
+	const kind = listed?.kind ?? mailboxKindOf(mailboxId);
 	const rights = useMemo(() => mailboxRights(mailboxes, mailboxId), [mailboxes, mailboxId]);
 	const [composing, setComposing] = useState<Composing | null>(null);
 	const [dialog, setDialog] = useState<MailDialog>(null);
@@ -123,7 +126,7 @@ export function MailApp({
 	// The address of the mailbox. A reply from a team mailbox leaves out the team address, not the person's.
 	const myAddress = profile?.address ?? (mailboxId ? (listed?.address ?? "") : whoami.principal.address);
 	const mailboxName = mailboxId
-		? (profile?.display_name ?? listed?.display_name ?? (isAgentMailbox(mailboxId) ? "Agent mailbox" : "Team mailbox"))
+		? (profile?.display_name ?? listed?.display_name ?? fallbackMailboxName(mailboxId))
 		: null;
 	const { view } = route;
 	// Focus works in each view with a reply and a Done (`focusMode`). Its path in a different view goes to the
@@ -245,7 +248,8 @@ export function MailApp({
 						open={navOpen}
 						onCompose={() => compose()}
 						onNewLabel={() => setDialog({ type: "new-label" })}
-						onAutoLabels={() => setDialog({ type: "auto-labels" })}
+						// Only the owner of a mailbox changes its auto labels, so a delegate gets no button for them.
+						onAutoLabels={kind === "delegated" ? undefined : () => setDialog({ type: "auto-labels" })}
 						onDeleteLabel={(label) => setDialog({ type: "delete-label", label })}
 						onClose={onCloseNav}
 					/>
@@ -295,7 +299,7 @@ export function MailApp({
 						<MailboxSettings
 							mailbox={{
 								id: mailboxId,
-								kind: mailboxId === null ? "personal" : isAgentMailbox(mailboxId) ? "agent" : "team",
+								kind,
 								address: myAddress,
 								display_name: mailboxName ?? whoami.principal.display_name,
 							}}
@@ -325,7 +329,7 @@ export function MailApp({
 					)}
 					{dialog?.type === "help" && <ShortcutHelp onClose={() => setDialog(null)} />}
 					{dialog?.type === "auto-labels" && (
-						<AutoLabelsDialog team={mailboxId !== null} onClose={() => setDialog(null)} onChanged={onChanged} />
+						<AutoLabelsDialog team={kind === "team"} onClose={() => setDialog(null)} onChanged={onChanged} />
 					)}
 					{dialog?.type === "new-label" && (
 						<NewLabelDialog

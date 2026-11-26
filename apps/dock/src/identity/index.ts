@@ -44,6 +44,14 @@ export {
 	recordExpiryNotice,
 } from "./expiry-notice.ts";
 export { identityHandlers } from "./handlers.ts";
+export {
+	delegatedMailboxesOf,
+	delegatedMailboxFor,
+	listMailboxDelegates,
+	type MailboxDelegateRecord,
+	removeMailboxDelegate,
+	setMailboxDelegate,
+} from "./mailbox-delegates.ts";
 export { mountOAuthRoutes, protectedResourceMetadataUrl } from "./oauth-routes.ts";
 export { toPrincipalOutput } from "./output.ts";
 export { chatPresenceHandlers } from "./presence.ts";

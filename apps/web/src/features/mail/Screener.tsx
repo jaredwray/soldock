@@ -6,7 +6,7 @@ import { Icon } from "../../lib/icons.tsx";
 import { Link } from "../../lib/router.tsx";
 import { useToast } from "../../lib/toast.tsx";
 import { useOnChange } from "../../lib/useOnChange.ts";
-import { isAgentMailbox, type ScreenerTab, screenerPath, threadPath, viewPath } from "../../routes.ts";
+import { mailboxKindOf, type ScreenerTab, screenerPath, threadPath, viewPath } from "../../routes.ts";
 import { SearchBox } from "../../shell/SearchBox.tsx";
 import { mailboxInput } from "./mailbox.tsx";
 import type { MailboxRights } from "./mailboxNav.ts";
@@ -61,9 +61,11 @@ export function Screener(props: ScreenerProps) {
 					)}
 					{!props.rights.modify && (
 						<p className="field-hint screener-line">
-							{isAgentMailbox(mailboxId)
+							{mailboxKindOf(mailboxId) === "agent"
 								? "You can only read the mailbox of an agent."
-								: "Your membership does not let you screen senders in this mailbox."}
+								: mailboxKindOf(mailboxId) === "delegated"
+									? "The owner of this mailbox does not let you screen senders in it."
+									: "Your membership does not let you screen senders in this mailbox."}
 						</p>
 					)}
 					<nav className="screener-tabs" aria-label="Screener views">

@@ -1,7 +1,9 @@
 import {
 	type AutoLabelSettings,
 	MAIL_LIMITS,
+	MAILBOX_DELEGATE_LIMITS,
 	type Mailbox,
+	type MailboxDelegate,
 	type MailboxKind,
 	type MailSettings,
 	type Principal,
@@ -18,6 +20,7 @@ import { useOnChange } from "../../lib/useOnChange.ts";
 import { usePrincipals } from "../../lib/usePrincipals.ts";
 import { adminPath, INBOX_PATH, screenerPath, viewPath } from "../../routes.ts";
 import { SearchBox } from "../../shell/SearchBox.tsx";
+import { type AccessEditorText, MailboxAccessEditor } from "../admin/MailboxAccessEditor.tsx";
 import { memberScopes, scopesText } from "../admin/mailboxScopes.ts";
 import { byName, MembersPart } from "../admin/SharedMailboxPanel.tsx";
 import { isOrgAdmin, useSession } from "../auth/session.tsx";
@@ -93,7 +96,7 @@ export function MailboxSettings(props: MailboxSettingsProps) {
 						onSaved={props.onSettingsSaved}
 						onChanged={props.onChanged}
 					/>
-					<AccessSection mailbox={mailbox} onMembersChanged={props.onMembersChanged} />
+					<AccessSection mailbox={mailbox} rights={props.rights} onMembersChanged={props.onMembersChanged} />
 					<DefaultSection
 						mailbox={mailbox}
 						rights={props.rights}
@@ -152,11 +155,27 @@ function LoadError({ error, onRetry }: { error: string; onRetry: () => void }) {
 }
 
 /**
+ * True when the person can change the settings of the mailbox: the signature, the Screener and AI. The person
+ * needs `mail.modify` there. In the mailbox of a different person, only its owner changes them.
+ */
+function canChangeSettings(mailbox: SettingsMailbox, rights: MailboxRights): boolean {
+	return rights.modify && mailbox.kind !== "delegated";
+}
+
+/** Why the person cannot change a setting of the mailbox. `what` names what a membership does not let them change. */
+function settingsLockedText(mailbox: SettingsMailbox, what: string): string {
+	if (mailbox.kind === "agent") return "You can only read the mailbox of an agent.";
+	if (mailbox.kind === "delegated") return `Only ${mailbox.display_name} changes the settings of this mailbox.`;
+	return `Your membership does not let you change ${what}.`;
+}
+
+/**
  * AI in the mailbox. Inbox auto labels are the only AI feature of Mail, so the switch is the switch of the
  * auto labels (`mail.update_auto_labels`). The organization must also turn on AI and the feature.
  */
 function AiSection({ mailbox, rights, refreshKey, onOpenAutoLabels, onChanged }: MailboxSettingsProps) {
 	const { whoami } = useSession();
+	const canChange = canChangeSettings(mailbox, rights);
 	const toast = useToast();
 	const load = useCallback(() => api.call("mail.get_auto_labels", mailboxInput(mailbox.id)), [mailbox.id]);
 	const { data: settings, setData, error, setError, reload } = useLoad<AutoLabelSettings>(load);
@@ -200,7 +219,7 @@ function AiSection({ mailbox, rights, refreshKey, onOpenAutoLabels, onChanged }:
 							className="checkbox"
 							checked={settings.enabled}
 							onChange={() => void toggle(!settings.enabled)}
-							disabled={busy || !rights.modify}
+							disabled={busy || !canChange}
 						/>
 						<span>
 							Use AI in this mailbox
@@ -211,14 +230,8 @@ function AiSection({ mailbox, rights, refreshKey, onOpenAutoLabels, onChanged }:
 							</span>
 						</span>
 					</label>
-					{!rights.modify && (
-						<p className="field-hint">
-							{mailbox.kind === "agent"
-								? "You can only read the mailbox of an agent."
-								: "Your membership does not let you change this mailbox."}
-						</p>
-					)}
-					{settings.enabled && rights.modify && (
+					{!canChange && <p className="field-hint">{settingsLockedText(mailbox, "this mailbox")}</p>}
+					{settings.enabled && canChange && (
 						<button type="button" className="button button-small" onClick={onOpenAutoLabels}>
 							<Icon name="tag" size={16} />
 							Choose the auto labels
@@ -256,6 +269,7 @@ function ScreenerSection({
 	const load = useCallback(() => api.call("mail.get_mailbox_settings", mailboxInput(mailbox.id)), [mailbox.id]);
 	const { data: settings, setData, error, setError, reload } = useLoad<MailboxSettingsData>(load);
 	const [busy, setBusy] = useState(false);
+	const canChange = canChangeSettings(mailbox, rights);
 
 	if (mailbox.kind === "agent") {
 		return (
@@ -307,12 +321,10 @@ function ScreenerSection({
 						value={settings.screener.mode}
 						options={screenerModeOptions(settings.screener.org_default)}
 						onChange={(value) => void change(value as ScreenerMode)}
-						disabled={busy || !rights.modify}
+						disabled={busy || !canChange}
 						aria-describedby={ids.hint}
 					/>
-					{!rights.modify && (
-						<p className="field-hint">Your membership does not let you change the Screener of this mailbox.</p>
-					)}
+					{!canChange && <p className="field-hint">{settingsLockedText(mailbox, "the Screener of this mailbox")}</p>}
 					<p className="screener-links">
 						<Link to={screenerPath(mailbox.id, "waiting")}>Open the Screener</Link>
 						<Link to={screenerPath(mailbox.id, "history")}>Open the Screener history</Link>
@@ -330,10 +342,19 @@ function ScreenerSection({
 
 /**
  * Who can use the mailbox. Owners and admins change the members of a shared mailbox here, as in Admin ›
- * Shared mailboxes. A member sees the list. The own mailbox of a person and the mailbox of an agent have
- * no members.
+ * Shared mailboxes. A member sees the list. A person changes the delegates of the own mailbox here: nobody
+ * else can use it until the person adds one. A delegate sees what the owner lets them do. The mailbox of an
+ * agent has no members.
  */
-function AccessSection({ mailbox, onMembersChanged }: { mailbox: SettingsMailbox; onMembersChanged: () => void }) {
+function AccessSection({
+	mailbox,
+	rights,
+	onMembersChanged,
+}: {
+	mailbox: SettingsMailbox;
+	rights: MailboxRights;
+	onMembersChanged: () => void;
+}) {
 	const { whoami } = useSession();
 	const admin = isOrgAdmin(whoami.principal);
 	if (mailbox.kind === "team" && mailbox.id !== null) {
@@ -341,24 +362,99 @@ function AccessSection({ mailbox, onMembersChanged }: { mailbox: SettingsMailbox
 			<TeamAccess mailboxId={mailbox.id} admin={admin} selfId={whoami.principal.id} onChanged={onMembersChanged} />
 		);
 	}
+	if (mailbox.kind === "personal") return <DelegateAccess selfId={whoami.principal.id} admin={admin} />;
+	if (mailbox.kind === "delegated") {
+		const can = memberScopes([
+			"mail.read",
+			...(rights.modify ? ["mail.modify"] : []),
+			...(rights.send ? ["mail.send"] : []),
+		]);
+		return (
+			<Panel title="Access">
+				<p className="field-hint">
+					This is the mailbox of {mailbox.display_name}, who lets you use it. You can {scopesText(can)} in it.
+					{rights.send && ` Mail that you send from it comes from the name and the address of ${mailbox.display_name}.`}{" "}
+					Only {mailbox.display_name} changes the settings of this mailbox and who can use it.
+				</p>
+			</Panel>
+		);
+	}
 	return (
 		<Panel title="Access">
-			{mailbox.kind === "agent" ? (
-				<p className="field-hint">
-					The agent uses this mailbox. Owners and admins can read it, and they cannot change it or send from it.
-				</p>
-			) : (
-				<p className="field-hint">
-					Only you can use this mailbox. To share mail with other members, use a shared mailbox: each member reads it
-					and sends from its address.{" "}
+			<p className="field-hint">
+				The agent uses this mailbox. Owners and admins can read it, and they cannot change it or send from it.
+			</p>
+		</Panel>
+	);
+}
+
+/** The words of the delegate editor of the own mailbox of a person. */
+const DELEGATE_TEXT: AccessEditorText = {
+	caption: () => "The people and agents that can use your mailbox",
+	empty: "Only you can use this mailbox. To let a person or an agent use it, add them here.",
+	addLabel: "Give access to",
+	addHint:
+		"The person or the agent then sees your mailbox in Mail. An agent sends from your address only to the recipients that its own policy allows. The people who manage the keys of an agent can use what you give to the agent.",
+	full: `A mailbox can have at most ${MAILBOX_DELEGATE_LIMITS.delegates} delegates.`,
+	newLegend: "The person or the agent can",
+	scopesHint:
+		"Read shows your mail and your labels. Change sets labels, the read state, archive and trash, and screens senders in or out. Send sends from your name and your address. Only you change the settings of your mailbox and this list.",
+	addButton: "Give access",
+	removeLabel: (member) => `Remove the access of ${member} to your mailbox`,
+	removeTitle: "Remove access?",
+	removeConfirm: "Remove access",
+	removeBody: (member) =>
+		`Remove the access of ${member} to your mailbox? The access ends at once. The mail stays in your mailbox.`,
+};
+
+/**
+ * The delegates of the own mailbox of the person (`mail.list_delegates`, `mail.set_delegate` and
+ * `mail.remove_delegate`): the people and agents that the person lets use the mailbox, with what each one can
+ * do in it. The list is empty until the person adds a delegate.
+ */
+function DelegateAccess({ selfId, admin }: { selfId: string; admin: boolean }) {
+	const principals = usePrincipals();
+	const load = useCallback(async () => (await api.call("mail.list_delegates")).delegates, []);
+	const { data: delegates, setData, error, reload } = useLoad<MailboxDelegate[]>(load);
+	if (!delegates || !principals) {
+		return (
+			<Panel title="Access">
+				{error ? (
+					<LoadError error={error} onRetry={() => void reload()} />
+				) : (
+					<p className="field-hint">Loading the access…</p>
+				)}
+			</Panel>
+		);
+	}
+	return (
+		<MailboxAccessEditor
+			heading="Access"
+			mailboxName="your mailbox"
+			members={delegates}
+			principals={principals}
+			exclude={[selfId]}
+			limit={MAILBOX_DELEGATE_LIMITS.delegates}
+			// The person adds each right that the delegate needs. Send lets the delegate write as the person.
+			newScopes={["mail.read"]}
+			text={DELEGATE_TEXT}
+			note={
+				<>
+					To share an address with a team, use a shared mailbox: each member reads it and sends from its address.{" "}
 					{admin ? (
 						<Link to={adminPath("shared-mailboxes")}>Open Admin › Shared mailboxes</Link>
 					) : (
 						"An owner or an admin creates one."
 					)}
-				</p>
-			)}
-		</Panel>
+				</>
+			}
+			onSet={async (principalId, scopes) => {
+				setData((await api.call("mail.set_delegate", { principal_id: principalId, scopes })).delegates);
+			}}
+			onRemove={async (principalId) => {
+				setData((await api.call("mail.remove_delegate", { principal_id: principalId })).delegates);
+			}}
+		/>
 	);
 }
 
@@ -573,6 +669,7 @@ function SignatureSection({
 	const { data: settings, setData, error, setError, reload } = useLoad<MailboxSettingsData>(load);
 	const [text, setText] = useState<string | null>(null);
 	const [busy, setBusy] = useState(false);
+	const canChange = canChangeSettings(mailbox, rights);
 	const value = text ?? settings?.signature ?? "";
 	const unchanged = settings !== null && value === settings.signature;
 	const tooLong = value.length > MAIL_LIMITS.signatureChars;
@@ -610,7 +707,7 @@ function SignatureSection({
 	const hint =
 		mailbox.kind === "agent"
 			? "Only the agent changes its signature. It adds the signature to its mail itself."
-			: `Plain text. The composer adds it to each new message, reply and forward. You can change it there.${mailbox.kind === "team" ? " The members of this shared mailbox share this signature." : ""}`;
+			: `Plain text. The composer adds it to each new message, reply and forward. You can change it there.${mailbox.kind === "team" ? " The members of this shared mailbox share this signature." : ""}${mailbox.kind === "delegated" ? " Only the owner of this mailbox changes this signature." : ""}`;
 
 	return (
 		<Panel title="Signature">
@@ -626,9 +723,9 @@ function SignatureSection({
 						className="input signature-input"
 						rows={4}
 						value={value}
-						placeholder={rights.modify ? "Your name, role and phone number" : "No signature"}
+						placeholder={canChange ? "Your name, role and phone number" : "No signature"}
 						onChange={(event) => setText(event.target.value)}
-						readOnly={!rights.modify}
+						readOnly={!canChange}
 						aria-describedby={`${ids.hint} ${ids.count}`}
 						aria-invalid={tooLong || undefined}
 						disabled={busy}
@@ -646,7 +743,7 @@ function SignatureSection({
 							{error}
 						</p>
 					)}
-					{rights.modify && (
+					{canChange && (
 						<button
 							type="submit"
 							className="button button-primary button-small"

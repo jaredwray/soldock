@@ -26,7 +26,8 @@ export function mailboxMemberScopes(scopes: readonly string[]): MailboxMemberSco
 	return MAILBOX_MEMBER_SCOPES.filter((scope) => scopes.includes(scope));
 }
 
-const MemberScopes = z
+/** The scopes of a membership or a grant in the input of an operation: one or more, each one time. */
+export const MemberScopes = z
 	.array(z.enum(MAILBOX_MEMBER_SCOPES))
 	.min(1)
 	.refine((scopes) => new Set(scopes).size === scopes.length, "must not name a scope two times");

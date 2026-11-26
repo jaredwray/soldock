@@ -3,7 +3,7 @@ import { useEffect, useRef } from "react";
 import { participantsLabel, shortDate } from "../../lib/format.ts";
 import { Icon } from "../../lib/icons.tsx";
 import { Link } from "../../lib/router.tsx";
-import { isAgentMailbox, type MailView, threadPath } from "../../routes.ts";
+import { type MailView, mailboxKindOf, threadPath } from "../../routes.ts";
 import { AUTO_MARK_TEXT, AUTO_MARK_TITLE } from "./autoLabels.ts";
 import type { ListState } from "./data.ts";
 import { useMailboxId, useReadOnlyMailbox } from "./mailbox.tsx";
@@ -31,7 +31,7 @@ interface ThreadListProps {
 export function ThreadList(props: ThreadListProps) {
 	const { list, view } = props;
 	const mailboxId = useMailboxId();
-	const owner = mailboxId === null ? "own" : isAgentMailbox(mailboxId) ? "agent" : "team";
+	const owner = mailboxKindOf(mailboxId);
 
 	if (list.status === "loading") {
 		return (
@@ -100,13 +100,14 @@ export function ThreadList(props: ThreadListProps) {
 	);
 }
 
-function emptyText(view: MailView, title: string, owner: "own" | "team" | "agent"): string {
+function emptyText(view: MailView, title: string, owner: ReturnType<typeof mailboxKindOf>): string {
 	if (view.kind === "search") return `No conversations match “${view.query}”.`;
 	if (view.kind === "system" && view.view === "snoozed") {
 		return "No conversation is snoozed. Snooze a conversation to take it out of the inbox until a time that you pick.";
 	}
 	if (view.kind === "system" && view.view === "inbox") {
 		if (owner === "team") return "The inbox of this team mailbox is empty.";
+		if (owner === "delegated") return "The inbox of this mailbox is empty.";
 		return owner === "agent" ? "The inbox of this agent is empty." : "Your inbox is empty.";
 	}
 	return `No conversations in ${title}.`;

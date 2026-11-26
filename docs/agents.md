@@ -412,6 +412,31 @@ a person who manages that account must agree.
 - A request stays until a person answers it. A room has at most 20 requests at the same time.
 - A direct message has no request. Two agents cannot start a direct message with each other.
 
+## The mailbox of a person
+
+A person can let you use their own mailbox. The person opens the settings of the mailbox in Mail (the
+gear), and adds you under **Access** with **Read**, **Change** and **Send** (`mail.set_delegate`). Nobody
+else can give this access: not an owner, not an admin and not your sponsor. You cannot ask for it with a
+tool. The people who manage your keys can use what the person gives to you.
+
+1. Call `mail_list_mailboxes`. The mailbox of the person has the kind `delegated`. Its `id` is the id of
+   the person, and `scopes` says what you can do in it.
+2. Pass that `id` as `mailbox_id` to a mail tool, for example `mail_list_threads` or `mail_send`.
+
+- The scopes are the scopes of a team mailbox: see the table in [Team mailboxes](#team-mailboxes). The
+  grant alone decides what you can do in the mailbox. Your account scopes do not count there.
+- Mail that you send from the mailbox comes from the name and the address of the person. The sent copy is
+  in the mailbox of the person, with your name in `sent_by`, and the mail has the header
+  `X-Asterra-Agent: true`.
+- Your outbound policy applies to mail that you send from the mailbox.
+- You can watch the inbox of the mailbox with `subscriptions/listen` when the grant has `mail.read`. You
+  cannot create a webhook for it.
+- You cannot change the settings of the mailbox: its signature, its Screener and its auto labels. You can
+  read them.
+- The person removes the grant in the same place (`mail.remove_delegate`). The access ends at your next
+  call. It also stops while the account of the person is archived.
+- The person who gives the access needs the scope `mail.share` in an API key. A browser session has it.
+
 ## Team mailboxes
 
 A team mailbox is a shared mailbox with its own address, for example `support@example.com`. An
@@ -420,7 +445,8 @@ owner or an admin creates it under **Admin › Shared mailboxes** and adds peopl
 mailbox. An agent cannot add itself.
 
 1. Call `mail_list_mailboxes`. The result has your own mailbox first, then each team mailbox that
-   you are a member of. `scopes` says what you can do in each mailbox.
+   you are a member of, then each [mailbox of a person](#the-mailbox-of-a-person) who lets you use it.
+   `scopes` says what you can do in each mailbox.
 2. Pass the `id` of a team mailbox as `mailbox_id` to a mail tool, for example `mail_list_threads`
    or `mail_send`. Without `mailbox_id`, a mail tool uses your own mailbox.
 

@@ -8,6 +8,7 @@ import { docsOperations } from "./docs.ts";
 import { domainOperations } from "./domains.ts";
 import { driveOperations } from "./drive.ts";
 import { mailOperations } from "./mail.ts";
+import { mailboxDelegateOperations } from "./mailbox-delegates.ts";
 import { oauthOperations } from "./oauth.ts";
 import type { Operation } from "./operation.ts";
 import { sheetsOperations } from "./sheets.ts";
@@ -17,6 +18,7 @@ import { webhookOperations } from "./webhooks.ts";
 /** Every operation, by name. Adapters and the client are generated from this registry. */
 export const operations = {
 	...mailOperations,
+	...mailboxDelegateOperations,
 	...directoryOperations,
 	...domainOperations,
 	...teamMailboxOperations,

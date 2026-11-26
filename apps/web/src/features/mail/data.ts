@@ -9,7 +9,7 @@ import {
 } from "@asterra/contracts";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, errorMessage } from "../../lib/api.ts";
-import type { MailView } from "../../routes.ts";
+import { type MailView, markPersonMailboxes } from "../../routes.ts";
 import { applyToSummary, belongsInView, changeLabels, type LabelChange, snoozedAfter } from "./actions.ts";
 import { mailboxInput } from "./mailbox.tsx";
 
@@ -163,6 +163,10 @@ export function useMailboxes(page: string): { mailboxes: Mailbox[] | null; reloa
 			(result) => {
 				if (request < applied.current) return;
 				applied.current = request;
+				// The paths of a delegated mailbox need its kind, which the id alone does not tell.
+				const idsOf = (kind: Mailbox["kind"]) =>
+					result.mailboxes.filter((mailbox) => mailbox.kind === kind).map(({ id }) => id);
+				markPersonMailboxes(idsOf("delegated"), idsOf("agent"));
 				setMailboxes(result.mailboxes);
 			},
 			() => {

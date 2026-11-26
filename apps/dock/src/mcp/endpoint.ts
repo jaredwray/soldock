@@ -85,7 +85,7 @@ function instructions(caller: AuthContext, era: Era): string {
 	const readsAgents = canReadAgentMailboxes(caller);
 	const text = [
 		`You act as ${caller.principal.display_name} <${caller.principal.address}>, ${KIND_NAMES[caller.kind]}.`,
-		"The mail tools act on this mailbox by default. To use a team mailbox that you are a member of, get its id from mail_list_mailboxes and pass it as mailbox_id. Its scopes there say what you can do in that mailbox.",
+		"The mail tools act on this mailbox by default. To use a team mailbox that you are a member of, or the mailbox of a person who lets you use it (kind delegated), get its id from mail_list_mailboxes and pass it as mailbox_id. Its scopes there say what you can do in that mailbox.",
 		...(readsAgents
 			? [
 					"As an owner or an admin, you can also read the mailbox of an agent: pass the id of the agent as mailbox_id. You cannot change it or send from it.",
