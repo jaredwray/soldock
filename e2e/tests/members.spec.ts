@@ -31,16 +31,21 @@ test("an admin creates a person with no API key, and an agent with a first key, 
 
 		const person = unique("Cooper Wray");
 		await page.getByRole("button", { name: "New member" }).click();
+		// The modal dialog is in the middle of the screen. A line that grows or shrinks while the admin types
+		// moves the whole dialog, so the result line of the address check keeps one height in each state.
+		await expect(dialog.getByRole("combobox", { name: "Email domain" })).toHaveText("example.com");
+		const top = (await dialog.boundingBox())?.y;
 		await dialog.getByLabel("Display name").fill(person);
 		// The address format of Admin › Mail is on at the start, with first.last: the address follows the name.
 		const address = dialog.getByLabel("Address", { exact: true });
 		const auto = `cooper.${person.split(" ").at(-1)}`;
 		await expect(address).toHaveValue(auto);
-		await expect(dialog.getByText(`${auto}@example.com is available.`)).toHaveClass("field-ok");
+		await expect(dialog.getByText(`${auto}@example.com is available.`)).toHaveClass(/address-status-ok/);
+		expect((await dialog.boundingBox())?.y).toBe(top);
 		// An address that a member has gets red text with the reason.
 		await address.fill("tomasz");
 		await expect(dialog.getByText("That address belongs to another member or a shared mailbox.")).toHaveClass(
-			"field-error",
+			/address-status-error/,
 		);
 		// The address that the admin types stays when the name changes.
 		await address.fill(`cooper-${local}`);

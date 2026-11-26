@@ -330,17 +330,14 @@ function CreatePrincipalForm({ me, humans, onBusy, onCancel, onCreated }: Create
 							aria-describedby={ids.addressHint}
 						/>
 					</div>
+					{/* The line keeps its height in each state, so the dialog does not move while the admin types. */}
 					<p
 						id={ids.availability}
 						aria-live="polite"
 						className={
-							current === null
-								? undefined
-								: current.result === null
-									? "field-hint"
-									: current.result.available
-										? "field-ok"
-										: "field-error"
+							current?.result
+								? `address-status ${current.result.available ? "address-status-ok" : "address-status-error"}`
+								: "address-status"
 						}
 					>
 						{current === null

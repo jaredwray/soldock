@@ -395,10 +395,23 @@ kbd {
 	font-size: 13px;
 }
 
-.field-ok {
-	margin-top: 4px;
-	color: var(--positive);
+/* The result of the address check in New member. It has the height of one line in each state, also when it is
+   empty, so the modal dialog does not move. A long message on a narrow screen can use a second line. */
+.address-status {
+	min-height: 18px;
+	margin-top: 6px;
+	color: var(--muted-foreground);
 	font-size: 13px;
+	line-height: 18px;
+	overflow-wrap: anywhere;
+}
+
+.address-status-ok {
+	color: var(--positive);
+}
+
+.address-status-error {
+	color: var(--negative);
 }
 
 .form-error {

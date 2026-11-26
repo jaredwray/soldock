@@ -600,7 +600,9 @@ MCP clients. The app has no UI-only path.
       The form checks the address 300 ms after the last change (`directory.check_address`, `addressToCheck` in
       `memberAddress.ts`), and ignores a result for an earlier address. A live line under the field shows
       **Checking…**, then green text that the address is available, or red text with the reason from the
-      server. If the check says that the address is not available, the create shows that message and does not
+      server. The line keeps the height of one line in each state, also when it is empty. The dialog is in the
+      middle of the screen, so a line that grows or shrinks would move the whole dialog while the admin types.
+      If the check says that the address is not available, the create shows that message and does not
       send. The check is advice only: the create can still fail if a different request takes the address first.
       The first API key of a new agent shows once, with a copy button.
       A new person gets no API key. **First sign-in** has two choices. **Invite link** is the default: after
