@@ -3008,6 +3008,67 @@ fieldset {
 	margin-top: 20px;
 }
 
+/* The invitation of a message with a calendar part. Its texts come from the sender, as plain text. */
+.invitation-card {
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+	margin: 0 0 16px;
+	padding: 12px 14px;
+	border: 1px solid var(--border);
+	border-left: 3px solid var(--link);
+	border-radius: var(--radius-md);
+	background: var(--surface);
+}
+
+.invitation-card p,
+.invitation-card h3 {
+	margin: 0;
+	overflow-wrap: anywhere;
+}
+
+.invitation-title {
+	font-size: 16px;
+	font-weight: 600;
+}
+
+.invitation-detail {
+	color: var(--muted-foreground);
+	font-size: 13px;
+}
+
+.invitation-state {
+	font-size: 13px;
+	font-weight: 500;
+}
+
+.invitation-actions {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 8px;
+	margin-top: 8px;
+}
+
+.invitation-answer {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	min-width: 0;
+	margin: 0;
+	padding: 0;
+	border: 0;
+}
+
+.invitation-answer .field-label {
+	margin: 0 4px 0 0;
+}
+
+.invitation-answer-active {
+	border-color: var(--foreground);
+	background: var(--hover);
+}
+
 /* Dialogs */
 
 .dialog {

@@ -1684,6 +1684,44 @@ export class MailboxDO extends DurableObject<Env> {
 	}
 
 	/**
+	 * What Calendar needs to read the calendar part of a message: where its raw message is, how it came, the
+	 * From address, the trusted authentication results, its attachments, and if Spam or the Screener holds it.
+	 */
+	getCalendarSource(messageId: string): {
+		rawKey: string;
+		origin: StoredMessage["origin"];
+		fromAddress: string | null;
+		authentication: AuthenticationResults | null;
+		attachments: StoredMessage["attachments"];
+		spam: boolean;
+		held: boolean;
+	} | null {
+		const row = this.one<{
+			seq: number;
+			raw_key: string;
+			origin: string;
+			from_addr: string | null;
+			auth_json: string | null;
+			attachments_json: string;
+			screen: string | null;
+		}>(
+			"SELECT seq, raw_key, origin, from_addr, auth_json, attachments_json, screen FROM messages WHERE id = ?",
+			messageId,
+		);
+		if (!row) return null;
+		const spam = this.one("SELECT 1 AS found FROM message_labels WHERE message_seq = ? AND label_id = 'SPAM'", row.seq);
+		return {
+			rawKey: row.raw_key,
+			origin: row.origin as StoredMessage["origin"],
+			fromAddress: row.from_addr,
+			authentication: row.auth_json ? (JSON.parse(row.auth_json) as AuthenticationResults) : null,
+			attachments: JSON.parse(row.attachments_json) as StoredMessage["attachments"],
+			spam: spam !== null,
+			held: row.screen === "pending" || row.screen === "out",
+		};
+	}
+
+	/**
 	 * The addresses that this mailbox sent mail to and that hold `query`, without regard to case. An
 	 * address that starts with the query comes first. Then comes an address with a part that starts with
 	 * it: after `@`, `.`, `_`, `-` or `+`, or a query that starts with one of them. Then the others. The

@@ -337,9 +337,29 @@ function InvitationDialog({
 		}
 	}
 
+	/** A meeting by mail from outside the organization: the person removes it from the own calendar only. */
+	async function removeCopy() {
+		setBusy(true);
+		setError(null);
+		try {
+			await deleteEvent(event.id, event.revision);
+			toast({ message: "Meeting removed from your calendar." });
+			onChanged(event);
+			onClose();
+		} catch (caught) {
+			setBusy(false);
+			setError(errorMessage(caught));
+		}
+	}
+
 	return (
 		<Dialog title={pending ? "Invitation" : "Meeting"} onClose={() => !busy && onClose()} className="cal-dialog">
 			<div className="dialog-body cal-form cal-invitation">
+				{event.untrusted && (
+					<p className="cal-invitation-notice">
+						This meeting came by mail from outside your organization. Be careful with links and requests in it.
+					</p>
+				)}
 				<h3 className="cal-invitation-title">{event.title}</h3>
 				<p className="cal-invitation-when">{whenText(event, zone)}</p>
 				{event.location && <p className="cal-invitation-location">{event.location}</p>}
@@ -387,6 +407,16 @@ function InvitationDialog({
 						</fieldset>
 					)}
 					<span className="toolbar-spacer" />
+					{event.untrusted && !gone && (
+						<button
+							type="button"
+							className="button button-danger-outline"
+							disabled={busy}
+							onClick={() => void removeCopy()}
+						>
+							Remove from my calendar
+						</button>
+					)}
 					<button type="button" className="button" disabled={busy} onClick={onClose} data-autofocus>
 						Close
 					</button>

@@ -119,7 +119,9 @@ in a time zone, or all day. An all-day event is on the same days in each time zo
 become a list of the days that have events.
 
 Invite people, agents and service accounts of the organization to a meeting. Each attendee answers Yes,
-Maybe or No, and the organizer sees each answer. Only the organizer changes or cancels the meeting. An agent
+Maybe or No, and the organizer sees each answer. Only the organizer changes or cancels the meeting. An address
+outside the organization gets a standard iCalendar invitation by mail, and its answer comes back to the
+meeting. An invitation that arrives by mail shows in the message with Yes, Maybe and No. An agent
 adds, reads and answers events of its own calendar with tools such as `calendar_create_event`,
 `calendar_list_events` and `calendar_respond_to_invitation`. Recurring events and reminders come in later
 layers.

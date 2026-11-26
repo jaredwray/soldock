@@ -3,23 +3,45 @@ import {
 	CALENDAR_LIMITS,
 	type CalendarEvent,
 	canonicalTimeZone,
-	checkWhen,
 	DAY_MS,
 	dateToUtcMs,
 	type EventWhenValue,
+	type MailInvitation,
 	type OperationName,
 	zonedDate,
 	zonedDayStart,
 } from "@asterra/contracts";
-import { auditOk, type CallContext, getPrincipals, resolveMailboxAddress } from "../identity/index.ts";
+import {
+	auditOk,
+	type CallContext,
+	domainOf,
+	getPrincipals,
+	listMailboxAliases,
+	mailDomains,
+	resolveMailboxAddress,
+} from "../identity/index.ts";
+import {
+	type CalendarPart,
+	deniedOutboundAddresses,
+	outboundMode,
+	outboundPolicyDenial,
+	readCalendarPart,
+} from "../mail/index.ts";
 import { decodeCursor, encodeCursor, type HandlerMap, newId, OperationError, sha256Hex } from "../platform/index.ts";
-import type { AttendeeRef, CalendarCall, EventFields, EventRecord, EventTime, Refusal } from "./calendar.ts";
+import {
+	type AttendeeRef,
+	type CalendarCall,
+	type EventFields,
+	type EventRecord,
+	type EventTime,
+	mailKey,
+	type Refusal,
+} from "./calendar.ts";
+import { type ICalInvite, parseICalendar } from "./ical.ts";
+import { storedTime } from "./time.ts";
 
 type CalendarOperation = Extract<OperationName, `calendar.${string}`>;
 
-/** The bounds of the days of an all-day event in each time zone: from UTC+14 to UTC-12. */
-const EARLIEST_ZONE_MS = 14 * 60 * 60 * 1000;
-const LATEST_ZONE_MS = 12 * 60 * 60 * 1000;
 /**
  * No event in a range starts more than this before the range: the longest event, and the widest day of an
  * all-day event in each time zone, with a margin.
@@ -54,11 +76,15 @@ function openCalendar(call: CallContext): { stub: ReturnType<typeof calendarStub
 type AttendeeInput = { principal_id?: string | undefined; email?: string | undefined };
 
 /**
- * The attendees of an input, as principals of the organization. The caller and a second entry of the same
- * principal are left out. An unknown or archived principal is refused.
+ * The attendees of an input. A principal of the organization gets a copy on its calendar. An address on a domain
+ * that is not a mail domain of the organization is an attendee outside it, who gets mail. The caller and a second
+ * entry of the same attendee are left out. An unknown or archived principal is refused.
  */
 async function resolveAttendees(call: CallContext, inputs: readonly AttendeeInput[]): Promise<AttendeeRef[]> {
 	const db = call.env.DIRECTORY;
+	const domains = inputs.some((input) => input.email !== undefined)
+		? new Set(await mailDomains(db))
+		: new Set<string>();
 	const ids = inputs.flatMap((input) => (input.principal_id ? [input.principal_id] : []));
 	const byId = new Map((await getPrincipals(db, ids)).map((principal) => [principal.id, principal]));
 	const result = new Map<string, AttendeeRef>();
@@ -71,13 +97,20 @@ async function resolveAttendees(call: CallContext, inputs: readonly AttendeeInpu
 			);
 		}
 		if (input.email !== undefined) {
+			const address = input.email.toLowerCase();
+			if (!domains.has(domainOf(address))) {
+				// An address outside the organization: the attendee gets the invitation by mail.
+				const key = mailKey(address);
+				if (!result.has(key)) result.set(key, { key, principal_id: null, email: address, name: address });
+				continue;
+			}
 			// The address of a person, also an alias. A team mailbox has no calendar.
-			const mailbox = await resolveMailboxAddress(db, input.email);
+			const mailbox = await resolveMailboxAddress(db, address);
 			const found = mailbox?.kind === "personal" ? (await getPrincipals(db, [mailbox.id]))[0] : undefined;
 			if (!found) {
 				throw new OperationError(
 					"invalid",
-					`No person, agent or service account of the organization has the address ${input.email}. Invitations to addresses outside the organization are not available yet.`,
+					`No person, agent or service account of the organization has the address ${input.email}.`,
 				);
 			}
 			principal = found;
@@ -100,6 +133,34 @@ async function resolveAttendees(call: CallContext, inputs: readonly AttendeeInpu
 	return [...result.values()];
 }
 
+/**
+ * Refuses a call that sends mail when the credential cannot send mail, or when the outbound policy of an agent
+ * does not allow an address. The outbox of the mailbox checks the policy again before each delivery.
+ */
+function assertMayMail(call: CallContext, addresses: readonly string[]): void {
+	if (addresses.length === 0) return;
+	if (!call.caller.scopes.has("mail.send")) {
+		throw new OperationError(
+			"forbidden",
+			"An attendee or an organizer outside the organization gets mail. The credential does not have the scope mail.send.",
+		);
+	}
+	const { principal } = call.caller;
+	const denied = deniedOutboundAddresses(principal, [...new Set(addresses)]);
+	if (denied.length > 0)
+		throw new OperationError("policy_denied", outboundPolicyDenial(outboundMode(principal), denied));
+}
+
+/** The addresses of the attendees outside the organization. */
+function mailAttendees(attendees: readonly { principal_id: string | null; email: string }[]): string[] {
+	return attendees.filter((attendee) => attendee.principal_id === null).map((attendee) => attendee.email);
+}
+
+/** True for the copy of a meeting by mail from outside the organization. */
+function isMailCopy(record: EventRecord): boolean {
+	return record.role === "attendee" && record.organizer?.principal_id === null;
+}
+
 /** Turns a refusal from the object into an OperationError, and returns any other result. */
 function accept<T extends object>(value: T): Exclude<T, Refusal> {
 	if ("error" in value) {
@@ -111,28 +172,9 @@ function accept<T extends object>(value: T): Exclude<T, Refusal> {
 
 /** The stored time of an event. Refuses a time that `checkWhen` refuses, with its text. */
 function timeOf(when: EventWhenValue): EventTime {
-	const problem = checkWhen(when);
-	if (problem) throw new OperationError("invalid", problem);
-	if (when.kind === "timed") {
-		const zone = canonicalTimeZone(when.time_zone);
-		if (!zone) throw new OperationError("invalid", "time_zone must be an IANA time zone, such as America/New_York.");
-		return {
-			all_day: false,
-			start_at: Date.parse(when.start),
-			end_at: Date.parse(when.end),
-			start_date: null,
-			end_date: null,
-			time_zone: zone,
-		};
-	}
-	return {
-		all_day: true,
-		start_at: dateToUtcMs(when.start_date) - EARLIEST_ZONE_MS,
-		end_at: dateToUtcMs(when.end_date) + LATEST_ZONE_MS,
-		start_date: when.start_date,
-		end_date: when.end_date,
-		time_zone: null,
-	};
+	const time = storedTime(when);
+	if ("problem" in time) throw new OperationError("invalid", time.problem);
+	return time;
 }
 
 function iso(ms: number): string {
@@ -171,7 +213,7 @@ function toEvent(record: EventRecord, call: CallContext): CalendarEvent {
 		is_organizer: isOrganizer,
 		organizer,
 		attendees: record.attendees.map((attendee) => {
-			const self = attendee.principal_id === principal.id;
+			const self = attendee.principal_id === principal.id || (isMailCopy(record) && attendee.email === record.my_email);
 			// The copy of an attendee shows its own answer and its time, which can be newer than the snapshot of the
 			// organizer.
 			const own = self && !isOrganizer && record.my_response !== null;
@@ -187,6 +229,7 @@ function toEvent(record: EventRecord, call: CallContext): CalendarEvent {
 			};
 		}),
 		my_response: isOrganizer ? null : record.my_response,
+		untrusted: isMailCopy(record),
 		created_at: iso(record.created_at),
 		updated_at: iso(record.updated_at),
 	};
@@ -260,6 +303,7 @@ export const calendarHandlers: Pick<HandlerMap<CallContext>, CalendarOperation> 
 			if (earlier) return { event: toEvent(accept(earlier), call) };
 		}
 		const attendees = input.attendees ? await resolveAttendees(call, input.attendees) : [];
+		assertMayMail(call, mailAttendees(attendees));
 		const id = newId("evt");
 		const record = accept(await stub.create(ctx, { id, fields, attendees, idempotency }));
 		// A retry with the key returns the first event: only the call that added it audits.
@@ -276,6 +320,10 @@ export const calendarHandlers: Pick<HandlerMap<CallContext>, CalendarOperation> 
 		};
 		const attendees = input.attendees ? await resolveAttendees(call, input.attendees) : undefined;
 		const { stub, ctx } = openCalendar(call);
+		// A change goes by mail to each attendee outside the organization, the old ones and the new ones.
+		const current = await stub.get(ctx, input.event_id);
+		const before = "error" in current || current.role !== "owner" ? [] : mailAttendees(current.attendees);
+		assertMayMail(call, [...before, ...mailAttendees(attendees ?? [])]);
 		const result = accept(await stub.update(ctx, input.event_id, patch, attendees, input.base_revision));
 		if (result.changed) auditOk(call, "calendar.update_event", input.event_id);
 		return { event: toEvent(result.event, call) };
@@ -283,6 +331,10 @@ export const calendarHandlers: Pick<HandlerMap<CallContext>, CalendarOperation> 
 
 	async "calendar.delete_event"(call, input) {
 		const { stub, ctx } = openCalendar(call);
+		if (!input.dry_run) {
+			const current = await stub.get(ctx, input.event_id);
+			if (!("error" in current) && current.role === "owner") assertMayMail(call, mailAttendees(current.attendees));
+		}
 		const record = accept(await stub.remove(ctx, input.event_id, input.base_revision, input.dry_run));
 		if (!input.dry_run) auditOk(call, "calendar.delete_event", input.event_id);
 		return { event: toEvent(record, call), dry_run: input.dry_run };
@@ -290,8 +342,125 @@ export const calendarHandlers: Pick<HandlerMap<CallContext>, CalendarOperation> 
 
 	async "calendar.respond_to_invitation"(call, input) {
 		const { stub, ctx } = openCalendar(call);
+		const current = await stub.get(ctx, input.event_id);
+		if (!("error" in current) && isMailCopy(current) && current.my_response !== input.response) {
+			assertMayMail(call, [current.organizer?.email ?? ""]);
+		}
 		const result = accept(await stub.respond(ctx, input.event_id, input.response));
 		if (result.changed) auditOk(call, "calendar.respond_to_invitation", input.event_id);
 		return { event: toEvent(result.event, call) };
 	},
+
+	async "calendar.get_mail_invitation"(call, input) {
+		const read = await readInvitation(call, input.message_id);
+		return { invitation: read.invite ? await invitationOf(call, read.part, read.invite) : null };
+	},
+
+	async "calendar.respond_to_mail_invitation"(call, input) {
+		const read = await readInvitation(call, input.message_id);
+		if (!read.invite) throw new OperationError("invalid", "The message has no calendar part that Asterra can read.");
+		const invite = read.invite;
+		const before = await invitationOf(call, read.part, invite);
+		if (before.state === "cancelled") throw new OperationError("conflict", "The organizer cancelled this meeting.");
+		if (!before.can_respond) throw new OperationError("invalid", cannotRespond(before, read.part));
+		const organizer = invite.organizer as { email: string; name: string };
+		const myEmail = before.attendees.find((attendee) => attendee.self)?.email as string;
+		assertMayMail(call, [organizer.email]);
+		const { stub, ctx } = openCalendar(call);
+		const result = accept(
+			await stub.respondToMail(ctx, {
+				invite,
+				time: timeOf(invite.when as EventWhenValue),
+				from: read.part.from as string,
+				myEmail,
+				response: input.response,
+			}),
+		);
+		if (result.changed) auditOk(call, "calendar.respond_to_mail_invitation", input.message_id);
+		return {
+			invitation: await invitationOf(call, read.part, invite),
+			event: result.event ? toEvent(result.event, call) : null,
+		};
+	},
 };
+
+/** The calendar part of a message of the own mailbox of the caller, read and parsed. */
+async function readInvitation(
+	call: CallContext,
+	messageId: string,
+): Promise<{ part: CalendarPart; invite: ICalInvite | null }> {
+	const part = await readCalendarPart(call.env, call.caller.principal.id, messageId);
+	if (!part) throw new OperationError("not_found", "Your mailbox has no message with that id.");
+	return { part, invite: part.ics ? parseICalendar(part.ics) : null };
+}
+
+const RESPONSE_OF_PARTSTAT = {
+	"NEEDS-ACTION": "pending",
+	ACCEPTED: "accepted",
+	TENTATIVE: "tentative",
+	DECLINED: "declined",
+} as const;
+
+/** The invitation of a mail for the output, with its state on the calendar of the caller. */
+async function invitationOf(call: CallContext, part: CalendarPart, invite: ICalInvite): Promise<MailInvitation> {
+	const { principal } = call.caller;
+	const mine = new Set([
+		principal.address.toLowerCase(),
+		...(await listMailboxAliases(call.env.DIRECTORY, principal.id)).map((alias) => alias.address.toLowerCase()),
+	]);
+	const myEmail = invite.attendees.find((attendee) => mine.has(attendee.email))?.email ?? null;
+	const method = invite.method === "OTHER" ? "other" : (invite.method.toLowerCase() as "request" | "reply" | "cancel");
+	const { stub, ctx } = openCalendar(call);
+	const onCalendar = accept(await stub.mailInvitationState(ctx, invite.uid, invite.sequence));
+	let state: MailInvitation["state"] = onCalendar.state;
+	if (method === "cancel" || invite.cancelled) state = "cancelled";
+	else if (method === "request" && (invite.recurring || invite.when === null)) state = "unsupported";
+	else if (method === "request" && myEmail === null && onCalendar.state === "new") state = "not_invited";
+	const can_respond =
+		method === "request" &&
+		(state === "new" || state === "on_calendar") &&
+		myEmail !== null &&
+		invite.organizer !== null &&
+		part.from !== null &&
+		!part.spam &&
+		!part.held &&
+		part.verification !== "failed";
+	return {
+		method,
+		uid: invite.uid,
+		sequence: invite.sequence,
+		title: invite.title,
+		description: invite.description,
+		location: invite.location,
+		when: invite.when,
+		organizer: invite.organizer,
+		sender: part.from,
+		sender_is_organizer: invite.organizer !== null && part.from === invite.organizer.email,
+		sender_verification: part.verification,
+		attendees: invite.attendees.map((attendee) => ({
+			name: attendee.name,
+			email: attendee.email,
+			response: RESPONSE_OF_PARTSTAT[attendee.partstat],
+			self: attendee.email === myEmail,
+		})),
+		state,
+		can_respond,
+		my_response: onCalendar.my_response,
+		event_id: onCalendar.event_id,
+		untrusted: part.origin === "external",
+	};
+}
+
+/** Why a mail invitation cannot be answered. */
+function cannotRespond(invitation: MailInvitation, part: CalendarPart): string {
+	if (invitation.method !== "request") return "This mail is not an invitation. Only an invitation takes an answer.";
+	if (invitation.state === "unsupported") {
+		return "Asterra cannot read this invitation: it is a recurring meeting, or it has a time that Asterra cannot read.";
+	}
+	if (invitation.state === "outdated")
+		return "Your calendar has a newer version of this meeting. Answer the newest mail.";
+	if (invitation.state === "not_invited") return "No address of yours is an attendee of this invitation.";
+	if (part.spam || part.verification === "failed") return "This mail is in Spam. Move it out of Spam to answer it.";
+	if (part.held) return "The Screener holds this mail. Screen the sender in to answer it.";
+	return "This invitation names no organizer, so Asterra cannot send an answer.";
+}

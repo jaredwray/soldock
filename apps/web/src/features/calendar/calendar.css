@@ -581,6 +581,14 @@
 	margin: 0;
 }
 
+.cal-invitation-notice {
+	padding: 8px 10px;
+	border: 1px solid var(--warning-border);
+	border-radius: var(--radius-md);
+	background: var(--warning-soft);
+	font-size: 13px;
+}
+
 .cal-invitation-title {
 	font-size: 18px;
 	font-weight: 600;

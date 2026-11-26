@@ -1094,7 +1094,7 @@ export async function breakCalendarDelivery(principalId: string): Promise<Broken
 }
 
 /**
- * Restarts a calendar with the schema of the first layer: no meetings, no outbox. The rows of `events` keep
+ * Restarts a calendar with the schema of the first layer: no meetings, no meetings by mail, no outbox. The rows of `events` keep
  * their values. Commit the fixture before an alarm can read it.
  */
 export async function restartLegacyCalendar(principalId: string): Promise<void> {
@@ -1114,6 +1114,9 @@ export async function restartLegacyCalendar(principalId: string): Promise<void> 
 					"my_response",
 					"my_reply_stamp",
 					"attendees_json",
+					"sender_email",
+					"organizer_stamp",
+					"my_email",
 				]) {
 					sql.exec(`ALTER TABLE events DROP COLUMN ${column}`);
 				}

@@ -1,6 +1,16 @@
 import { DurableObject } from "cloudflare:workers";
 import { CALENDAR_LIMITS } from "@asterra/contracts";
+import { type CalendarSenderCheck, sendCalendarMail } from "../mail/index.ts";
 import { log, newId } from "../platform/index.ts";
+import {
+	buildICalendar,
+	type ICalAttendee,
+	type ICalInvite,
+	type ICalOutput,
+	type PartStat,
+	parseICalendar,
+} from "./ical.ts";
+import { storedTime } from "./time.ts";
 
 // Each person, agent and service account has one CalendarDO. Its name is the principal id. It holds the
 // events of the calendar of that principal in its SQLite database.
@@ -99,6 +109,8 @@ export interface EventRecord extends EventFields {
 	my_response: Response | null;
 	/** UTC ms of the answer of the owner, on a copy. Null on an event of the owner and before the first answer. */
 	my_responded_at: number | null;
+	/** On the copy of a meeting by mail: the address of the owner that the invitation names. */
+	my_email: string | null;
 }
 
 /** The range of a list. The handler computes the dates and the lower bound from the time zone of the call. */
@@ -155,7 +167,88 @@ export interface ReplyMessage {
 
 export type ApplyResult =
 	| { applied: true }
-	| { applied: false; reason: "stale" | "not_organizer" | "not_attendee" | "unknown" | "full" | "wrong_calendar" };
+	| {
+			applied: false;
+			reason:
+				| "stale"
+				| "not_organizer"
+				| "not_attendee"
+				| "unknown"
+				| "full"
+				| "wrong_calendar"
+				| "unreadable"
+				| "unsupported"
+				| "unverified";
+	  };
+
+/** A message by mail: an invitation, a change or a cancellation to an attendee, or an answer to an organizer. */
+export interface MailPayload {
+	method: ICalOutput["method"];
+	ical: ICalOutput;
+	subject: string;
+	text: string;
+	/** The idempotency key of the send. The same message has the same key, so a retry sends it one time. */
+	key: string;
+}
+
+/** A calendar part of a mail that the mailbox of the owner received. Each value comes from the sender. */
+export interface IncomingMail {
+	ics: string;
+	/** The From address, in lowercase. */
+	from: string | null;
+	verification: CalendarSenderCheck;
+	receivedAt: number;
+}
+
+/** The answer of the owner to an invitation by mail. The handler read the mail and its sender. */
+export interface MailAnswer {
+	invite: ICalInvite;
+	/** The stored time of the invitation. */
+	time: EventTime;
+	/** The From address of the mail, in lowercase. */
+	from: string;
+	/** The address of the owner that the invitation names. */
+	myEmail: string;
+	response: Answer;
+}
+
+const PARTSTAT: Record<Response, PartStat> = {
+	pending: "NEEDS-ACTION",
+	accepted: "ACCEPTED",
+	tentative: "TENTATIVE",
+	declined: "DECLINED",
+};
+
+const RESPONSE_OF: Record<PartStat, Response> = {
+	"NEEDS-ACTION": "pending",
+	ACCEPTED: "accepted",
+	TENTATIVE: "tentative",
+	DECLINED: "declined",
+};
+
+/** The key of an attendee or an organizer outside the organization: `mailto:` and the address in lowercase. */
+export function mailKey(address: string): string {
+	return `mailto:${address.toLowerCase()}`;
+}
+
+/** The plain text of a message by mail. It holds the facts of the meeting, and no HTML. */
+function mailText(intro: string, ical: ICalOutput): string {
+	const { fields } = ical;
+	const when =
+		fields.all_day && fields.start_date && fields.end_date
+			? `All day, from ${fields.start_date} until ${fields.end_date} (the day after the last day)`
+			: `${new Date(fields.start_at).toISOString().replace("T", " ").slice(0, 16)} to ${new Date(fields.end_at).toISOString().replace("T", " ").slice(0, 16)} UTC`;
+	const lines = [intro, "", fields.title, `When: ${when}`];
+	if (fields.location) lines.push(`Where: ${fields.location}`);
+	lines.push(
+		`Organizer: ${ical.organizer.name ? `${ical.organizer.name} <${ical.organizer.email}>` : ical.organizer.email}`,
+	);
+	if (ical.method === "REQUEST" && ical.attendees.length > 0) {
+		lines.push(`Attendees: ${ical.attendees.map((attendee) => attendee.email).join(", ")}`);
+	}
+	if (fields.description && ical.method !== "REPLY") lines.push("", fields.description);
+	return lines.join("\n");
+}
 
 /** A key works for 24 hours, as in Drive. */
 const IDEMPOTENCY_TTL_MS = 24 * 60 * 60 * 1000;
@@ -244,6 +337,14 @@ const MIGRATIONS: readonly (readonly string[])[] = [
 		)`,
 		"CREATE INDEX outbox_due ON outbox (next_attempt_at)",
 	],
+	// Meetings by mail: the From address of the accepted invitation, the DTSTAMP of the last applied change, and
+	// the address of the owner that the invitation names. An attendee outside the organization has the key
+	// `mailto:<address>` and no principal id. The outbox gets the kind `mail`.
+	[
+		"ALTER TABLE events ADD COLUMN sender_email TEXT",
+		"ALTER TABLE events ADD COLUMN organizer_stamp INTEGER NOT NULL DEFAULT 0",
+		"ALTER TABLE events ADD COLUMN my_email TEXT",
+	],
 ];
 
 const COLUMNS = [
@@ -269,12 +370,19 @@ const COLUMNS = [
 	"my_response",
 	"my_reply_stamp",
 	"attendees_json",
+	"sender_email",
+	"organizer_stamp",
+	"my_email",
 ].join(", ");
 
 interface StoredRow {
 	record: EventRecord;
 	organizerId: string | null;
 	myReplyStamp: number;
+	/** The From address of the accepted invitation by mail. */
+	senderEmail: string | null;
+	/** The DTSTAMP of the last applied change by mail. */
+	organizerStamp: number;
 }
 
 function fieldsOf(row: Row): EventFields {
@@ -434,11 +542,14 @@ export class CalendarDO extends DurableObject<Env> {
 			my_response: myResponse,
 			// The stamp of an answer is its time. After a new invitation the stamp stays, and the answer is `pending`.
 			my_responded_at: myResponse !== null && myResponse !== "pending" && myReplyStamp > 0 ? myReplyStamp : null,
+			my_email: (row.my_email as string | null) ?? null,
 		};
 		return {
 			record,
 			organizerId: (row.organizer_id as string | null) ?? null,
 			myReplyStamp,
+			senderEmail: (row.sender_email as string | null) ?? null,
+			organizerStamp: (row.organizer_stamp as number | null) ?? 0,
 		};
 	}
 
@@ -464,7 +575,7 @@ export class CalendarDO extends DurableObject<Env> {
 	 * Puts a message in the outbox. A message that waits for the same target and the same meeting gets the newer
 	 * payload: each message is a full state, so only the newest one matters.
 	 */
-	private enqueue(kind: "meeting" | "reply", target: string, uid: string, payload: unknown): void {
+	private enqueue(kind: "meeting" | "reply" | "mail", target: string, uid: string, payload: unknown): void {
 		this.sql.exec(
 			`INSERT INTO outbox (kind, target, uid, payload, next_attempt_at) VALUES (?, ?, ?, ?, ?)
 			ON CONFLICT (kind, target, uid) DO UPDATE SET payload = excluded.payload, gen = gen + 1, attempts = 0,
@@ -477,32 +588,127 @@ export class CalendarDO extends DurableObject<Env> {
 		);
 	}
 
-	/** Queues the snapshot of an event of the owner for each attendee, with the current sequence. */
-	private sendSnapshots(event: EventRecord): void {
+	/** The fields of an event that a message carries. */
+	private fieldsOfRecord(event: EventRecord): EventFields {
+		return Object.fromEntries(FIELD_KEYS.map((key) => [key, event[key]])) as unknown as EventFields;
+	}
+
+	/** The iCalendar of an event of the owner, for a message by mail. */
+	private icalOf(
+		event: EventRecord,
+		method: ICalOutput["method"],
+		sequence: number,
+		attendees: ICalAttendee[],
+	): ICalOutput {
+		const organizer = this.organizerRef();
+		return {
+			method,
+			uid: event.uid,
+			sequence,
+			stamp: Date.now(),
+			fields: this.fieldsOfRecord(event),
+			organizer: { email: organizer.email, name: organizer.name },
+			attendees,
+		};
+	}
+
+	/**
+	 * Queues the snapshot of an event of the owner for each attendee, with the current sequence. With `mail`, each
+	 * attendee outside the organization gets the invitation or the change by mail. An answer of an attendee
+	 * changes only the answers, so it sends no mail.
+	 */
+	private sendSnapshots(event: EventRecord, mail = true): void {
 		const message: MeetingMessage = {
 			uid: event.uid,
 			sequence: event.sequence,
 			state: "invited",
 			organizer: this.organizerRef(),
-			fields: Object.fromEntries(FIELD_KEYS.map((key) => [key, event[key]])) as unknown as EventFields,
+			fields: this.fieldsOfRecord(event),
 			attendees: event.attendees,
 		};
 		for (const attendee of event.attendees) {
 			if (attendee.principal_id) this.enqueue("meeting", attendee.principal_id, event.uid, message);
 		}
+		if (!mail) return;
+		const everyone = event.attendees.map((attendee) => ({
+			email: attendee.email,
+			name: attendee.name === attendee.email ? "" : attendee.name,
+			partstat: PARTSTAT[attendee.response],
+		}));
+		for (const attendee of event.attendees) {
+			if (attendee.principal_id) continue;
+			const ical = this.icalOf(event, "REQUEST", event.sequence, everyone);
+			const first = attendee.invited_sequence === event.sequence;
+			const payload: MailPayload = {
+				method: "REQUEST",
+				ical,
+				subject: `${first ? "Invitation" : "Updated invitation"}: ${event.title}`,
+				text: mailText(first ? "You are invited to this meeting." : "The organizer changed this meeting.", ical),
+				key: `asterra-calendar:${event.uid}:REQUEST:${event.sequence}:${attendee.email}`,
+			};
+			this.enqueue("mail", attendee.key, event.uid, payload);
+		}
 	}
 
-	private sendEnd(uid: string, sequence: number, state: "cancelled" | "removed", attendee: AttendeeRecord): void {
-		if (!attendee.principal_id) return;
+	/** Tells an attendee that the meeting is cancelled, or that the organizer removed the attendee. */
+	private sendEnd(
+		event: EventRecord,
+		sequence: number,
+		state: "cancelled" | "removed",
+		attendee: AttendeeRecord,
+	): void {
+		if (!attendee.principal_id) {
+			const ical = this.icalOf(event, "CANCEL", sequence, [
+				{ email: attendee.email, name: "", partstat: "NEEDS-ACTION" },
+			]);
+			const payload: MailPayload = {
+				method: "CANCEL",
+				ical,
+				subject: `Cancelled: ${event.title}`,
+				text: mailText(
+					state === "cancelled"
+						? "The organizer cancelled this meeting."
+						: "The organizer removed you from this meeting.",
+					ical,
+				),
+				key: `asterra-calendar:${event.uid}:CANCEL:${sequence}:${attendee.email}`,
+			};
+			this.enqueue("mail", attendee.key, event.uid, payload);
+			return;
+		}
 		const message: MeetingMessage = {
-			uid,
+			uid: event.uid,
 			sequence,
 			state,
 			organizer: this.organizerRef(),
 			fields: null,
 			attendees: [],
 		};
-		this.enqueue("meeting", attendee.principal_id, uid, message);
+		this.enqueue("meeting", attendee.principal_id, event.uid, message);
+	}
+
+	/** Queues the answer of the owner to an organizer outside the organization, by mail. */
+	private sendMailReply(record: EventRecord, response: Answer, stamp: number, myEmail: string, key: string): void {
+		const organizer = record.organizer;
+		if (!organizer?.email) return;
+		const ical: ICalOutput = {
+			method: "REPLY",
+			uid: record.uid,
+			sequence: record.sequence,
+			stamp,
+			fields: this.fieldsOfRecord(record),
+			organizer: { email: organizer.email, name: organizer.name },
+			attendees: [{ email: myEmail, name: this.meta("owner_name") ?? "", partstat: PARTSTAT[response] }],
+		};
+		const label = response === "accepted" ? "Accepted" : response === "tentative" ? "Maybe" : "Declined";
+		const payload: MailPayload = {
+			method: "REPLY",
+			ical,
+			subject: `${label}: ${record.title}`,
+			text: mailText(`${myEmail} answered: ${label}.`, ical),
+			key,
+		};
+		this.enqueue("mail", mailKey(organizer.email), record.uid, payload);
 	}
 
 	/** Sets the alarm for the first message of the outbox that is due. */
@@ -703,7 +909,7 @@ export class CalendarDO extends DurableObject<Env> {
 			);
 			for (const attendee of removed) {
 				this.sql.exec("DELETE FROM attendees WHERE event_id = ? AND attendee_key = ?", eventId, attendee.key);
-				this.sendEnd(event.uid, sequence, "removed", attendee);
+				this.sendEnd(next, sequence, "removed", attendee);
 			}
 			for (const attendee of added) this.insertAttendee(eventId, attendee, sequence, now);
 			this.sendSnapshots(this.row(eventId) as EventRecord);
@@ -726,7 +932,8 @@ export class CalendarDO extends DurableObject<Env> {
 		if (refused) return refused;
 		const event = this.row(eventId);
 		if (!event) return refuse("not_found", NOT_FOUND);
-		if (event.role === "attendee") {
+		const external = event.role === "attendee" && event.organizer?.principal_id === null;
+		if (event.role === "attendee" && !external) {
 			return refuse(
 				"forbidden",
 				"Only the organizer can cancel this meeting. Answer No with calendar.respond_to_invitation.",
@@ -739,8 +946,18 @@ export class CalendarDO extends DurableObject<Env> {
 			);
 		}
 		if (dryRun) return event;
+		if (external) {
+			// A meeting by mail from outside the organization: the owner removes it from the own calendar only. A
+			// tombstone stops the same invitation from coming back. A newer invitation can be accepted again.
+			this.ctx.storage.transactionSync(() => {
+				this.sql.exec("DELETE FROM events WHERE id = ?", eventId);
+				this.addToCount(-1);
+				this.writeTombstone(event.uid, mailKey(event.organizer?.email ?? ""), event.sequence, "removed");
+			});
+			return event;
+		}
 		this.ctx.storage.transactionSync(() => {
-			for (const attendee of event.attendees) this.sendEnd(event.uid, event.sequence + 1, "cancelled", attendee);
+			for (const attendee of event.attendees) this.sendEnd(event, event.sequence + 1, "cancelled", attendee);
 			this.sql.exec("DELETE FROM attendees WHERE event_id = ?", eventId);
 			this.sql.exec("DELETE FROM events WHERE id = ?", eventId);
 			this.addToCount(-1);
@@ -760,13 +977,35 @@ export class CalendarDO extends DurableObject<Env> {
 		const stored = this.stored("id", eventId);
 		if (!stored) return refuse("not_found", NOT_FOUND);
 		const { record } = stored;
-		if (record.role === "owner" || !stored.organizerId) {
+		if (record.role === "owner") {
 			return refuse("invalid", "You are the organizer of this event. Only an attendee answers an invitation.");
 		}
 		if (record.my_response === response) return { event: record, changed: false };
 		const now = Date.now();
 		const stamp = Math.max(now, stored.myReplyStamp + 1);
 		const organizerId = stored.organizerId;
+		if (!organizerId) {
+			// A meeting by mail: the answer goes to the organizer by mail.
+			const myEmail = record.my_email ?? call.ownerEmail;
+			this.ctx.storage.transactionSync(() => {
+				this.sql.exec(
+					"UPDATE events SET my_response = ?, my_reply_stamp = ?, revision = revision + 1, updated_at = ? WHERE id = ?",
+					response,
+					stamp,
+					now,
+					eventId,
+				);
+				this.sendMailReply(
+					record,
+					response,
+					stamp,
+					myEmail,
+					`asterra-calendar:${record.uid}:REPLY:${stamp}:${myEmail}`,
+				);
+			});
+			await this.schedule();
+			return { event: this.row(eventId) as EventRecord, changed: true };
+		}
 		this.ctx.storage.transactionSync(() => {
 			this.sql.exec(
 				"UPDATE events SET my_response = ?, my_reply_stamp = ?, revision = revision + 1, updated_at = ? WHERE id = ?",
@@ -827,15 +1066,11 @@ export class CalendarDO extends DurableObject<Env> {
 				this.addToCount(-1);
 			}
 			this.sql.exec("DELETE FROM outbox WHERE kind = 'reply' AND uid = ?", message.uid);
-			this.sql.exec(
-				`INSERT INTO meeting_tombstones (uid, organizer, sequence, state, at) VALUES (?, ?, ?, ?, ?)
-				ON CONFLICT (uid) DO UPDATE SET organizer = excluded.organizer, sequence = excluded.sequence,
-					state = excluded.state, at = excluded.at`,
+			this.writeTombstone(
 				message.uid,
 				organizerId,
 				message.sequence,
 				message.state === "invited" ? "removed" : message.state,
-				now,
 			);
 			return { applied: true };
 		}
@@ -946,10 +1181,363 @@ export class CalendarDO extends DurableObject<Env> {
 			);
 			// The answer does not change the revision, so an answer never makes an edit of the organizer fail.
 			this.sql.exec("UPDATE events SET sequence = sequence + 1 WHERE id = ?", stored.record.id);
-			this.sendSnapshots(this.row(stored.record.id) as EventRecord);
+			// An answer changes only the answers, so the attendees outside the organization get no mail.
+			this.sendSnapshots(this.row(stored.record.id) as EventRecord, false);
 		});
 		if (result.applied) await this.schedule();
 		return result;
+	}
+
+	/** Writes the tombstone of a copy, so an older invitation cannot bring it back. */
+	private writeTombstone(uid: string, organizer: string, sequence: number, state: "cancelled" | "removed"): void {
+		const now = Date.now();
+		this.sql.exec("DELETE FROM meeting_tombstones WHERE at < ?", now - TOMBSTONE_TTL_MS);
+		this.sql.exec(
+			`INSERT INTO meeting_tombstones (uid, organizer, sequence, state, at) VALUES (?, ?, ?, ?, ?)
+			ON CONFLICT (uid) DO UPDATE SET organizer = excluded.organizer, sequence = excluded.sequence,
+				state = excluded.state, at = excluded.at`,
+			uid,
+			organizer,
+			sequence,
+			state,
+			now,
+		);
+	}
+
+	private tombstone(uid: string): { organizer: string; sequence: number } | null {
+		return (
+			this.sql
+				.exec<{ organizer: string; sequence: number }>(
+					"SELECT organizer, sequence FROM meeting_tombstones WHERE uid = ?",
+					uid,
+				)
+				.toArray()[0] ?? null
+		);
+	}
+
+	/** The attendees of an invitation by mail, as a copy keeps them. */
+	private mailAttendees(invite: ICalInvite): AttendeeRecord[] {
+		return invite.attendees.map((attendee) => ({
+			key: mailKey(attendee.email),
+			principal_id: null,
+			email: attendee.email,
+			name: attendee.name || attendee.email,
+			response: RESPONSE_OF[attendee.partstat],
+			responded_at: null,
+			invited_sequence: 0,
+		}));
+	}
+
+	/**
+	 * From the mailbox of the owner: the calendar part of a mail that it received. Only a rule against a row that the
+	 * calendar holds applies a change. A new invitation changes nothing: the owner answers it
+	 * (`respondToMail`). Bad content gives a refusal, never an error.
+	 *
+	 * - REPLY: the answer of an attendee outside the organization to a meeting of the owner. The From address must
+	 *   be the one attendee of the reply and an attendee of the meeting. An older answer changes nothing.
+	 * - REQUEST and CANCEL: a change or a cancellation of a meeting by mail that the owner accepted. The organizer
+	 *   and the From address must be the ones of the accepted invitation, and the receiving server must have
+	 *   verified the sender, or the mail is internal.
+	 */
+	async applyMail(targetId: string, mail: IncomingMail): Promise<ApplyResult> {
+		const invite = parseICalendar(mail.ics);
+		if (!invite) return { applied: false, reason: "unreadable" };
+		if (invite.recurring) return { applied: false, reason: "unsupported" };
+		let result: ApplyResult = { applied: false, reason: "unknown" };
+		let queued = false;
+		this.ctx.storage.transactionSync(() => {
+			if (!this.claim(targetId)) {
+				result = { applied: false, reason: "wrong_calendar" };
+				return;
+			}
+			const stored = this.stored("uid", invite.uid);
+			if (!stored) return;
+			if (invite.method === "REPLY") {
+				result = this.applyMailReply(stored, invite, mail);
+				queued = result.applied;
+				return;
+			}
+			if (invite.method !== "REQUEST" && invite.method !== "CANCEL") return;
+			const { record } = stored;
+			if (record.role !== "attendee" || stored.organizerId !== null) {
+				result = { applied: false, reason: "not_organizer" };
+				return;
+			}
+			if (
+				invite.organizer?.email !== record.organizer?.email ||
+				mail.from === null ||
+				mail.from !== stored.senderEmail
+			) {
+				result = { applied: false, reason: "not_organizer" };
+				return;
+			}
+			if (mail.verification !== "internal" && mail.verification !== "verified") {
+				result = { applied: false, reason: "unverified" };
+				return;
+			}
+			if (invite.method === "CANCEL") {
+				if (invite.sequence < record.sequence) {
+					result = { applied: false, reason: "stale" };
+					return;
+				}
+				this.sql.exec("DELETE FROM events WHERE id = ?", record.id);
+				this.addToCount(-1);
+				this.writeTombstone(invite.uid, mailKey(record.organizer?.email ?? ""), invite.sequence, "cancelled");
+				result = { applied: true };
+				return;
+			}
+			if (!invite.when) {
+				result = { applied: false, reason: "unsupported" };
+				return;
+			}
+			const time = storedTime(invite.when);
+			if ("problem" in time) {
+				result = { applied: false, reason: "unsupported" };
+				return;
+			}
+			const newer =
+				invite.sequence > record.sequence ||
+				(invite.sequence === record.sequence && invite.stamp > stored.organizerStamp);
+			if (!newer) {
+				result = { applied: false, reason: "stale" };
+				return;
+			}
+			this.updateMailCopy(record.id, invite, time);
+			result = { applied: true };
+		});
+		if (queued) await this.schedule();
+		return result;
+	}
+
+	/** Writes a newer version of a meeting by mail into its copy. The answer of the owner stays. */
+	private updateMailCopy(eventId: string, invite: ICalInvite, time: EventTime): void {
+		this.sql.exec(
+			`UPDATE events SET title = ?, description = ?, location = ?, all_day = ?, start_at = ?, end_at = ?,
+				start_date = ?, end_date = ?, time_zone = ?, organizer_name = ?, sequence = ?, organizer_stamp = ?,
+				attendees_json = ?, revision = revision + 1, updated_at = ?
+			WHERE id = ?`,
+			invite.title,
+			invite.description,
+			invite.location,
+			time.all_day ? 1 : 0,
+			time.start_at,
+			time.end_at,
+			time.start_date,
+			time.end_date,
+			time.time_zone,
+			invite.organizer?.name ?? "",
+			invite.sequence,
+			invite.stamp,
+			JSON.stringify(this.mailAttendees(invite)),
+			Date.now(),
+			eventId,
+		);
+	}
+
+	private applyMailReply(stored: StoredRow, invite: ICalInvite, mail: IncomingMail): ApplyResult {
+		const { record } = stored;
+		if (record.role !== "owner") return { applied: false, reason: "unknown" };
+		const [answer] = invite.attendees;
+		if (invite.attendees.length !== 1 || !answer || mail.from === null || answer.email !== mail.from) {
+			return { applied: false, reason: "not_attendee" };
+		}
+		if (mail.verification === "failed" || answer.partstat === "NEEDS-ACTION") {
+			return { applied: false, reason: "unverified" };
+		}
+		const row = this.sql
+			.exec<{ reply_stamp: number; added_at: number }>(
+				"SELECT reply_stamp, added_at FROM attendees WHERE event_id = ? AND attendee_key = ?",
+				record.id,
+				mailKey(mail.from),
+			)
+			.toArray()[0];
+		if (!row) return { applied: false, reason: "not_attendee" };
+		// A sender can write each DTSTAMP. A stamp after the arrival counts as the arrival.
+		const stamp = Math.min(invite.stamp || mail.receivedAt, mail.receivedAt);
+		if (stamp <= row.reply_stamp || stamp < row.added_at) return { applied: false, reason: "stale" };
+		this.sql.exec(
+			"UPDATE attendees SET response = ?, reply_stamp = ?, responded_at = ? WHERE event_id = ? AND attendee_key = ?",
+			RESPONSE_OF[answer.partstat],
+			stamp,
+			stamp,
+			record.id,
+			mailKey(mail.from),
+		);
+		this.sql.exec("UPDATE events SET sequence = sequence + 1 WHERE id = ?", record.id);
+		this.sendSnapshots(this.row(record.id) as EventRecord, false);
+		return { applied: true };
+	}
+
+	/**
+	 * The answer of the owner to an invitation by mail. Yes and Maybe put the meeting on the calendar, or change
+	 * the answer of the copy. No without a copy adds nothing. Each new answer goes to the organizer by mail. The
+	 * same answer again changes nothing and sends nothing. A copy of the same uid from a different organizer or
+	 * sender, or a tombstone of this version or a newer one, gives `conflict`.
+	 */
+	async respondToMail(
+		call: CalendarCall,
+		input: MailAnswer,
+	): Promise<{ event: EventRecord | null; changed: boolean } | Refusal> {
+		const refused = this.enter(call);
+		if (refused) return refused;
+		const { invite } = input;
+		const organizer = invite.organizer;
+		if (!organizer) return refuse("invalid", "The invitation names no organizer.");
+		const tomb = this.tombstone(invite.uid);
+		const stored = this.stored("uid", invite.uid);
+		if (!stored && tomb && tomb.sequence >= invite.sequence) {
+			return refuse("conflict", "The organizer cancelled this meeting, or you removed it from your calendar.");
+		}
+		const now = Date.now();
+		let eventId: string | null = null;
+		let changed = true;
+		if (stored) {
+			const { record } = stored;
+			if (
+				record.role !== "attendee" ||
+				stored.organizerId !== null ||
+				record.organizer?.email !== organizer.email ||
+				stored.senderEmail !== input.from
+			) {
+				return refuse("conflict", "A different organizer made the event with this id on your calendar.");
+			}
+			eventId = record.id;
+			const newer =
+				invite.sequence > record.sequence ||
+				(invite.sequence === record.sequence && invite.stamp > stored.organizerStamp);
+			if (record.my_response === input.response && !newer) return { event: record, changed: false };
+			const stamp = Math.max(now, stored.myReplyStamp + 1);
+			this.ctx.storage.transactionSync(() => {
+				if (newer) this.updateMailCopy(record.id, invite, input.time);
+				if (record.my_response === input.response) {
+					changed = false;
+					return;
+				}
+				this.sql.exec(
+					"UPDATE events SET my_response = ?, my_reply_stamp = ?, my_email = ?, revision = revision + 1, updated_at = ? WHERE id = ?",
+					input.response,
+					stamp,
+					input.myEmail,
+					now,
+					record.id,
+				);
+				this.sendMailReply(
+					this.row(record.id) as EventRecord,
+					input.response,
+					stamp,
+					input.myEmail,
+					`asterra-calendar:${invite.uid}:REPLY:${stamp}:${input.myEmail}`,
+				);
+			});
+		} else if (input.response === "declined") {
+			// No adds nothing to the calendar. The key has no time, so the same No again sends no second mail.
+			const fake = this.copyRecordOf(invite, input, null);
+			this.ctx.storage.transactionSync(() =>
+				this.sendMailReply(
+					fake,
+					"declined",
+					now,
+					input.myEmail,
+					`asterra-calendar:${invite.uid}:REPLY:${invite.sequence}:declined:${input.myEmail}`,
+				),
+			);
+		} else {
+			if (this.eventCount() >= CALENDAR_LIMITS.events) {
+				return refuse("invalid", `A calendar can have at most ${CALENDAR_LIMITS.events} events. Delete events first.`);
+			}
+			eventId = newId("evt");
+			const id = eventId;
+			const time = input.time;
+			this.ctx.storage.transactionSync(() => {
+				this.sql.exec(
+					`INSERT INTO events (id, title, description, location, all_day, start_at, end_at, start_date, end_date,
+						time_zone, revision, created_at, updated_at, uid, role, sequence, organizer_id, organizer_email,
+						organizer_name, my_response, my_reply_stamp, attendees_json, sender_email, organizer_stamp, my_email)
+					VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, 'attendee', ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?)`,
+					id,
+					invite.title,
+					invite.description,
+					invite.location,
+					time.all_day ? 1 : 0,
+					time.start_at,
+					time.end_at,
+					time.start_date,
+					time.end_date,
+					time.time_zone,
+					now,
+					now,
+					invite.uid,
+					invite.sequence,
+					organizer.email,
+					organizer.name,
+					input.response,
+					now,
+					JSON.stringify(this.mailAttendees(invite)),
+					input.from,
+					invite.stamp,
+					input.myEmail,
+				);
+				this.addToCount(1);
+				this.sql.exec("DELETE FROM meeting_tombstones WHERE uid = ?", invite.uid);
+				this.sendMailReply(
+					this.row(id) as EventRecord,
+					input.response,
+					now,
+					input.myEmail,
+					`asterra-calendar:${invite.uid}:REPLY:${now}:${input.myEmail}`,
+				);
+			});
+		}
+		await this.schedule();
+		return { event: eventId ? this.row(eventId) : null, changed };
+	}
+
+	/** A record of an invitation by mail that is not on the calendar, for the answer No. */
+	private copyRecordOf(invite: ICalInvite, input: MailAnswer, id: string | null): EventRecord {
+		return {
+			id: id ?? "",
+			uid: invite.uid,
+			role: "attendee",
+			sequence: invite.sequence,
+			revision: 0,
+			created_at: 0,
+			updated_at: 0,
+			title: invite.title,
+			description: invite.description,
+			location: invite.location,
+			...input.time,
+			organizer: { principal_id: null, email: invite.organizer?.email ?? "", name: invite.organizer?.name ?? "" },
+			attendees: this.mailAttendees(invite),
+			my_response: input.response,
+			my_responded_at: null,
+			my_email: input.myEmail,
+		};
+	}
+
+	/**
+	 * The state of an invitation by mail on the calendar of the owner: the copy or the event of this uid, or its
+	 * tombstone. `sequence` is the SEQUENCE of the mail.
+	 */
+	mailInvitationState(
+		call: CalendarCall,
+		uid: string,
+		sequence: number,
+	):
+		| { state: "new" | "on_calendar" | "outdated" | "cancelled"; my_response: Response | null; event_id: string | null }
+		| Refusal {
+		const refused = this.enter(call);
+		if (refused) return refused;
+		const stored = this.stored("uid", uid);
+		if (stored) {
+			return {
+				state: stored.record.sequence > sequence ? "outdated" : "on_calendar",
+				my_response: stored.record.my_response,
+				event_id: stored.record.id,
+			};
+		}
+		const tomb = this.tombstone(uid);
+		if (tomb && tomb.sequence >= sequence) return { state: "cancelled", my_response: null, event_id: null };
+		return { state: "new", my_response: null, event_id: null };
 	}
 
 	override async alarm(): Promise<void> {
@@ -987,6 +1575,21 @@ export class CalendarDO extends DurableObject<Env> {
 				.toArray()[0];
 			if (!row) continue;
 			try {
+				if (row.kind === "mail") {
+					const payload = JSON.parse(row.payload) as MailPayload;
+					const sent = await sendCalendarMail(this.env, {
+						senderId: this.meta("owner_id") ?? "",
+						to: row.target.slice("mailto:".length),
+						subject: payload.subject,
+						text: payload.text,
+						method: payload.method,
+						ics: buildICalendar(payload.ical),
+						idempotencyKey: payload.key,
+					});
+					if (sent.status === "refused") log("info", "calendar mail not sent", { reason: sent.reason });
+					this.sql.exec("DELETE FROM outbox WHERE id = ? AND gen = ?", row.id, row.gen);
+					continue;
+				}
 				const stub = this.env.CALENDAR.get(this.env.CALENDAR.idFromName(row.target));
 				const result =
 					row.kind === "reply"

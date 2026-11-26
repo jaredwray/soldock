@@ -2,16 +2,17 @@
 
 > Status: **started**. A personal calendar for each person, agent and service account, with events that the
 > owner adds, reads, changes and deletes. [Meetings](#meetings): the owner invites principals of the
-> organization, and each attendee answers Yes, Maybe or No. Keep this README current as the module grows. It
-> is the module's contract.
+> organization, and each attendee answers Yes, Maybe or No. [Invitations by mail](#invitations-by-mail): the
+> owner invites addresses outside the organization with iCalendar, and answers invitations that arrive by mail.
+> Keep this README current as the module grows. It is the module's contract.
 
 | | |
 | --- | --- |
 | **Purpose** | Calendar: the events of each principal, the time zones and all-day events, meetings with attendees and their answers, and later recurrence, reminders, free/busy and sharing. |
 | **Owns** | `CalendarDO`, one for each principal. |
-| **Depends on** | `platform`, `identity`. |
-| **Operations** | `calendar.list_events`, `calendar.get_event`, `calendar.create_event`, `calendar.update_event`, `calendar.delete_event`, `calendar.respond_to_invitation` |
-| **Data inventory** | `CalendarDO` tables `events` (with the copies of meetings), `attendees`, `meeting_tombstones`, `outbox`, `idempotency` and `meta` (with `owner_id`, `owner_email`, `owner_name`, `event_count` and `schema_version`). No R2 object and no D1 table. D1 migration 0038 changes `principals.agent_scopes` only. Backups: not built yet. |
+| **Depends on** | `platform`, `identity`, `mail` (`sendCalendarMail`, `readCalendarPart` and the outbound policy). `mail` does not import `calendar`: it calls `CalendarDO.applyMail` through the `CALENDAR` binding. |
+| **Operations** | `calendar.list_events`, `calendar.get_event`, `calendar.create_event`, `calendar.update_event`, `calendar.delete_event`, `calendar.respond_to_invitation`, `calendar.get_mail_invitation`, `calendar.respond_to_mail_invitation` |
+| **Data inventory** | `CalendarDO` tables `events` (with the copies of meetings, and for a copy by mail the columns `sender_email`, `organizer_stamp` and `my_email`), `attendees` (an attendee outside the organization has the key `mailto:<address>`), `meeting_tombstones`, `outbox` (kinds `meeting`, `reply` and `mail`), `idempotency` and `meta` (with `owner_id`, `owner_email`, `owner_name`, `event_count` and `schema_version`). No R2 object and no D1 table. A message by mail is a message of the Sent mail of the owner (see [mail](../mail/README.md)). D1 migration 0038 changes `principals.agent_scopes` only. Backups: not built yet. |
 
 Public surface: `index.ts` only. Other domains must not import files from this folder directly.
 
@@ -20,7 +21,9 @@ Public surface: `index.ts` only. Other domains must not import files from this f
 | File | What |
 | --- | --- |
 | `calendar.ts` | `CalendarDO`: the SQLite tables of one calendar, the range query, the idempotency keys, the count of events, the meetings, and the outbox with its alarm |
-| `handlers.ts` | The operation handlers. They check the time of an event, change it to the stored form and back, find the attendees in the directory, and open the object of the caller |
+| `handlers.ts` | The operation handlers. They check the time of an event, change it to the stored form and back, find the attendees in the directory, check the mail rules, and open the object of the caller |
+| `ical.ts` | The iCalendar parser and builder: the subset of RFC 5545 and RFC 5546 that invitations by mail use |
+| `time.ts` | The stored time of an event. The handlers and the object use it |
 
 ## A calendar
 
@@ -83,10 +86,11 @@ A meeting is an event with attendees. The organizer adds `attendees` to `calenda
   `order: "match"`. Calendar has no search operation of its own. An invitation needs no directory scope:
   the handler resolves each `principal_id` or `email` in the directory itself.
 - **Attendee input.** Each entry has `principal_id` or `email`, not the two. An alias of a person finds that
-  person, and the meeting shows the primary address. An unknown principal, an address of no principal of the
-  organization, the address of a team mailbox, and an archived principal give `invalid`. The organizer
-  and a second entry of the same principal are left out. A meeting has at most 100 attendees. An address
-  outside the organization gives `invalid` in this layer.
+  person, and the meeting shows the primary address. An address on a domain that is not a mail domain of the
+  organization is an attendee outside it ([Invitations by mail](#invitations-by-mail)). An unknown principal,
+  an address on a mail domain of the organization that no person, agent or service account has, the address
+  of a team mailbox, and an archived principal give `invalid`. The organizer and a second entry of the same
+  attendee are left out. A meeting has at most 100 attendees.
 - **The authority.** The event of the organizer is the authority. Each attendee gets a copy with its own
   `id`, the same `uid`, `is_organizer: false`, the `organizer`, the list of `attendees`, and
   `my_response`. Only the organizer changes the fields, the attendees or the time, and only the
@@ -168,6 +172,101 @@ message that replaces an older one.
     `sequence` is from before a removal and a new invitation, and gives `stale`.
   - An applied answer adds 1 to `sequence` and sends a new snapshot to each attendee.
 
+## Invitations by mail
+
+### Outbound
+
+- An attendee outside the organization has no calendar here. The organizer sends the invitation, each change,
+  the removal and the cancellation by mail, as iTIP (RFC 5546) with the same `UID`: the `uid` of the meeting.
+- The object queues one `mail` row for each address in its outbox, as for a `meeting` row. The drain calls
+  `sendCalendarMail` of the mail module, which stores the message in the Sent mail of the own mailbox of the
+  organizer and queues its delivery in the outbox of that mailbox. So the mail has the retries, the check of
+  the outbound policy before each delivery and the delivery status of each other mail.
+
+  | Change of the organizer | Mail to each attendee outside the organization |
+  | --- | --- |
+  | New meeting, or a new attendee | `METHOD:REQUEST`, subject "Invitation: <title>" |
+  | A change of the fields or of the attendees | `METHOD:REQUEST` with a larger `SEQUENCE`, subject "Updated invitation: <title>" |
+  | The organizer removes the attendee | `METHOD:CANCEL` to that address only, subject "Cancelled: <title>" |
+  | The organizer deletes the meeting | `METHOD:CANCEL` to each address |
+  | An attendee answers | No mail. Only the calendars of the organization get the new answers |
+
+- `SEQUENCE` is the `sequence` of the meeting. `DTSTAMP` is the time of the enqueue, so a retry writes the
+  same bytes. A timed event is written in UTC (`…Z`), with no `VTIMEZONE`. An all-day event has
+  `DTSTART;VALUE=DATE` and an exclusive `DTEND;VALUE=DATE`, the same as `end_date`. A REQUEST lists each
+  attendee with its `PARTSTAT`, and `RSVP=TRUE` for an attendee with no answer.
+- The message is `multipart/alternative` of a plain text part and a `text/calendar; method=<METHOD>` part
+  (base64, CRLF line ends). A REQUEST and a CANCEL also have the same bytes as an `invite.ics` attachment.
+- The idempotency key of each message is `asterra-calendar:<uid>:<METHOD>:<sequence>:<address>`, so a retry
+  of the drain stores one message and sends one mail.
+- A call that queues mail needs `mail.send` in the credential (`forbidden`), and the outbound policy of an
+  agent must allow each address (`policy_denied`). The handler checks the old and the new attendees outside
+  the organization before an update, and each one before a delete. A change of the policy after the enqueue
+  stops the mail at the send and at the delivery.
+
+### Incoming invitations
+
+- The mail module gives the calendar part of each stored message of the own mailbox of a principal to the
+  `CalendarDO` of that principal (`applyMail`), after the mailbox stored it and also for a second copy. Spam,
+  mail that the Screener holds, and the mail of a team mailbox never reach a calendar. A calendar part is a
+  `text/calendar` or `application/ics` part, or a file with the name `.ics`, of at most 256 KiB.
+- The content is untrusted. The parser cleans each text and accepts only plain addresses. `applyMail` changes
+  only a row that the calendar holds:
+
+  | Method | Applied when each rule is true | Effect |
+  | --- | --- | --- |
+  | `REPLY` | An event of the owner has the `uid`. The reply has exactly one `ATTENDEE`, its address is the From address, and it is an attendee of the event. The receiving server did not record a DMARC failure. `PARTSTAT` is ACCEPTED, TENTATIVE or DECLINED. The stamp (the `DTSTAMP`, at most the time of arrival) is newer than the last answer and not before the invitation of that attendee | The answer of that attendee. The meeting gets a new `sequence`, and the attendees of the organization get the new answers |
+  | `CANCEL` | A copy by mail has the `uid`. `ORGANIZER` is the organizer of the copy, the From address is the sender of the accepted invitation, the receiving server verified the sender (DMARC pass) or the mail is internal, and `SEQUENCE` is not smaller | The copy goes away. A tombstone stops the old invitation |
+  | `REQUEST` | The same rules as `CANCEL`, and the version (`SEQUENCE`, then `DTSTAMP`) is newer | The fields of the copy change. The answer stays |
+  | Each other mail, or a rule that is not true | | Nothing. The mail stays in Mail, and its card tells the state |
+
+- A new invitation is not on the calendar until the person or the agent answers it. `calendar.get_mail_invitation`
+  reads the calendar part of a message, with its state: `new`, `on_calendar`, `outdated`, `cancelled`,
+  `not_invited` (no address or alias of the caller is an attendee) or `unsupported` (a recurring meeting, or a
+  time that Asterra cannot read). `can_respond` is true only for a REQUEST in the state `new` or
+  `on_calendar`, outside Spam and the Screener, with an organizer and a From address.
+- `calendar.respond_to_mail_invitation` answers it. Yes and Maybe add a copy by mail (`untrusted: true`,
+  `organizer.principal_id: null`), or change the answer of the copy. No without a copy adds nothing. Each new
+  answer goes to the organizer as `METHOD:REPLY` from the own address, with the address of the caller that the
+  invitation names. The same answer again changes nothing and sends nothing. A second mail with the same
+  invitation finds the same copy by its `uid`, so it adds no second event. A tombstone of this version or a
+  newer one gives `conflict`. A copy of the same `uid` from a different organizer or sender gives `conflict`.
+- The copy keeps the `ORGANIZER` and the From address of the accepted mail. Later mail changes or cancels it
+  by itself only when both are the same and the receiving server verified the sender. The owner can delete a
+  copy by mail: it goes away from the own calendar only, with no mail, and a tombstone stops the same version.
+  A newer invitation can be accepted again.
+- `calendar.respond_to_invitation` on a copy by mail sends the new answer by mail too.
+
+### iCalendar subset
+
+- The parser reads the first `VEVENT` of a `VCALENDAR`: `METHOD`, `UID` (at most 255 characters), `SEQUENCE`,
+  `DTSTAMP`, `SUMMARY`, `DESCRIPTION`, `LOCATION`, `DTSTART`, `DTEND` or `DURATION`, `STATUS`, `ORGANIZER`,
+  and at most 500 `ATTENDEE` lines with `CN`, `PARTSTAT` and the `mailto:` address or the `EMAIL` parameter. It
+  ignores `VALARM`, `VTIMEZONE`, `X-` properties and each other property.
+- A time in UTC, a `TZID` with an IANA name, and a `TZID` with a Windows name of Outlook from a fixed list
+  give an instant. A floating time and an unknown `TZID` give no time: the invitation is `unsupported`.
+- `RRULE`, `RDATE`, `EXDATE`, `RECURRENCE-ID` and a second `VEVENT` mark a recurring meeting: `unsupported`.
+- The texts lose their control characters (the description keeps tabs and line breaks) and are cut to the
+  limits of an event. An empty title becomes "(No title)".
+- The builder writes CRLF line ends and folds each line at 75 octets. A `CN` loses its quotes and control
+  characters, so a name cannot add a parameter or a property.
+
+### Interoperability to verify with live clients
+
+The workerd tests use synthetic fixtures in the forms of Google Calendar, Outlook / Exchange and Apple Calendar
+(`fixtures/calendar/`). These points need a check with the real clients:
+
+1. Gmail, Outlook (web and desktop) and Apple Mail show the RSVP controls for the `text/calendar;
+   method=REQUEST` part of Asterra in base64, with UTC times and no `VTIMEZONE`.
+2. Each client replaces the event for an update with the same `UID` and a larger `SEQUENCE`, and removes it
+   for a CANCEL.
+3. The From address and the DMARC result at Cloudflare Email Routing of invitations from Google Calendar
+   (the organizer, or a notification address for some domains), from Exchange and from iCloud. A sender that
+   is not the address of the accepted invitation changes nothing by itself.
+4. The form of the REPLY of each client: one `ATTENDEE`, the echo of `SEQUENCE`, and `DTSTAMP`.
+5. The `TZID` names of Outlook outside the fixed list.
+6. Email Service accepts the `text/calendar` part and keeps its `method` parameter.
+
 ## Range query
 
 - `calendar.list_events` takes `time_min`, `time_max` and `time_zone` (default `UTC`). An event is
@@ -224,8 +323,9 @@ message that replaces an older one.
   upgrade: the person makes a new key with the calendar scopes.
 - A mailbox delegate, the sponsor of an agent, and an owner or an admin get no access to a different
   calendar.
-- No content of a calendar comes from outside the organization in this layer, so the output marks
-  nothing untrusted.
+- An event that came by mail from outside the organization has `untrusted: true`: its title, description,
+  location and names come from that mail. The MCP adapter adds its notice for such content. Each other event
+  has `untrusted: false`.
 - The access to a meeting, for REST and MCP (the same handlers):
 
   | Caller | List and get | Update | Delete | Answer |
@@ -252,6 +352,15 @@ message that replaces an older one.
 - A message that fails 20 times is dropped. The calendar of the attendee then keeps an older state until
   the next change of the organizer.
 - A meeting has at most 100 attendees.
+- Invitations by mail: no recurring meetings, no `VTIMEZONE` in the output, no counter proposals, no
+  delegation, and `SENT-BY` is ignored. Only the own mailbox of a principal has a calendar: an invitation to a
+  team mailbox or in a delegated mailbox stays in Mail.
+- An update or a cancellation by mail from a sender that the receiving server did not verify (no DMARC pass)
+  is not applied by itself. The card tells the state, and the person sees the mail.
+- An answer by mail from a domain with no DMARC policy is applied. The worst result is one wrong answer of that
+  address.
+- A cancellation by mail can reach an address that did not get the invitation yet, when the organizer deletes a
+  meeting at once.
 - The `CalendarDO` of a deleted principal stays in storage, as its drive does.
 - The web app polls the events of the open period every 30 seconds while the page shows. No change
   feed exists yet.
@@ -272,8 +381,7 @@ message that replaces an older one.
 8. Delegates of a calendar, with a `calendar.share` scope, and shared calendars of a team.
 9. The calendar of an agent for its sponsor, or for an owner or an admin.
 10. ICS export, and ICS import marked untrusted.
-11. Invitations by mail to addresses outside the organization, and **Add to calendar** on a message
-    with the Meeting label.
+11. **Add to calendar** on a message with the Meeting label and no calendar part.
 12. Text search of events.
 13. A day view, a link to one event, and drag to move an event in the week grid. A grid of 25 hours on
     the day that the clock goes back.

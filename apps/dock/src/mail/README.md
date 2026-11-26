@@ -25,7 +25,9 @@ Public surface: `index.ts` only. Other domains must not import files from this f
 | File | What |
 | --- | --- |
 | `inbound.ts` | The `email()` handler and the `soldock-mail-inbound` queue consumer |
-| `delivery.ts` | R2 keys of raw messages, and delivery of a raw message to a mailbox |
+| `delivery.ts` | R2 keys of raw messages, delivery of a raw message to a mailbox, and the hand-off of a calendar part to the calendar of the owner |
+| `calendar-mail.ts` | `sendCalendarMail` (an iTIP message of Calendar from the own mailbox of a principal) and `readCalendarPart` (the calendar part of a message, with the facts about its sender) |
+| `calendar-part.ts` | The calendar part of a message, and the check of its sender (`internal`, `verified`, `unverified` or `failed`) |
 | `mailbox.ts` | `MailboxDO`: schema, threading, labels, snoozes, search, sends, recipient suggestions, the outbox alarm and the watch sockets |
 | `handlers.ts` | The operation handlers. They run in the Worker. They find the mailbox of the call, check that the caller can use it, and call its `MailboxDO` |
 | `outbound.ts` | The outbound policy rule for an agent. `mail.send` and the outbox both use it |
@@ -353,7 +355,13 @@ in one row (migrations `0031` and `0036`). There are two settings:
 5. The consumer reads the raw bytes, parses them, and calls `MailboxDO.deliver()`.
 6. The mailbox drops a second copy of the same content (`UNIQUE(content_hash)`), and the consumer
    acknowledges it. A queue redelivery or a sender retry stores one message.
-7. A failed delivery is retried with backoff. After 5 attempts, or for a job that cannot be read,
+7. After the mailbox stores a message, also a second copy, the delivery gives its calendar part to the
+   `CalendarDO` of the owner (`CalendarDO.applyMail`), through the `CALENDAR` binding. Conditions: the own
+   mailbox of a principal (not a team mailbox), not Spam, not held by the Screener, and a `text/calendar` or
+   `application/ics` part, or a `.ics` file, of at most 256 KiB. The calendar applies only what its rules
+   allow ([Calendar](../calendar/README.md#incoming-invitations)). An error of the call fails the job, and
+   the retry finds the stored message.
+8. A failed delivery is retried with backoff. After 5 attempts, or for a job that cannot be read,
    the job goes to `soldock-mail-inbound-dlq`.
 
 Inbound mail gets `INBOX` and `UNREAD`. A DMARC failure that the receiving server recorded puts the
@@ -793,6 +801,14 @@ The pause marker survives object eviction. A paused mailbox refuses new sends an
 After the reset, setup cancels the old outboxes. A failed directory transaction resumes the mailboxes.
 
 Agent mail carries `X-Asterra-Agent: true`. It also carries `X-Soldock-Agent: true` for existing mail filters.
+Calendar sends its invitations, changes, cancellations and answers by mail with `sendCalendarMail`: from the
+own mailbox of the principal, with the agent headers of `mail.send`, an idempotency key from Calendar, and the
+same outbox, retries, policy check and delivery status as `mail.send`. The message is
+`multipart/alternative` of a plain text part and a `text/calendar; method=<METHOD>` part (base64). A REQUEST
+and a CANCEL also have an `invite.ics` attachment with the same bytes. `composeMessage` writes these parts for
+its `calendar` field, and refuses a line break in the method. A message without `calendar` has the same parts
+as before.
+
 Mail to yourself is stored once, with `SENT` and
 `INBOX`, and the label of its [tag](#tags).
 
@@ -1005,6 +1021,10 @@ A disabled endpoint stays disabled. Delete it and create a new one.
   `header.from` is `verified` for the domain of the stored From address. Results that the mailbox
   stored before `dmarcFrom` are in this group.
 - Attachments are returned as base64 JSON, never served as active content on the origin.
+- A calendar part is untrusted content. Calendar reads it with its own parser and applies only its rules: a
+  change or a cancellation needs the organizer and the sender of the accepted invitation and a verified sender,
+  and an answer needs the From address of that attendee. The card of the web app shows its texts as text, never
+  as HTML. Spam and mail that the Screener holds never reach a calendar.
 - Auto labels: the classifier gets the message as delimited data, with a nonce for each call. Its
   answer can only choose candidate labels of the mailbox, which the mailbox checks again. It can
   never name a system label, a label of a different mailbox or an action. The mailbox stores no text
@@ -1033,6 +1053,7 @@ A disabled endpoint stays disabled. Delete it and create a new one.
 | Snooze | `MailboxDO` tables `labels` (the system label `SNOOZED`, migration 8), `message_labels`, and `threads` (columns `snoozed_until` and `woke_at`) | No new table. Each snoozed message has a row in `message_labels`. `snoozed_until` is the time when the thread comes back, and null for a thread that is not snoozed. `woke_at` is the time when the last snooze of the thread ended at its time |
 | Search index | `MailboxDO` SQLite, FTS5 table `messages_fts` | Rebuildable from the messages |
 | Delivery status of sent mail | `MailboxDO` table `delivery` | |
+| Invitations of Calendar | No new state | A message of `sendCalendarMail` is a sent message, as for `mail.send`. `getCalendarSource` reads the columns of `messages` and the label `SPAM` that exist |
 | Outbox | `MailboxDO` table `outbox` | Rows are deleted after delivery or after the last retry |
 | Reset pause | `MailboxDO` table `meta`, keys `delivery_pause`, `delivery_pause_generation` | Keeps the old mailbox paused and rejects calls from an older reset |
 | Idempotency keys of `mail.send` | `MailboxDO` table `idempotency` | Kept 24 hours, with the SHA-256 hash of the request. In a team mailbox, and for a delegate in the mailbox of a person, the key has the principal id of its caller in front |

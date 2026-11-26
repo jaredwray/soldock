@@ -60,7 +60,9 @@ describe("the MCP endpoint", () => {
 		await setLegacyScopes(bot.id, ["account.read", "mail.read"]);
 		const narrow = instructionsOf((await initialize(bot.key)).body);
 		expect(narrow).toMatch(/chat\.read \(\d+ tools\)/);
-		expect(narrow).not.toContain("mail.send (");
+		// mail_send names a mailbox, so it is not counted. The one mail.send tool is the answer to an invitation by
+		// mail, which acts on the own mailbox only.
+		expect(narrow).toContain("mail.send (1 tool)");
 		expect(narrow).toContain("apply only to your own mailbox, your own drive, your own calendar");
 		expect(narrow).not.toContain("create a key with more scopes");
 		expect(narrow).not.toContain("account.keys");
@@ -95,7 +97,7 @@ describe("the MCP endpoint", () => {
 		const { owner, bot } = await seedOrg();
 		const all = names((await mcp(owner.key, "tools/list")).body);
 		expect(all).toContain("directory_update_agent_policy");
-		expect(all).toHaveLength(232);
+		expect(all).toHaveLength(234);
 		// Only a person decides a member request or a share request, and only an agent or a service account makes one.
 		expect(all).not.toContain("chat_request_member");
 		expect(all).not.toContain("drive_request_share");
@@ -136,8 +138,10 @@ describe("the MCP endpoint", () => {
 			"calendar_create_event",
 			"calendar_delete_event",
 			"calendar_get_event",
+			"calendar_get_mail_invitation",
 			"calendar_list_events",
 			"calendar_respond_to_invitation",
+			"calendar_respond_to_mail_invitation",
 			"calendar_update_event",
 			"chat_add_members",
 			"chat_add_reaction",

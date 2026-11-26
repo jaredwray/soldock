@@ -7,15 +7,20 @@ import {
 	eventsByDay,
 	formOf,
 	formProblem,
+	hasCalendarPart,
+	invitationStateText,
+	invitationWhenText,
 	monthGrid,
 	newEventForm,
 	periodOf,
 	periodTitle,
 	placeSegments,
+	replyText,
 	sameAttendees,
 	sameTimeFields,
 	shiftPeriod,
 	shiftTarget,
+	typedAddress,
 	weekDays,
 	whenOf,
 	whenText,
@@ -36,6 +41,7 @@ function event(id: string, when: CalendarEvent["when"], title = id): CalendarEve
 		organizer: null,
 		attendees: [],
 		my_response: null,
+		untrusted: false,
 		created_at: "2026-11-01T00:00:00.000Z",
 		updated_at: "2026-11-01T00:00:00.000Z",
 	};
@@ -237,5 +243,44 @@ describe("the copy of a meeting", () => {
 		expect(sameAttendees([a, b], [b, a])).toBe(true);
 		expect(sameAttendees([a], [a, b])).toBe(false);
 		expect(sameAttendees([a, a], [a, b])).toBe(false);
+	});
+});
+
+describe("an invitation by mail", () => {
+	it("finds a calendar part by its type or by the name .ics", () => {
+		expect(hasCalendarPart([{ filename: "invite.ics", mime_type: "application/octet-stream" }])).toBe(true);
+		expect(hasCalendarPart([{ filename: "part", mime_type: "text/calendar; method=REQUEST" }])).toBe(true);
+		expect(hasCalendarPart([{ filename: "a.pdf", mime_type: "application/pdf" }])).toBe(false);
+	});
+
+	it("tells where the meeting is, and what an attendee answered", () => {
+		expect(invitationStateText({ method: "request", state: "new" })).toBeNull();
+		expect(invitationStateText({ method: "request", state: "on_calendar" })).toBe("This meeting is on your calendar.");
+		expect(invitationStateText({ method: "cancel", state: "cancelled" })).toBe("The organizer cancelled this meeting.");
+		expect(invitationStateText({ method: "reply", state: "on_calendar" })).toBeNull();
+		expect(
+			replyText({ attendees: [{ name: "Priya", email: "p@x.example", response: "tentative", self: false }] }),
+		).toBe("Priya answered Maybe.");
+		expect(replyText({ attendees: [{ name: "", email: "p@x.example", response: "pending", self: false }] })).toBeNull();
+	});
+
+	it("gives the day with the time, in the time zone of the person", () => {
+		expect(
+			invitationWhenText(
+				{ kind: "timed", start: "2026-12-03T15:00:00Z", end: "2026-12-03T16:00:00Z", time_zone: "UTC" },
+				NY,
+			),
+		).toBe("Thursday, December 3, 2026, 10:00 AM – 11:00 AM");
+		expect(invitationWhenText({ kind: "all_day", start_date: "2026-12-10", end_date: "2026-12-11" }, NY)).toBe(
+			"All day, Thursday, December 10, 2026",
+		);
+	});
+
+	it("takes a typed address outside the organization as an attendee with no principal", () => {
+		expect(typedAddress(" Guest@Partner.example ")).toBe("guest@partner.example");
+		expect(typedAddress("Guest")).toBeNull();
+		const guest = { principal_id: null, name: "guest@partner.example", email: "guest@partner.example" };
+		expect(sameAttendees([guest], [{ ...guest, email: "GUEST@partner.example" }])).toBe(true);
+		expect(sameAttendees([guest], [{ principal_id: "prn_a", name: "A", email: "guest@partner.example" }])).toBe(false);
 	});
 });

@@ -9,6 +9,7 @@ import {
 	dateToUtcMs,
 	type EventResponse,
 	type EventWhenValue,
+	type MailInvitation,
 	zonedDate,
 	zonedDayStart,
 	zonedTime,
@@ -343,7 +344,7 @@ export function periodTitle(view: CalendarView, date: string, firstDay: FirstDay
  * The time of an event as text, in the time zone of the person: "All day", "All day, Dec 1 – Dec 3", or
  * "9:00 AM – 10:00 AM".
  */
-export function whenText(event: CalendarEvent, zone: string): string {
+export function whenText(event: Pick<CalendarEvent, "when">, zone: string): string {
 	if (event.when.kind === "all_day") {
 		const last = addDays(event.when.end_date, -1);
 		return last === event.when.start_date
@@ -390,38 +391,107 @@ export function eventLabel(event: CalendarEvent, zone: string): string {
 	return [event.title, whenText(event, zone), event.location, state].filter(Boolean).join(", ");
 }
 
+/** The time of an invitation by mail with its day: "Thu, Dec 3, 9:00 AM – 10:00 AM", or "All day, Dec 10". */
+export function invitationWhenText(when: CalendarEvent["when"], zone: string): string {
+	const day = when.kind === "all_day" ? when.start_date : zonedDate(Date.parse(when.start), zone);
+	const text = whenText({ when }, zone);
+	if (when.kind === "all_day") return text === "All day" ? `All day, ${longDate(day)}` : text;
+	return text.includes(",") ? text : `${longDate(day)}, ${text}`;
+}
+
+/** The first day of an invitation by mail on the clock of the person, for the link to its week. */
+export function invitationDay(when: CalendarEvent["when"], zone: string): string {
+	return when.kind === "all_day" ? when.start_date : zonedDate(Date.parse(when.start), zone);
+}
+
+/** True for the attachments of a message with a calendar part. The card of the invitation shows only then. */
+export function hasCalendarPart(attachments: readonly { filename: string; mime_type: string }[]): boolean {
+	return attachments.some(
+		(attachment) =>
+			/^(text\/calendar|application\/ics)\b/i.test(attachment.mime_type) || /\.ics$/i.test(attachment.filename),
+	);
+}
+
+/** The line of the card of an invitation by mail that tells where the meeting is now. Null for no line. */
+export function invitationStateText(invitation: Pick<MailInvitation, "method" | "state">): string | null {
+	if (invitation.method === "reply") return null;
+	switch (invitation.state) {
+		case "on_calendar":
+			return "This meeting is on your calendar.";
+		case "outdated":
+			return "A newer version is on your calendar.";
+		case "cancelled":
+			return "The organizer cancelled this meeting.";
+		case "not_invited":
+			return "This invitation is for a different address.";
+		case "unsupported":
+			return "Asterra cannot read this invitation: it is a recurring meeting, or it has a time that Asterra cannot read.";
+		default:
+			return null;
+	}
+}
+
+/** The line of the card of an answer by mail: "Priya Natarajan answered Yes." */
+export function replyText(invitation: Pick<MailInvitation, "attendees">): string | null {
+	const [attendee] = invitation.attendees;
+	if (!attendee || attendee.response === "pending") return null;
+	return `${attendee.name || attendee.email} answered ${responseLabel(attendee.response)}.`;
+}
+
 /** The class of the button of an event: a pending, a tentative or a declined invitation looks different. */
 export function eventStateClass(event: CalendarEvent): string {
 	if (event.is_organizer || event.my_response === null || event.my_response === "accepted") return "";
 	return `cal-event-${event.my_response}`;
 }
 
-/** A person, agent or service account that the organizer chose in the event dialog. */
+/**
+ * An attendee that the organizer chose in the event dialog: a person, agent or service account of the
+ * organization, or an address outside it (`principal_id` null), who gets the invitation by mail.
+ */
 export interface ChosenAttendee {
-	principal_id: string;
+	principal_id: string | null;
 	name: string;
 	email: string;
 	kind?: "human" | "agent" | "service";
 }
 
+/** The key of a chosen attendee: the principal id, or the address in lowercase. */
+export function attendeeKey(attendee: Pick<ChosenAttendee, "principal_id" | "email">): string {
+	return attendee.principal_id ?? attendee.email.toLowerCase();
+}
+
 /** The attendees of an event, as the dialog shows them at the start. */
 export function chosenOf(event: CalendarEvent | null): ChosenAttendee[] {
-	return (event?.attendees ?? []).flatMap((attendee) =>
-		attendee.principal_id ? [{ principal_id: attendee.principal_id, name: attendee.name, email: attendee.email }] : [],
-	);
+	return (event?.attendees ?? []).map((attendee) => ({
+		principal_id: attendee.principal_id,
+		name: attendee.name,
+		email: attendee.email,
+	}));
 }
 
 /** The attendees for the input of an operation. */
-export function attendeeInputs(chosen: readonly ChosenAttendee[]): { principal_id: string }[] {
-	return chosen.map((attendee) => ({ principal_id: attendee.principal_id }));
+export function attendeeInputs(chosen: readonly ChosenAttendee[]): ({ principal_id: string } | { email: string })[] {
+	return chosen.map((attendee) =>
+		attendee.principal_id ? { principal_id: attendee.principal_id } : { email: attendee.email },
+	);
 }
 
-/** True when two lists have the same principals, in each order. */
+/** True when two lists have the same attendees, in each order. */
 export function sameAttendees(a: readonly ChosenAttendee[], b: readonly ChosenAttendee[]): boolean {
-	const ids = new Set(a.map((attendee) => attendee.principal_id));
-	return a.length === b.length && ids.size === new Set(b.map((attendee) => attendee.principal_id)).size
-		? b.every((attendee) => ids.has(attendee.principal_id))
+	const keys = new Set(a.map(attendeeKey));
+	return a.length === b.length && keys.size === new Set(b.map(attendeeKey)).size
+		? b.every((attendee) => keys.has(attendeeKey(attendee)))
 		: false;
+}
+
+/** The address of an attendee outside the organization that the person types, or null. */
+export function typedAddress(text: string): string | null {
+	const address = text.trim().toLowerCase();
+	return /^[a-z0-9.!#$%&'*+/=?^_`{|}~-]{1,64}@[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$/.test(
+		address,
+	)
+		? address
+		: null;
 }
 
 /** The hours of the grid of the week view. */

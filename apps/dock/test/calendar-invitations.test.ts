@@ -322,9 +322,6 @@ describe("the access to a meeting", () => {
 		const unknown = "prn_01ARZ3NDEKTSV4RRFFQ69G5FAV";
 		expect(await codeOf(ada.call("calendar.create_event", meeting([{ principal_id: unknown }])))).toBe("invalid");
 		expect(await codeOf(ada.call("calendar.create_event", meeting([{ email: "nobody@dock.test" }])))).toBe("invalid");
-		expect(await codeOf(ada.call("calendar.create_event", meeting([{ email: "someone@example.com" }])))).toBe(
-			"invalid",
-		);
 		expect(
 			await codeOf(
 				ada.call("calendar.create_event", meeting([{ principal_id: owner.id, email: "owner@dock.test" }] as never)),

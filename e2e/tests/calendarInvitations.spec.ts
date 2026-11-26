@@ -19,7 +19,7 @@ interface ApiEvent {
 	title: string;
 	is_organizer: boolean;
 	my_response: string | null;
-	attendees: { email: string; response: string }[];
+	attendees: { email: string; response: string; principal_id: string | null }[];
 	when: { kind: string; start?: string; end?: string };
 }
 
@@ -137,5 +137,35 @@ test("a person invites a teammate, who accepts, and the meeting moves and goes a
 	} finally {
 		await organizer.close();
 		await teammate.close();
+	}
+});
+
+test("a person invites an address outside the organization in the same field", async ({ browser }) => {
+	const organizer = await signIn(browser, "nadia");
+	try {
+		const day = farDay();
+		const title = unique("Client review");
+		const page = await organizer.newPage();
+		await openWeek(page, day);
+		await page.getByRole("button", { name: "New event" }).click();
+		const dialog = page.getByRole("dialog", { name: "New event" });
+		await dialog.getByLabel("Title").fill(title);
+		await dialog.getByLabel("Start date").fill(day);
+		await dialog.getByLabel("Start time").fill("10:00");
+		await dialog.getByLabel("End date").fill(day);
+		await dialog.getByLabel("End time").fill("11:00");
+		await dialog.getByRole("combobox", { name: "Attendees" }).fill("client@partner.example");
+		await dialog.getByRole("option", { name: /Invite client@partner\.example by mail/ }).click();
+		await expect(
+			dialog.getByRole("list", { name: "Attendees" }).getByText("Outside your organization, by mail"),
+		).toBeVisible();
+		await dialog.getByRole("button", { name: "Save" }).click();
+		await expect(page.getByText("Invitations sent.")).toBeVisible();
+		const [event] = await eventsOn(organizer, day, title);
+		expect(event?.attendees).toEqual([
+			expect.objectContaining({ email: "client@partner.example", principal_id: null, response: "pending" }),
+		]);
+	} finally {
+		await organizer.close();
 	}
 });

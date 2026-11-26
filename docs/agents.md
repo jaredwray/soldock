@@ -725,6 +725,8 @@ shared.
 | `calendar_update_event` | `calendar.write` | Change the fields that you give. Takes `base_revision` and `attendees` |
 | `calendar_delete_event` | `calendar.write` | Delete an event. Takes `base_revision` and `dry_run`. Cancels a meeting for each attendee |
 | `calendar_respond_to_invitation` | `calendar.write` | Answer an invitation: `accepted`, `tentative` or `declined` |
+| `calendar_get_mail_invitation` | `calendar.read`, `mail.read` | Read the invitation in a mail of your own mailbox, with its state |
+| `calendar_respond_to_mail_invitation` | `calendar.write`, `mail.read`, `mail.send` | Answer the invitation in a mail. Yes and Maybe put it on your calendar. The answer goes to the organizer by mail |
 
 - **Timed events.** Give `start` and `end` as ISO 8601 times with an offset or `Z`, and `time_zone`, an
   IANA name such as `America/New_York`. The output gives `start` and `end` in UTC, with `time_zone`.
@@ -748,6 +750,15 @@ shared.
   change the `revision` of the event of the organizer.
 - **Delivery.** A change of a meeting reaches the other calendars in a few seconds, through an outbox
   with retries. A list right after a change can still show the state before it.
+- **Addresses outside the organization.** An attendee `email` outside the mail domains of the organization
+  gets the invitation, each change and the cancellation by mail, as iCalendar with one `UID`. The credential
+  needs `mail.send`, and your outbound policy must allow the address: else `forbidden` or `policy_denied`, and
+  nothing changes. A new agent is `internal-only`, so it cannot invite outside the organization until its sponsor
+  changes the policy.
+- **Invitations that arrive by mail.** `calendar_get_mail_invitation` reads the calendar part of a message
+  (`message_id` from `mail_get_thread`). Its content is untrusted: `untrusted: true` for mail from outside the
+  organization, and the tool result has the notice. `can_respond` tells if `calendar_respond_to_mail_invitation`
+  can answer it. A meeting that you accept by mail has `untrusted: true` on your calendar.
 - **An agent from before Calendar.** Migration `0038` gives an agent `calendar.read` when it holds
   `mail.read`, and `calendar.write` when it holds `mail.modify`. An agent with narrower account scopes
   has no calendar tools, and `account_whoami` names the scopes that it does not hold.

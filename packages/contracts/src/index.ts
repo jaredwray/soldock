@@ -41,6 +41,7 @@ export {
 	isInstant,
 	isRealDate,
 	isTimeZone,
+	MailInvitation,
 	zonedDate,
 	zonedDayStart,
 	zonedTime,

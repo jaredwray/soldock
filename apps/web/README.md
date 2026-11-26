@@ -1198,6 +1198,16 @@ MCP clients. The app has no UI-only path.
   - A viewer gets a read-only grid: selection and copy work, and the formula bar shows "View only".
   - While no change waits, the page gets the sheet again every 15 seconds when the tab is visible,
     and on window focus.
+- **Invitations in Mail** (`InvitationCard.tsx`). An open message of the own mailbox with a calendar part
+  (`text/calendar`, `application/ics` or a `.ics` file), from someone else, shows a card above the body from
+  `calendar.get_mail_invitation`: the title, the day and the time in the time zone of the browser, the place,
+  "Organizer: <name> (<address>)", "Sent by <address>" when the sender is not the organizer, and a line of the
+  state ("This meeting is on your calendar.", "A newer version is on your calendar.", "The organizer cancelled
+  this meeting.", "This invitation is for a different address." or that Asterra cannot read it). **Yes**,
+  **Maybe** and **No** in the group "Your answer" call `calendar.respond_to_mail_invitation` when `can_respond`
+  is true. **Open in Calendar** opens the week of the meeting when it is on the calendar. The answer of an
+  attendee shows one line: "<name> answered Yes." Each text comes from the sender, so the card renders text
+  nodes only, never HTML. A team mailbox and a delegated mailbox show no card.
 - **Calendar** (`/calendar`, `/calendar/week/<date>`, `/calendar/month/<date>`). The own calendar of
   the person, in the time zone of the browser. The rail has **Calendar** after Chat.
   - The toolbar has **Today**, **Previous** and **Next**, the title of the period, and the **Week** and
@@ -1231,6 +1241,10 @@ MCP clients. The app has no UI-only path.
     **Save** and no **Delete**. The open dialog shows the newest copy of each poll. When a poll does not
     have the copy, or an answer gets `not_found`, the dialog says that the organizer cancelled the meeting
     or removed the person, and hides the answers.
+  - **Attendees** also takes an address outside the organization: a typed address that no principal of the
+    list has gives the option "Invite <address> by mail". Its row says "Outside your organization, by mail".
+  - A meeting that came by mail from outside the organization opens the invitation dialog with a notice that
+    it came by mail, and **Remove from my calendar**, which removes it from the own calendar only.
   - A pending invitation has a dashed border and no fill. **Maybe** has stripes. **No** is faded, with a
     line through the title. An accepted meeting looks like an own event. The name of the event ends with
     "invitation, not answered", "maybe" or "declined", so the state is not only a look.
@@ -2178,7 +2192,7 @@ Sent `in:sent`, Spam `in:spam`, Trash `in:trash`, All mail an empty string, and 
 | [`src/features/drive/`](src/features/drive/) | Drive: the sidebar, the item list, the menus and dialogs (new folder, rename, move, share, versions, preview), the data hooks, the pure rules in `model.ts`, the upload queue in `uploadQueue.ts`, and the document header that the editors share |
 | [`src/features/docs/`](src/features/docs/) | Docs: the schema, the commands, the autosave, the paste of Markdown (`markdownPaste.ts`), the editor and the page. For images: the store of the images of a doc (`images.ts`), the geometry (`imageModel.ts`), the commands (`imageCommands.ts`), the view of an image (`imageView.ts`), the plugin for a drop and a paste (`imagePlugin.ts`), the toolbar and the dialogs |
 | [`src/features/sheets/`](src/features/sheets/) | Sheets: the store with the tabs and the save queue, the toolbar, the grid, the formula bar, the tab bar, and the pure modules for cell names, the selection, clipboard text, the cells of the grid, the formats of cells and the formulas of the Σ menu |
-| [`src/features/calendar/`](src/features/calendar/) | Calendar: the page and its toolbar (`CalendarApp.tsx`), the week, month and agenda views (`views.tsx`), the event dialog and the invitation dialog (`EventDialog.tsx`), the attendee field (`AttendeePicker.tsx`), the load of a period with its poll (`data.ts`), and the pure rules for the days of a period, the parts of an event on each day, the columns of overlaps and the form of an event (`model.ts`) |
+| [`src/features/calendar/`](src/features/calendar/) | Calendar: the page and its toolbar (`CalendarApp.tsx`), the week, month and agenda views (`views.tsx`), the event dialog and the invitation dialog (`EventDialog.tsx`), the attendee field (`AttendeePicker.tsx`), the pure rules of the card of an invitation in Mail, the load of a period with its poll (`data.ts`), and the pure rules for the days of a period, the parts of an event on each day, the columns of overlaps and the form of an event (`model.ts`) |
 | [`src/features/chat/`](src/features/chat/) | Chat: the sidebar, the room view, the dialogs (new room, public rooms, new direct message, members, name and topic), the message box with its toolbar, Markdown shortcuts and suggestions of a mention (`ChatComposer.tsx`, `composerSchema.ts`, `composerCommands.ts`), the files of a new message (`attachments.ts`, `ComposerFiles.tsx`, the drop in `fileDrop.ts`), the files and the link previews of a message (`MessageFiles.tsx`), the focus after the X of a chip (`focusAfterRemove.ts`), the data hooks, the pure rules in `model.ts`, the rules of mentions in `mentions.ts`, the part of the history that the page keeps in `history.ts`, the page reads in `pager.ts`, the last list of each room in `roomCache.ts`, the drafts in `drafts.ts`, the sends whose message the room has in `settle.ts`, the sync of the open room in `sync.ts`, and the texts and the buttons of a member request and of a share request (`memberRequests.ts`, `shareRequests.ts`, `RequestActions.tsx`) |
 | [`src/features/people/`](src/features/people/) | The profile page of a person or an agent |
 | [`src/features/settings/`](src/features/settings/) | Settings, its side navigation, the password and two-step verification cards, the TOTP setup panel, the API key manager with the lifetime of a key (`ttl.ts`), the event check boxes, the webhook list of one target, and the one-time secret dialog |
