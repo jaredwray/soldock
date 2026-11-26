@@ -1,5 +1,8 @@
 import { type BrowserContext, expect, type Page, test } from "@playwright/test";
 import { signIn, unique } from "../support/chat.ts";
+import { BASE_URL } from "../support/server.ts";
+
+const JSON_HEADERS = { origin: BASE_URL, "content-type": "application/json" };
 
 // Two people in two browsers, each with their own session: the organizer and the teammate that the organizer
 // invites. The browsers are in New York. The test uses a far day and its own title, so no other test and no
@@ -134,6 +137,59 @@ test("a person invites a teammate, who accepts, and the meeting moves and goes a
 		await teammatePage.reload();
 		await expect(teammatePage.getByRole("button", { name: new RegExp(title) })).toHaveCount(0);
 		await expect(organizerPage.getByRole("button", { name: new RegExp(title) })).toHaveCount(0);
+	} finally {
+		await organizer.close();
+		await teammate.close();
+	}
+});
+
+// A poll has only the events of the open week. An open invitation that the organizer moves to a different week is
+// not in the poll, but it is not cancelled: the dialog keeps its answers and shows the new time.
+test("an open invitation follows a move to a different week, and tells a cancellation", async ({ browser }) => {
+	const organizer = await signIn(browser, "nadia");
+	const teammate = await signIn(browser, "chidi");
+	try {
+		const day = farDay();
+		const later = new Date(Date.parse(`${day}T00:00:00Z`) + 14 * 86_400_000).toISOString().slice(0, 10);
+		const title = unique("Kiln walkthrough");
+		const created = await organizer.request.post("/api/v1/calendar/events", {
+			headers: JSON_HEADERS,
+			data: {
+				title,
+				when: { kind: "timed", start: `${day}T15:00:00Z`, end: `${day}T16:00:00Z`, time_zone: "America/New_York" },
+				attendees: [{ email: "chidi@example.com" }],
+			},
+		});
+		expect(created.ok(), await created.text()).toBe(true);
+		const { event } = (await created.json()) as { event: ApiEvent & { revision: number } };
+		await expectStarts([teammate], day, title, [`${day}T15:00:00.000Z`]);
+
+		const page = await teammate.newPage();
+		await openWeek(page, day);
+		await page.getByRole("button", { name: new RegExp(title) }).click();
+		const dialog = page.getByRole("dialog", { name: "Invitation" });
+		await expect(dialog.getByText("10:00 AM – 11:00 AM")).toBeVisible();
+
+		const moved = await organizer.request.post(`/api/v1/calendar/events/${event.id}`, {
+			headers: JSON_HEADERS,
+			data: {
+				when: { kind: "timed", start: `${later}T18:00:00Z`, end: `${later}T19:00:00Z`, time_zone: "America/New_York" },
+			},
+		});
+		expect(moved.ok(), await moved.text()).toBe(true);
+		await expectStarts([teammate], later, title, [`${later}T18:00:00.000Z`]);
+		// A focus of the window loads the week again, as the poll does.
+		await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+		await expect(dialog.getByText("1:00 PM – 2:00 PM")).toBeVisible();
+		await expect(dialog.getByRole("group", { name: "Your answer" }).getByRole("button", { name: "Yes" })).toBeVisible();
+		await expect(dialog.getByText("The organizer cancelled this meeting or removed you from it.")).toHaveCount(0);
+
+		const deleted = await organizer.request.delete(`/api/v1/calendar/events/${event.id}`, { headers: JSON_HEADERS });
+		expect(deleted.ok(), await deleted.text()).toBe(true);
+		await expectStarts([teammate], later, title, []);
+		await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+		await expect(dialog.getByText("The organizer cancelled this meeting or removed you from it.")).toBeVisible();
+		await expect(dialog.getByRole("group", { name: "Your answer" })).toHaveCount(0);
 	} finally {
 		await organizer.close();
 		await teammate.close();
