@@ -27,6 +27,7 @@ import {
 	realtimeConfig,
 	renegotiate,
 	revokeTurn,
+	sessionState,
 } from "./realtime.ts";
 
 // One MeetingDO for each meeting. Its name is the meeting code. It holds the meeting, its participants and the
@@ -81,6 +82,13 @@ const CLOSE_KEEP_MS = 24 * 60 * 60_000;
 const CREDENTIAL_RETRY_MS = 60_000;
 /** The row of a guest that the host never admitted goes this long after the guest left the lobby. */
 const PRUNE_AFTER_MS = 10 * 60_000;
+/** The row of each other guest goes this long after the guest left. Its token is of no use at that time. */
+const PRUNE_LEFT_MS = 24 * 60 * 60_000;
+/**
+ * The mid of a row of `pending_closes` that is not one track: the object reads the session from the SFU, and
+ * closes each track there that it has no row for. No real mid has this value.
+ */
+const SWEEP = "*";
 /** The time window of the limit `MEET_LIMITS.guestJoinsPerMinute`. */
 const JOIN_WINDOW_MS = 60_000;
 
@@ -546,8 +554,9 @@ export class MeetingDO extends DurableObject<Env> {
 		// with the link cannot lock them out.
 		if (!input.member) {
 			this.sql.exec(
-				`DELETE FROM participants WHERE kind = 'guest' AND left_at <= ?
-					AND (state = 'denied' OR (state = 'left' AND decided_at IS NULL))`,
+				`DELETE FROM participants WHERE kind = 'guest' AND state IN ('denied', 'left', 'removed') AND (left_at <= ?
+					OR (left_at <= ? AND (state = 'denied' OR (state = 'left' AND decided_at IS NULL))))`,
+				now - PRUNE_LEFT_MS,
 				now - PRUNE_AFTER_MS,
 			);
 			const guests = this.sql
@@ -783,8 +792,10 @@ export class MeetingDO extends DurableObject<Env> {
 		const now = Date.now();
 		for (const mid of mids) {
 			this.sql.exec(
-				`INSERT OR IGNORE INTO pending_closes (session_id, mid, owner_id, attempts, next_at, created_at)
-					VALUES (?, ?, ?, 0, ?, ?)`,
+				// A second request for the same mid starts its tries again: the caller wants the close now.
+				`INSERT INTO pending_closes (session_id, mid, owner_id, attempts, next_at, created_at)
+					VALUES (?, ?, ?, 0, ?, ?)
+					ON CONFLICT (session_id, mid) DO UPDATE SET attempts = 0, next_at = excluded.next_at`,
 				sessionId,
 				mid,
 				ownerId,
@@ -826,40 +837,101 @@ export class MeetingDO extends DurableObject<Env> {
 				.toArray()
 				.map((pull) => pull.mid as string),
 		];
-		this.queueCloses(participantId, row.sfu_session_id, own);
+		// The session ends here. A push or a pull that got no answer can have a track without a row: the SWEEP row
+		// makes the object read the session from the SFU and close what it finds.
+		this.queueCloses(participantId, row.sfu_session_id, [...own, SWEEP]);
 		this.queuePullCloses("publisher_id", participantId);
 		this.sql.exec("DELETE FROM pulls WHERE publisher_id = ? OR subscriber_id = ?", participantId, participantId);
 		this.sql.exec("DELETE FROM tracks WHERE participant_id = ?", participantId);
+	}
+
+	/** The mids of the tracks and the pulls that a participant has rows for on this SFU session. */
+	private liveMids(ownerId: string, sessionId: string): Set<string> {
+		const owner = this.participantRow("id", ownerId);
+		if (owner?.sfu_session_id !== sessionId) return new Set();
+		return new Set([
+			...this.tracksOf(ownerId).map((track) => track.mid),
+			...this.sql
+				.exec("SELECT mid FROM pulls WHERE subscriber_id = ?", ownerId)
+				.toArray()
+				.map((pull) => pull.mid as string),
+		]);
+	}
+
+	private retryClose(sessionId: string, mid: string): void {
+		this.sql.exec(
+			`UPDATE pending_closes SET next_at = ? + MIN(?, ? * (1 << MIN(attempts, 10))), attempts = attempts + 1
+				WHERE session_id = ? AND mid = ?`,
+			Date.now(),
+			CLOSE_RETRY_MAX_MS,
+			CLOSE_RETRY_MS,
+			sessionId,
+			mid,
+		);
+	}
+
+	private dueCloses(sessionId: string): string[] {
+		return this.sql
+			.exec(
+				"SELECT mid FROM pending_closes WHERE session_id = ? AND (attempts = 0 OR next_at <= ?)",
+				sessionId,
+				Date.now(),
+			)
+			.toArray()
+			.map((row) => row.mid as string);
 	}
 
 	/**
 	 * Closes the recorded tracks of one session on the SFU. It runs on the chain of the owner of the session. A row
 	 * goes when the SFU confirmed the close. A different row waits for the alarm, each time two times longer.
 	 */
-	private async closeSession(sessionId: string): Promise<void> {
+	private async closeSession(ownerId: string, sessionId: string): Promise<void> {
 		const config = realtimeConfig(this.env);
-		const now = Date.now();
-		const mids = this.sql
-			.exec("SELECT mid FROM pending_closes WHERE session_id = ? AND (attempts = 0 OR next_at <= ?)", sessionId, now)
-			.toArray()
-			.map((row) => row.mid as string);
+		const due = this.dueCloses(sessionId);
+		if (due.length === 0) return;
+		if (!config) {
+			for (const mid of due) this.retryClose(sessionId, mid);
+			return;
+		}
+		if (due.includes(SWEEP)) {
+			let onSfu: string[] | null | undefined;
+			try {
+				onSfu = await sessionState(config, sessionId);
+			} catch (error) {
+				log("warn", "meet: the media service did not give the state of a session", {
+					error: error instanceof Error ? error.message : String(error),
+				});
+			}
+			// The alarm can delete the data of an old meeting while the SFU call runs.
+			if (!this.exists()) return;
+			if (onSfu === undefined) {
+				this.retryClose(sessionId, SWEEP);
+			} else {
+				const live = this.liveMids(ownerId, sessionId);
+				this.queueCloses(
+					ownerId,
+					sessionId,
+					(onSfu ?? []).filter((mid) => !live.has(mid)),
+				);
+				this.sql.exec("DELETE FROM pending_closes WHERE session_id = ? AND mid = ?", sessionId, SWEEP);
+			}
+		}
+		// A mid with a row in `tracks` or `pulls` is in use again. Its close is not wanted now.
+		const live = this.liveMids(ownerId, sessionId);
+		const mids: string[] = [];
+		for (const mid of this.dueCloses(sessionId)) {
+			if (mid === SWEEP) continue;
+			if (live.has(mid)) this.sql.exec("DELETE FROM pending_closes WHERE session_id = ? AND mid = ?", sessionId, mid);
+			else mids.push(mid);
+		}
 		if (mids.length === 0) return;
-		const closed = config ? await closeTracks(config, sessionId, mids) : new Set<string>();
-		// The alarm can delete the data of an old meeting while the SFU call runs.
+		const closed = await closeTracks(config, sessionId, mids);
 		if (!this.exists()) return;
 		for (const mid of mids) {
 			if (closed.has(mid)) {
 				this.sql.exec("DELETE FROM pending_closes WHERE session_id = ? AND mid = ?", sessionId, mid);
 			} else {
-				this.sql.exec(
-					`UPDATE pending_closes SET next_at = ? + MIN(?, ? * (1 << MIN(attempts, 10))), attempts = attempts + 1
-						WHERE session_id = ? AND mid = ?`,
-					Date.now(),
-					CLOSE_RETRY_MAX_MS,
-					CLOSE_RETRY_MS,
-					sessionId,
-					mid,
-				);
+				this.retryClose(sessionId, mid);
 			}
 		}
 	}
@@ -885,7 +957,7 @@ export class MeetingDO extends DurableObject<Env> {
 		).toArray();
 		const scheduled = this.schedule();
 		const jobs = sessions.map((row) =>
-			this.enqueue(row.owner_id as string, () => this.closeSession(row.session_id as string)),
+			this.enqueue(row.owner_id as string, () => this.closeSession(row.owner_id as string, row.session_id as string)),
 		);
 		await Promise.all([scheduled, ...jobs]);
 		await this.schedule();
@@ -933,6 +1005,15 @@ export class MeetingDO extends DurableObject<Env> {
 			try {
 				result = await pushTracks(config, row.sfu_session_id, input.offer, planned);
 			} catch (error) {
+				// Without an answer, the object does not know if the SFU made the tracks. So it closes their mids.
+				if (error instanceof RealtimeError && error.status === 0) {
+					this.queueCloses(
+						row.id,
+						row.sfu_session_id,
+						planned.map((track) => track.mid),
+					);
+					this.kick();
+				}
 				return this.failure(error);
 			}
 			const after = this.participantRow("id", row.id);
@@ -1042,6 +1123,12 @@ export class MeetingDO extends DurableObject<Env> {
 					wanted.map((item) => ({ sessionId: item.sessionId, trackName: item.track.track_name })),
 				);
 			} catch (error) {
+				// Without an answer, the SFU can have pulls with mids that the object does not know. The object reads
+				// the session and closes each track without a row.
+				if (error instanceof RealtimeError && error.status === 0) {
+					this.queueCloses(row.id, row.sfu_session_id, [SWEEP]);
+					this.kick();
+				}
 				return this.failure(error);
 			}
 			const after = this.participantRow("id", row.id);

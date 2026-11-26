@@ -739,11 +739,12 @@ describe("meet", () => {
 		const pending = () =>
 			runInDurableObject(
 				stub,
-				(_instance, state) => state.storage.sql.exec("SELECT COUNT(*) AS n FROM pending_closes").one().n as number,
+				(_instance, state) =>
+					state.storage.sql.exec("SELECT COUNT(*) AS n FROM pending_closes WHERE mid != '*'").one().n as number,
 			);
 
 		// The SFU refuses one of the two close calls of the removal. The removal itself still succeeds.
-		sfu.failNext(503);
+		sfu.failNext(503, "/tracks/close");
 		const removed = await ada.call("meet.remove_participant", {
 			code: meeting.code,
 			participant_id: guest.participant.id,
@@ -753,7 +754,7 @@ describe("meet", () => {
 		expect(await pending()).toBe(open().length);
 
 		// An alarm before the time of the next try, and a try that fails again, keep the record.
-		sfu.failNext(503);
+		sfu.failNext(503, "/tracks/close");
 		await runInDurableObject(stub, (_instance, state) => {
 			state.storage.sql.exec("UPDATE pending_closes SET next_at = 0");
 		});
@@ -802,19 +803,21 @@ describe("meet", () => {
 				`WITH RECURSIVE numbers (n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM numbers WHERE n < ?)
 				INSERT INTO participants (id, token_hash, kind, display_name, role, state, end_reason, requested_at,
 					decided_at, left_at, last_seen_at)
-				SELECT 'par_old' || n, 'hash' || n, 'guest', 'Old', 'participant', 'removed', 'removed', 0, 0, 0, 0 FROM numbers`,
+				SELECT 'par_old' || n, 'hash' || n, 'guest', 'Old', 'participant', 'removed', 'removed', 0, 0, ?, 0 FROM numbers`,
 				MEET_LIMITS.participantRows,
+				Date.now() - 23 * 60 * 60_000,
 			);
 		});
 		expect((await tryGuest()).status).toBe(429);
 		expect((await joinAsMember(meeting.code, adaCookie)).participant.state).toBe("admitted");
-		// A guest that the host never admitted leaves no row after some minutes. Then a new guest can ask.
+		// The row of a guest goes one day after the guest left the call, and after some minutes when the host never
+		// admitted the guest. Then a new guest can ask, so a link that lives long keeps its use.
 		await runInDurableObject(stub, (_instance, state) => {
-			state.storage.sql.exec("UPDATE participants SET state = 'denied' WHERE id LIKE 'par_old%'");
+			state.storage.sql.exec("UPDATE participants SET left_at = left_at - 3600000 WHERE kind = 'guest'");
 		});
 		expect((await tryGuest()).status).toBe(201);
-		// The rows that stay are from this test: the guests of the first minute, and two guests that wait.
-		expect(await guestRows()).toBe(MEET_LIMITS.guestJoinsPerMinute + 2);
+		// The rows that stay are the two guests that wait.
+		expect(await guestRows()).toBe(2);
 	});
 
 	it("closes the oldest socket at the third socket of a participant, and the first row of a member that joins again", async () => {
@@ -853,5 +856,98 @@ describe("meet", () => {
 		const list = await ada.call("meet.list_participants", { code: meeting.code });
 		expect(list.participants.map((p) => p.id)).toEqual([again.participant.id]);
 		await expect.poll(() => sfu.openTracks(sfu.sessions[0] as string)).toEqual([]);
+	});
+
+	it("closes the tracks of a push or a pull that got no answer from the SFU", async () => {
+		const meeting = await newMeeting();
+		const host = await joinAsMember(meeting.code, await signIn("ada@dock.test"));
+		const guest = await joinAsGuest(meeting.code);
+		await ada.call("meet.admit_participant", { code: meeting.code, participant_id: guest.participant.id });
+		const hostMedia = await sendMedia(meeting.code, host.token);
+		const started = await callRoute(meeting.code, "/media/session", { token: guest.token, body: {} });
+		const session = started.body.session as number;
+		const guestSession = sfu.sessions[1] as string;
+
+		// The SFU makes the tracks of the push, and the answer does not come. The object closes the mids of the push.
+		sfu.loseNextAnswer();
+		const audio = { session, offer: { sdp: "v=0 offer" }, tracks: [{ mid: "0", kind: "audio" }] };
+		expect((await callRoute(meeting.code, "/media/publish", { token: guest.token, body: audio })).status).toBe(503);
+		await expect.poll(() => sfu.openTracks(guestSession)).toEqual([]);
+
+		// The same for a pull: the object does not know the mids, so it reads the session from the SFU. The track that
+		// the guest sends with a row stays open.
+		const video = { session, offer: { sdp: "v=0 offer" }, tracks: [{ mid: "1", kind: "video" }] };
+		expect((await callRoute(meeting.code, "/media/publish", { token: guest.token, body: video })).status).toBe(200);
+		sfu.loseNextAnswer();
+		const pull = { session, track_ids: hostMedia.tracks.map((track) => track.id) };
+		expect((await callRoute(meeting.code, "/media/subscribe", { token: guest.token, body: pull })).status).toBe(503);
+		await expect.poll(() => sfu.openTracks(guestSession).map((track) => track.mid)).toEqual(["1"]);
+
+		// A teardown reads the session too. Here the SFU gives no answer to a pull and refuses the read of the
+		// session, so the pulls stay open. Then the guest leaves, and each track of its session closes.
+		sfu.loseNextAnswer();
+		sfu.failNext(503, "GET /apps");
+		expect((await callRoute(meeting.code, "/media/subscribe", { token: guest.token, body: pull })).status).toBe(503);
+		await expect.poll(() => sfu.calls.filter((call) => call.method === "GET")).toHaveLength(2);
+		expect(sfu.openTracks(guestSession)).toHaveLength(3);
+		expect((await callRoute(meeting.code, "/leave", { token: guest.token, body: {} })).status).toBe(200);
+		expect(sfu.openTracks(guestSession)).toEqual([]);
+	});
+
+	it("sends the close of a pull to the SFU session that had it, also after a new session of the subscriber", async () => {
+		const meeting = await newMeeting();
+		const host = await joinAsMember(meeting.code, await signIn("ada@dock.test"));
+		const guest = await joinAsGuest(meeting.code);
+		await ada.call("meet.admit_participant", { code: meeting.code, participant_id: guest.participant.id });
+		const hostMedia = await sendMedia(meeting.code, host.token);
+		const guestMedia = await sendMedia(meeting.code, guest.token);
+		await receive(
+			meeting.code,
+			host.token,
+			hostMedia.session,
+			guestMedia.tracks.map((t) => t.id),
+		);
+		const oldSession = sfu.sessions[0] as string;
+		const pulls = () => sfu.openTracks(oldSession).filter((track) => track.location === "remote");
+
+		// The guest leaves, and the SFU refuses the close of the pulls of the host. Then the host starts a new session.
+		sfu.failNext(503, `${oldSession}/tracks/close`);
+		expect((await callRoute(meeting.code, "/leave", { token: guest.token, body: {} })).status).toBe(200);
+		expect(pulls()).toHaveLength(2);
+		const again = await callRoute(meeting.code, "/media/session", { token: host.token, body: {} });
+		expect(again.status).toBe(200);
+		const newSession = sfu.sessions[2] as string;
+		// The new try goes to the old session, with the tracks that the host sent on it. The new session gets no close.
+		await expect.poll(() => sfu.openTracks(oldSession)).toEqual([]);
+		const closes = sfu.callsTo("/tracks/close");
+		expect(closes.filter((call) => call.path.includes(oldSession)).length).toBeGreaterThanOrEqual(2);
+		expect(closes.filter((call) => call.path.includes(newSession))).toEqual([]);
+	});
+
+	it("waits one minute after a credential check that failed", async () => {
+		const meeting = await newMeeting();
+		const host = await joinAsMember(meeting.code, await signIn("ada@dock.test"));
+		const stub = env.MEETING.get(env.MEETING.idFromName(meeting.code));
+		await runInDurableObject(stub, (instance, state) => {
+			state.storage.sql.exec("UPDATE participants SET last_seen_at = ?", Date.now());
+			state.storage.sql.exec("DELETE FROM meta WHERE key = 'credentials_at'");
+			// The directory database of this object gives no answer.
+			const holder = instance as unknown as { env: Env };
+			holder.env = {
+				...holder.env,
+				DIRECTORY: {
+					prepare() {
+						throw new Error("D1 is down");
+					},
+				} as unknown as D1Database,
+			};
+		});
+		const before = Date.now();
+		await runDurableObjectAlarm(stub);
+		const next = await runInDurableObject(stub, (_instance, state) => state.storage.getAlarm());
+		// Without the wait, the next alarm comes one second later, and each alarm asks the directory again.
+		expect(next).toBeGreaterThanOrEqual(before + 55_000);
+		expect(next).toBeLessThanOrEqual(Date.now() + 60_000);
+		expect((await callRoute(meeting.code, "/state", { token: host.token })).body.self.state).toBe("admitted");
 	});
 });

@@ -46,6 +46,11 @@ Public surface: `index.ts` only. Other domains must not import files from this f
   session. The object writes these rows in the same synchronous block that deletes the rows of `tracks` and `pulls`.
   A row goes only when the SFU confirms the close. `close_track_error` (closed before) and `410` (the SFU has no
   such session) count as confirmed.
+- A push or a pull can get no answer in 10 seconds. The object then does not know if the SFU made tracks. For a
+  push it records a close of each mid of the request. For a pull it records a read of the session (the mid `*`):
+  the object asks the SFU for the tracks of the session and closes each track that has no row. Each teardown and
+  each new media session records the same read for the session that ends.
+- A new try does not close a mid that has a row in `tracks` or `pulls` again.
 - A close that fails waits for the alarm. The first new try comes after 5 seconds, and each later try waits two
   times longer, at most 5 minutes. After 24 hours the object deletes the row and writes an error line.
 - TURN: each admitted participant gets a credential with a life of 12 hours when the deployment has a TURN key. URLs
@@ -93,7 +98,7 @@ Public surface: `index.ts` only. Other domains must not import files from this f
   rows of guests for each meeting, and a token life of 24 hours.
 - The limits of join requests count guests only. The host and each member always get a row, so a person with the
   link cannot lock them out. The row of a guest that the host never admitted goes 10 minutes after the guest left
-  the lobby. Its token is then unknown.
+  the lobby. The row of each other guest goes 24 hours after the guest left. The token of a deleted row is unknown.
 
 ## Admission and media
 
@@ -160,7 +165,8 @@ of pull requests set a stand-in there.
 - `test/meet.test.ts` (workerd) replaces `fetch` with a stand-in of the Realtime API (`test/realtime-fake.ts`). It
   proves the access of each operation for a person, an agent through MCP, a service account and a scoped key, that
   a participant in the lobby causes no SFU call, the exact tracks that a removal and an end close, the close of the
-  old session at a new media session, the new try of a failed close from the alarm, the limits of join requests, the
+  old session at a new media session, the new try of a failed close from the alarm, the close after a push or a
+  pull without an answer, the wait after a failed credential check, the limits of join requests, the
   stale epoch, the alarm (absence, token life, credential, deletion) and the scope migration.
 - `e2e/tests/meet.spec.ts` runs two browsers with synthetic media against a stand-in SFU (`e2e/support/fake-sfu.ts`):
   a headless Chromium that holds one real `RTCPeerConnection` for each SFU session and sends each received track on.
@@ -176,8 +182,8 @@ of pull requests set a stand-in there.
   join.
 - The revoke of a TURN credential has one try. If it fails, a removed participant keeps the credential for at most
   12 hours. The credential gives a relay only: it gives no track of the meeting.
-- If the SFU refuses a push or a pull with an error, or gives no answer in 10 seconds, the object does not know
-  if the SFU made tracks, and records no close for them. The SFU deletes a track without packets after 30 seconds.
+- The read of a session for tracks without a row needs `GET /sessions/{id}` of the SFU. While that call fails, a
+  track from a push or a pull without an answer stays until the next try of the alarm.
 - The limits of join requests are for each meeting. A person with the link can use them up, and then a different
   guest waits one minute.
 - A pull that the server closed keeps its transceiver in the browser until the next media session.

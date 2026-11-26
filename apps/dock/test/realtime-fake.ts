@@ -34,8 +34,10 @@ export interface RealtimeFake {
 	openTracks(sessionId: string): FakeTrack[];
 	/** The session ids that the fake made, in order. */
 	sessions: string[];
-	/** Makes the next SFU call fail with this status. */
-	failNext(status: number): void;
+	/** Makes the next SFU call fail with this status. With `match`, the next call whose method and path (`GET /apps/…`) contain that text. */
+	failNext(status: number, match?: string): void;
+	/** The next push or pull makes its tracks, and then gives no answer, as a request that timed out. */
+	loseNextAnswer(): void;
 }
 
 /** Installs the stand-in. Other requests reach a 599 answer, so a test sees a call to an unknown host. */
@@ -44,6 +46,8 @@ export function fakeRealtime(): RealtimeFake {
 	const sessions = new Map<string, FakeTrack[]>();
 	const order: string[] = [];
 	let failStatus: number | null = null;
+	let failMatch = "";
+	let loseAnswer = false;
 	let counter = 0;
 	vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
 		const outgoing = new Request(input, init);
@@ -76,7 +80,7 @@ export function fakeRealtime(): RealtimeFake {
 		if (auth !== `Bearer ${APP_SECRET}` || !path.startsWith(`/apps/${APP_ID}/`)) {
 			return Response.json({ errorCode: "unauthorized" }, { status: 401 });
 		}
-		if (failStatus !== null) {
+		if (failStatus !== null && `${outgoing.method} ${path}`.includes(failMatch)) {
 			const status = failStatus;
 			failStatus = null;
 			return Response.json({ errorCode: "retryable_transient_error", errorDescription: "test" }, { status });
@@ -88,17 +92,20 @@ export function fakeRealtime(): RealtimeFake {
 			order.push(id);
 			return Response.json({ sessionId: id }, { status: 201 });
 		}
-		const match = /^\/sessions\/([^/]+)(\/.*)$/.exec(rest);
+		const match = /^\/sessions\/([^/]+)(\/.*)?$/.exec(rest);
 		const tracks = match ? sessions.get(match[1] as string) : undefined;
 		if (!match || !tracks) return Response.json({ errorCode: "session_error" }, { status: 410 });
-		const action = match[2];
+		const action = match[2] ?? "";
 		const items = (body?.tracks ?? []) as { location?: string; mid?: string; trackName?: string; sessionId?: string }[];
 		if (action === "/tracks/new") {
 			const local = items.filter((item) => item.location === "local");
+			const lose = loseAnswer;
+			loseAnswer = false;
 			if (local.length > 0) {
 				for (const item of local) {
 					tracks.push({ trackName: item.trackName as string, mid: item.mid as string, location: "local", open: true });
 				}
+				if (lose) throw new Error("no answer");
 				return Response.json({
 					requiresImmediateRenegotiation: false,
 					tracks: local.map((item) => ({ mid: item.mid, trackName: item.trackName })),
@@ -120,6 +127,7 @@ export function fakeRealtime(): RealtimeFake {
 				});
 				return { mid, trackName: item.trackName, sessionId: item.sessionId };
 			});
+			if (lose) throw new Error("no answer");
 			return Response.json({
 				requiresImmediateRenegotiation: true,
 				tracks: out,
@@ -127,6 +135,16 @@ export function fakeRealtime(): RealtimeFake {
 			});
 		}
 		if (action === "/renegotiate") return Response.json({});
+		if (action === "" && outgoing.method === "GET") {
+			return Response.json({
+				tracks: tracks.map((track) => ({
+					location: track.location,
+					mid: track.mid,
+					trackName: track.trackName,
+					status: track.open ? "active" : "inactive",
+				})),
+			});
+		}
 		if (action === "/tracks/close") {
 			return Response.json({
 				requiresImmediateRenegotiation: false,
@@ -145,8 +163,12 @@ export function fakeRealtime(): RealtimeFake {
 		callsTo: (suffix) => calls.filter((call) => call.path.endsWith(suffix)),
 		openTracks: (sessionId) => (sessions.get(sessionId) ?? []).filter((track) => track.open),
 		sessions: order,
-		failNext(status) {
+		failNext(status, match = "") {
 			failStatus = status;
+			failMatch = match;
+		},
+		loseNextAnswer() {
+			loseAnswer = true;
 		},
 	};
 }

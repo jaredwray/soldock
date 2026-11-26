@@ -167,6 +167,25 @@ export async function renegotiate(config: RealtimeConfig, sessionId: string, sdp
 }
 
 /**
+ * The mids of the tracks that a session has on the SFU now (`active` or `initializing`), or null when the SFU no
+ * longer has the session.
+ */
+export async function sessionState(config: RealtimeConfig, sessionId: string): Promise<string[] | null> {
+	let answer: TracksAnswer & { tracks?: (TrackResult & { status?: string })[] };
+	try {
+		answer = await call(config, "GET", `/sessions/${encodeURIComponent(sessionId)}`);
+	} catch (error) {
+		if (error instanceof RealtimeError && (error.status === 410 || error.status === 404)) return null;
+		throw error;
+	}
+	const mids: string[] = [];
+	for (const track of answer.tracks ?? []) {
+		if (typeof track.mid === "string" && track.status !== "inactive") mids.push(track.mid);
+	}
+	return mids;
+}
+
+/**
  * Closes tracks of a session with `force`, without an SDP exchange: the SFU stops the media of each mid at once.
  * Returns the mids that the SFU confirmed as closed. A mid that was closed before counts as closed
  * (`close_track_error`). A session that the SFU no longer has (410) has no open track. Each other failure leaves
