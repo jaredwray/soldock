@@ -307,9 +307,16 @@ const MAILBOX_BY_ADDRESS = `SELECT p.id AS id, 'personal' AS kind, primary_addre
 	JOIN addresses primary_address ON primary_address.principal_id = p.id AND primary_address.is_primary = 1
 	WHERE target.address = ?1
 	UNION ALL
-	SELECT id, 'team' AS kind, address, display_name FROM team_mailboxes WHERE address = ?1`;
+	SELECT id, 'team' AS kind, address, display_name FROM team_mailboxes WHERE address = ?1
+	UNION ALL
+	SELECT t.id, 'team' AS kind, t.address, t.display_name
+	FROM team_mailbox_aliases alias JOIN team_mailboxes t ON t.id = alias.mailbox_id
+	WHERE alias.address = ?1`;
 
-/** The mailbox that receives mail for an address, or null when the address is unknown. */
+/**
+ * The mailbox that receives mail for an address (a primary address or an alias), with its primary address,
+ * or null when the address is unknown.
+ */
 export async function resolveMailboxAddress(db: D1Database, address: string): Promise<MailboxRecord | null> {
 	return await db.prepare(MAILBOX_BY_ADDRESS).bind(normalizeAddress(address)).first<MailboxRecord>();
 }

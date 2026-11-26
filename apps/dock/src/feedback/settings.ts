@@ -52,7 +52,7 @@ async function readVersioned(
 	};
 }
 
-/** The settings of the organization. Migration 0040 writes the one row, so a missing row means feedback is off. */
+/** The settings of the organization. Migration 0041 writes the one row, so a missing row means feedback is off. */
 export async function readFeedbackConfig(env: Env): Promise<FeedbackConfig> {
 	return (await readVersioned(env)).config;
 }

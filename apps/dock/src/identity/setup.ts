@@ -35,7 +35,8 @@ import addressFormatSchema from "../../migrations/0036_address_format.sql";
 import mailboxDelegatesSchema from "../../migrations/0037_mailbox_delegates.sql";
 import calendarScopesSchema from "../../migrations/0038_calendar_scopes.sql";
 import chatPushSettingsSchema from "../../migrations/0039_chat_push_settings.sql";
-import feedbackSchema from "../../migrations/0040_feedback.sql";
+import mailboxAliasSchema from "../../migrations/0040_mailbox_aliases.sql";
+import feedbackSchema from "../../migrations/0041_feedback.sql";
 import { log, OperationError, randomToken } from "../platform/index.ts";
 import { allMailboxIds } from "./team-mailboxes.ts";
 
@@ -95,9 +96,10 @@ function freshDirectoryStatements(db: D1Database): D1PreparedStatement[] {
 		.map((statement) => statement.trim())
 		.filter(Boolean);
 	return [
-		// The team mailbox tables refer to principals, and one trigger on mail_domains refers to them. They
+		// The team mailbox tables refer to principals, and two triggers on mail_domains refer to them. They
 		// go first: a rename in the replay of 0004 fails while a trigger refers to a missing table.
 		"DROP TRIGGER IF EXISTS mail_domain_in_use_team",
+		"DROP TRIGGER IF EXISTS mail_domain_in_use_team_alias",
 		// The room index of Chat names the old principals. The rooms stay in their objects, as old mail
 		// stays in storage, and no new account is a member of them.
 		"DROP TABLE IF EXISTS chat_slash_commands",
@@ -126,6 +128,7 @@ function freshDirectoryStatements(db: D1Database): D1PreparedStatement[] {
 		"DROP TABLE IF EXISTS oauth_grants",
 		"DROP TABLE IF EXISTS oauth_requests",
 		"DROP TABLE IF EXISTS oauth_clients",
+		"DROP TABLE IF EXISTS team_mailbox_aliases",
 		"DROP TABLE IF EXISTS team_mailbox_members",
 		"DROP TABLE IF EXISTS team_mailboxes",
 		// The invite links give a sign-in to the old principals.
@@ -189,6 +192,7 @@ function freshDirectoryStatements(db: D1Database): D1PreparedStatement[] {
 		...mailboxDelegatesSchema.split("--> statement-breakpoint"),
 		...calendarScopesSchema.split("--> statement-breakpoint"),
 		...chatPushSettingsSchema.split("--> statement-breakpoint"),
+		...mailboxAliasSchema.split("--> statement-breakpoint"),
 		...feedbackSchema.split("--> statement-breakpoint"),
 		// The directory now has the schema of each bundled migration. Record them in the table that
 		// `wrangler d1 migrations apply` reads, or it runs them again later. A second run of 0004 would
@@ -239,5 +243,6 @@ const BUNDLED_MIGRATIONS = [
 	"0037_mailbox_delegates.sql",
 	"0038_calendar_scopes.sql",
 	"0039_chat_push_settings.sql",
-	"0040_feedback.sql",
+	"0040_mailbox_aliases.sql",
+	"0041_feedback.sql",
 ] as const;

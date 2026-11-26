@@ -44,7 +44,7 @@ test("an admin creates a person with no API key, and an agent with a first key, 
 		expect((await dialog.boundingBox())?.y).toBe(top);
 		// An address that a member has gets red text with the reason.
 		await address.fill("tomasz");
-		await expect(dialog.getByText("That address belongs to another member or a shared mailbox.")).toHaveClass(
+		await expect(dialog.getByText("That address belongs to another member, a shared mailbox or an alias.")).toHaveClass(
 			/address-status-error/,
 		);
 		// The address that the admin types stays when the name changes.
@@ -155,6 +155,55 @@ test("an admin creates a person with no API key, and an agent with a first key, 
 		for (const id of ids.reverse()) {
 			await context.request.delete(`/api/v1/directory/principals/${id}`, { headers: { origin: BASE_URL } });
 		}
+		await context.close();
+	}
+});
+
+// An owner or an admin gives the own mailbox of a member an extra address, on the page of the member. An
+// address that a different mailbox has gives an error in the form, and the field refers to the error.
+test("an admin adds an alias on the page of a member, and removes it", async ({ browser }) => {
+	const context = await signIn(browser, "tomasz");
+	const local = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+	const person = unique("Alma Reyes");
+	const alias = `alma-alias-${local}@example.com`;
+	const created = await context.request.post("/api/v1/directory/principals", {
+		headers: { origin: BASE_URL },
+		data: {
+			kind: "human",
+			display_name: person,
+			address: `alma-${local}@example.com`,
+			password: "alma local password",
+		},
+	});
+	expect(created.ok(), await created.text()).toBe(true);
+	const personId = ((await created.json()) as { principal: { id: string } }).principal.id;
+	try {
+		const page = await context.newPage();
+		await page.goto(`/admin/members/${personId}`);
+		const aliases = page.getByRole("main").getByRole("region", { name: "Aliases" });
+		await expect(aliases.getByText("This mailbox has no aliases.")).toBeVisible();
+
+		const field = aliases.getByLabel("New alias");
+		await field.fill("tomasz@example.com");
+		await aliases.getByRole("button", { name: "Add alias" }).click();
+		await expect(aliases.getByRole("alert")).toHaveText(
+			"That address belongs to another principal, team mailbox or alias.",
+		);
+		await expect(field).toHaveAttribute("aria-invalid", "true");
+		await expect(field).toHaveAccessibleDescription(/That address belongs to another principal/);
+
+		await field.fill(alias);
+		await aliases.getByRole("button", { name: "Add alias" }).click();
+		await expect(page.getByText(`${alias} now receives mail for ${person}.`)).toBeVisible();
+		await expect(aliases.getByRole("cell", { name: alias, exact: true })).toBeVisible();
+		await expect(aliases.getByRole("alert")).toHaveCount(0);
+		await expect(field).not.toHaveAttribute("aria-invalid");
+
+		await aliases.getByRole("button", { name: `Remove ${alias}` }).click();
+		await page.getByRole("dialog").getByRole("button", { name: "Remove alias" }).click();
+		await expect(aliases.getByText("This mailbox has no aliases.")).toBeVisible();
+	} finally {
+		await context.request.delete(`/api/v1/directory/principals/${personId}`, { headers: { origin: BASE_URL } });
 		await context.close();
 	}
 });

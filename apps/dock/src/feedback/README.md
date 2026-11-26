@@ -7,7 +7,7 @@
 | | |
 | --- | --- |
 | **Purpose** | A person reports a bug or sends an idea from the web app. Each report becomes a public issue in the GitHub repository that an owner or an admin chose. |
-| **Owns** | D1 tables `feedback_settings` (with the GitHub token), `feedback_reports` and `feedback_attachments` (migration `0040`). R2 `BLOBS` keys `feedback/<attachment id>`. |
+| **Owns** | D1 tables `feedback_settings` (with the GitHub token), `feedback_reports` and `feedback_attachments` (migration `0041`). R2 `BLOBS` keys `feedback/<attachment id>`. |
 | **Depends on** | `platform`, `identity`. |
 | **Operations** | `feedback.get_status`, `feedback.get_settings`, `feedback.update_settings`, `feedback.upload_attachment`, `feedback.delete_attachment`, `feedback.submit` |
 | **Data inventory** | See [Data inventory](#data-inventory). Backups: not built yet. |
@@ -141,6 +141,6 @@ addresses stop at once.
 
 | State | Where | Notes |
 | --- | --- | --- |
-| Feedback settings | D1 `feedback_settings` (migration `0040`) | One row: on or off, the repository, the GitHub token (sealed with `ENCRYPTION_KEY`). A directory reset makes a new row with feedback off |
+| Feedback settings | D1 `feedback_settings` (migration `0041`) | One row: on or off, the repository, the GitHub token (sealed with `ENCRYPTION_KEY`). A directory reset makes a new row with feedback off |
 | Reports | D1 `feedback_reports` | The person, the kind, the state, the issue number and address, the idempotency key. Not the title or the text: GitHub holds them. Removed after 180 days |
 | Attachments | D1 `feedback_attachments` and R2 `BLOBS` `feedback/<attachment id>` | The person, the report, the SHA-256 of the token, the type, the size and the pixels. Removed after 24 hours without a report, or 180 days in a report |
