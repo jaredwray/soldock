@@ -84,8 +84,9 @@ A meeting is an event with attendees. The organizer adds `attendees` to `calenda
 - **Find a person.** The web app and an agent use `directory.list_principals` with `query` and
   `order: "match"`. Calendar has no search operation of its own. An invitation needs no directory scope:
   the handler resolves each `principal_id` or `email` in the directory itself.
-- **Attendee input.** Each entry has `principal_id` or `email`, not the two. An unknown principal, an
-  address of no principal of the organization, and an archived principal give `invalid`. The organizer
+- **Attendee input.** Each entry has `principal_id` or `email`, not the two. An alias of a person finds that
+  person, and the meeting shows the primary address. An unknown principal, an address of no principal of the
+  organization, the address of a team mailbox, and an archived principal give `invalid`. The organizer
   and a second entry of the same principal are left out. A meeting has at most 100 attendees. An address
   outside the organization gives `invalid` in this layer.
 - **The authority.** The event of the organizer is the authority. Each attendee gets a copy with its own
@@ -97,6 +98,8 @@ A meeting is an event with attendees. The organizer adds `attendees` to `calenda
   answer. No input names a different attendee, so nobody sets the answer of a different attendee. The
   organizer gets `invalid` on their own event. A repeated answer changes nothing and writes no audit
   line. A declined copy stays on the calendar of the attendee, so the attendee can change the answer.
+  On the copy, the entry of the caller in `attendees` has the answer and the `responded_at` of the copy,
+  which can be newer than the last snapshot of the organizer.
 - **The organizer sees each answer.** The event of the organizer has the `response` and the
   `responded_at` of each attendee. An answer changes neither the `revision` nor the `updated_at` of the
   event of the organizer, so an answer never makes an edit of the organizer fail with `conflict`. Each
@@ -111,7 +114,8 @@ A meeting is an event with attendees. The organizer adds `attendees` to `calenda
   organizer. A copy gets a new `revision` for each change that it applies. The idempotency key of
   `calendar.create_event` covers `attendees`: a retry with the same key and the same attendees returns
   the first event and sends no second invitation. The same key with a different list gives `conflict`.
-  The input has no default for `attendees`, so the hash of a request from before meetings stays the
+  A retry with attendees gets the first event from the object before the handler reads the directory, so
+  the retry also works after an attendee was archived. The input has no default for `attendees`, so the hash of a request from before meetings stays the
   same.
 - **Names.** The output has the names and the addresses of the organizer and the attendees from the time
   of the last change of the organizer.
@@ -137,7 +141,8 @@ message that replaces an older one.
   20 attempts (about 14 hours) the row is dropped with an `error` log. A result of the target, also a
   refusal, is a delivery. Rows are independent: a target that fails does not stop the others. A delete
   or an update of a row after a delivery checks `gen`, so it keeps a newer payload that a change wrote
-  while the call ran. The object sets an alarm at its start when the outbox has rows.
+  while the call ran. The drain reads each row again immediately before its call, so it sends only the
+  newest payload. The object sets an alarm at its start when the outbox has rows.
 - **Receive rules of a snapshot (`applyMeeting`).**
   - The first message names the owner of a new object, as the first call does. A message for a
     different owner gives `wrong_calendar`.
@@ -148,6 +153,10 @@ message that replaces an older one.
   - `invited` adds the copy with `pending`, or updates the fields of the copy. The copy keeps its `id`,
     its answer and its `created_at`. A full calendar gives `full`, and the attendee stays `pending` for
     the organizer.
+  - Each attendee of a snapshot has `invited_sequence`. When the organizer removes an attendee and invites
+    them again, the new invitation can replace the `removed` message in the outbox. The copy then gets a
+    snapshot where its own `invited_sequence` is larger than the `sequence` of the copy. The copy goes
+    back to `pending` and deletes a waiting answer, as the organizer has no answer for the new invitation.
   - `cancelled` and `removed` delete the copy and write a tombstone with the `sequence`. A waiting answer
     of the copy is deleted. The tombstone stops an old invitation that arrives later. A tombstone is
     deleted after 30 days.

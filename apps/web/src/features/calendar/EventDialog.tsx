@@ -24,6 +24,8 @@ import {
 interface EventDialogProps {
 	/** The event to change, or null for a new event. */
 	event: CalendarEvent | null;
+	/** True when the calendar does not have the open copy of a meeting now. */
+	gone?: boolean;
 	/** The form of a new event. */
 	initial: EventForm;
 	zone: string;
@@ -36,7 +38,13 @@ interface EventDialogProps {
 export function EventDialog(props: EventDialogProps) {
 	if (props.event && !props.event.is_organizer) {
 		return (
-			<InvitationDialog event={props.event} zone={props.zone} onChanged={props.onChanged} onClose={props.onClose} />
+			<InvitationDialog
+				event={props.event}
+				zone={props.zone}
+				gone={props.gone === true}
+				onChanged={props.onChanged}
+				onClose={props.onClose}
+			/>
 		);
 	}
 	return <OrganizerDialog {...props} />;
@@ -278,6 +286,8 @@ function OrganizerDialog({ event, initial, zone, onChanged, onClose }: EventDial
 	);
 }
 
+const GONE_TEXT = "The organizer cancelled this meeting or removed you from it.";
+
 const ANSWERS: { response: EventAnswer; label: string }[] = [
 	{ response: "accepted", label: "Yes" },
 	{ response: "tentative", label: "Maybe" },
@@ -291,18 +301,22 @@ const ANSWERS: { response: EventAnswer; label: string }[] = [
 function InvitationDialog({
 	event,
 	zone,
+	gone: goneNow,
 	onChanged,
 	onClose,
 }: {
 	event: CalendarEvent;
 	zone: string;
+	/** True when a load of the calendar does not have the copy now. */
+	gone: boolean;
 	onChanged: (event: CalendarEvent) => void;
 	onClose: () => void;
 }) {
 	const toast = useToast();
 	const [busy, setBusy] = useState(false);
 	const [error, setError] = useState<string | null>(null);
-	const [gone, setGone] = useState(false);
+	const [refused, setRefused] = useState(false);
+	const gone = refused || goneNow;
 	const pending = event.my_response === "pending";
 
 	async function answer(response: EventAnswer) {
@@ -316,8 +330,7 @@ function InvitationDialog({
 		} catch (caught) {
 			setBusy(false);
 			if (caught instanceof ApiError && caught.code === "not_found") {
-				setGone(true);
-				setError("The organizer cancelled this meeting or removed you from it.");
+				setRefused(true);
 				return;
 			}
 			setError(errorMessage(caught));
@@ -350,9 +363,9 @@ function InvitationDialog({
 						</li>
 					))}
 				</ul>
-				{error && (
+				{(gone || error) && (
 					<p className="form-error" role="alert">
-						{error}
+						{gone ? GONE_TEXT : error}
 					</p>
 				)}
 				<div className="dialog-actions cal-actions">

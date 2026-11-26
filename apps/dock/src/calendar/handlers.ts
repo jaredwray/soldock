@@ -11,14 +11,7 @@ import {
 	zonedDate,
 	zonedDayStart,
 } from "@asterra/contracts";
-import {
-	auditOk,
-	type CallContext,
-	getPrincipal,
-	getPrincipals,
-	normalizeAddress,
-	resolveMailboxAddress,
-} from "../identity/index.ts";
+import { auditOk, type CallContext, getPrincipals, resolveMailboxAddress } from "../identity/index.ts";
 import { decodeCursor, encodeCursor, type HandlerMap, newId, OperationError, sha256Hex } from "../platform/index.ts";
 import type { AttendeeRef, CalendarCall, EventFields, EventRecord, EventTime, Refusal } from "./calendar.ts";
 import { calendarWebhookHandlers } from "./webhooks.ts";
@@ -79,9 +72,9 @@ async function resolveAttendees(call: CallContext, inputs: readonly AttendeeInpu
 			);
 		}
 		if (input.email !== undefined) {
-			// A primary address or an alias of a person, an agent or a service account. A team mailbox is not a principal.
-			const mailbox = await resolveMailboxAddress(db, normalizeAddress(input.email));
-			const found = mailbox?.kind === "personal" ? await getPrincipal(db, mailbox.id) : null;
+			// The address of a person, also an alias. A team mailbox has no calendar.
+			const mailbox = await resolveMailboxAddress(db, input.email);
+			const found = mailbox?.kind === "personal" ? (await getPrincipals(db, [mailbox.id]))[0] : undefined;
 			if (!found) {
 				throw new OperationError(
 					"invalid",
@@ -180,14 +173,17 @@ function toEvent(record: EventRecord, call: CallContext): CalendarEvent {
 		organizer,
 		attendees: record.attendees.map((attendee) => {
 			const self = attendee.principal_id === principal.id;
-			// The copy of an attendee shows its own answer, which can be newer than the snapshot of the organizer.
-			const response = self && !isOrganizer && record.my_response ? record.my_response : attendee.response;
+			// The copy of an attendee shows its own answer and its time, which can be newer than the snapshot of the
+			// organizer.
+			const own = self && !isOrganizer && record.my_response !== null;
+			const response = own && record.my_response ? record.my_response : attendee.response;
+			const respondedAt = own ? record.my_responded_at : attendee.responded_at;
 			return {
 				principal_id: attendee.principal_id,
 				email: attendee.email,
 				name: attendee.name,
 				response,
-				responded_at: attendee.responded_at === null ? null : iso(attendee.responded_at),
+				responded_at: respondedAt === null ? null : iso(respondedAt),
 				self,
 			};
 		}),
@@ -257,9 +253,15 @@ export const calendarHandlers: Pick<HandlerMap<CallContext>, CalendarOperation> 
 						key: `${call.caller.principal.id}:${key}`,
 						requestHash: await sha256Hex(JSON.stringify(["calendar.create_event", request])),
 					};
+		const { stub, ctx } = openCalendar(call);
+		// A retry with the key returns the first event. It does not read the directory again: an attendee that
+		// is archived now does not make the retry fail.
+		if (idempotency && input.attendees?.length) {
+			const earlier = await stub.replay(ctx, idempotency);
+			if (earlier) return { event: toEvent(accept(earlier), call) };
+		}
 		const attendees = input.attendees ? await resolveAttendees(call, input.attendees) : [];
 		const id = newId("evt");
-		const { stub, ctx } = openCalendar(call);
 		const record = accept(await stub.create(ctx, { id, fields, attendees, idempotency }));
 		// A retry with the key returns the first event: only the call that added it audits.
 		if (record.id === id) auditOk(call, "calendar.create_event", id);

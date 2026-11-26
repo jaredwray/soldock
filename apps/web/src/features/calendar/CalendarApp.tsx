@@ -82,6 +82,13 @@ export function CalendarApp({ view, date }: CalendarAppProps) {
 				: `${anchor.slice(0, 7)}-01`,
 	);
 
+	// An open invitation shows the newest copy of each load, so a change of the organizer shows in the dialog.
+	// A copy that a load does not have is gone: the organizer cancelled the meeting or removed the person.
+	const openCopy = dialog?.event && !dialog.event.is_organizer ? dialog.event : null;
+	const loadedCopy =
+		openCopy && state.status === "ready" ? state.events.find((event) => event.id === openCopy.id) : undefined;
+	const copyGone = openCopy !== null && state.status === "ready" && !loadedCopy;
+
 	const month = anchor.slice(0, 7);
 	const agendaDays = view === "month" ? period.days.filter((day) => day.slice(0, 7) === month) : period.days;
 
@@ -181,7 +188,8 @@ export function CalendarApp({ view, date }: CalendarAppProps) {
 			</div>
 			{dialog && (
 				<EventDialog
-					event={dialog.event}
+					event={loadedCopy ?? dialog.event}
+					gone={copyGone}
 					initial={dialog.initial}
 					zone={zone}
 					onChanged={() => void reload()}
