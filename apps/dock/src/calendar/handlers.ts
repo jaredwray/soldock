@@ -11,7 +11,14 @@ import {
 	zonedDate,
 	zonedDayStart,
 } from "@asterra/contracts";
-import { auditOk, type CallContext, getPrincipals, normalizeAddress, resolveAddress } from "../identity/index.ts";
+import {
+	auditOk,
+	type CallContext,
+	getPrincipal,
+	getPrincipals,
+	normalizeAddress,
+	resolveMailboxAddress,
+} from "../identity/index.ts";
 import { decodeCursor, encodeCursor, type HandlerMap, newId, OperationError, sha256Hex } from "../platform/index.ts";
 import type { AttendeeRef, CalendarCall, EventFields, EventRecord, EventTime, Refusal } from "./calendar.ts";
 
@@ -71,7 +78,9 @@ async function resolveAttendees(call: CallContext, inputs: readonly AttendeeInpu
 			);
 		}
 		if (input.email !== undefined) {
-			const found = await resolveAddress(db, normalizeAddress(input.email));
+			// A primary address or an alias of a person, an agent or a service account. A team mailbox is not a principal.
+			const mailbox = await resolveMailboxAddress(db, normalizeAddress(input.email));
+			const found = mailbox?.kind === "personal" ? await getPrincipal(db, mailbox.id) : null;
 			if (!found) {
 				throw new OperationError(
 					"invalid",
