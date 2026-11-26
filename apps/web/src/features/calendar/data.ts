@@ -10,7 +10,7 @@ import {
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../../lib/api.ts";
 import { onPrincipalConnection, onPrincipalEvent, principalSocketLive } from "../../lib/principalSocket.ts";
-import { catchUp } from "./sync.ts";
+import { createSync } from "./sync.ts";
 
 /** While the events socket is down, the page reads the change feed at this interval when it is visible. */
 const FALLBACK_MS = 30_000;
@@ -51,9 +51,9 @@ async function headCursor(): Promise<string> {
  * of the range before. A catch-up and `reload` keep the events on screen while they load. Only the newest load
  * shows its answer.
  *
- * The handoff between the first read and the live changes: the hook gets the cursor of now first, then reads
- * the range. A change after that cursor makes a catch-up read it, and the range loads again. So no change that
- * commits during the first read is lost. The events socket sends `calendar.changed`, and `hello` after each
+ * The handoff between the first read and the live changes is in `createSync`: the cursor of now first, then
+ * the range, and the cursor moves only after the range loaded. So no change is lost during the first read or
+ * after a failed read of the range. The events socket sends `calendar.changed`, and `hello` after each
  * connect, so a page that was offline catches up when it connects again. An expired cursor loads the range
  * again with a new cursor. While the socket is down, the page reads the feed each `FALLBACK_MS`.
  */
@@ -64,18 +64,21 @@ export function useEvents(timeMin: string, timeMax: string, zone: string) {
 	const cursor = useRef<string | null>(null);
 
 	const load = useCallback(
-		async (fresh: boolean) => {
+		async (fresh: boolean): Promise<boolean> => {
 			const current = ++generation.current;
 			if (fresh) setState({ status: "loading", events: [] });
 			try {
 				const events = await loadRange(timeMin, timeMax, zone);
-				if (current === generation.current) setState({ status: "ready", events });
+				if (current !== generation.current) return false;
+				setState({ status: "ready", events });
+				return true;
 			} catch (error) {
-				if (current !== generation.current) return;
-				// A poll that fails keeps the events on screen. The next poll tries again.
+				if (current !== generation.current) return false;
+				// A poll that fails keeps the events on screen. The sync keeps its cursor, so the next sync tries again.
 				setState((previous) =>
 					fresh || previous.status !== "ready" ? { status: "error", events: previous.events, error } : previous,
 				);
+				return false;
 			}
 		},
 		[timeMin, timeMax, zone],
@@ -83,40 +86,13 @@ export function useEvents(timeMin: string, timeMax: string, zone: string) {
 
 	useEffect(() => {
 		let stopped = false;
-		/** One catch-up at a time. A request during a catch-up runs one more after it. */
-		let running = false;
-		let again = false;
-		const sync = async () => {
-			if (running) {
-				again = true;
-				return;
-			}
-			running = true;
-			try {
-				do {
-					again = false;
-					// A catch-up of a range that the page left keeps the cursor as it was: the load of the new range
-					// started before its changes, so the next catch-up must read them again.
-					if (cursor.current === null) {
-						// The first read: the cursor of now, then the range.
-						const head = await headCursor();
-						if (stopped) return;
-						cursor.current = head;
-						await load(true);
-						continue;
-					}
-					const result = await catchUp(cursor.current, (after) => api.call("calendar.list_changes", { cursor: after }));
-					if (stopped) return;
-					cursor.current = result.cursor;
-					if (result.reload) await load(false);
-				} while (again && !stopped);
-			} catch {
-				// The next hint, connect or fallback tries again. A first read that failed shows its error.
-				if (cursor.current === null && !stopped) await load(true);
-			} finally {
-				running = false;
-			}
-		};
+		const sync = createSync({
+			cursor,
+			head: headCursor,
+			list: (after) => api.call("calendar.list_changes", { cursor: after }),
+			load,
+			stopped: () => stopped,
+		});
 		// A range change keeps the cursor: the range loads now, and the changes after the cursor still come.
 		if (cursor.current === null) void sync();
 		else void load(true);

@@ -32,3 +32,84 @@ export async function catchUp(cursor: string, list: (cursor: string) => Promise<
 	}
 	return { cursor: current, reload: true };
 }
+
+/** What the sync of one range needs. A test gives its own parts. */
+export interface SyncParts {
+	/** The position of the page in the change feed. Each range of the page uses the same object. */
+	cursor: { current: string | null };
+	/** Reads the cursor of now. */
+	head: () => Promise<string>;
+	/** Reads one page of changes after a cursor. */
+	list: (cursor: string) => Promise<ChangePage>;
+	/**
+	 * Reads the range. `fresh` shows the loading state with no events. The result is true only when this read
+	 * put its events on screen. It is false after a failure, and when a newer read replaced this one.
+	 */
+	load: (fresh: boolean) => Promise<boolean>;
+	/** True after the page left the range of this sync. */
+	stopped: () => boolean;
+}
+
+/**
+ * Makes the sync of one range. Each hint, connect and fallback tick calls the function that it returns.
+ *
+ * - One catch-up runs at a time. A call during a catch-up runs one more catch-up after it.
+ * - The first read gets the cursor of now, then reads the range. So a change that commits during the read of
+ *   the range is after the cursor, and the next catch-up reads it.
+ * - The cursor moves only after the range loaded. A failed read of the range keeps the cursor, so the next
+ *   sync reads the same changes and loads the range again.
+ * - A sync of a range that the page left does not move the cursor. The read of the new range started before
+ *   the changes of that catch-up, so the next catch-up must read them again.
+ * - While the feed gives no cursor, each sync reads the range. Only the first of these reads shows the
+ *   loading state.
+ */
+export function createSync(parts: SyncParts): () => Promise<void> {
+	const { cursor, stopped } = parts;
+	let running = false;
+	let again = false;
+	/** True after one read of this range put its events on screen. A later read keeps them while it loads. */
+	let loaded = false;
+	const load = async (fresh: boolean) => {
+		const shown = await parts.load(fresh);
+		if (shown) loaded = true;
+		return shown;
+	};
+	const first = async () => {
+		let head: string;
+		try {
+			head = await parts.head();
+		} catch {
+			if (!stopped()) await load(!loaded);
+			return;
+		}
+		if (stopped()) return;
+		cursor.current = head;
+		await load(!loaded);
+	};
+	const next = async (from: string) => {
+		const result = await catchUp(from, parts.list);
+		if (stopped()) return;
+		if (result.reload && !(await load(false))) return;
+		if (!stopped()) cursor.current = result.cursor;
+	};
+	return async () => {
+		if (running) {
+			again = true;
+			return;
+		}
+		running = true;
+		try {
+			do {
+				again = false;
+				try {
+					if (cursor.current === null) await first();
+					else await next(cursor.current);
+				} catch {
+					// The next hint, connect or fallback tick tries again.
+				}
+			} while (again && !stopped());
+		} finally {
+			running = false;
+		}
+	};
+}
