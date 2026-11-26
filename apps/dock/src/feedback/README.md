@@ -134,7 +134,10 @@ The hourly cron (`runScheduled`) calls `pruneFeedback`:
 - An attachment that no report holds goes after 24 hours.
 - An attachment of a sent report goes after 180 days.
 - A report row goes after 180 days.
-- One run removes at most 500 attachments. One statement finds and removes the rows, then the bytes go from R2.
+- One run removes at most 500 attachments. The bytes go from R2 first, then the rows, with the same age condition.
+  If the removal of the rows fails, the next run finds them again, and their addresses already answer `404`.
+- A report cannot use an attachment in the last hour before its removal. Thus the cron never removes the bytes of
+  an attachment that a report is about to hold.
 
 A directory reset drops the three tables. The bytes of the old attachments stay in R2 with no row, so their
 addresses stop at once.

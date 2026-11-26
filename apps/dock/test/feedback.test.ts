@@ -360,9 +360,11 @@ describe("a report", () => {
 		expect(github.calls).toHaveLength(3);
 	});
 
-	it("gives conflict for a key whose report did not complete, and sends nothing", async () => {
+	it("gives conflict for a key whose report did not complete, also at the limit, and sends nothing", async () => {
 		await turnOn();
 		const github = fakeGitHub();
+		// The person is at the limit of the hour. The key still gets conflict, because its issue is possibly on GitHub.
+		for (let i = 0; i < 5; i++) await ada.call("feedback.submit", report);
 		// A Worker that stopped after the request to GitHub leaves a row in the state pending.
 		const before = Date.now() - 10 * 60 * 1000;
 		await env.DIRECTORY.prepare(
@@ -372,7 +374,7 @@ describe("a report", () => {
 			.bind(ada.id, before, before)
 			.run();
 		expect(await codeOf(ada.call("feedback.submit", { ...report, idempotency_key: "lost-1" }))).toBe("conflict");
-		expect(github.calls).toEqual([]);
+		expect(github.calls).toHaveLength(5);
 		expect((await reportRow("fbr_01JD3V0Y9XG8Q2W4E6R8T0Y2U4"))?.status).toBe("pending");
 	});
 });
@@ -422,6 +424,18 @@ describe("an attachment", () => {
 		).toBe("not_found");
 		// The refused report makes no row, so it does not count in a limit.
 		expect(await reportCount()).toBe(0);
+	});
+
+	it("cannot go in a report in its last hour before the cleanup", async () => {
+		await turnOn();
+		fakeGitHub();
+		const image = await ada.call("feedback.upload_attachment", { content_base64: png() });
+		await env.DIRECTORY.prepare("UPDATE feedback_attachments SET created_at = ? WHERE id = ?")
+			.bind(Date.now() - 23.5 * 60 * 60 * 1000, image.id)
+			.run();
+		expect(
+			await codeOf(ada.call("feedback.submit", { ...report, attachments: [{ id: image.id, token: image.token }] })),
+		).toBe("not_found");
 	});
 
 	it("goes away at once when its owner or an admin removes it", async () => {

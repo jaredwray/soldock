@@ -158,11 +158,15 @@ export async function pendingAttachments(
 	env: Env,
 	principalId: string,
 	refs: readonly { id: string; token: string }[],
+	now: number,
 ): Promise<AttachmentRow[]> {
+	// The cron removes an attachment with no report after `pendingHours`. A report cannot use one in the last hour of
+	// that time, so the cron never removes the bytes of an attachment that a report is about to hold.
+	const usableAfter = now - (FEEDBACK_LIMITS.pendingHours - 1) * HOUR_MS;
 	const rows: AttachmentRow[] = [];
 	for (const ref of refs) {
 		const row = await rowWithToken(env, ref.id, ref.token);
-		if (!row || row.principal_id !== principalId || row.report_id !== null) {
+		if (!row || row.principal_id !== principalId || row.report_id !== null || row.created_at <= usableAfter) {
 			throw new OperationError("not_found", "An attachment is missing, is not yours, or is in a different report.");
 		}
 		rows.push(row);
@@ -200,18 +204,25 @@ const PRUNE_BATCH = 500;
 export async function pruneFeedback(env: Env, now: number): Promise<number> {
 	const pendingBefore = now - FEEDBACK_LIMITS.pendingHours * HOUR_MS;
 	const sentBefore = now - FEEDBACK_LIMITS.attachmentDays * DAY_MS;
-	// One statement finds and removes the rows, so the age and the report of each row are correct at the removal.
-	const { results } = await env.DIRECTORY.prepare(
-		`DELETE FROM feedback_attachments WHERE id IN (
-			SELECT id FROM feedback_attachments
-			WHERE (report_id IS NULL AND created_at < ?) OR (report_id IS NOT NULL AND created_at < ?)
-			LIMIT ?
-		) RETURNING id`,
-	)
+	const old = "(report_id IS NULL AND created_at < ?) OR (report_id IS NOT NULL AND created_at < ?)";
+	const { results } = await env.DIRECTORY.prepare(`SELECT id FROM feedback_attachments WHERE ${old} LIMIT ?`)
 		.bind(pendingBefore, sentBefore, PRUNE_BATCH)
 		.all<{ id: string }>();
 	const ids = results.map((row) => row.id);
-	if (ids.length > 0) await env.BLOBS.delete(ids.map(blobKey));
+	if (ids.length > 0) {
+		// The bytes go first. If the removal of the rows then fails, the next run finds the rows again, and their
+		// addresses already answer `404`. The rows go with the same age condition.
+		await env.BLOBS.delete(ids.map(blobKey));
+		await env.DIRECTORY.batch(
+			ids.map((id) =>
+				env.DIRECTORY.prepare(`DELETE FROM feedback_attachments WHERE id = ? AND (${old})`).bind(
+					id,
+					pendingBefore,
+					sentBefore,
+				),
+			),
+		);
+	}
 	await env.DIRECTORY.prepare("DELETE FROM feedback_reports WHERE created_at < ?").bind(sentBefore).run();
 	return ids.length;
 }

@@ -91,6 +91,11 @@ async function claimError(env: Env, principalId: string, now: number, exceptId: 
 	if ((await count(COUNT_ORG, now - DAY_MS, exceptId)) >= FEEDBACK_LIMITS.orgReportsPerDay) {
 		return new OperationError("rate_limited", "The organization sent too many reports today. Try again tomorrow.");
 	}
+	return sameKeyConflict();
+}
+
+/** The error for a key whose report is in progress or did not complete: its issue is possibly on GitHub. */
+function sameKeyConflict(): OperationError {
 	return new OperationError(
 		"conflict",
 		"A report with the same key did not complete. It is possibly on GitHub. Examine the issues of the repository, or discard the draft.",
@@ -110,6 +115,8 @@ async function claimReport(
 ): Promise<string> {
 	const db = env.DIRECTORY;
 	if (existing) {
+		// A pending row is never used again, also when a limit applies now: its issue is possibly on GitHub.
+		if (existing.status !== "failed") throw sameKeyConflict();
 		// The row of a failed report does not count again in the limits, so its tries have their own limit. Without
 		// it, one key could send requests to GitHub with no end while GitHub fails.
 		if (existing.status === "failed" && existing.attempts >= FEEDBACK_LIMITS.attemptsPerReport) {
@@ -153,7 +160,11 @@ async function claimReport(
 			...limitValues(input.principalId, now, ""),
 		)
 		.run();
-	if ((inserted.meta.changes ?? 0) === 0) throw await claimError(env, input.principalId, now, "");
+	if ((inserted.meta.changes ?? 0) === 0) {
+		// A request with the same key wrote its row first: that is a conflict, not a limit.
+		if ((await reportOfKey(env, input.principalId, input.idempotencyKey)) !== null) throw sameKeyConflict();
+		throw await claimError(env, input.principalId, now, "");
+	}
 	return id;
 }
 
@@ -244,7 +255,7 @@ export const feedbackHandlers: Pick<HandlerMap<CallContext>, FeedbackOperation> 
 		const sent = sentIssue(existing);
 		if (existing && sent) return { report_id: existing.id, delivery: "issue" as const, ...sent };
 		// The check of the attachments is before the claim, so a bad attachment makes no report row.
-		const attachments = await pendingAttachments(call.env, principal.id, input.attachments);
+		const attachments = await pendingAttachments(call.env, principal.id, input.attachments, now);
 		const reportId = await claimReport(
 			call.env,
 			{ principalId: principal.id, kind: input.kind, idempotencyKey: input.idempotency_key },
