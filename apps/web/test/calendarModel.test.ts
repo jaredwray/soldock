@@ -19,6 +19,7 @@ import {
 	weekDays,
 	whenOf,
 	whenText,
+	zoneOfEvent,
 } from "../src/features/calendar/model.ts";
 
 const NY = "America/New_York";
@@ -247,5 +248,49 @@ describe("the repeat of the form", () => {
 			end: "2030-10-23T18:00:00.000Z",
 			time_zone: LA,
 		});
+	});
+
+	it("keeps the time zone of the series when the person is in a different zone", () => {
+		const TOKYO = "Asia/Tokyo";
+		const master = {
+			...timed("evt", "2030-10-22T16:00:00Z", "2030-10-22T17:00:00Z"),
+			when: { kind: "timed" as const, start: "2030-10-22T16:00:00Z", end: "2030-10-22T17:00:00Z", time_zone: LA },
+		};
+		// The occurrence at 09:00 PST on 2030-11-05 is at 02:00 on 2030-11-06 in Tokyo.
+		const occurrence = {
+			...master,
+			when: { ...master.when, start: "2030-11-05T17:00:00.000Z", end: "2030-11-05T18:00:00.000Z" },
+		};
+		const opened = formOf(occurrence, TOKYO);
+		expect(opened).toMatchObject({ startDate: "2030-11-06", startTime: "02:00" });
+		const moved = { ...opened, startTime: "03:00", endTime: "04:00" };
+		// For this occurrence: the instants come from the clock of the person, and the zone stays.
+		expect(whenOf(moved, TOKYO, zoneOfEvent(occurrence, TOKYO))).toEqual({
+			kind: "timed",
+			start: "2030-11-05T18:00:00.000Z",
+			end: "2030-11-05T19:00:00.000Z",
+			time_zone: LA,
+		});
+		// For all events: the series moves from 09:00 to 10:00 on its own clock, on the same day.
+		expect(seriesWhen(master, opened, moved, TOKYO)).toEqual({
+			kind: "timed",
+			start: "2030-10-22T17:00:00.000Z", // 10:00 PDT
+			end: "2030-10-22T18:00:00.000Z",
+			time_zone: LA,
+		});
+		expect(zoneOfEvent(null, TOKYO)).toBe(TOKYO);
+	});
+
+	it("does not check the rule for a form of one occurrence whose rule stays", () => {
+		// The last occurrence of a series that ends on 2030-11-05 moves to the next day.
+		const form = {
+			...newEventForm("2030-11-06"),
+			repeat: "biweekly" as const,
+			ends: "until" as const,
+			until: "2030-11-05",
+		};
+		expect(formProblem(form, LA)).toMatch(/before the first day/);
+		expect(formProblem(form, LA, { ruleStays: true })).toBeNull();
+		expect(formProblem({ ...form, endTime: "08:00" }, LA, { ruleStays: true })).toMatch(/after its start/);
 	});
 });

@@ -33,6 +33,7 @@ import {
 	sameTimeFields,
 	seriesWhen,
 	whenOf,
+	zoneOfEvent,
 } from "./model.ts";
 
 interface EventDialogProps {
@@ -86,6 +87,8 @@ export function EventDialog({ event, initial, zone, onChanged, onClose }: EventD
 		people: useId(),
 	};
 
+	// A timed event keeps its own time zone. The person can be in a different zone.
+	const eventZone = zoneOfEvent(event, zone);
 	const invitation = event?.role === "attendee";
 	const occurrence = event?.occurrence_id ?? null;
 	// A rule that the dialog cannot show, such as every 3 weeks, keeps its text and cannot change here.
@@ -141,25 +144,29 @@ export function EventDialog({ event, initial, zone, onChanged, onClose }: EventD
 				title: form.title.trim(),
 				location: form.location.trim(),
 				description: form.description,
-				...(sameTimeFields(form, opened) ? {} : { when: whenOf(form, zone) }),
+				...(sameTimeFields(form, opened) ? {} : { when: whenOf(form, zone, eventZone) }),
 				base_revision: event.revision,
 			});
 			onChanged(saved);
 			return;
 		}
 		if (!contentChanged && !seriesOnly) return;
-		// From an occurrence, the change of the time applies to the first occurrence of the series.
-		const master = occurrence ? (await getEvent(event.id)).event : event;
 		const timeChanged = !sameTimeFields(form, opened);
+		// From an occurrence, the change of the time applies to the first occurrence of the series.
+		const seriesTime = async () =>
+			occurrence ? seriesWhen((await getEvent(event.id)).event, opened, form, zone) : whenOf(form, zone, eventZone);
+		// The form of a changed occurrence has the values of that occurrence. A save for the entire series sends
+		// only the fields that the person changed, so those values do not go into the series.
 		const { event: saved } = await updateEvent({
 			event_id: event.id,
-			title: form.title.trim(),
-			location: form.location.trim(),
-			description: form.description,
-			...(timeChanged ? { when: occurrence ? seriesWhen(master, opened, form, zone) : whenOf(form, zone) } : {}),
+			...(form.title.trim() === opened.title.trim() ? {} : { title: form.title.trim() }),
+			...(form.location.trim() === opened.location.trim() ? {} : { location: form.location.trim() }),
+			...(form.description === opened.description ? {} : { description: form.description }),
+			...(timeChanged ? { when: await seriesTime() } : {}),
 			...(customRule || sameRepeat(form, opened) ? {} : { recurrence: recurrenceOf(form) }),
 			...(sameAttendees ? {} : { attendee_ids: attendees }),
-			base_revision: master.revision,
+			// The revision that the dialog opened with: a change from a different place gives a conflict.
+			base_revision: event.revision,
 		});
 		onChanged(saved);
 	}
@@ -182,7 +189,10 @@ export function EventDialog({ event, initial, zone, onChanged, onClose }: EventD
 			setError("Give the event a title.");
 			return;
 		}
-		const problem = formProblem(form, zone);
+		const problem = formProblem(form, zone, {
+			eventZone,
+			ruleStays: occurrence !== null && sameRepeat(form, opened),
+		});
 		if (problem) {
 			setError(problem);
 			return;

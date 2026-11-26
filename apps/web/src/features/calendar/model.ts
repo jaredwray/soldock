@@ -16,7 +16,9 @@ import {
 	type SeriesTime,
 	zonedDate,
 	zonedDayStart,
+	zonedInstant,
 	zonedTime,
+	zonedWall,
 	zoneOffsetMs,
 } from "@asterra/contracts";
 import { type CalendarView, isCalendarDate } from "../../routes.ts";
@@ -348,28 +350,47 @@ export function formOf(event: CalendarEvent, zone: string): EventForm {
 	};
 }
 
-/** The time of an event from the fields of the form. The last day of an all-day form is in the event. */
-export function whenOf(form: EventForm, zone: string): EventWhenValue {
+/**
+ * The time zone that a save of an event keeps: the zone of a timed event, or the zone of the person for a new
+ * event and for an all-day event. The person can be in a different zone than the event.
+ */
+export function zoneOfEvent(event: CalendarEvent | null, zone: string): string {
+	return event?.when.kind === "timed" ? event.when.time_zone : zone;
+}
+
+/**
+ * The time of an event from the fields of the form. The last day of an all-day form is in the event. The
+ * fields are on the clock of `zone`, the zone of the person. `eventZone` is the zone that the event keeps.
+ */
+export function whenOf(form: EventForm, zone: string, eventZone = zone): EventWhenValue {
 	if (form.allDay) return { kind: "all_day", start_date: form.startDate, end_date: addDays(form.endDate, 1) };
 	return {
 		kind: "timed",
 		start: new Date(zonedTime(form.startDate, form.startTime, zone)).toISOString(),
 		end: new Date(zonedTime(form.endDate, form.endTime, zone)).toISOString(),
-		time_zone: zone,
+		time_zone: eventZone,
 	};
 }
 
-/** The problem with the time of the form, with the text of the server, or null. */
-export function formProblem(form: EventForm, zone: string): string | null {
+/**
+ * The problem with the time of the form, with the text of the server, or null. With `ruleStays`, the form is
+ * the form of one occurrence and its rule did not change, so the rule gets no check: the time of one occurrence
+ * can be outside the rule, and the server checks a change of the series.
+ */
+export function formProblem(
+	form: EventForm,
+	zone: string,
+	options: { eventZone?: string; ruleStays?: boolean } = {},
+): string | null {
 	if (!form.startDate || !form.endDate || (!form.allDay && (!form.startTime || !form.endTime))) {
 		return "Give a start and an end.";
 	}
 	if (form.allDay && form.endDate < form.startDate) return "The last day of an event must not be before its first day.";
-	const when = whenOf(form, zone);
+	const when = whenOf(form, zone, options.eventZone);
 	const problem = checkWhen(when);
 	if (problem) return problem;
 	const rule = recurrenceOf(form);
-	if (rule === null) return null;
+	if (rule === null || options.ruleStays) return null;
 	if (form.ends === "until" && !form.until) return "Give the last day of the repeat.";
 	if (form.ends === "count" && !/^\d+$/.test(form.count)) return "Give the number of times as a number.";
 	return checkRecurrence(seriesTimeOf(when), {
@@ -406,13 +427,31 @@ function seriesTimeOf(when: EventWhenValue): SeriesTime {
  * The time of a series after a change to one of its occurrences for the entire series. The occurrence moves
  * by some days and gets a new wall clock time: the first occurrence moves by the same days and gets the same
  * time and length. `master` is the series as calendar.get_event returns it.
+ *
+ * A timed series keeps its own time zone. The fields of the form are on the clock of `zone`, the zone of the
+ * person, so the days and the new time are computed on the clock of the series.
  */
 export function seriesWhen(master: CalendarEvent, opened: EventForm, form: EventForm, zone: string): EventWhenValue {
-	const shift = daysBetween(opened.startDate, form.startDate);
-	const first = formOf(master, zone);
-	const length = daysBetween(form.startDate, form.endDate);
-	const startDate = addDays(first.startDate, shift);
-	return whenOf({ ...form, startDate, endDate: addDays(startDate, length) }, zone);
+	if (master.when.kind === "all_day" || form.allDay) {
+		const shift = daysBetween(opened.startDate, form.startDate);
+		const first = formOf(master, zone);
+		const length = daysBetween(form.startDate, form.endDate);
+		const startDate = addDays(first.startDate, shift);
+		return whenOf({ ...form, startDate, endDate: addDays(startDate, length) }, zone);
+	}
+	const seriesZone = master.when.time_zone;
+	const from = zonedTime(opened.startDate, opened.startTime, zone);
+	const to = zonedTime(form.startDate, form.startTime, zone);
+	const length = zonedTime(form.endDate, form.endTime, zone) - to;
+	const shift = daysBetween(zonedDate(from, seriesZone), zonedDate(to, seriesZone));
+	const firstDate = addDays(zonedDate(Date.parse(master.when.start), seriesZone), shift);
+	const start = zonedInstant(firstDate, zonedWall(to, seriesZone).msOfDay, seriesZone);
+	return {
+		kind: "timed",
+		start: new Date(start).toISOString(),
+		end: new Date(start + length).toISOString(),
+		time_zone: seriesZone,
+	};
 }
 
 /** The key of an entry of a list: the id of the occurrence, or the id of a one-off event. */
