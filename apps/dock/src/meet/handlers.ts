@@ -1,4 +1,10 @@
-import { type Meeting, meetPath, newMeetingCode, type OperationName, type Participant } from "@asterra/contracts";
+import {
+	MEETING_CODE_ALPHABET,
+	type Meeting,
+	meetPath,
+	type OperationName,
+	type Participant,
+} from "@asterra/contracts";
 import { auditOk, type CallContext } from "../identity/index.ts";
 import { type HandlerMap, newId, OperationError } from "../platform/index.ts";
 import type { MeetingDO, MeetingRecord, ParticipantRecord, Refusal } from "./meeting.ts";
@@ -19,6 +25,18 @@ export function accept<T extends object>(value: T): Exclude<T, Refusal> {
 		throw new OperationError(error.code, error.message);
 	}
 	return value as Exclude<T, Refusal>;
+}
+
+/** A new meeting code: 80 random bits in four groups of four characters, such as `k7qm-2x9d-ptw4-hs6n`. */
+export function newMeetingCode(): string {
+	const bytes = new Uint8Array(16);
+	crypto.getRandomValues(bytes);
+	let code = "";
+	for (let i = 0; i < 16; i++) {
+		if (i > 0 && i % 4 === 0) code += "-";
+		code += MEETING_CODE_ALPHABET[(bytes[i] as number) & 31];
+	}
+	return code;
 }
 
 function iso(ms: number): string {

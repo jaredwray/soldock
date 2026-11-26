@@ -384,6 +384,9 @@ interface LobbyProps {
 
 function Lobby({ code, info, token, media, onAdmitted, onOver }: LobbyProps) {
 	const watch = useRef<MeetingWatch | null>(null);
+	// The parent gives new callbacks on each render. The socket of the lobby must not open again for that.
+	const callbacks = useRef({ onAdmitted, onOver });
+	callbacks.current = { onAdmitted, onOver };
 	useEffect(() => {
 		let done = false;
 		watch.current = watchMeeting(code, token, {
@@ -391,18 +394,18 @@ function Lobby({ code, info, token, media, onAdmitted, onOver }: LobbyProps) {
 				if (!done && state.self.state === "admitted") {
 					done = true;
 					watch.current?.stop();
-					onAdmitted();
+					callbacks.current.onAdmitted();
 				}
 			},
 			closed(reason) {
-				if (!done) onOver(reason);
+				if (!done) callbacks.current.onOver(reason);
 			},
 		});
 		return () => {
 			done = true;
 			watch.current?.stop();
 		};
-	}, [code, token, onAdmitted, onOver]);
+	}, [code, token]);
 
 	async function leave() {
 		try {

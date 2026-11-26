@@ -24,25 +24,13 @@ export const MEET_LIMITS = {
 } as const;
 
 /** The characters of a meeting code: lowercase Crockford base32, without i, l, o and u. */
-const CODE_ALPHABET = "0123456789abcdefghjkmnpqrstvwxyz";
+export const MEETING_CODE_ALPHABET = "0123456789abcdefghjkmnpqrstvwxyz";
 const CODE_GROUP = "[0-9a-hjkmnp-tv-z]{4}";
 const CODE_PATTERN = new RegExp(`^${CODE_GROUP}(?:-${CODE_GROUP}){3}$`);
 
 /** True for a meeting code in its canonical form, such as `k7qm-2x9d-ptw4-hs6n`. */
 export function isMeetingCode(value: string): boolean {
 	return CODE_PATTERN.test(value);
-}
-
-/** A new meeting code: 80 random bits in four groups of four characters. */
-export function newMeetingCode(): string {
-	const bytes = new Uint8Array(16);
-	crypto.getRandomValues(bytes);
-	let code = "";
-	for (let i = 0; i < 16; i++) {
-		if (i > 0 && i % 4 === 0) code += "-";
-		code += CODE_ALPHABET[(bytes[i] as number) & 31];
-	}
-	return code;
 }
 
 /**

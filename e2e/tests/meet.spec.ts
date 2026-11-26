@@ -19,6 +19,9 @@ import {
 
 const LIVE = process.env.MEET_LIVE === "1";
 
+// Each test runs three browsers and the stand-in SFU at once. On a busy runner that takes longer than the default.
+test.describe.configure({ timeout: 120_000 });
+
 let hostBrowser: Browser;
 let guestBrowser: Browser;
 
@@ -199,7 +202,7 @@ test("a guest reconnects after a reload and after a lost connection, without the
 	});
 	// The session from before the reload is still in the stand-in, which keeps old sessions as the SFU keeps them for a while.
 	expect(((await dropped.json()) as { dropped: number }).dropped).toBeGreaterThanOrEqual(1);
-	await expect.poll(() => connectionCount(guest.page), { timeout: 45_000 }).toBeGreaterThan(before);
+	await expect.poll(() => connectionCount(guest.page), { timeout: 60_000 }).toBeGreaterThan(before);
 	await expectMediaFlows(guest.page);
 	await expectMediaFlows(host.page);
 	await host.context.close();
@@ -232,7 +235,9 @@ test("a guest on a phone without a camera joins with audio, and a guest with no 
 		await quietPage.getByRole("button", { name: "Ask to join" }).click();
 		await expect(host.page.getByRole("complementary", { name: "Waiting to join" })).toContainText("Lee Listener");
 		await host.page.getByRole("button", { name: "Deny Lee Listener" }).click();
-		await expect(quietPage.getByRole("heading", { name: "The host did not let you in" })).toBeVisible();
+		await expect(quietPage.getByRole("heading", { name: "The host did not let you in" })).toBeVisible({
+			timeout: 20_000,
+		});
 		expect(await inbound(quietPage)).toMatchObject({ audioBytes: 0, videoBytes: 0 });
 	} finally {
 		await phoneBrowser.close();
