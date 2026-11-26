@@ -145,6 +145,9 @@ describe("the iCalendar parser", () => {
 			withStart("DTSTART;VALUE=DATE:20261345"),
 			withStart("DTSTART:20261203T150000Z", "DURATION:P99999999999999999999W\r\n"),
 			withStart("DTSTART;VALUE=DATE:20261203", "DURATION:P99999999999999999999D\r\n"),
+			// A DTEND that is there but not real: not the default of one day.
+			withStart("DTSTART;VALUE=DATE:20261203", "DTEND;VALUE=DATE:20261345\r\n"),
+			withStart("DTSTART:20261203T150000Z", "DTEND:20261203T996000Z\r\n"),
 		]) {
 			expect(text).not.toBe(googleTimed);
 			expect(parse(text).when).toBeNull();

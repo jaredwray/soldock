@@ -322,8 +322,10 @@ export function parseICalendar(text: string): ICalInvite | null {
 		description: clean(unescapeText(props.get("DESCRIPTION")?.value ?? ""), CALENDAR_LIMITS.descriptionChars, true),
 		location: clean(unescapeText(props.get("LOCATION")?.value ?? ""), CALENDAR_LIMITS.locationChars),
 		// A DURATION that the parser cannot read gives no time: a guess of the end is not exact.
+		// A DTEND or a DURATION that is there but not readable gives no time. A missing one has a default.
 		when:
-			props.has("DURATION") && !props.has("DTEND") && duration === null
+			(props.has("DTEND") && timeValue(props.get("DTEND")) === null) ||
+			(props.has("DURATION") && !props.has("DTEND") && duration === null)
 				? null
 				: whenOf(timeValue(props.get("DTSTART")), timeValue(props.get("DTEND")), duration),
 		organizer: organizerLine && organizerEmail ? { email: organizerEmail, name: nameOf(organizerLine.params) } : null,
