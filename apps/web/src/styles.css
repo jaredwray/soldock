@@ -2432,14 +2432,82 @@ fieldset {
 	outline-offset: -2px;
 }
 
-.message-expanded .message-toggle {
+/* An open message: the toggle holds the avatar and the name. The address, the copy button and the date come after
+   it, outside the toggle. The toggle covers the full header, so a click on a different part closes the message. */
+.message-expanded .message-header {
+	position: relative;
+	display: flex;
 	align-items: flex-start;
+	padding: 14px 10px 0 58px;
+}
+
+/* The name, then the address and the copy button. Together, the address and the button go to a second line. */
+.message-expanded .message-from {
+	display: flex;
+	flex: 1 1 auto;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 0 6px;
+	min-width: 0;
+	line-height: 22px;
+}
+
+.message-expanded .message-heading {
+	flex: 0 1 auto;
+	min-width: 0;
+}
+
+.message-expanded .message-toggle {
 	margin: 0;
-	padding: 14px 10px 0;
+	padding: 0;
+}
+
+.message-expanded .message-toggle::before {
+	content: "";
+	position: absolute;
+	inset: 0;
+	border-radius: var(--radius-md);
 }
 
 .message-expanded .message-toggle:hover {
 	background: none;
+}
+
+.message-expanded .message-toggle:focus-visible {
+	outline: none;
+}
+
+.message-expanded .message-toggle:focus-visible::before {
+	outline: 2px solid var(--focus);
+	outline-offset: -2px;
+}
+
+/* Above the toggle, so the address is selectable and the copy button gets the click. */
+.message-sender-detail {
+	position: relative;
+	z-index: 1;
+	display: inline-flex;
+	align-items: center;
+	gap: 4px;
+	min-width: 0;
+}
+
+.message-copy-address {
+	width: 24px;
+	height: 24px;
+	margin: -1px 0;
+	opacity: 0;
+}
+
+.message-header:hover .message-copy-address,
+.message-copy-address:focus-visible {
+	opacity: 1;
+}
+
+@media (hover: none) {
+	.message-copy-address {
+		opacity: 1;
+	}
 }
 
 .message-avatar {
@@ -2447,6 +2515,13 @@ fieldset {
 	place-items: center;
 	flex: none;
 	width: 36px;
+}
+
+/* In an open message, the avatar is at the left of the header. The name and the address go next to it. */
+.message-expanded .message-avatar {
+	position: absolute;
+	top: 14px;
+	left: 10px;
 }
 
 .message-avatar-mark {
@@ -2481,9 +2556,9 @@ fieldset {
 	min-width: 0;
 }
 
+/* The sender can shrink, so a long name ends with an ellipsis and the address and the date keep their place. */
 .message-expanded .message-sender {
-	flex: 1;
-	flex-wrap: wrap;
+	flex: 0 1 auto;
 	max-width: none;
 }
 
@@ -2524,18 +2599,23 @@ fieldset {
 	white-space: nowrap;
 }
 
+.message-expanded .message-date {
+	padding-left: 12px;
+}
+
 .message-content {
 	padding: 0 10px 20px 58px;
 }
 
-/* The recipients are under the name of the sender, next to the avatar. The header is 50px high, and
-   the name is 22px high, so the list moves up 14px. */
+/* The recipients are under the name and the address of the sender, next to the avatar. The avatar is out
+   of the flow, so the header is as high as its text, and the list starts on the next line. The minimum
+   height keeps the content below the avatar, which is 50px from the top. */
 .message-recipients {
 	display: flex;
 	flex-wrap: wrap;
 	gap: 0 14px;
 	min-height: 14px;
-	margin: -14px 0 12px;
+	margin: 0 0 12px;
 	color: var(--muted-foreground);
 	font-size: 13px;
 	line-height: 20px;
@@ -5005,11 +5085,18 @@ fieldset {
 		padding-left: 10px;
 	}
 
+	/* The recipients use the full width, so the header is at least as high as the avatar. */
+	.message-expanded .message-header {
+		min-height: 50px;
+	}
+
 	.message-recipients {
 		margin: 10px 0 12px;
 	}
 
+	/* The date goes to two lines, so the address and the copy button have space. */
 	.message-expanded .message-date {
+		max-width: 8em;
 		white-space: normal;
 		text-align: right;
 	}
@@ -5020,6 +5107,11 @@ fieldset {
 
 	.message-toggle {
 		min-height: 44px;
+	}
+
+	/* The full header of an open message is the target of its toggle. */
+	.message-expanded .message-toggle {
+		min-height: 0;
 	}
 
 	.compose-fields {
@@ -5438,6 +5530,11 @@ fieldset {
 	.toast-close {
 		width: 44px;
 		height: 44px;
+	}
+
+	/* The target is 44px, but the line of the name stays 22px high. */
+	.message-copy-address {
+		margin: -11px -10px;
 	}
 
 	/* The label around a box is the target. The box keeps its size. */

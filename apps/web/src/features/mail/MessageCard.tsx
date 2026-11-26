@@ -82,6 +82,8 @@ export function MessageCard({
 		if (body) onFullBodyRef.current?.({ ...message, body });
 	}, [message, body]);
 	const bodyId = useId();
+	const addressId = useId();
+	const dateId = useId();
 	// In a team mailbox, more than one person sends from the address, so the sender is not "me". In the
 	// mailbox of an agent, the sender is the agent, not the person who reads.
 	const mailboxId = useMailboxId();
@@ -102,37 +104,60 @@ export function MessageCard({
 		return name ? [{ id, name, auto: message.auto_label_ids.includes(id) }] : [];
 	});
 
+	const date = (
+		<time id={dateId} className="message-date" dateTime={message.date} title={fullDate(message.date)}>
+			{expanded ? fullDate(message.date) : shortDate(message.date)}
+		</time>
+	);
+
 	return (
 		<article className={expanded ? "message message-expanded" : "message"}>
-			<Heading className="message-heading">
-				<button
-					type="button"
-					className="message-toggle"
-					aria-expanded={expanded}
-					aria-controls={bodyId}
-					onClick={() => setExpanded((value) => !value)}
-				>
-					<span className="message-avatar" aria-hidden="true">
-						<span className="avatar message-avatar-mark">{sender ? initials(addressName(sender)) : "?"}</span>
-					</span>
-					<span className="message-summary">
-						<span className="message-sender">
-							<span className="message-sender-name">{senderName}</span>
-							{expanded && sender?.name && <span className="message-sender-address">&lt;{sender.address}&gt;</span>}
-						</span>
-						{!expanded && <span className="message-snippet">{message.snippet}</span>}
-					</span>
-					{!expanded && message.attachments.length > 0 && (
-						<span className="message-mark">
-							<Icon name="paperclip" size={16} />
-							<span className="visually-hidden">Has attachments, </span>
+			{/* In an open message, the address, the copy button and the date are outside the toggle, because a button
+			    cannot hold a button. The toggle keeps its place in the tree, so React keeps it, and its focus, when the
+			    message opens. */}
+			<div className="message-header">
+				<div className="message-from">
+					<Heading className="message-heading">
+						<button
+							type="button"
+							className="message-toggle"
+							aria-expanded={expanded}
+							aria-controls={bodyId}
+							// The address and the date of an open message are outside the toggle. They describe it.
+							aria-describedby={expanded ? (sender?.name ? `${addressId} ${dateId}` : dateId) : undefined}
+							onClick={() => setExpanded((value) => !value)}
+						>
+							<span className="message-avatar" aria-hidden="true">
+								<span className="avatar message-avatar-mark">{sender ? initials(addressName(sender)) : "?"}</span>
+							</span>
+							<span className="message-summary">
+								<span className="message-sender">
+									<span className="message-sender-name">{senderName}</span>
+								</span>
+								{!expanded && <span className="message-snippet">{message.snippet}</span>}
+							</span>
+							{!expanded && message.attachments.length > 0 && (
+								<span className="message-mark">
+									<Icon name="paperclip" size={16} />
+									<span className="visually-hidden">Has attachments, </span>
+								</span>
+							)}
+							{!expanded && date}
+						</button>
+					</Heading>
+					{expanded && sender && (
+						<span className="message-sender-detail">
+							{sender.name && (
+								<span id={addressId} className="message-sender-address">
+									&lt;{sender.address}&gt;
+								</span>
+							)}
+							<CopyAddressButton address={sender.address} />
 						</span>
 					)}
-					<time className="message-date" dateTime={message.date} title={fullDate(message.date)}>
-						{expanded ? fullDate(message.date) : shortDate(message.date)}
-					</time>
-				</button>
-			</Heading>
+				</div>
+				{expanded && date}
+			</div>
 			<div id={bodyId} hidden={!expanded} className="message-content">
 				{expanded && (
 					<>
@@ -222,6 +247,41 @@ export function MessageCard({
 				)}
 			</div>
 		</article>
+	);
+}
+
+/** Puts the address of the sender on the clipboard. It shows when the pointer is on the header of the message. */
+function CopyAddressButton({ address }: { address: string }) {
+	const toast = useToast();
+	const [copied, setCopied] = useState(false);
+
+	useEffect(() => {
+		if (!copied) return;
+		const timer = window.setTimeout(() => setCopied(false), 2000);
+		return () => window.clearTimeout(timer);
+	}, [copied]);
+
+	async function copy() {
+		try {
+			await navigator.clipboard.writeText(address);
+			setCopied(true);
+		} catch {
+			toast({ message: "The browser did not permit a copy to the clipboard.", tone: "error" });
+		}
+	}
+
+	return (
+		<button
+			type="button"
+			className="icon-button message-copy-address"
+			title={copied ? "Copied" : "Copy the address"}
+			onClick={() => void copy()}
+		>
+			<Icon name={copied ? "check" : "copy"} size={16} />
+			<span className="visually-hidden" aria-live="polite">
+				{copied ? `Copied ${address}` : `Copy the address ${address}`}
+			</span>
+		</button>
 	);
 }
 
