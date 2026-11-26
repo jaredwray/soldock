@@ -15,6 +15,7 @@ import { isWorkerPath } from "./routes.ts";
 import { runScheduled } from "./scheduled.ts";
 import { handleWebhookBatch, WEBHOOK_QUEUE } from "./webhooks/index.ts";
 
+export { CalendarDO } from "./calendar/index.ts";
 export { ChatRoomDO, ChatSearchDO } from "./chat/index.ts";
 export { DocumentDO } from "./collab/index.ts";
 export { DriveSpaceDO } from "./drive/index.ts";

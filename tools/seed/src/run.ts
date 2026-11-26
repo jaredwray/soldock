@@ -2,6 +2,7 @@
 // agent can make: the seed has no access to a database or to a Durable Object.
 import { ALL_SCOPES, ApiError, type InputOf, OWN_KEY_SCOPES } from "@asterra/contracts";
 import { type SeedApi, SeedStop } from "./api.ts";
+import { EVENTS, whenOfSeedEvent } from "./calendar.ts";
 import {
 	type ActorKey,
 	AGENTS,
@@ -286,6 +287,21 @@ export async function runSeed(api: SeedApi, options: SeedOptions = {}): Promise<
 	}
 	log(
 		`Drive: the items of ${DRIVES.length} drives, with their shares, and ${SHARED_DRIVES.length} shared drive (${SHARED_DRIVES.map((drive) => drive.name).join(", ")}).`,
+	);
+
+	// 6. Calendar. Each person and agent adds the events of its own calendar, from the day of the seed.
+	const seedDay = new Date().toISOString().slice(0, 10);
+	for (const event of EVENTS) {
+		await api.call(keyOf(event.owner), "calendar.create_event", {
+			title: event.title,
+			when: whenOfSeedEvent(event, seedDay),
+			...(event.location ? { location: event.location } : {}),
+			...(event.description ? { description: event.description } : {}),
+			idempotency_key: `${KEY_PREFIX}/calendar/${event.id}`,
+		});
+	}
+	log(
+		`Calendar: ${EVENTS.length} events in the calendars of ${new Set(EVENTS.map((event) => event.owner)).size} people and agents.`,
 	);
 }
 

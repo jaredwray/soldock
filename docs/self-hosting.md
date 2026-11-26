@@ -772,6 +772,24 @@ and agents use the own mailbox, in the settings of the mailbox in Mail (`mail.se
   of `mailbox_delegates` before you start fresh with it, or the reset fails.
 - [Agents](agents.md#the-mailbox-of-a-person) has the rules for an agent.
 
+### Calendar scopes
+
+Calendar adds the scopes `calendar.read` and `calendar.write`. They apply only to the own calendar of the
+caller. The calendar of each principal is a new Durable Object class, `CalendarDO` (migration tag `v6` in
+`wrangler.jsonc`).
+
+- Nothing writes the account scopes of an agent or a service account after its creation. So migration
+  `0038_calendar_scopes.sql` gives each account from before the upgrade `calendar.read` when it holds
+  `mail.read`, and `calendar.write` when it holds `mail.modify`. An account with narrower scopes stays
+  narrow. A second run of the migration changes nothing.
+- The old Worker keeps working between the migration and the deploy. It drops the scopes that it does not
+  know.
+- A browser session has both scopes. An API key of a person from before the upgrade does not have them:
+  create a new key with the scopes.
+- A rollback to a Worker from before this change works. That Worker has no calendar routes, and the
+  events stay in the objects for the next upgrade.
+- [Agents](agents.md#calendar) has the rules for an agent.
+
 ### Recover a sign-in
 
 - A person whose invite link expired asks an owner or an admin for a new link: **New invite link** under

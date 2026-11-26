@@ -295,7 +295,7 @@ function ApprovalForm({ authorization, agents, domains, canCreate, onDone, onGon
 							)}
 							<p className="field-hint form-grid-wide">
 								{mode === "new"
-									? "A new agent reaches its own mailbox and its own drive. It reaches a shared mailbox, a shared drive or a room after a member adds it there. A new agent can send mail only inside this organization. Open the agent under Admin › Members to change its policy."
+									? "A new agent reaches its own mailbox, its own drive and its own calendar. It reaches a shared mailbox, a shared drive or a room after a member adds it there. A new agent can send mail only inside this organization. Open the agent under Admin › Members to change its policy."
 									: "The app acts as the agent. It reaches each mailbox, drive and room that the agent is a member of."}{" "}
 								The app does not choose what it can do: the settings of each mailbox, room and drive decide. The Access
 								part of the agent under Admin › Members lists them.

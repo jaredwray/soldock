@@ -448,10 +448,10 @@ function CreatePrincipalForm({ me, humans, onBusy, onCancel, onCreated }: Create
 							/>
 						</div>
 						<p className="field-hint form-grid-wide">
-							A new account reaches its own mailbox and its own drive. It reaches a shared mailbox, a shared drive or a
-							room after a member adds it there, and the settings of each one decide what it can do. A token only proves
-							who the account is. The sponsor is the person to ask about the account. Only owners and admins create its
-							tokens. Open the account under Members after you create it to add a token.
+							A new account reaches its own mailbox, its own drive and its own calendar. It reaches a shared mailbox, a
+							shared drive or a room after a member adds it there, and the settings of each one decide what it can do. A
+							token only proves who the account is. The sponsor is the person to ask about the account. Only owners and
+							admins create its tokens. Open the account under Members after you create it to add a token.
 						</p>
 					</>
 				) : (
@@ -473,10 +473,10 @@ function CreatePrincipalForm({ me, humans, onBusy, onCancel, onCreated }: Create
 							/>
 						</div>
 						<p className="field-hint form-grid-wide">
-							A new agent reaches its own mailbox and its own drive. It reaches a shared mailbox, a shared drive or a
-							room after a member adds it there, and the settings of each one decide what it can do. An API key or an
-							app that connects with OAuth only proves who the agent is. A new agent can send mail only inside this
-							organization. Open the agent under Members to change its policy.
+							A new agent reaches its own mailbox, its own drive and its own calendar. It reaches a shared mailbox, a
+							shared drive or a room after a member adds it there, and the settings of each one decide what it can do.
+							An API key or an app that connects with OAuth only proves who the agent is. A new agent can send mail only
+							inside this organization. Open the agent under Members to change its policy.
 						</p>
 					</>
 				)}
