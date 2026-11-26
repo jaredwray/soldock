@@ -32,6 +32,7 @@ export type DriveView =
  * The old `/admin/agents` path redirects there. Each member has its own page under `/admin/members`.
  */
 export const ADMIN_SECTIONS = [
+	"general",
 	"members",
 	"shared-mailboxes",
 	"shared-drives",

@@ -58,6 +58,7 @@ read. The optional Worker secret `ENCRYPTION_KEY` supplies the key. The module h
 | `chat_push_settings.private_key` | [`chat`](../chat/README.md#web-push-settings) |
 | `chat_incoming_webhooks.signing_secret` | [`chat`](../chat/README.md#data-inventory) |
 | `ai_settings.api_token` | [`ai`](../ai/README.md) |
+| `feedback_settings.github_token` | [`feedback`](../feedback/README.md#settings) |
 | `webhook_endpoints.secret` (also for `previous_secret`), `webhook_endpoints.auth_key`, `webhook_endpoints.header_value` | [`webhooks`](../webhooks/README.md#secrets-at-rest) |
 | `principals.totp_secret` (also for `totp_pending_secret`) | [`identity`](../identity/README.md) |
 

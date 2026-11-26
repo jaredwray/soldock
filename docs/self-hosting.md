@@ -268,6 +268,39 @@ is inbox auto labels. AI is off until an owner or an admin turns it on in **Admi
 - For local work, enter a token in Admin › AI of `wrangler dev`, or put `AI_GATEWAY_TOKEN=<token>` in
   `apps/dock/.dev.vars`. Never commit that file.
 
+## Feedback
+
+Feedback lets a person report a bug or send an idea from the web app. Each report becomes a public issue in a
+GitHub repository. Feedback is off until an owner or an admin turns it on in **Admin › General**.
+
+1. Choose the repository. The default is `jaredwray/soldock`, the Asterra project. A fork can use its own
+   repository.
+2. Make a GitHub token that can create issues in that repository:
+   - For a repository that you own, or that your organization owns, use a fine-grained token. Give it access to
+     that one repository only, with the permission **Issues: Read and write**.
+   - A fine-grained token cannot write to a repository of a different owner. For the Asterra project, use a
+     classic token with the `public_repo` scope. Make it on a separate GitHub account for the bot, not on your
+     own account, because a classic token can act on each public repository of that account.
+3. In **Admin › General**, select **Let people send feedback**, enter the repository and the token, and save.
+4. The rail of the web app now shows **Feedback**.
+
+- **Each report is public.** Each person on the internet can read the issue and open its screenshots and
+  recordings. The dialog warns the person, shows the exact text, and needs a confirmation before the send.
+- The issue always names the host of the instance and the role of the person. It names the person only when they
+  select it, and their address only when they select it. Agents and service accounts cannot send feedback.
+- The issues come from the GitHub account of the token, not from the person.
+- Screenshots and recordings stay in R2 on your instance. The issue links to
+  `https://<host>/dl/feedback/<id>/<token>`, which opens with no sign-in. An instance behind Cloudflare Access
+  gives links that the maintainers cannot open.
+- An owner or an admin can remove an attachment with `feedback.delete_attachment`. Its link stops at once.
+  GitHub can keep a copy of an image in its cache for some time.
+- The cron removes an attachment that no report holds after 24 hours, and the attachments of a report after
+  180 days.
+- Asterra keeps the token in D1, sealed with `ENCRYPTION_KEY` (see
+  [Encryption of stored secrets](#encryption-of-stored-secrets)). No API answer and no log contains it.
+- A person can send 5 reports in one hour and 20 in one day. The organization can send 200 in one day.
+- Migration `0040` adds the feedback tables: run `wrangler d1 migrations apply` as for each migration.
+
 ## Mail
 
 The dock Worker receives mail through Email Routing and sends mail through Email Service. Do these

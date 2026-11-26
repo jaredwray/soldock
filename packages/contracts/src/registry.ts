@@ -8,6 +8,7 @@ import { directoryOperations } from "./directory.ts";
 import { docsOperations } from "./docs.ts";
 import { domainOperations } from "./domains.ts";
 import { driveOperations } from "./drive.ts";
+import { feedbackOperations } from "./feedback.ts";
 import { mailOperations } from "./mail.ts";
 import { mailboxDelegateOperations } from "./mailbox-delegates.ts";
 import { oauthOperations } from "./oauth.ts";
@@ -33,6 +34,7 @@ export const operations = {
 	...webhookOperations,
 	...aiOperations,
 	...calendarOperations,
+	...feedbackOperations,
 } as const;
 
 export type Operations = typeof operations;

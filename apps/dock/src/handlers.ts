@@ -18,6 +18,7 @@ import {
 	enableDriveEvents,
 	sharedItemsOfPrincipal,
 } from "./drive/index.ts";
+import { feedbackHandlers } from "./feedback/index.ts";
 import { type CallContext, getPrincipal, identityHandlers } from "./identity/index.ts";
 import { closeAutoLabels, enableMailEvents, mailHandlers, mailWatchers } from "./mail/index.ts";
 import type { EventSubscriptions, HandlerMap, WatcherMap } from "./platform/index.ts";
@@ -34,6 +35,7 @@ export const handlers: HandlerMap<CallContext> = {
 	...chatHandlers,
 	...endpointHandlers,
 	...aiHandlers,
+	...feedbackHandlers,
 	...calendarHandlers,
 	async "chat.invoke_slash_command"(call, input) {
 		return await invokeSlashCommand(call, handlers, {

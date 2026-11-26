@@ -192,6 +192,27 @@ export {
 	PrincipalEvent,
 } from "./events.ts";
 export {
+	breakMentions,
+	buildFeedbackIssue,
+	FEEDBACK_ATTACHMENT_TYPES,
+	FEEDBACK_LIMITS,
+	FeedbackAttachment,
+	FeedbackAttachmentId,
+	FeedbackAttachmentToken,
+	FeedbackContext,
+	type FeedbackIssue,
+	type FeedbackIssueInput,
+	FeedbackKind,
+	FeedbackNotReadyReason,
+	FeedbackPage,
+	FeedbackReportId,
+	FeedbackSettings,
+	FeedbackStatus,
+	GitHubOwner,
+	GitHubRepoName,
+	GitHubToken,
+} from "./feedback.ts";
+export {
 	AUTO_LABEL_LIMITS,
 	AUTO_LABELS,
 	AutoLabelKey,
