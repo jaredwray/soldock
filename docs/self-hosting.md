@@ -45,11 +45,13 @@ same data.
 - A Cloudflare account with the Workers Paid plan.
 - The domain of the instance as a zone in that account. The host of the instance (for example
   `work.example.com`) must have no DNS record. The deploy makes its DNS record and its certificate, and
-  replaces a record that conflicts. So do not use this name for a different service.
+  replaces a record that conflicts. So do not use this name for a different service. `install` looks up
+  the host in DNS, and refuses a host that has records. `--replace-dns` permits such a host.
 - Node.js 22 or later, on a trusted computer. Do not run the CLI in an agent session: it signs in to your
   Cloudflare account.
 - wrangler 4. The CLI uses a compatible wrangler on `PATH`. If it finds none, it offers to install the
-  tested version into its cache folder (about 130 MB). It does not install wrangler globally.
+  tested version into its cache folder (about 130 MB). It does not install wrangler globally. On Windows,
+  the CLI uses only the copy in its cache folder.
 
 ### Steps
 
@@ -64,7 +66,7 @@ same data.
    - It deploys the Worker. The deploy makes the D1 database, the R2 bucket and the queues, and attaches
      the custom domain.
    - It applies the D1 migrations.
-   - It sets the Worker secrets `SETUP_TOKEN` and `ENCRYPTION_KEY`.
+   - It sets the Worker secrets `SETUP_TOKEN` and `ENCRYPTION_KEY`, and shows `ENCRYPTION_KEY`.
    - It runs the smoke check. A new host can take some minutes to answer, so the first request waits up
      to five minutes.
 6. Keep `ENCRYPTION_KEY` in a password manager. Cloudflare does not show a secret again, and a restore
@@ -90,21 +92,35 @@ The names of an instance:
 | Queues | `asterra-<name>-mail-inbound`, `-mail-inbound-dlq`, `-webhooks`, `-webhooks-dlq`, `-chat-previews`, `-chat-push`, `-mail-autolabel` |
 | Durable Objects | No name. They belong to the Worker, so each instance has its own. |
 
-`install` refuses a name whose D1 database exists in the account. Use `upgrade` for that instance.
+`install` refuses a name whose D1 database or Worker exists in the account. No flag changes that. Use
+`upgrade` for that instance.
 
 ### Install without questions
 
 With `--yes`, or without a terminal, the CLI asks nothing. Give each answer with a flag. New secrets go
-to a new file (mode 0600), never to the log:
+to a new file (mode 0600), never to the log. The CLI makes the file before it changes anything, so the
+file must not exist.
+
+The CLI reads `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID` and `ASTERRA_OWNER_PASSWORD` from the
+environment. Do not write a secret value in a command: the shell keeps a history of commands. In CI, set
+the variables from the secret store of the CI system. On a computer, read each value without an echo:
 
 ```sh
-CLOUDFLARE_API_TOKEN=... CLOUDFLARE_ACCOUNT_ID=... ASTERRA_OWNER_PASSWORD=... \
-  npx asterra install --yes --name rivus --hostname work.rivus.com --secrets-out ./rivus-secrets.env \
+read -rs CLOUDFLARE_API_TOKEN && export CLOUDFLARE_API_TOKEN
+read -rs ASTERRA_OWNER_PASSWORD && export ASTERRA_OWNER_PASSWORD
+export CLOUDFLARE_ACCOUNT_ID=<account id>    # an identifier, not a secret
+
+npx asterra install --yes --name rivus --hostname work.rivus.com --secrets-out ./rivus-secrets.env \
   --owner-name "Your Name" --owner-address you@rivus.com
+
+unset CLOUDFLARE_API_TOKEN ASTERRA_OWNER_PASSWORD
 ```
 
-Without `--owner-name` and `--owner-address`, the file also holds `SETUP_TOKEN`. Create the owner in the
-browser, then delete the token with `npx asterra secrets clear-setup-token --name rivus`.
+The file then holds `ENCRYPTION_KEY` and `OWNER_API_KEY`, the first API key of the owner. Move the two
+values to a password manager, and delete the file.
+
+Without `--owner-name` and `--owner-address`, the file holds `ENCRYPTION_KEY` and `SETUP_TOKEN`. Create
+the owner in the browser, then delete the token with `npx asterra secrets clear-setup-token --name rivus`.
 
 ## Upgrade
 
@@ -113,8 +129,11 @@ does these steps:
 
 1. It finds the instances of the account by their D1 database, and asks which one. `--name` gives the
    answer.
-2. It asks for the host (`--hostname`). The deploy needs the custom domain.
-3. It shows the release notes from GitHub Releases, for each release after the running version.
+2. It reads the host of the instance from the running version. Each deploy of the CLI stores the host. An
+   instance without a stored host needs `--hostname`. A `--hostname` that is not the stored host needs
+   `--change-hostname`, also with `--yes`: the deploy takes the new host from the Worker that has it.
+3. It shows the release notes from GitHub Releases, for each release after the running release. A run
+   without questions shows only the link.
 4. It compares the migrations of the database with the release. It refuses a database with a migration
    that the release does not know: that is a downgrade. It also refuses a database that is older than the
    release allows, and names the release to install first.
@@ -126,18 +145,28 @@ does these steps:
 7. It checks that `ENCRYPTION_KEY` exists. On a terminal, it offers to make the key. Without a terminal,
    it shows a warning.
 
+In GitHub Actions, `upgrade` writes `url`, `version` and `result` to `GITHUB_OUTPUT`. `result` is `passed`,
+`rolled_back`, or `failed` (the CLI did not roll back).
+
 More commands:
 
 | Command | What it does |
 | --- | --- |
-| `npx asterra status` | Shows the running version, the migrations, the upgrade of this CLI, and the secret names |
-| `npx asterra rollback` | Sends the traffic back to the version before the running version |
+| `npx asterra status` | Shows the running release, the host, the migrations, the upgrade of this CLI, and the secret names |
+| `npx asterra rollback` | Sends the traffic back to the newest version of the release before the running release |
 | `npx asterra secrets setup-token` | Makes a new `SETUP_TOKEN`, for example for **Start fresh** |
 | `npx asterra secrets clear-setup-token` | Deletes `SETUP_TOKEN` |
 | `npx asterra smoke <url>` | Runs the smoke check against a host |
 
+A secret change makes a new Worker version with the same code. So `rollback` does not go to the version
+before the running version: that version can be the same release with an earlier `SETUP_TOKEN`, or without
+`ENCRYPTION_KEY`. It goes to the newest version from before the deploy of the running release, and shows
+the two versions with their releases. A Worker version holds its secrets. If the secret names of the two
+versions are different, `rollback` tells the difference and asks. A run without questions then refuses.
+
 An instance from before the CLI needs its prefix and its Worker name, for example
-`--prefix soldock --worker-name soldock-dock-dev`.
+`--prefix soldock --worker-name soldock-dock-dev`. Give the two flags together, and not with `--name`.
+For an instance of the CLI, give only `--name`: its Worker is always `asterra-<name>`.
 
 ## Several instances in one account
 
@@ -173,6 +202,8 @@ create it with no rules.
    exists, so publish the first version of `asterra` by hand. Then, on npmjs.com, open the package
    **Settings › Trusted publishing**, and add GitHub Actions with the repository `jaredwray/soldock`, the
    workflow `release.yaml` and the environment `release`. The release workflow then needs no npm token.
+   Then run the release workflow one time: it finds that version on npm, and makes its tag and its GitHub
+   Release.
 
 ## Workflow rules
 
@@ -241,8 +272,10 @@ The workflow:
   To run it again, open **Actions › deploy-development › Run workflow** and select `main`.
 - Until the secrets exist, the run stops at its first step, and the error names each missing secret.
 - The CLI runs the smoke check against `https://work.soldock.org`. If it fails, the CLI rolls back to
-  the earlier version, and the run fails. The job summary and the `development` environment page show
-  the host.
+  the earlier version, and the run fails. The job summary shows the result that the CLI wrote: `passed`,
+  `rolled_back` or `failed`. The job summary and the `development` environment page show the host.
+- With the token and the account id of the environment, the CLI does not call `wrangler whoami`. So the
+  token needs no permission to read its user.
 - A run without questions does not make `ENCRYPTION_KEY`, because nobody would see the key. Make it one
   time on a trusted computer, for example with `openssl rand -base64 32 | tr '+/' '-_' | tr -d '='`.
   Add it as the secret `ENCRYPTION_KEY` of `soldock-dock-dev` in the dashboard (**Workers & Pages ›**
@@ -260,10 +293,15 @@ A release is the npm package `asterra`: the CLI and a prebuilt bundle of the Wor
 migrations and the config template. The CLI version is the Asterra version.
 
 1. Merge a pull request that changes `version` in `tools/cli/package.json`.
-2. Open **Actions › release › Run workflow**, and select `main`. The workflow runs `pnpm verify`,
-   builds the bundle, and publishes the package with provenance. Then it makes the tag `v<version>`
-   and the GitHub Release.
+2. Open **Actions › release › Run workflow**, and select `main`. The `build` job runs `pnpm verify`,
+   builds the bundle, and makes the package file. It has no publish rights. The `publish` job installs
+   nothing: it publishes that file with provenance. Then it makes the tag `v<version>` and the GitHub
+   Release.
 3. Edit the notes of the GitHub Release. `asterra upgrade` shows them before an upgrade.
+
+The workflow refuses the version `0.0.0`. If a run publishes to npm and then fails, run the workflow
+again. It finds the version on npm without the tag, does not publish again, and makes the tag and the
+GitHub Release. If the version is on npm and the tag exists, the run stops: change the version.
 
 Set `min_applied_migration` in `tools/cli/release.json` when the Worker of an earlier release cannot run
 on the new migrations. An example is a migration that removes a column that an earlier Worker still uses.
@@ -388,12 +426,17 @@ top-level only and applies to each instance. So it cannot hold a rule for one in
       person gets no API key. The person creates keys in **Settings**.
 
    `curl` does the same setup without a browser. The response holds the key (`api_key.secret`),
-   and gives no session:
+   and gives no session. Do not write the token or the password in the command: the shell keeps a
+   history of commands, and other users of the computer can see the arguments of a process. Put the
+   header and the body in two files that only you can read, and delete the files after the call:
 
    ```sh
+   umask 077
+   "${EDITOR:-vi}" setup-header.txt   # one line: authorization: Bearer <SETUP_TOKEN>
+   "${EDITOR:-vi}" setup-body.json    # {"mail_domain":"example.com","display_name":"Your Name","address":"you@example.com","password":"<a password of at least 12 characters>"}
    curl -X POST "https://<dock-host>/auth/setup" \
-     -H "authorization: Bearer <SETUP_TOKEN>" -H "content-type: application/json" \
-     -d '{"mail_domain":"example.com","display_name":"Your Name","address":"you@example.com","password":"<a password of at least 12 characters>"}'
+     -H @setup-header.txt -H "content-type: application/json" --data @setup-body.json
+   rm setup-header.txt setup-body.json
    ```
 
    To turn on two-step verification without a browser, call `account.create_totp_secret` with the
