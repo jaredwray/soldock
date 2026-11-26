@@ -2,6 +2,8 @@ import type { CalendarEvent } from "@asterra/contracts";
 import { describe, expect, it } from "vitest";
 import {
 	clampDay,
+	eventLabel,
+	eventStateClass,
 	eventsByDay,
 	formOf,
 	formProblem,
@@ -10,6 +12,7 @@ import {
 	periodOf,
 	periodTitle,
 	placeSegments,
+	sameAttendees,
 	sameTimeFields,
 	shiftPeriod,
 	shiftTarget,
@@ -28,6 +31,11 @@ function event(id: string, when: CalendarEvent["when"], title = id): CalendarEve
 		location: "",
 		when,
 		revision: 1,
+		uid: id,
+		is_organizer: true,
+		organizer: null,
+		attendees: [],
+		my_response: null,
 		created_at: "2026-11-01T00:00:00.000Z",
 		updated_at: "2026-11-01T00:00:00.000Z",
 	};
@@ -194,5 +202,40 @@ describe("the form of an event", () => {
 			expect(sameTimeFields({ ...opened, ...change }, opened), JSON.stringify(change)).toBe(false);
 		}
 		expect(newEventForm("2026-12-01", 23)).toMatchObject({ endDate: "2026-12-02", endTime: "00:00" });
+	});
+});
+
+describe("the copy of a meeting", () => {
+	const base = timed("m", "2026-12-01T14:00:00Z", "2026-12-01T15:00:00Z");
+	const copy = (my_response: CalendarEvent["my_response"]): CalendarEvent => ({
+		...base,
+		title: "Review",
+		location: "Room 2",
+		is_organizer: false,
+		my_response,
+	});
+
+	it("names the state of an invitation that the person did not accept, and keeps the name of an own event", () => {
+		expect(eventLabel({ ...base, title: "Review", location: "Room 2" }, NY)).toBe("Review, 9:00 AM – 10:00 AM, Room 2");
+		expect(eventLabel(copy("accepted"), NY)).toBe("Review, 9:00 AM – 10:00 AM, Room 2");
+		expect(eventLabel(copy("pending"), NY)).toBe("Review, 9:00 AM – 10:00 AM, Room 2, invitation, not answered");
+		expect(eventLabel(copy("tentative"), NY)).toBe("Review, 9:00 AM – 10:00 AM, Room 2, maybe");
+		expect(eventLabel(copy("declined"), NY)).toBe("Review, 9:00 AM – 10:00 AM, Room 2, declined");
+	});
+
+	it("gives a pending, a tentative and a declined invitation their own look", () => {
+		expect(eventStateClass(base)).toBe("");
+		expect(eventStateClass(copy("accepted"))).toBe("");
+		expect(eventStateClass(copy("pending"))).toBe("cal-event-pending");
+		expect(eventStateClass(copy("tentative"))).toBe("cal-event-tentative");
+		expect(eventStateClass(copy("declined"))).toBe("cal-event-declined");
+	});
+
+	it("sends the attendees only when the set changed", () => {
+		const a = { principal_id: "prn_a", name: "A", email: "a@x.test" };
+		const b = { principal_id: "prn_b", name: "B", email: "b@x.test" };
+		expect(sameAttendees([a, b], [b, a])).toBe(true);
+		expect(sameAttendees([a], [a, b])).toBe(false);
+		expect(sameAttendees([a, a], [a, b])).toBe(false);
 	});
 });

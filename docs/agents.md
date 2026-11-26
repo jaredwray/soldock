@@ -714,14 +714,17 @@ So a person who manages that account must agree.
 Each agent and each service account has its own calendar, as each person has. The calendar tools act
 on the own calendar of the caller only. No tool reads or changes the calendar of a different
 principal. The sponsor of an agent, and an owner or an admin, do not read the calendar of the agent.
+An invitation puts a copy of one meeting on the calendar of each attendee. Nothing else of a calendar is
+shared.
 
 | Tool | Scope | What |
 | --- | --- | --- |
 | `calendar_list_events` | `calendar.read` | The events that overlap a range, first start first, with pages |
 | `calendar_get_event` | `calendar.read` | One event |
-| `calendar_create_event` | `calendar.write` | Add an event. Takes `idempotency_key` |
-| `calendar_update_event` | `calendar.write` | Change the fields that you give. Takes `base_revision` |
-| `calendar_delete_event` | `calendar.write` | Delete an event. Takes `base_revision` and `dry_run` |
+| `calendar_create_event` | `calendar.write` | Add an event. Takes `idempotency_key` and `attendees` |
+| `calendar_update_event` | `calendar.write` | Change the fields that you give. Takes `base_revision` and `attendees` |
+| `calendar_delete_event` | `calendar.write` | Delete an event. Takes `base_revision` and `dry_run`. Cancels a meeting for each attendee |
+| `calendar_respond_to_invitation` | `calendar.write` | Answer an invitation: `accepted`, `tentative` or `declined` |
 
 - **Timed events.** Give `start` and `end` as ISO 8601 times with an offset or `Z`, and `time_zone`, an
   IANA name such as `America/New_York`. The output gives `start` and `end` in UTC, with `time_zone`.
@@ -735,6 +738,16 @@ principal. The sponsor of an agent, and an owner or an admin, do not read the ca
 - **Limits.** A title has 1 to 300 characters, a location at most 500, and a description at most 8000. An
   event can be at most 366 days long, from 1970-01-01 to 2100-12-31. A calendar holds at most 50,000
   events.
+- **Meetings.** Set `attendees` to invite people, agents or service accounts of the organization. Give
+  the `principal_id` or the `email` of each one. Find them with `directory_list_principals` and
+  `order: "match"`. Each attendee gets a copy with `is_organizer: false` and `my_response: "pending"`.
+  `attendees` in `calendar_update_event` is the complete new list.
+- **Only the organizer changes a meeting.** On a copy, `calendar_update_event` and
+  `calendar_delete_event` return `forbidden`. Answer with `calendar_respond_to_invitation` and the `id`
+  of the copy. The organizer sees the `response` of each attendee in `attendees`. An answer does not
+  change the `revision` of the event of the organizer.
+- **Delivery.** A change of a meeting reaches the other calendars in a few seconds, through an outbox
+  with retries. A list right after a change can still show the state before it.
 - **An agent from before Calendar.** Migration `0038` gives an agent `calendar.read` when it holds
   `mail.read`, and `calendar.write` when it holds `mail.modify`. An agent with narrower account scopes
   has no calendar tools, and `account_whoami` names the scopes that it does not hold.

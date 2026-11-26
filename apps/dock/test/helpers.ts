@@ -1004,3 +1004,118 @@ export async function consumeAutoLabels(
 	await handlers.queue(batch, { ...env, ...overrides } as Env, ctx);
 	return getQueueResult(batch, ctx);
 }
+
+/** The CalendarDO of a principal. */
+export const calendarStub = (principalId: string) => env.CALENDAR.get(env.CALENDAR.idFromName(principalId));
+
+/** The rows of the outbox of a calendar, oldest first, with the payload as JSON. */
+export async function calendarOutbox(
+	principalId: string,
+): Promise<
+	{ kind: string; target: string; uid: string; attempts: number; next_attempt_at: number; payload: unknown }[]
+> {
+	return runInDurableObject(calendarStub(principalId), (_instance, state) =>
+		state.storage.sql
+			.exec<{ kind: string; target: string; uid: string; attempts: number; next_attempt_at: number; payload: string }>(
+				"SELECT kind, target, uid, attempts, next_attempt_at, payload FROM outbox ORDER BY id",
+			)
+			.toArray()
+			.map((row) => ({ ...row, payload: JSON.parse(row.payload) as unknown })),
+	);
+}
+
+/**
+ * Delivers the outbox of each calendar until each one is empty. A row that waits for its next attempt is made due
+ * first. A delivery can queue messages in a different calendar of the list, so this runs in rounds. The runtime
+ * also fires the alarm by itself, so this waits for a drain in flight.
+ */
+export async function settleCalendars(...principalIds: string[]): Promise<void> {
+	await vi.waitFor(
+		async () => {
+			let waiting = 0;
+			for (const id of principalIds) {
+				const stub = calendarStub(id);
+				await runInDurableObject(stub, async (_instance, state) => {
+					if (state.storage.sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM outbox").one().n === 0) return;
+					state.storage.sql.exec("UPDATE outbox SET next_attempt_at = 0");
+					await state.storage.setAlarm(Date.now());
+				});
+				await runDurableObjectAlarm(stub);
+			}
+			for (const id of principalIds) {
+				waiting += await runInDurableObject(
+					calendarStub(id),
+					(_instance, state) => state.storage.sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM outbox").one().n,
+				);
+			}
+			if (waiting > 0) throw new Error(`${waiting} calendar outbox rows wait`);
+		},
+		{ timeout: 5000, interval: 20 },
+	);
+}
+
+export interface BrokenCalendarDelivery {
+	/** When set, each delivery from the calendar to a different calendar fails with this error. */
+	fail: Error | null;
+}
+
+/**
+ * Replaces the CALENDAR binding of one calendar object with a wrapper. While `fail` is set, each delivery from
+ * its outbox to a different calendar throws, as a lost or failed call does.
+ */
+export async function breakCalendarDelivery(principalId: string): Promise<BrokenCalendarDelivery> {
+	const broken: BrokenCalendarDelivery = { fail: new Error("calendar delivery failed") };
+	await runInDurableObject(calendarStub(principalId), (instance) => {
+		const target = instance as unknown as { env: Env };
+		const real = target.env.CALENDAR;
+		const wrapper = {
+			idFromName: (name: string) => real.idFromName(name),
+			get: (id: DurableObjectId) => {
+				const stub = real.get(id);
+				return {
+					applyMeeting: (...args: Parameters<typeof stub.applyMeeting>) =>
+						broken.fail ? Promise.reject(broken.fail) : stub.applyMeeting(...args),
+					applyReply: (...args: Parameters<typeof stub.applyReply>) =>
+						broken.fail ? Promise.reject(broken.fail) : stub.applyReply(...args),
+				};
+			},
+		} as unknown as Env["CALENDAR"];
+		target.env = { ...target.env, CALENDAR: wrapper };
+	});
+	return broken;
+}
+
+/**
+ * Restarts a calendar with the schema of the first layer: no meetings, no outbox. The rows of `events` keep
+ * their values. Commit the fixture before an alarm can read it.
+ */
+export async function restartLegacyCalendar(principalId: string): Promise<void> {
+	await expect(
+		runInDurableObject(calendarStub(principalId), (_instance, state) =>
+			state.blockConcurrencyWhile(async () => {
+				await state.storage.deleteAlarm();
+				const sql = state.storage.sql;
+				sql.exec("DROP INDEX events_uid");
+				for (const column of [
+					"uid",
+					"role",
+					"sequence",
+					"organizer_id",
+					"organizer_email",
+					"organizer_name",
+					"my_response",
+					"my_reply_stamp",
+					"attendees_json",
+				]) {
+					sql.exec(`ALTER TABLE events DROP COLUMN ${column}`);
+				}
+				sql.exec("DROP TABLE attendees");
+				sql.exec("DROP TABLE meeting_tombstones");
+				sql.exec("DROP TABLE outbox");
+				sql.exec("UPDATE meta SET value = '1' WHERE key = 'schema_version'");
+				await state.storage.sync();
+				state.abort("Restart the legacy calendar.");
+			}),
+		),
+	).rejects.toThrow("Restart the legacy calendar.");
+}

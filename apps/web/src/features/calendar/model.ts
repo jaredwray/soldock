@@ -7,6 +7,7 @@ import {
 	checkWhen,
 	DAY_MS,
 	dateToUtcMs,
+	type EventResponse,
 	type EventWhenValue,
 	zonedDate,
 	zonedDayStart,
@@ -358,9 +359,69 @@ export function whenText(event: CalendarEvent, zone: string): string {
 	return `${shortDate(zonedDate(start, zone))}, ${startText} – ${shortDate(zonedDate(end, zone))}, ${endText}`;
 }
 
-/** The accessible name of an event: its title, its time and its place. */
+/** The text of an answer to an invitation. */
+export function responseLabel(response: EventResponse): string {
+	switch (response) {
+		case "accepted":
+			return "Yes";
+		case "tentative":
+			return "Maybe";
+		case "declined":
+			return "No";
+		default:
+			return "No answer yet";
+	}
+}
+
+/** The state of the copy of a meeting in the accessible name of its event. An accepted meeting has none. */
+const STATE_TEXT: Record<EventResponse, string | null> = {
+	pending: "invitation, not answered",
+	tentative: "maybe",
+	declined: "declined",
+	accepted: null,
+};
+
+/**
+ * The accessible name of an event: its title, its time and its place. The copy of a meeting that the person did
+ * not accept also has its state, so the state is not only a color.
+ */
 export function eventLabel(event: CalendarEvent, zone: string): string {
-	return [event.title, whenText(event, zone), event.location].filter(Boolean).join(", ");
+	const state = event.is_organizer || event.my_response === null ? null : STATE_TEXT[event.my_response];
+	return [event.title, whenText(event, zone), event.location, state].filter(Boolean).join(", ");
+}
+
+/** The class of the button of an event: a pending, a tentative or a declined invitation looks different. */
+export function eventStateClass(event: CalendarEvent): string {
+	if (event.is_organizer || event.my_response === null || event.my_response === "accepted") return "";
+	return `cal-event-${event.my_response}`;
+}
+
+/** A person, agent or service account that the organizer chose in the event dialog. */
+export interface ChosenAttendee {
+	principal_id: string;
+	name: string;
+	email: string;
+	kind?: "human" | "agent" | "service";
+}
+
+/** The attendees of an event, as the dialog shows them at the start. */
+export function chosenOf(event: CalendarEvent | null): ChosenAttendee[] {
+	return (event?.attendees ?? []).flatMap((attendee) =>
+		attendee.principal_id ? [{ principal_id: attendee.principal_id, name: attendee.name, email: attendee.email }] : [],
+	);
+}
+
+/** The attendees for the input of an operation. */
+export function attendeeInputs(chosen: readonly ChosenAttendee[]): { principal_id: string }[] {
+	return chosen.map((attendee) => ({ principal_id: attendee.principal_id }));
+}
+
+/** True when two lists have the same principals, in each order. */
+export function sameAttendees(a: readonly ChosenAttendee[], b: readonly ChosenAttendee[]): boolean {
+	const ids = new Set(a.map((attendee) => attendee.principal_id));
+	return a.length === b.length && ids.size === new Set(b.map((attendee) => attendee.principal_id)).size
+		? b.every((attendee) => ids.has(attendee.principal_id))
+		: false;
 }
 
 /** The hours of the grid of the week view. */

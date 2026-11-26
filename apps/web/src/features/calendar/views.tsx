@@ -6,6 +6,7 @@ import {
 	DAY_MINUTES,
 	type DaySegment,
 	eventLabel,
+	eventStateClass,
 	eventsByDay,
 	HOURS,
 	hourText,
@@ -54,6 +55,8 @@ function EventButton({
 	const { event } = segment;
 	const start = event.when.kind === "timed" ? Date.parse(event.when.start) : null;
 	const classes = ["cal-event"];
+	const state = eventStateClass(event);
+	if (state) classes.push(state);
 	if (segment.allDay) classes.push("cal-event-all-day");
 	// A short event has one line in the grid: the title, then the time. An event with no room for its place hides it.
 	else if (segment.end - segment.start < SHORT_EVENT_MINUTES) classes.push("cal-event-short");

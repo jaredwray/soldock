@@ -1,14 +1,19 @@
 import { DurableObject } from "cloudflare:workers";
 import { CALENDAR_LIMITS } from "@asterra/contracts";
+import { log, newId } from "../platform/index.ts";
 
 // Each person, agent and service account has one CalendarDO. Its name is the principal id. It holds the
-// events of the calendar of that principal in its SQLite database. It has no outbox and no alarm: a change
-// of a calendar has no effect on a different object.
+// events of the calendar of that principal in its SQLite database.
+//
+// A meeting is an event with attendees. The event of the organizer is the authority. Each attendee has a copy
+// with the same `uid`. The organizer sends a full snapshot of the meeting to each attendee, and each attendee
+// sends its answer to the organizer, through the outbox of this object and its alarm. Each message is safe to
+// apply two times and in each order: see `applyMeeting` and `applyReply`.
 
 type Row = Record<string, SqlStorageValue>;
 
 /** An expected failure, as a value: an error that a Durable Object throws loses its class over RPC. */
-export type Refusal = { error: { code: "invalid" | "not_found" | "conflict"; message: string } };
+export type Refusal = { error: { code: "invalid" | "not_found" | "conflict" | "forbidden"; message: string } };
 
 function refuse(code: Refusal["error"]["code"], message: string): Refusal {
 	return { error: { code, message } };
@@ -16,12 +21,19 @@ function refuse(code: Refusal["error"]["code"], message: string): Refusal {
 
 const NOT_FOUND = "Your calendar has no event with that id.";
 
-/** The caller of the object. Only the owner reaches the calendar now: sharing comes in a later layer. */
+/** The answer of an attendee. `pending` is no answer yet. */
+export type Response = "pending" | "accepted" | "tentative" | "declined";
+export type Answer = Exclude<Response, "pending">;
+
+/** The caller of the object. Only the owner reaches the calendar. */
 export interface CalendarCall {
 	/** The principal that owns the calendar. The handler opens the object of this principal. */
 	ownerId: string;
 	/** The principal of the call. */
 	actorId: string;
+	/** The address and the name of the owner, for the meetings that the owner organizes. */
+	ownerEmail: string;
+	ownerName: string;
 }
 
 /**
@@ -46,11 +58,43 @@ export interface EventFields extends EventTime {
 	location: string;
 }
 
+/** An attendee that the organizer invites. `key` is the principal id. */
+export interface AttendeeRef {
+	key: string;
+	principal_id: string | null;
+	email: string;
+	name: string;
+}
+
+export interface AttendeeRecord extends AttendeeRef {
+	response: Response;
+	/** UTC ms of the last answer, or null. */
+	responded_at: number | null;
+}
+
+export interface OrganizerRef {
+	principal_id: string | null;
+	email: string;
+	name: string;
+}
+
 export interface EventRecord extends EventFields {
 	id: string;
+	/** The identity of the meeting. Each calendar has at most one event for a uid. */
+	uid: string;
+	/** `owner` for an event of the owner. `attendee` for the copy of a meeting of a different principal. */
+	role: "owner" | "attendee";
+	/** The organizer counter of the meeting. See `MeetingMessage.sequence`. */
+	sequence: number;
 	revision: number;
 	created_at: number;
 	updated_at: number;
+	/** The organizer of a copy. Null on an event of the owner. */
+	organizer: OrganizerRef | null;
+	/** The attendees, without the organizer. */
+	attendees: AttendeeRecord[];
+	/** The answer of the owner, on a copy. Null on an event of the owner. */
+	my_response: Response | null;
 }
 
 /** The range of a list. The handler computes the dates and the lower bound from the time zone of the call. */
@@ -72,11 +116,55 @@ export interface ListQuery {
 export interface CreateInput {
 	id: string;
 	fields: EventFields;
+	/** The attendees of a meeting. Empty for an event without attendees. */
+	attendees: AttendeeRef[];
 	idempotency?: { key: string; requestHash: string } | undefined;
 }
 
+/**
+ * Organizer to attendee: a full snapshot of the meeting. `sequence` grows by one for each change of the
+ * organizer that the attendees must see. An attendee applies only a sequence that is larger than the last that
+ * it applied, so a duplicate and an old message change nothing.
+ */
+export interface MeetingMessage {
+	uid: string;
+	sequence: number;
+	state: "invited" | "cancelled" | "removed";
+	organizer: { principal_id: string; email: string; name: string };
+	/** Only for `invited`. */
+	fields: EventFields | null;
+	/** Only for `invited`. Empty otherwise. */
+	attendees: AttendeeRecord[];
+}
+
+/**
+ * Attendee to organizer: an answer. `stamp` grows in the calendar of the attendee, so an old answer never
+ * replaces a newer one. `sequence` is the sequence of the copy when the attendee answered.
+ */
+export interface ReplyMessage {
+	uid: string;
+	attendee_id: string;
+	response: Answer;
+	stamp: number;
+	sequence: number;
+}
+
+export type ApplyResult =
+	| { applied: true }
+	| { applied: false; reason: "stale" | "not_organizer" | "not_attendee" | "unknown" | "full" | "wrong_calendar" };
+
 /** A key works for 24 hours, as in Drive. */
 const IDEMPOTENCY_TTL_MS = 24 * 60 * 60 * 1000;
+/** A tombstone stops an old invitation for this time. The outbox gives up on a message long before. */
+const TOMBSTONE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+/** About 14 hours of attempts with `backoff`. Then the message is dropped. */
+const OUTBOX_MAX_ATTEMPTS = 20;
+const OUTBOX_BATCH = 50;
+
+/** 1 minute, doubled for each failure, at most 1 hour. */
+function backoff(attempts: number): number {
+	return Math.min(60_000 * 2 ** (attempts - 1), 60 * 60 * 1000);
+}
 
 const MIGRATIONS: readonly (readonly string[])[] = [
 	[
@@ -103,14 +191,90 @@ const MIGRATIONS: readonly (readonly string[])[] = [
 			created_at INTEGER NOT NULL
 		)`,
 	],
+	// Meetings: the uid of each event, the copies of the meetings of other principals, the attendees of the
+	// meetings of the owner, the tombstones of cancelled and removed copies, and the outbox.
+	[
+		"ALTER TABLE events ADD COLUMN uid TEXT",
+		"UPDATE events SET uid = id",
+		"CREATE UNIQUE INDEX events_uid ON events (uid)",
+		"ALTER TABLE events ADD COLUMN role TEXT NOT NULL DEFAULT 'owner'",
+		"ALTER TABLE events ADD COLUMN sequence INTEGER NOT NULL DEFAULT 0",
+		"ALTER TABLE events ADD COLUMN organizer_id TEXT",
+		"ALTER TABLE events ADD COLUMN organizer_email TEXT",
+		"ALTER TABLE events ADD COLUMN organizer_name TEXT",
+		"ALTER TABLE events ADD COLUMN my_response TEXT",
+		"ALTER TABLE events ADD COLUMN my_reply_stamp INTEGER NOT NULL DEFAULT 0",
+		"ALTER TABLE events ADD COLUMN attendees_json TEXT",
+		`CREATE TABLE attendees (
+			event_id TEXT NOT NULL,
+			attendee_key TEXT NOT NULL,
+			principal_id TEXT,
+			email TEXT NOT NULL,
+			name TEXT NOT NULL,
+			response TEXT NOT NULL DEFAULT 'pending',
+			reply_stamp INTEGER NOT NULL DEFAULT 0,
+			responded_at INTEGER,
+			invited_sequence INTEGER NOT NULL,
+			added_at INTEGER NOT NULL,
+			position INTEGER NOT NULL,
+			PRIMARY KEY (event_id, attendee_key)
+		) WITHOUT ROWID`,
+		`CREATE TABLE meeting_tombstones (
+			uid TEXT PRIMARY KEY,
+			organizer TEXT NOT NULL,
+			sequence INTEGER NOT NULL,
+			state TEXT NOT NULL,
+			at INTEGER NOT NULL
+		) WITHOUT ROWID`,
+		`CREATE TABLE outbox (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			kind TEXT NOT NULL,
+			target TEXT NOT NULL,
+			uid TEXT NOT NULL,
+			payload TEXT NOT NULL,
+			gen INTEGER NOT NULL DEFAULT 1,
+			attempts INTEGER NOT NULL DEFAULT 0,
+			next_attempt_at INTEGER NOT NULL,
+			last_error TEXT,
+			UNIQUE (kind, target, uid)
+		)`,
+		"CREATE INDEX outbox_due ON outbox (next_attempt_at)",
+	],
 ];
 
-const COLUMNS =
-	"id, title, description, location, all_day, start_at, end_at, start_date, end_date, time_zone, revision, created_at, updated_at";
+const COLUMNS = [
+	"id",
+	"title",
+	"description",
+	"location",
+	"all_day",
+	"start_at",
+	"end_at",
+	"start_date",
+	"end_date",
+	"time_zone",
+	"revision",
+	"created_at",
+	"updated_at",
+	"uid",
+	"role",
+	"sequence",
+	"organizer_id",
+	"organizer_email",
+	"organizer_name",
+	"my_response",
+	"my_reply_stamp",
+	"attendees_json",
+].join(", ");
 
-function toRecord(row: Row): EventRecord {
+interface StoredRow {
+	record: EventRecord;
+	organizerId: string | null;
+	myReplyStamp: number;
+}
+
+function fieldsOf(row: Row): EventFields {
 	return {
-		id: row.id as string,
 		title: row.title as string,
 		description: row.description as string,
 		location: row.location as string,
@@ -120,10 +284,17 @@ function toRecord(row: Row): EventRecord {
 		start_date: (row.start_date as string | null) ?? null,
 		end_date: (row.end_date as string | null) ?? null,
 		time_zone: (row.time_zone as string | null) ?? null,
-		revision: row.revision as number,
-		created_at: row.created_at as number,
-		updated_at: row.updated_at as number,
 	};
+}
+
+function parseAttendees(json: SqlStorageValue | undefined): AttendeeRecord[] {
+	if (typeof json !== "string") return [];
+	try {
+		const value = JSON.parse(json) as unknown;
+		return Array.isArray(value) ? (value as AttendeeRecord[]) : [];
+	} catch {
+		return [];
+	}
 }
 
 const FIELD_KEYS = [
@@ -140,11 +311,18 @@ const FIELD_KEYS = [
 
 export class CalendarDO extends DurableObject<Env> {
 	private readonly sql: SqlStorage;
+	/** The drain of the outbox that runs now. One drain at a time. */
+	private drainTask: Promise<void> | null = null;
 
 	constructor(ctx: DurableObjectState, env: Env) {
 		super(ctx, env);
 		this.sql = ctx.storage.sql;
-		this.migrate();
+		ctx.blockConcurrencyWhile(async () => {
+			this.migrate();
+			// A change sets the alarm after its transaction commits. If the object stopped between the two, the
+			// outbox has rows and no alarm: set one now.
+			if (this.outboxSize() > 0 && (await ctx.storage.getAlarm()) === null) await ctx.storage.setAlarm(Date.now());
+		});
 	}
 
 	private migrate(): void {
@@ -171,21 +349,160 @@ export class CalendarDO extends DurableObject<Env> {
 		);
 	}
 
+	private outboxSize(): number {
+		return this.sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM outbox").one().n;
+	}
+
+	private eventCount(): number {
+		return Number(this.meta("event_count") ?? 0);
+	}
+
+	private addToCount(delta: number): void {
+		this.setMeta("event_count", String(Math.max(0, this.eventCount() + delta)));
+	}
+
 	/**
 	 * Checks the caller. The first call keeps the owner, so a handler that opens the object of a different
-	 * principal gets a refusal, never the events. Only the owner reaches the calendar in this layer.
+	 * principal gets a refusal, never the events. Only the owner reaches the calendar.
 	 */
 	private enter(call: CalendarCall): Refusal | null {
 		const owner = this.meta("owner_id");
 		if (owner === null) this.setMeta("owner_id", call.ownerId);
 		else if (owner !== call.ownerId) return refuse("not_found", NOT_FOUND);
 		if (call.actorId !== call.ownerId) return refuse("not_found", NOT_FOUND);
+		// The organizer identity of the snapshots that an answer of an attendee makes, without a call.
+		if (this.meta("owner_email") !== call.ownerEmail) this.setMeta("owner_email", call.ownerEmail);
+		if (this.meta("owner_name") !== call.ownerName) this.setMeta("owner_name", call.ownerName);
 		return null;
 	}
 
+	/** For a message from a different calendar: keeps the owner on the first message, as `enter` does. */
+	private claim(targetId: string): boolean {
+		const owner = this.meta("owner_id");
+		if (owner === null) {
+			this.setMeta("owner_id", targetId);
+			return true;
+		}
+		return owner === targetId;
+	}
+
+	private attendeesOf(eventId: string): AttendeeRecord[] {
+		return this.sql
+			.exec<Row>(
+				`SELECT attendee_key, principal_id, email, name, response, responded_at FROM attendees
+				WHERE event_id = ? ORDER BY position`,
+				eventId,
+			)
+			.toArray()
+			.map((row) => ({
+				key: row.attendee_key as string,
+				principal_id: (row.principal_id as string | null) ?? null,
+				email: row.email as string,
+				name: row.name as string,
+				response: row.response as Response,
+				responded_at: (row.responded_at as number | null) ?? null,
+			}));
+	}
+
+	private toStored(row: Row): StoredRow {
+		const role = row.role === "attendee" ? "attendee" : "owner";
+		const record: EventRecord = {
+			id: row.id as string,
+			uid: (row.uid as string | null) ?? (row.id as string),
+			role,
+			sequence: row.sequence as number,
+			revision: row.revision as number,
+			created_at: row.created_at as number,
+			updated_at: row.updated_at as number,
+			...fieldsOf(row),
+			organizer:
+				role === "attendee"
+					? {
+							principal_id: (row.organizer_id as string | null) ?? null,
+							email: (row.organizer_email as string | null) ?? "",
+							name: (row.organizer_name as string | null) ?? "",
+						}
+					: null,
+			attendees: role === "attendee" ? parseAttendees(row.attendees_json) : this.attendeesOf(row.id as string),
+			my_response: role === "attendee" ? ((row.my_response as Response | null) ?? "pending") : null,
+		};
+		return {
+			record,
+			organizerId: (row.organizer_id as string | null) ?? null,
+			myReplyStamp: (row.my_reply_stamp as number | null) ?? 0,
+		};
+	}
+
+	private stored(where: "id" | "uid", value: string): StoredRow | null {
+		const row = this.sql.exec<Row>(`SELECT ${COLUMNS} FROM events WHERE ${where} = ?`, value).toArray()[0];
+		return row ? this.toStored(row) : null;
+	}
+
 	private row(id: string): EventRecord | null {
-		const row = this.sql.exec<Row>(`SELECT ${COLUMNS} FROM events WHERE id = ?`, id).toArray()[0];
-		return row ? toRecord(row) : null;
+		return this.stored("id", id)?.record ?? null;
+	}
+
+	/** The organizer of the meetings of the owner, for a snapshot. */
+	private organizerRef(): MeetingMessage["organizer"] {
+		return {
+			principal_id: this.meta("owner_id") ?? "",
+			email: this.meta("owner_email") ?? "",
+			name: this.meta("owner_name") ?? "",
+		};
+	}
+
+	/**
+	 * Puts a message in the outbox. A message that waits for the same target and the same meeting gets the newer
+	 * payload: each message is a full state, so only the newest one matters.
+	 */
+	private enqueue(kind: "meeting" | "reply", target: string, uid: string, payload: unknown): void {
+		this.sql.exec(
+			`INSERT INTO outbox (kind, target, uid, payload, next_attempt_at) VALUES (?, ?, ?, ?, ?)
+			ON CONFLICT (kind, target, uid) DO UPDATE SET payload = excluded.payload, gen = gen + 1, attempts = 0,
+				next_attempt_at = excluded.next_attempt_at, last_error = NULL`,
+			kind,
+			target,
+			uid,
+			JSON.stringify(payload),
+			Date.now(),
+		);
+	}
+
+	/** Queues the snapshot of an event of the owner for each attendee, with the current sequence. */
+	private sendSnapshots(event: EventRecord): void {
+		const message: MeetingMessage = {
+			uid: event.uid,
+			sequence: event.sequence,
+			state: "invited",
+			organizer: this.organizerRef(),
+			fields: Object.fromEntries(FIELD_KEYS.map((key) => [key, event[key]])) as unknown as EventFields,
+			attendees: event.attendees,
+		};
+		for (const attendee of event.attendees) {
+			if (attendee.principal_id) this.enqueue("meeting", attendee.principal_id, event.uid, message);
+		}
+	}
+
+	private sendEnd(uid: string, sequence: number, state: "cancelled" | "removed", attendee: AttendeeRecord): void {
+		if (!attendee.principal_id) return;
+		const message: MeetingMessage = {
+			uid,
+			sequence,
+			state,
+			organizer: this.organizerRef(),
+			fields: null,
+			attendees: [],
+		};
+		this.enqueue("meeting", attendee.principal_id, uid, message);
+	}
+
+	/** Sets the alarm for the first message of the outbox that is due. */
+	private async schedule(): Promise<void> {
+		const next = this.sql.exec<{ at: number | null }>("SELECT MIN(next_attempt_at) AS at FROM outbox").one().at;
+		if (next === null) return;
+		const at = Math.max(next, Date.now());
+		const set = await this.ctx.storage.getAlarm();
+		if (set === null || set > at) await this.ctx.storage.setAlarm(at);
 	}
 
 	/** The events of a range, first start first, and true when more follow. */
@@ -211,7 +528,7 @@ export class CalendarDO extends DurableObject<Env> {
 			)
 			.toArray();
 		const more = rows.length > query.limit;
-		return { events: rows.slice(0, query.limit).map(toRecord), more };
+		return { events: rows.slice(0, query.limit).map((row) => this.toStored(row).record), more };
 	}
 
 	get(call: CalendarCall, eventId: string): EventRecord | Refusal {
@@ -223,9 +540,9 @@ export class CalendarDO extends DurableObject<Env> {
 	/**
 	 * Adds an event. With an idempotency key that a call with the same request used, it returns that event and
 	 * adds nothing. The check and the write run with no await between them, so two calls with one key add one
-	 * event.
+	 * event. Each attendee gets an invitation through the outbox.
 	 */
-	create(call: CalendarCall, input: CreateInput): EventRecord | Refusal {
+	async create(call: CalendarCall, input: CreateInput): Promise<EventRecord | Refusal> {
 		const refused = this.enter(call);
 		if (refused) return refused;
 		const now = Date.now();
@@ -246,14 +563,16 @@ export class CalendarDO extends DurableObject<Env> {
 				);
 			}
 		}
-		const count = Number(this.meta("event_count") ?? 0);
+		const count = this.eventCount();
 		if (count >= CALENDAR_LIMITS.events) {
 			return refuse("invalid", `A calendar can have at most ${CALENDAR_LIMITS.events} events. Delete events first.`);
 		}
 		const { fields } = input;
 		this.ctx.storage.transactionSync(() => {
 			this.sql.exec(
-				`INSERT INTO events (${COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)`,
+				`INSERT INTO events (id, title, description, location, all_day, start_at, end_at, start_date, end_date,
+					time_zone, revision, created_at, updated_at, uid, role, sequence)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, 'owner', 0)`,
 				input.id,
 				fields.title,
 				fields.description,
@@ -266,7 +585,9 @@ export class CalendarDO extends DurableObject<Env> {
 				fields.time_zone,
 				now,
 				now,
+				input.id,
 			);
+			for (const attendee of input.attendees) this.insertAttendee(input.id, attendee, 0, now);
 			this.setMeta("event_count", String(count + 1));
 			if (input.idempotency) {
 				this.sql.exec("DELETE FROM idempotency WHERE created_at <= ?", now - IDEMPOTENCY_TTL_MS);
@@ -278,24 +599,51 @@ export class CalendarDO extends DurableObject<Env> {
 					now,
 				);
 			}
+			const event = this.row(input.id) as EventRecord;
+			this.sendSnapshots(event);
 		});
+		await this.schedule();
 		return this.row(input.id) as EventRecord;
 	}
 
+	/** Adds an attendee after the others, so the list keeps the order of the organizer. */
+	private insertAttendee(eventId: string, attendee: AttendeeRef, sequence: number, now: number): void {
+		this.sql.exec(
+			`INSERT INTO attendees (event_id, attendee_key, principal_id, email, name, invited_sequence, added_at, position)
+			VALUES (?, ?, ?, ?, ?, ?, ?, (SELECT COALESCE(MAX(position), 0) + 1 FROM attendees WHERE event_id = ?))`,
+			eventId,
+			attendee.key,
+			attendee.principal_id,
+			attendee.email,
+			attendee.name,
+			sequence,
+			now,
+			eventId,
+		);
+	}
+
 	/**
-	 * Changes the fields of the patch. A patch that changes nothing writes nothing and keeps the revision. A
-	 * `baseRevision` that is not the revision of the event changes nothing.
+	 * Changes the fields of the patch, and with `attendees` the set of attendees. A patch that changes nothing
+	 * writes nothing and keeps the revision. A `baseRevision` that is not the revision of the event changes
+	 * nothing. Only the organizer changes a meeting.
 	 */
-	update(
+	async update(
 		call: CalendarCall,
 		eventId: string,
 		patch: Partial<EventFields>,
+		attendees: AttendeeRef[] | undefined,
 		baseRevision: number | undefined,
-	): { event: EventRecord; changed: boolean } | Refusal {
+	): Promise<{ event: EventRecord; changed: boolean } | Refusal> {
 		const refused = this.enter(call);
 		if (refused) return refused;
 		const event = this.row(eventId);
 		if (!event) return refuse("not_found", NOT_FOUND);
+		if (event.role === "attendee") {
+			return refuse(
+				"forbidden",
+				"Only the organizer can change this meeting. Use calendar.respond_to_invitation to change your answer.",
+			);
+		}
 		if (baseRevision !== undefined && baseRevision !== event.revision) {
 			return refuse(
 				"conflict",
@@ -306,38 +654,63 @@ export class CalendarDO extends DurableObject<Env> {
 		for (const key of FIELD_KEYS) {
 			if (patch[key] !== undefined) (next as unknown as Record<string, unknown>)[key] = patch[key];
 		}
-		if (FIELD_KEYS.every((key) => next[key] === event[key])) return { event, changed: false };
+		const fieldsChanged = FIELD_KEYS.some((key) => next[key] !== event[key]);
+		const before = new Map(event.attendees.map((attendee) => [attendee.key, attendee]));
+		const after = attendees ? new Map(attendees.map((attendee) => [attendee.key, attendee])) : before;
+		const added = [...after.values()].filter((attendee) => !before.has(attendee.key));
+		const removed = [...before.values()].filter((attendee) => !after.has(attendee.key));
+		if (!fieldsChanged && added.length === 0 && removed.length === 0) return { event, changed: false };
 		const now = Date.now();
-		this.sql.exec(
-			`UPDATE events SET title = ?, description = ?, location = ?, all_day = ?, start_at = ?, end_at = ?,
-				start_date = ?, end_date = ?, time_zone = ?, revision = revision + 1, updated_at = ?
-			WHERE id = ?`,
-			next.title,
-			next.description,
-			next.location,
-			next.all_day ? 1 : 0,
-			next.start_at,
-			next.end_at,
-			next.start_date,
-			next.end_date,
-			next.time_zone,
-			now,
-			eventId,
-		);
+		const sequence = event.sequence + 1;
+		this.ctx.storage.transactionSync(() => {
+			this.sql.exec(
+				`UPDATE events SET title = ?, description = ?, location = ?, all_day = ?, start_at = ?, end_at = ?,
+					start_date = ?, end_date = ?, time_zone = ?, revision = revision + 1, sequence = ?, updated_at = ?
+				WHERE id = ?`,
+				next.title,
+				next.description,
+				next.location,
+				next.all_day ? 1 : 0,
+				next.start_at,
+				next.end_at,
+				next.start_date,
+				next.end_date,
+				next.time_zone,
+				sequence,
+				now,
+				eventId,
+			);
+			for (const attendee of removed) {
+				this.sql.exec("DELETE FROM attendees WHERE event_id = ? AND attendee_key = ?", eventId, attendee.key);
+				this.sendEnd(event.uid, sequence, "removed", attendee);
+			}
+			for (const attendee of added) this.insertAttendee(eventId, attendee, sequence, now);
+			this.sendSnapshots(this.row(eventId) as EventRecord);
+		});
+		await this.schedule();
 		return { event: this.row(eventId) as EventRecord, changed: true };
 	}
 
-	/** Deletes an event, or with `dryRun` returns it without a change. */
-	remove(
+	/**
+	 * Deletes an event, or with `dryRun` returns it without a change. The delete of a meeting of the owner
+	 * cancels it for each attendee. Only the organizer cancels a meeting.
+	 */
+	async remove(
 		call: CalendarCall,
 		eventId: string,
 		baseRevision: number | undefined,
 		dryRun: boolean,
-	): EventRecord | Refusal {
+	): Promise<EventRecord | Refusal> {
 		const refused = this.enter(call);
 		if (refused) return refused;
 		const event = this.row(eventId);
 		if (!event) return refuse("not_found", NOT_FOUND);
+		if (event.role === "attendee") {
+			return refuse(
+				"forbidden",
+				"Only the organizer can cancel this meeting. Answer No with calendar.respond_to_invitation.",
+			);
+		}
 		if (baseRevision !== undefined && baseRevision !== event.revision) {
 			return refuse(
 				"conflict",
@@ -346,9 +719,266 @@ export class CalendarDO extends DurableObject<Env> {
 		}
 		if (dryRun) return event;
 		this.ctx.storage.transactionSync(() => {
+			for (const attendee of event.attendees) this.sendEnd(event.uid, event.sequence + 1, "cancelled", attendee);
+			this.sql.exec("DELETE FROM attendees WHERE event_id = ?", eventId);
 			this.sql.exec("DELETE FROM events WHERE id = ?", eventId);
-			this.setMeta("event_count", String(Math.max(0, Number(this.meta("event_count") ?? 1) - 1)));
+			this.addToCount(-1);
 		});
+		await this.schedule();
 		return event;
+	}
+
+	/** Sets the answer of the owner to the copy of a meeting, and sends it to the organizer. */
+	async respond(
+		call: CalendarCall,
+		eventId: string,
+		response: Answer,
+	): Promise<{ event: EventRecord; changed: boolean } | Refusal> {
+		const refused = this.enter(call);
+		if (refused) return refused;
+		const stored = this.stored("id", eventId);
+		if (!stored) return refuse("not_found", NOT_FOUND);
+		const { record } = stored;
+		if (record.role === "owner" || !stored.organizerId) {
+			return refuse("invalid", "You are the organizer of this event. Only an attendee answers an invitation.");
+		}
+		if (record.my_response === response) return { event: record, changed: false };
+		const now = Date.now();
+		const stamp = Math.max(now, stored.myReplyStamp + 1);
+		const organizerId = stored.organizerId;
+		this.ctx.storage.transactionSync(() => {
+			this.sql.exec(
+				"UPDATE events SET my_response = ?, my_reply_stamp = ?, revision = revision + 1, updated_at = ? WHERE id = ?",
+				response,
+				stamp,
+				now,
+				eventId,
+			);
+			const reply: ReplyMessage = {
+				uid: record.uid,
+				attendee_id: call.ownerId,
+				response,
+				stamp,
+				sequence: record.sequence,
+			};
+			this.enqueue("reply", organizerId, record.uid, reply);
+		});
+		await this.schedule();
+		return { event: this.row(eventId) as EventRecord, changed: true };
+	}
+
+	/**
+	 * From the outbox of the organizer: the snapshot of a meeting. Only the organizer on record changes a copy,
+	 * and only a larger sequence applies. A cancelled or removed copy leaves a tombstone, so an old invitation
+	 * cannot bring it back. Handlers never call this method: only the outbox of a calendar does.
+	 */
+	applyMeeting(targetId: string, message: MeetingMessage): ApplyResult {
+		let result: ApplyResult = { applied: true };
+		this.ctx.storage.transactionSync(() => {
+			result = this.applyMeetingNow(targetId, message);
+		});
+		return result;
+	}
+
+	private applyMeetingNow(targetId: string, message: MeetingMessage): ApplyResult {
+		if (!this.claim(targetId)) return { applied: false, reason: "wrong_calendar" };
+		const organizerId = message.organizer.principal_id;
+		if (!organizerId || organizerId === targetId) return { applied: false, reason: "not_organizer" };
+		const stored = this.stored("uid", message.uid);
+		const tomb = this.sql
+			.exec<{ organizer: string; sequence: number }>(
+				"SELECT organizer, sequence FROM meeting_tombstones WHERE uid = ?",
+				message.uid,
+			)
+			.toArray()[0];
+		if (stored && (stored.record.role === "owner" || stored.organizerId !== organizerId)) {
+			return { applied: false, reason: "not_organizer" };
+		}
+		if (!stored && tomb && tomb.organizer !== organizerId) return { applied: false, reason: "not_organizer" };
+		const last = stored?.record.sequence ?? tomb?.sequence ?? -1;
+		if (message.sequence <= last) return { applied: false, reason: "stale" };
+		const now = Date.now();
+		this.sql.exec("DELETE FROM meeting_tombstones WHERE at < ?", now - TOMBSTONE_TTL_MS);
+
+		if (message.state !== "invited" || !message.fields) {
+			if (stored) {
+				this.sql.exec("DELETE FROM events WHERE id = ?", stored.record.id);
+				this.addToCount(-1);
+			}
+			this.sql.exec("DELETE FROM outbox WHERE kind = 'reply' AND uid = ?", message.uid);
+			this.sql.exec(
+				`INSERT INTO meeting_tombstones (uid, organizer, sequence, state, at) VALUES (?, ?, ?, ?, ?)
+				ON CONFLICT (uid) DO UPDATE SET organizer = excluded.organizer, sequence = excluded.sequence,
+					state = excluded.state, at = excluded.at`,
+				message.uid,
+				organizerId,
+				message.sequence,
+				message.state === "invited" ? "removed" : message.state,
+				now,
+			);
+			return { applied: true };
+		}
+
+		const fields = message.fields;
+		const attendeesJson = JSON.stringify(message.attendees);
+		if (stored) {
+			this.sql.exec(
+				`UPDATE events SET title = ?, description = ?, location = ?, all_day = ?, start_at = ?, end_at = ?,
+					start_date = ?, end_date = ?, time_zone = ?, organizer_email = ?, organizer_name = ?, sequence = ?,
+					attendees_json = ?, revision = revision + 1, updated_at = ?
+				WHERE id = ?`,
+				fields.title,
+				fields.description,
+				fields.location,
+				fields.all_day ? 1 : 0,
+				fields.start_at,
+				fields.end_at,
+				fields.start_date,
+				fields.end_date,
+				fields.time_zone,
+				message.organizer.email,
+				message.organizer.name,
+				message.sequence,
+				attendeesJson,
+				now,
+				stored.record.id,
+			);
+			return { applied: true };
+		}
+		if (this.eventCount() >= CALENDAR_LIMITS.events) return { applied: false, reason: "full" };
+		this.sql.exec(
+			`INSERT INTO events (id, title, description, location, all_day, start_at, end_at, start_date, end_date,
+				time_zone, revision, created_at, updated_at, uid, role, sequence, organizer_id, organizer_email,
+				organizer_name, my_response, my_reply_stamp, attendees_json)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, 'attendee', ?, ?, ?, ?, 'pending', 0, ?)`,
+			newId("evt"),
+			fields.title,
+			fields.description,
+			fields.location,
+			fields.all_day ? 1 : 0,
+			fields.start_at,
+			fields.end_at,
+			fields.start_date,
+			fields.end_date,
+			fields.time_zone,
+			now,
+			now,
+			message.uid,
+			message.sequence,
+			organizerId,
+			message.organizer.email,
+			message.organizer.name,
+			attendeesJson,
+		);
+		this.addToCount(1);
+		this.sql.exec("DELETE FROM meeting_tombstones WHERE uid = ?", message.uid);
+		return { applied: true };
+	}
+
+	/**
+	 * From the outbox of an attendee: an answer. Only a current attendee of a meeting of the owner answers, and
+	 * an answer applies only when it is newer than the last one. An answer from before a removal and a new
+	 * invitation has a smaller sequence than the new invitation, so it changes nothing.
+	 */
+	async applyReply(targetId: string, reply: ReplyMessage): Promise<ApplyResult> {
+		let result: ApplyResult = { applied: true };
+		this.ctx.storage.transactionSync(() => {
+			if (!this.claim(targetId)) {
+				result = { applied: false, reason: "wrong_calendar" };
+				return;
+			}
+			const stored = this.stored("uid", reply.uid);
+			if (stored?.record.role !== "owner") {
+				result = { applied: false, reason: "unknown" };
+				return;
+			}
+			const attendee = this.sql
+				.exec<{ attendee_key: string; reply_stamp: number; invited_sequence: number }>(
+					"SELECT attendee_key, reply_stamp, invited_sequence FROM attendees WHERE event_id = ? AND principal_id = ?",
+					stored.record.id,
+					reply.attendee_id,
+				)
+				.toArray()[0];
+			if (!attendee) {
+				result = { applied: false, reason: "not_attendee" };
+				return;
+			}
+			if (reply.sequence < attendee.invited_sequence || reply.stamp <= attendee.reply_stamp) {
+				result = { applied: false, reason: "stale" };
+				return;
+			}
+			this.sql.exec(
+				"UPDATE attendees SET response = ?, reply_stamp = ?, responded_at = ? WHERE event_id = ? AND attendee_key = ?",
+				reply.response,
+				reply.stamp,
+				reply.stamp,
+				stored.record.id,
+				attendee.attendee_key,
+			);
+			// The answer does not change the revision, so an answer never makes an edit of the organizer fail.
+			this.sql.exec("UPDATE events SET sequence = sequence + 1 WHERE id = ?", stored.record.id);
+			this.sendSnapshots(this.row(stored.record.id) as EventRecord);
+		});
+		if (result.applied) await this.schedule();
+		return result;
+	}
+
+	override async alarm(): Promise<void> {
+		// The runtime can fire an alarm while one runs. One drain at a time.
+		if (this.drainTask) return this.drainTask;
+		this.drainTask = this.drain();
+		try {
+			await this.drainTask;
+		} finally {
+			this.drainTask = null;
+		}
+	}
+
+	/**
+	 * Delivers the due messages. Each message is independent: a target that fails does not stop the others. A
+	 * result of the target, also `applied: false`, is a delivery. A thrown error tries again later, with
+	 * `backoff`, `OUTBOX_MAX_ATTEMPTS` times. The `gen` check keeps a newer payload that a change wrote while
+	 * the call ran.
+	 */
+	private async drain(): Promise<void> {
+		const rows = this.sql
+			.exec<{ id: number; kind: string; target: string; payload: string; gen: number; attempts: number }>(
+				"SELECT id, kind, target, payload, gen, attempts FROM outbox WHERE next_attempt_at <= ? ORDER BY next_attempt_at, id LIMIT ?",
+				Date.now(),
+				OUTBOX_BATCH,
+			)
+			.toArray();
+		for (const row of rows) {
+			try {
+				const stub = this.env.CALENDAR.get(this.env.CALENDAR.idFromName(row.target));
+				const result =
+					row.kind === "reply"
+						? await stub.applyReply(row.target, JSON.parse(row.payload) as ReplyMessage)
+						: await stub.applyMeeting(row.target, JSON.parse(row.payload) as MeetingMessage);
+				if (!result.applied) log("info", "calendar message not applied", { kind: row.kind, reason: result.reason });
+				this.sql.exec("DELETE FROM outbox WHERE id = ? AND gen = ?", row.id, row.gen);
+			} catch (error) {
+				const attempts = row.attempts + 1;
+				const message = error instanceof Error ? error.message : String(error);
+				log(attempts >= OUTBOX_MAX_ATTEMPTS ? "error" : "warn", "calendar outbox delivery failed", {
+					kind: row.kind,
+					attempts,
+					error: message,
+				});
+				if (attempts >= OUTBOX_MAX_ATTEMPTS) {
+					this.sql.exec("DELETE FROM outbox WHERE id = ? AND gen = ?", row.id, row.gen);
+				} else {
+					this.sql.exec(
+						"UPDATE outbox SET attempts = ?, next_attempt_at = ?, last_error = ? WHERE id = ? AND gen = ?",
+						attempts,
+						Date.now() + backoff(attempts),
+						message.slice(0, 500),
+						row.id,
+						row.gen,
+					);
+				}
+			}
+		}
+		await this.schedule();
 	}
 }

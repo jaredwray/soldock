@@ -1,4 +1,4 @@
-import { prefixedId, Timestamp } from "./common.ts";
+import { EmailAddress, prefixedId, Timestamp } from "./common.ts";
 import { defineOperation } from "./operation.ts";
 import { z } from "./zod.ts";
 
@@ -18,6 +18,8 @@ export const CALENDAR_LIMITS = {
 	pageSize: 250,
 	/** The events of one calendar. */
 	events: 50_000,
+	/** The attendees of one event, without the organizer. */
+	attendees: 100,
 	/** The first day that an event can use. */
 	firstDate: "1970-01-01",
 	/** The last day that an event can use. */
@@ -274,14 +276,57 @@ export const EventWhen = z.discriminatedUnion("kind", [
 ]);
 export type EventWhen = z.infer<typeof EventWhen>;
 
+/** The answer of an attendee to an invitation. `pending` is no answer yet. */
+export const EventResponse = z.enum(["pending", "accepted", "tentative", "declined"]);
+export type EventResponse = z.infer<typeof EventResponse>;
+
+/** The answer that an attendee can give: Yes, Maybe or No. */
+export const EventAnswer = z.enum(["accepted", "tentative", "declined"]);
+export type EventAnswer = z.infer<typeof EventAnswer>;
+
+export const EventAttendee = z.object({
+	/** The principal of the attendee. */
+	principal_id: z.string().nullable(),
+	email: z.string(),
+	name: z.string(),
+	response: EventResponse,
+	/** The time of the last answer. Null while the attendee did not answer. */
+	responded_at: Timestamp.nullable(),
+	/** True for the entry of the caller. */
+	self: z.boolean(),
+});
+export type EventAttendee = z.infer<typeof EventAttendee>;
+
+export const EventOrganizer = z.object({
+	principal_id: z.string().nullable(),
+	email: z.string(),
+	name: z.string(),
+	/** True when the caller is the organizer. */
+	self: z.boolean(),
+});
+export type EventOrganizer = z.infer<typeof EventOrganizer>;
+
 export const CalendarEvent = z.object({
 	id: z.string(),
+	/**
+	 * The stable identity of the meeting. Each calendar that has the meeting has the same uid. For an event
+	 * without attendees, it is the id of the event.
+	 */
+	uid: z.string(),
 	title: z.string(),
 	description: z.string(),
 	location: z.string(),
 	when: EventWhen,
 	/** 1 for a new event. Each change adds 1. */
 	revision: z.number().int(),
+	/** True for an event of your own. False for the copy of a meeting that a different principal organizes. */
+	is_organizer: z.boolean(),
+	/** The organizer of a meeting. Null for an event without attendees. */
+	organizer: EventOrganizer.nullable(),
+	/** The attendees of a meeting, without the organizer. Empty for an event without attendees. */
+	attendees: z.array(EventAttendee),
+	/** Your answer to the invitation. Null when you are the organizer. */
+	my_response: EventResponse.nullable(),
 	created_at: Timestamp,
 	updated_at: Timestamp,
 });
@@ -289,8 +334,35 @@ export type CalendarEvent = z.infer<typeof CalendarEvent>;
 
 const READ = { readOnly: true, destructive: false, idempotent: true, openWorld: false } as const;
 
-const OWN_NOTE =
-	"The calendar is your own calendar. Each person, agent and service account has one. Nobody else can read or change it.";
+const OWN_NOTE = [
+	"The calendar is your own calendar. Each person, agent and service account has one.",
+	"An invitation puts a copy of one meeting on the calendar of each attendee. Only the organizer and the attendees of that meeting can read it.",
+	"Nobody else can read or change your calendar.",
+].join(" ");
+
+const MEETING_NOTE = [
+	"A meeting is an event with attendees. The event of the organizer is the authority.",
+	"Only the organizer changes or cancels a meeting. Each attendee changes only their own answer, with calendar.respond_to_invitation.",
+	"is_organizer is false on the copy of a meeting that a different principal organizes. my_response is pending until you answer.",
+].join(" ");
+
+const PrincipalId = prefixedId("prn");
+
+const AttendeeInput = z
+	.strictObject({
+		principal_id: PrincipalId.optional().describe("The id of a person, agent or service account of the organization."),
+		email: EmailAddress.optional().describe("The address of a person, agent or service account of the organization."),
+	})
+	.refine((attendee) => (attendee.principal_id === undefined) !== (attendee.email === undefined), {
+		message: "set principal_id or email, not the two",
+	});
+
+const AttendeesInput = z
+	.array(AttendeeInput)
+	.max(CALENDAR_LIMITS.attendees)
+	.describe(
+		`The attendees of a meeting, at most ${CALENDAR_LIMITS.attendees}. Give the principal_id or the email of each one. Find a person with directory.list_principals. You are the organizer: do not add yourself.`,
+	);
 
 const BASE_REVISION = z
 	.number()
@@ -315,6 +387,8 @@ export const listEvents = defineOperation({
 		`The range can be at most ${CALENDAR_LIMITS.rangeDays} days long.`,
 		"time_zone sets the days of all-day events: an all-day event is in the range when one of its days, from 00:00 to 00:00 in time_zone, overlaps the range. The default is UTC. Give your own time zone.",
 		"When next_cursor is not null, more events follow: call again with the same input and cursor set to next_cursor.",
+		"The list also has the meetings that other principals invited you to.",
+		MEETING_NOTE,
 		OWN_NOTE,
 	].join(" "),
 	http: { method: "GET", path: "/api/v1/calendar/events" },
@@ -349,7 +423,7 @@ export const listEvents = defineOperation({
 export const getEvent = defineOperation({
 	name: "calendar.get_event",
 	summary: "Read one event of your calendar",
-	description: ["Returns one event of your calendar.", OWN_NOTE].join(" "),
+	description: ["Returns one event of your calendar.", MEETING_NOTE, OWN_NOTE].join(" "),
 	http: { method: "GET", path: "/api/v1/calendar/events/{event_id}" },
 	scopes: ["calendar.read"],
 	callers: ["human", "agent", "service"],
@@ -365,8 +439,10 @@ export const createEvent = defineOperation({
 	description: [
 		"Adds an event to your calendar and returns it.",
 		WHEN_NOTE,
+		"Set attendees to invite people, agents or service accounts of the organization. Each attendee gets a copy of the meeting on their calendar, with my_response pending.",
 		`A calendar can have at most ${CALENDAR_LIMITS.events} events.`,
 		"Set idempotency_key to make a retry safe.",
+		MEETING_NOTE,
 		OWN_NOTE,
 	].join(" "),
 	http: { method: "POST", path: "/api/v1/calendar/events" },
@@ -378,6 +454,7 @@ export const createEvent = defineOperation({
 		when: EventWhenInput,
 		description: Description.default("").describe("Plain text. Line breaks stay."),
 		location: Location.default(""),
+		attendees: AttendeesInput.optional(),
 		idempotency_key: z
 			.string()
 			.min(1)
@@ -400,6 +477,9 @@ export const updateEvent = defineOperation({
 		"A call that changes nothing keeps the revision.",
 		"Set base_revision to the revision that you read. When the event has a different revision now, the call fails with conflict and changes nothing: read the event again.",
 		"Without base_revision, the change applies to the current event.",
+		"attendees is the complete new list of attendees. A new attendee gets an invitation. A removed attendee loses the meeting and gets no later change. Each kept attendee keeps their answer. An empty list removes each attendee.",
+		"A change of a meeting goes to the calendar of each attendee. Only the organizer can change a meeting: on the copy of a meeting the call fails with forbidden.",
+		MEETING_NOTE,
 		OWN_NOTE,
 	].join(" "),
 	http: { method: "POST", path: "/api/v1/calendar/events/{event_id}" },
@@ -412,6 +492,7 @@ export const updateEvent = defineOperation({
 		when: EventWhenInput.optional(),
 		description: Description.optional(),
 		location: Location.optional(),
+		attendees: AttendeesInput.optional(),
 		base_revision: BASE_REVISION,
 	}),
 	output: z.object({ event: CalendarEvent }),
@@ -426,6 +507,8 @@ export const deleteEvent = defineOperation({
 		"Set dry_run to true to get the event without a change.",
 		"Set base_revision to the revision that you read. When the event has a different revision now, the call fails with conflict and deletes nothing: read the event again.",
 		"Without base_revision, the call deletes the current event.",
+		"For a meeting with attendees, the delete cancels the meeting for each attendee: it goes away from each calendar.",
+		"Only the organizer can cancel a meeting: on the copy of a meeting the call fails with forbidden. Answer No with calendar.respond_to_invitation instead.",
 		OWN_NOTE,
 	].join(" "),
 	http: { method: "DELETE", path: "/api/v1/calendar/events/{event_id}" },
@@ -441,10 +524,33 @@ export const deleteEvent = defineOperation({
 	errors: ["not_found", "conflict"],
 });
 
+export const respondToInvitation = defineOperation({
+	name: "calendar.respond_to_invitation",
+	summary: "Answer an invitation on your calendar",
+	description: [
+		"Sets your answer to a meeting that a different principal invited you to: accepted (Yes), tentative (Maybe) or declined (No).",
+		"event_id is the id of the copy on your calendar, as calendar.list_events returns it. The organizer sees your answer.",
+		"You can change your answer later. A declined meeting stays on your calendar, so you can change the answer.",
+		"The organizer of an event cannot answer it: the call fails with invalid.",
+		OWN_NOTE,
+	].join(" "),
+	http: { method: "POST", path: "/api/v1/calendar/events/{event_id}/response" },
+	scopes: ["calendar.write"],
+	callers: ["human", "agent", "service"],
+	annotations: { readOnly: false, destructive: false, idempotent: true, openWorld: false },
+	input: z.strictObject({
+		event_id: EventId,
+		response: EventAnswer.describe("accepted is Yes, tentative is Maybe, declined is No."),
+	}),
+	output: z.object({ event: CalendarEvent }),
+	errors: ["not_found"],
+});
+
 export const calendarOperations = {
 	"calendar.list_events": listEvents,
 	"calendar.get_event": getEvent,
 	"calendar.create_event": createEvent,
 	"calendar.update_event": updateEvent,
 	"calendar.delete_event": deleteEvent,
+	"calendar.respond_to_invitation": respondToInvitation,
 } as const;
