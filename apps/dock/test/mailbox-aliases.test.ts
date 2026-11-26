@@ -1,6 +1,18 @@
+import { env } from "cloudflare:test";
 import { ApiError, MAILBOX_ALIAS_LIMITS } from "@asterra/contracts";
 import { beforeEach, describe, expect, it } from "vitest";
-import { type Actor, api, callTool, drainOutbox, inject, rawMessage, seedOrg } from "./helpers.ts";
+import { addMailboxAlias } from "../src/identity/mailbox-aliases.ts";
+import {
+	type Actor,
+	api,
+	callTool,
+	createActor,
+	drainOutbox,
+	inject,
+	PASSWORD,
+	rawMessage,
+	seedOrg,
+} from "./helpers.ts";
 
 let owner: Actor;
 let ada: Actor;
@@ -84,6 +96,43 @@ describe("mailbox aliases in the directory", () => {
 		expect(await aliasesOf(support.id)).toEqual(["help@dock.test"]);
 	});
 
+	// An admin has the same control as the owner, apart from the own mailbox of the owner.
+	it("lets an admin change each mailbox apart from the mailbox of the owner", async () => {
+		const support = await createSupport();
+		const admin = await createActor(owner, {
+			kind: "human",
+			display_name: "Alan Admin",
+			address: "alan@dock.test",
+			org_role: "admin",
+			password: PASSWORD,
+		});
+		const addresses = (result: { aliases: { address: string }[] }) => result.aliases.map((alias) => alias.address);
+		for (const [mailboxId, address] of [
+			[ada.id, "countess@dock.test"],
+			[bot.id, "billing@dock.test"],
+			[support.id, "help@dock.test"],
+			[admin.id, "al@dock.test"],
+		] as const) {
+			const input = { mailbox_id: mailboxId, address };
+			expect(addresses(await admin.call("directory.add_mailbox_alias", input))).toEqual([address]);
+			expect(addresses(await admin.call("directory.list_mailbox_aliases", { mailbox_id: mailboxId }))).toEqual([
+				address,
+			]);
+			expect(addresses(await admin.call("directory.remove_mailbox_alias", input))).toEqual([]);
+		}
+
+		// Only the owner changes the mailbox of the owner. The admin can read its aliases.
+		const chief = { mailbox_id: owner.id, address: "chief@dock.test" };
+		expect(await code(admin.call("directory.add_mailbox_alias", chief))).toBe("forbidden");
+		expect(toolCode(await callTool(admin.key, "directory_add_mailbox_alias", chief))).toBe("forbidden");
+		expect(addresses(await owner.call("directory.add_mailbox_alias", chief))).toEqual(["chief@dock.test"]);
+		expect(await code(admin.call("directory.remove_mailbox_alias", chief))).toBe("forbidden");
+		expect(addresses(await admin.call("directory.list_mailbox_aliases", { mailbox_id: owner.id }))).toEqual([
+			"chief@dock.test",
+		]);
+		expect(addresses(await owner.call("directory.remove_mailbox_alias", chief))).toEqual([]);
+	});
+
 	it("lets the principal itself and the members of a team mailbox read its aliases, and no one else", async () => {
 		const support = await createSupport([ada]);
 		await owner.call("directory.add_mailbox_alias", { mailbox_id: ada.id, address: "countess@dock.test" });
@@ -96,6 +145,19 @@ describe("mailbox aliases in the directory", () => {
 		expect((await read(bot, bot.id)).aliases.map((alias) => alias.address)).toEqual(["billing@dock.test"]);
 		expect((await read(ada, support.id)).aliases.map((alias) => alias.address)).toEqual(["help@dock.test"]);
 		expect(toolCode(await callTool(bot.key, "directory_list_mailbox_aliases", { mailbox_id: bot.id }))).toBe("ok");
+		// A service account reads the aliases of its own mailbox, and of no other mailbox.
+		const { principal: service } = await owner.call("directory.create_service_account", {
+			display_name: "CI",
+			address: "ci@dock.test",
+		});
+		const { api_key } = await owner.call("account.create_api_key", { principal_id: service.id, label: "CI" });
+		const ci = api(api_key.secret);
+		await owner.call("directory.add_mailbox_alias", { mailbox_id: service.id, address: "builds@dock.test" });
+		expect(await ci("directory.list_mailbox_aliases", { mailbox_id: service.id })).toMatchObject({
+			address: "ci@dock.test",
+			aliases: [{ address: "builds@dock.test" }],
+		});
+		expect(await code(ci("directory.list_mailbox_aliases", { mailbox_id: ada.id }))).toBe("forbidden");
 
 		expect(await code(read(bot, ada.id))).toBe("forbidden");
 		expect(await code(read(bot, support.id))).toBe("forbidden");
@@ -138,6 +200,84 @@ describe("mailbox aliases in the directory", () => {
 			});
 		}
 		expect(await aliasesOf(bot.id)).toEqual([]);
+	});
+
+	// The handler does these checks before the insert. The triggers of 0040 do them again for a write that
+	// does not go through the handler, such as a parallel call or the previous Worker.
+	it("refuses a row of team_mailbox_aliases that the triggers do not permit", async () => {
+		const support = await createSupport();
+		await owner.call("directory.add_mailbox_alias", { mailbox_id: ada.id, address: "countess@dock.test" });
+		await owner.call("directory.add_mailbox_alias", { mailbox_id: support.id, address: "help@dock.test" });
+		const insert = (address: string) =>
+			env.DIRECTORY.prepare(
+				"INSERT INTO team_mailbox_aliases (address, mailbox_id, created_by, created_at) VALUES (?, ?, ?, ?)",
+			)
+				.bind(address, support.id, owner.id, new Date().toISOString())
+				.run();
+		for (const [address, abort] of [
+			["ada@dock.test", "address_in_use"],
+			["countess@dock.test", "address_in_use"],
+			["support@dock.test", "address_in_use"],
+			["sales@unsaved.example", "address_mail_domain"],
+			["help@dock.test", "UNIQUE constraint failed: team_mailbox_aliases.address"],
+		] as const) {
+			await expect(insert(address), address).rejects.toThrow(abort);
+		}
+		expect(await aliasesOf(support.id)).toEqual(["help@dock.test"]);
+	});
+
+	// Each of two parallel calls can pass the check before the insert. Only one insert succeeds. The other
+	// insert fails on the unique key, and its call must give the same result as a later call.
+	it("gives the same result to two parallel calls that add the same alias", async () => {
+		const support = await createSupport();
+		for (const [mailboxId, address] of [
+			[ada.id, "countess@dock.test"],
+			[support.id, "help@dock.test"],
+		] as const) {
+			const input = { mailbox_id: mailboxId, address };
+			const [first, second] = await Promise.all([
+				owner.call("directory.add_mailbox_alias", input),
+				owner.call("directory.add_mailbox_alias", input),
+			]);
+			expect(second).toEqual(first);
+			expect(first.aliases.map((alias) => alias.address)).toEqual([address]);
+		}
+
+		// The two calls above do not meet in each run. This database makes the race occur each time: a second
+		// call adds the alias after the check of the first call and before its insert.
+		const raced = (winner: string, address: string) =>
+			new Proxy(env.DIRECTORY, {
+				get(db, key) {
+					if (key !== "prepare") return Reflect.get(db, key, db);
+					return (sql: string) => {
+						const statement = db.prepare(sql);
+						if (!sql.startsWith("INSERT")) return statement;
+						return new Proxy(statement, {
+							get(target, name) {
+								if (name !== "bind") return Reflect.get(target, name, target);
+								return (...values: unknown[]) => {
+									const bound = target.bind(...values);
+									return {
+										run: async () => {
+											expect(await addMailboxAlias(db, winner, address, owner.id)).toBe("added");
+											return await bound.run();
+										},
+									};
+								};
+							},
+						});
+					};
+				},
+			});
+		for (const [mailboxId, address] of [
+			[ada.id, "lady@dock.test"],
+			[support.id, "desk@dock.test"],
+		] as const) {
+			expect(await addMailboxAlias(raced(mailboxId, address), mailboxId, address, owner.id)).toBe("exists");
+			// A different mailbox that wins the race keeps the address.
+			const other = `other-${address}`;
+			expect(await addMailboxAlias(raced(bot.id, other), mailboxId, other, owner.id)).toBe("taken");
+		}
 	});
 
 	it("checks the address, the limit and a second call", async () => {

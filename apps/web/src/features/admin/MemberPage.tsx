@@ -62,7 +62,7 @@ export function MemberPage({ principal, me, humans, principals, elevated, onChan
 			<div className="member-parts">
 				{canEdit && <ProfileForm me={me} principal={principal} humans={humans} onChanged={onChanged} />}
 				{elevated && !canEdit && <p className="panel-note">Only the owner can change this account.</p>}
-				{elevated && <MailboxAliases mailboxId={principal.id} mailboxName={principal.display_name} />}
+				{canEdit && <MailboxAliases mailboxId={principal.id} mailboxName={principal.display_name} />}
 				{canRemove && principal.kind === "human" && <ResetSignIn person={principal} />}
 				{elevated && principal.kind === "human" && (
 					<PersonAccess person={principal} viewer={{ id: me.id, admin: elevated }} />

@@ -822,7 +822,12 @@ mailbox as mail to the primary address. Mail from the mailbox always uses the pr
 - **Who changes them.** Only owners and admins add and remove an alias (`directory.add_mailbox_alias`,
   `directory.remove_mailbox_alias`). These operations need `directory.write` and accept humans only. An
   address belongs to the organization, so a member or an agent cannot take an address such as `ceo@`
-  for its own mailbox. An admin can change the aliases of each mailbox, also of the owner.
+  for its own mailbox. An admin can change the aliases of each team mailbox and of each own mailbox,
+  also of the own mailbox of that admin. Only the owner is out of reach: only the owner changes the
+  aliases of the own mailbox of the owner, and an admin gets `forbidden` there.
+- **Sign-in.** An alias is not a sign-in name. `resolvePrimaryAddress` in `store.ts` reads only primary
+  addresses, so a sign-in with an alias gets the same refusal as an unknown address. A wrong password for
+  an alias does not count against its holder, so it cannot lock the holder.
 - **Who reads them.** `directory.list_mailbox_aliases` needs `directory.read`. An owner or an admin reads
   the aliases of each mailbox. A principal, also an agent or a service account, reads the aliases of its
   own mailbox. A member of a team mailbox reads the aliases of that mailbox. Each other caller gets
@@ -832,7 +837,9 @@ mailbox as mail to the primary address. Mail from the mailbox always uses the pr
   saved mail domain. It cannot contain `+`, because mail to `alias+tag@` reaches `alias@`. A mailbox can
   have at most 10 aliases (`MAILBOX_ALIAS_LIMITS.aliases`). The insert counts in its statement, so two
   parallel calls cannot go past the limit. The `setup_lock` row blocks a new alias during a reset.
-- **Idempotent.** An add of an alias that the mailbox has changes nothing. The primary address of the
+- **Idempotent.** An add of an alias that the mailbox has changes nothing. Two parallel calls that add
+  the same alias to the same mailbox give the same result: the call that loses the insert reads the holder
+  of the address again. The primary address of the
   mailbox, and an address of a different mailbox, give `conflict`. A remove of an alias that the mailbox
   does not have changes nothing. A remove of the primary address gives `invalid`.
 - **Delivery.** `resolveMailboxAddress` reads aliases, so inbound mail and local mail to an alias go to

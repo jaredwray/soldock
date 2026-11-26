@@ -856,7 +856,8 @@ and agents use the own mailbox, in the settings of the mailbox in Mail (`mail.se
 
 Migration `0040_mailbox_aliases.sql` adds the table `team_mailbox_aliases` and triggers that keep each
 address in one place. An owner or an admin can then add aliases to a mailbox, in Admin › Members and in
-Admin › Shared mailboxes (`directory.add_mailbox_alias`).
+Admin › Shared mailboxes (`directory.add_mailbox_alias`). Only the owner changes the aliases of the own
+mailbox of the owner. A person signs in with the primary address only, not with an alias.
 
 - The migration only adds a table, and the table is empty. No address and no access changes at the upgrade.
 - The old Worker keeps working between the migration and the deploy. It has no alias operations.

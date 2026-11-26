@@ -38,7 +38,9 @@ export type AddAliasResult = "added" | "exists" | "primary" | "taken" | "full" |
 
 /**
  * Adds an alias to a mailbox. The insert does the checks again in its statement, so two parallel calls cannot
- * go past the limit, and an address that a parallel call takes gives a `conflict` error from the triggers.
+ * go past the limit. The unique keys and the triggers stop an insert of an address that a parallel call
+ * took after the first check. The function then reads the holder again: the same mailbox gives `exists`, as
+ * a later call does, and a different mailbox gives `taken`.
  * The caller makes sure that the domain is saved. The trigger of the domain does the check again.
  */
 export async function addMailboxAlias(
@@ -48,11 +50,14 @@ export async function addMailboxAlias(
 	createdBy: string,
 ): Promise<AddAliasResult> {
 	const normalized = normalizeAddress(address);
-	const holder = await resolveMailboxAddress(db, normalized);
-	if (holder) {
+	const held = async (): Promise<"taken" | "primary" | "exists" | null> => {
+		const holder = await resolveMailboxAddress(db, normalized);
+		if (!holder) return null;
 		if (holder.id !== mailboxId) return "taken";
 		return holder.address === normalized ? "primary" : "exists";
-	}
+	};
+	const before = await held();
+	if (before) return before;
 	const now = new Date().toISOString();
 	const statement = isTeamMailboxId(mailboxId)
 		? db
@@ -77,7 +82,13 @@ export async function addMailboxAlias(
 	try {
 		changes = (await statement.run()).meta.changes;
 	} catch (error) {
-		throw conflictOf(error) ?? error;
+		const conflict = conflictOf(error);
+		// A parallel call took the address after the check above. Read the holder again.
+		if (conflict?.code === "conflict") {
+			const after = await held();
+			if (after) return after;
+		}
+		throw conflict ?? error;
 	}
 	if (changes === 1) return "added";
 	const aliases = await listMailboxAliases(db, mailboxId);

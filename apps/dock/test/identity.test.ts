@@ -470,11 +470,14 @@ describe("sign-in with a password", () => {
 	});
 
 	// The answer must not tell an attacker which part is wrong, or which addresses have an account.
-	it("gives the same 401 for an unknown address, an agent, and a wrong password, and refuses another origin", async () => {
-		const { owner, bot } = await seedOrg();
+	it("gives the same 401 for an unknown address, an alias, an agent, and a wrong password, and refuses another origin", async () => {
+		const { owner, ada, bot } = await seedOrg();
+		// An alias receives mail, but it is not a sign-in name.
+		await owner.call("directory.add_mailbox_alias", { mailbox_id: ada.id, address: "countess@dock.test" });
 		const details = new Set<string | undefined>();
 		for (const [address, password] of [
 			["nobody@dock.test", PASSWORD],
+			["countess@dock.test", PASSWORD],
 			[bot.address, PASSWORD],
 			[owner.address, `${PASSWORD}!`],
 			[owner.address, "x"],
@@ -487,6 +490,9 @@ describe("sign-in with a password", () => {
 		}
 		expect((await submitSignIn("not an address", PASSWORD)).status).toBe(400);
 		expect((await submitSignIn(owner.address, "")).status).toBe(400);
+		// Wrong passwords for the alias do not count against the person, so they cannot lock the person.
+		for (let guess = 0; guess < 10; guess++) await refusal(await submitSignIn("countess@dock.test", "wrong password"));
+		await signIn(ada.address);
 	});
 
 	// A password is safe only while the number of guesses stays small.

@@ -1043,8 +1043,9 @@ async function teamMailboxToManage(
 
 /**
  * The mailbox whose aliases the caller changes: owners and admins only. An address belongs to the
- * organization, so a member or an agent cannot take an address such as ceo@ for its own mailbox. Throws
- * `not_found` for a mailbox that does not exist, and for a deleted principal.
+ * organization, so a member or an agent cannot take an address such as ceo@ for its own mailbox. Only the
+ * owner changes the aliases of the own mailbox of the owner. Throws `not_found` for a mailbox that does not
+ * exist, and for a deleted principal.
  */
 async function aliasMailboxToManage(
 	call: CallContext,
@@ -1056,6 +1057,12 @@ async function aliasMailboxToManage(
 	}
 	const mailbox = await getMailbox(call.env.DIRECTORY, mailboxId);
 	if (!mailbox) throw new OperationError("not_found", "No mailbox has that id.");
+	if (mailbox.kind === "personal" && mailbox.id !== call.caller.principal.id) {
+		const target = await getPrincipal(call.env.DIRECTORY, mailbox.id);
+		if (target?.org_role === "owner") {
+			throw new OperationError("forbidden", `Only the owner can ${action} the aliases of the mailbox of the owner.`);
+		}
+	}
 	return mailbox;
 }
 

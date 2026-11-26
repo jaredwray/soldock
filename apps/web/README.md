@@ -507,8 +507,10 @@ MCP clients. The app has no UI-only path.
   - The card of a shared mailbox has **Aliases** (`MailboxAliases.tsx`) under the name: a list of the
     extra addresses of the mailbox, a **Remove** button for each one (with a confirmation), and a field to
     add one (`directory.list_mailbox_aliases`, `directory.add_mailbox_alias`,
-    `directory.remove_mailbox_alias`). The field checks the address with `AliasAddress` before the call. At
-    the limit, the field and the button are disabled.
+    `directory.remove_mailbox_alias`). The field checks the address with `AliasAddress` before the call. An
+    error of the add shows in the form and the field refers to it (`aria-invalid`, `aria-describedby`). An
+    error of the load shows above the list with **Try again**. At the limit, the field and the button are
+    disabled.
   - A team mailbox has its own paths (`/mail/team/<tmb_id>/…`), so a deep link and a reload stay in
     it. Each mail call of its views sends `mailbox_id`. Search, labels and the composer use the
     same mailbox.
@@ -652,7 +654,8 @@ MCP clients. The app has no UI-only path.
       It tells the admin to give each agent a different sponsor first, or to archive or delete the agent.
     - The page of an agent and the page of a service account share **Access** (`directory.get_member_access`, `MemberAccess.tsx`): a read-only summary. Each shared mailbox, room and shared drive decides what the account can do there, and an API key, an OAuth connection or a token only proves its identity. The page has no permissions editor.
       An owner or an admin also sees **Access** on the page of a person (`PersonAccess` in `MemberPage.tsx`).
-      An owner or an admin sees **Aliases** (`MailboxAliases.tsx`) on the page of each member, also of the owner: the aliases of the own mailbox of that member, as on the card of a shared mailbox.
+      An owner or an admin sees **Aliases** (`MailboxAliases.tsx`) on the page of each member that they can change: the aliases of the own mailbox of that member, as on the card of a shared mailbox.
+      An admin does not see **Aliases** on the page of the owner. The page says "Only the owner can change this account."
       It shows the team mailboxes, the shared drives and the public rooms (**Public chat rooms**).
       It does not show account scopes, keys, private rooms, direct messages or items that others shared with the person.
       **Own mailbox, own drive and organization** says that the person can do each thing there, and that the role of the person decides the actions for the organization.

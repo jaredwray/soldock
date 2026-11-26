@@ -35,11 +35,12 @@ export const MailboxAliases = z.object({
 });
 export type MailboxAliases = z.infer<typeof MailboxAliases>;
 
-const ADMIN_ONLY = "Owners and admins only.";
+const ADMIN_ONLY =
+	"Owners and admins only. Only the owner can change the aliases of the own mailbox of the owner: an admin gets `forbidden` there.";
 
 /** What an alias does, and what it does not do. */
 const ALIAS_RULES =
-	"An alias is an extra address that receives mail for the mailbox. Mail to the alias, also with a +tag, goes to the same mailbox as mail to the primary address. Mail from the mailbox always uses the primary address. Personal mailboxes (of a person, an agent or a service account) and team mailboxes can have aliases.";
+	"An alias is an extra address that receives mail for the mailbox. Mail to the alias, also with a +tag, goes to the same mailbox as mail to the primary address. Mail from the mailbox always uses the primary address. An alias is not a sign-in name. Personal mailboxes (of a person, an agent or a service account) and team mailboxes can have aliases.";
 
 const MailboxParam = MailboxId.describe(
 	"The mailbox: the id of a principal for its own mailbox, or the id of a team mailbox.",

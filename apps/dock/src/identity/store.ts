@@ -516,15 +516,18 @@ export async function listPrincipalPage(
 	};
 }
 
-/** The principal that receives mail for an address, or null when the address is unknown. */
-export async function resolveAddress(db: D1Database, address: string): Promise<PrincipalRecord | null> {
+/**
+ * The principal that signs in with an address, or null when no principal has it as the primary address.
+ * An alias is not a sign-in name: a wrong password for an alias must not count against its holder.
+ * Mail delivery uses `resolveMailboxAddress`, which reads aliases too.
+ */
+export async function resolvePrimaryAddress(db: D1Database, address: string): Promise<PrincipalRecord | null> {
 	const row = await db
 		.prepare(
-			`SELECT ${PRINCIPAL_COLUMNS}, primary_address.address
-			FROM addresses target
-			JOIN principals p ON p.id = target.principal_id
-			JOIN addresses primary_address ON primary_address.principal_id = p.id AND primary_address.is_primary = 1
-			WHERE target.address = ?`,
+			`SELECT ${PRINCIPAL_COLUMNS}, a.address
+			FROM addresses a
+			JOIN principals p ON p.id = a.principal_id
+			WHERE a.address = ? AND a.is_primary = 1`,
 		)
 		.bind(normalizeAddress(address))
 		.first<PrincipalRow>();

@@ -20,9 +20,12 @@ export function MailboxAliases({ mailboxId, mailboxName }: MailboxAliasesProps) 
 	const [aliases, setAliases] = useState<MailboxAlias[] | null>(null);
 	const [address, setAddress] = useState("");
 	const [busy, setBusy] = useState(false);
+	/** The error of the load. It shows above the list. */
 	const [error, setError] = useState<string | null>(null);
+	/** The error of an add. It shows in the form, and the field refers to it. */
+	const [addError, setAddError] = useState<string | null>(null);
 	const [remove, setRemove] = useState<string | null>(null);
-	const ids = { heading: useId(), input: useId(), hint: useId() };
+	const ids = { heading: useId(), input: useId(), hint: useId(), error: useId() };
 
 	const load = useCallback(async () => {
 		setError(null);
@@ -41,19 +44,19 @@ export function MailboxAliases({ mailboxId, mailboxName }: MailboxAliasesProps) 
 		event.preventDefault();
 		const parsed = AliasAddress.safeParse(address);
 		if (!parsed.success) {
-			return setError(
+			return setAddError(
 				"Enter one address, such as sales@example.com. Use only letters, digits, dots, hyphens and underscores before the @.",
 			);
 		}
 		setBusy(true);
-		setError(null);
+		setAddError(null);
 		try {
 			const result = await api.call("directory.add_mailbox_alias", { mailbox_id: mailboxId, address: parsed.data });
 			setAliases(result.aliases);
 			setAddress("");
 			toast({ message: `${parsed.data} now receives mail for ${mailboxName}.` });
 		} catch (caught) {
-			setError(errorMessage(caught));
+			setAddError(errorMessage(caught));
 		} finally {
 			setBusy(false);
 		}
@@ -61,7 +64,6 @@ export function MailboxAliases({ mailboxId, mailboxName }: MailboxAliasesProps) 
 
 	async function removeAlias(value: string) {
 		setBusy(true);
-		setError(null);
 		try {
 			const result = await api.call("directory.remove_mailbox_alias", { mailbox_id: mailboxId, address: value });
 			setAliases(result.aliases);
@@ -149,7 +151,8 @@ export function MailboxAliases({ mailboxId, mailboxName }: MailboxAliasesProps) 
 								placeholder="sales@example.com"
 								value={address}
 								onChange={(event) => setAddress(event.target.value)}
-								aria-describedby={ids.hint}
+								aria-invalid={addError ? true : undefined}
+								aria-describedby={addError ? `${ids.hint} ${ids.error}` : ids.hint}
 								disabled={busy || full}
 							/>
 							<p id={ids.hint} className="field-hint">
@@ -158,6 +161,11 @@ export function MailboxAliases({ mailboxId, mailboxName }: MailboxAliasesProps) 
 									: "Use a saved email domain. Mail to the alias arrives at once."}
 							</p>
 						</div>
+						{addError && (
+							<p id={ids.error} className="form-error" role="alert">
+								{addError}
+							</p>
+						)}
 						<button type="submit" className="button button-primary" disabled={busy || full}>
 							{busy ? "Please wait…" : "Add alias"}
 						</button>

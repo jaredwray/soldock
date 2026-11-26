@@ -128,7 +128,7 @@ test("an admin adds an alias to a shared mailbox, and removes it", async ({ brow
 	await card.getByLabel("New alias").fill(alias.toUpperCase());
 	await card.getByRole("button", { name: "Add alias" }).click();
 	await expect(page.getByText(`${alias} now receives mail for ${name}.`)).toBeVisible();
-	await expect(card.getByRole("cell", { name: alias })).toBeVisible();
+	await expect(card.getByRole("cell", { name: alias, exact: true })).toBeVisible();
 	const listed = await admin.request.get(`/api/v1/directory/mailboxes/${mailbox.id}/aliases`);
 	expect(await listed.json()).toMatchObject({ aliases: [{ address: alias }] });
 
