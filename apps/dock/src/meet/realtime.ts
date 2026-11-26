@@ -168,30 +168,46 @@ export async function renegotiate(config: RealtimeConfig, sessionId: string, sdp
 
 /**
  * Closes tracks of a session with `force`, without an SDP exchange: the SFU stops the media of each mid at once.
- * A mid that is already closed counts as closed. Returns false when a request failed.
+ * Returns the mids that the SFU confirmed as closed. A mid that was closed before counts as closed
+ * (`close_track_error`). A session that the SFU no longer has (410) has no open track. Each other failure leaves
+ * the mid out of the result, and the caller tries again later.
  */
 export async function closeTracks(
 	config: RealtimeConfig,
 	sessionId: string,
 	mids: readonly string[],
-): Promise<boolean> {
-	let ok = true;
+): Promise<Set<string>> {
+	const closed = new Set<string>();
 	for (let start = 0; start < mids.length; start += TRACKS_PER_REQUEST) {
 		const batch = mids.slice(start, start + TRACKS_PER_REQUEST);
 		try {
-			await call(config, "PUT", `/sessions/${encodeURIComponent(sessionId)}/tracks/close`, {
-				tracks: batch.map((mid) => ({ mid })),
-				force: true,
-			});
+			const answer = await call<TracksAnswer>(
+				config,
+				"PUT",
+				`/sessions/${encodeURIComponent(sessionId)}/tracks/close`,
+				{
+					tracks: batch.map((mid) => ({ mid })),
+					force: true,
+				},
+			);
+			const failed = new Set<string>();
+			for (const track of answer.tracks ?? []) {
+				if (track.mid && track.errorCode && track.errorCode !== "close_track_error") failed.add(track.mid);
+			}
+			for (const mid of batch) if (!failed.has(mid)) closed.add(mid);
+			if (failed.size > 0) log("warn", "meet: the media service did not close tracks", { count: failed.size });
 		} catch (error) {
-			ok = false;
+			if (error instanceof RealtimeError && error.status === 410) {
+				for (const mid of batch) closed.add(mid);
+				continue;
+			}
 			log("warn", "meet: the media service did not close tracks", {
 				error: error instanceof Error ? error.message : String(error),
 				count: batch.length,
 			});
 		}
 	}
-	return ok;
+	return closed;
 }
 
 /**

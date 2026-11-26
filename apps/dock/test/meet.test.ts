@@ -156,8 +156,69 @@ describe("meet", () => {
 		const listed = await callTool(bot.key, "meet_list_participants", { code });
 		expect(listed.isError).toBeFalsy();
 		expect(listed.content[0]?.text).toContain("untrusted");
-		const participants = listed.structuredContent?.participants as { untrusted: boolean; state: string }[];
+		const participants = listed.structuredContent?.participants as { id: string; untrusted: boolean; state: string }[];
 		expect(participants).toEqual([expect.objectContaining({ untrusted: true, state: "waiting" })]);
+
+		// The agent runs the lobby through MCP. A person who is not the host cannot, also the sponsor of the agent.
+		const first = { code, participant_id: participants[0]?.id as string };
+		const second = { code, participant_id: (await joinAsGuest(code, "Second Guest")).participant.id };
+		const stateOf = (result: Awaited<ReturnType<typeof callTool>>) =>
+			(result.structuredContent as { participant?: { state: string } } | undefined)?.participant?.state;
+		for (const tool of ["meet_admit_participant", "meet_deny_participant", "meet_remove_participant"]) {
+			const refused = await callTool(ada.key, tool, first);
+			expect(refused.isError, tool).toBe(true);
+			expect(refused.content[0]?.text, tool).toContain("Only the host");
+		}
+		expect((await callTool(ada.key, "meet_end_meeting", { code })).isError).toBe(true);
+		expect(stateOf(await callTool(bot.key, "meet_admit_participant", first))).toBe("admitted");
+		expect(stateOf(await callTool(bot.key, "meet_deny_participant", second))).toBe("denied");
+		expect(stateOf(await callTool(bot.key, "meet_remove_participant", first))).toBe("removed");
+		const ended = await callTool(bot.key, "meet_end_meeting", { code });
+		expect((ended.structuredContent as { meeting: { status: string } }).meeting.status).toBe("ended");
+	});
+
+	it("lets a service account and a key of the host run the lobby, and refuses each caller that is not the host", async () => {
+		const { principal: service } = await owner.call("directory.create_service_account", {
+			display_name: "Front Desk",
+			address: "desk@dock.test",
+		});
+		const desk = api(
+			(await owner.call("account.create_api_key", { principal_id: service.id, label: "desk" })).api_key.secret,
+		);
+		const { meeting } = await desk("meet.create_meeting", { title: "Support" });
+		expect(meeting.host.principal_id).toBe(service.id);
+		const code = meeting.code;
+		const guests = [];
+		for (const name of ["One", "Two"])
+			guests.push({ code, participant_id: (await joinAsGuest(code, name)).participant.id });
+		const [one, two] = guests as [(typeof guests)[0], (typeof guests)[0]];
+		// The owner made the service account. The owner is not the host of its meeting.
+		for (const other of [owner, ada]) {
+			expect(await codeOf(other.call("meet.admit_participant", one))).toBe("forbidden");
+			expect(await codeOf(other.call("meet.deny_participant", one))).toBe("forbidden");
+			expect(await codeOf(other.call("meet.end_meeting", { code }))).toBe("forbidden");
+		}
+		expect((await desk("meet.admit_participant", one)).participant.state).toBe("admitted");
+		expect(await codeOf(ada.call("meet.remove_participant", one))).toBe("forbidden");
+		expect((await desk("meet.deny_participant", two)).participant.state).toBe("denied");
+		expect((await desk("meet.remove_participant", one)).participant.state).toBe("removed");
+		expect((await desk("meet.end_meeting", { code })).meeting.status).toBe("ended");
+
+		// A key with meet.write decides for the meeting of its principal only. A key with meet.read decides nothing.
+		const scoped = async (actor: Actor, scopes: ("meet.read" | "meet.write")[]) =>
+			api((await actor.call("account.create_api_key", { label: "k", scopes })).api_key.secret);
+		const mine = await newMeeting();
+		const guest = { code: mine.code, participant_id: (await joinAsGuest(mine.code)).participant.id };
+		const stranger = await scoped(owner, ["meet.read", "meet.write"]);
+		const reader = await scoped(ada, ["meet.read"]);
+		const writer = await scoped(ada, ["meet.read", "meet.write"]);
+		for (const operation of ["meet.admit_participant", "meet.deny_participant", "meet.remove_participant"] as const) {
+			expect(await codeOf(stranger(operation, guest)), operation).toBe("forbidden");
+			expect(await codeOf(reader(operation, guest)), operation).toBe("forbidden");
+		}
+		expect((await writer("meet.admit_participant", guest)).participant.state).toBe("admitted");
+		expect((await writer("meet.remove_participant", guest)).participant.state).toBe("removed");
+		expect((await writer("meet.end_meeting", { code: mine.code })).meeting.status).toBe("ended");
 	});
 
 	it("is off without the Realtime secrets, and names no meeting for a bad code", async () => {
@@ -227,6 +288,15 @@ describe("meet", () => {
 	it("lets the host and members in at once, brokers media after an admit, and keeps the names of the SFU inside", async () => {
 		const meeting = await newMeeting();
 		const adaCookie = await signIn("ada@dock.test");
+		// A page of a different site cannot make the browser of the host join: the cookie needs the origin of Asterra.
+		for (const origin of ["https://evil.example", null]) {
+			const forged = await request(`${meetCallPath(meeting.code)}/join`, {
+				method: "POST",
+				headers: { "content-type": "application/json", cookie: adaCookie, ...(origin ? { origin } : {}) },
+				body: "{}",
+			});
+			expect(forged.status, String(origin)).toBe(403);
+		}
 		const host = await joinAsMember(meeting.code, adaCookie);
 		expect(host.participant).toMatchObject({ role: "host", state: "admitted", kind: "member" });
 		const hostInfo = await callRoute(meeting.code, "", { cookie: adaCookie });
@@ -307,13 +377,24 @@ describe("meet", () => {
 			hostMedia.session,
 			guestMedia.tracks.map((track) => track.id),
 		);
+		await receive(
+			meeting.code,
+			guest.token,
+			guestMedia.session,
+			hostMedia.tracks.map((track) => track.id),
+		);
 		const hostPulls = sfu.openTracks(sfu.sessions[0] as string).filter((track) => track.location === "remote");
 		expect(hostPulls).toHaveLength(2);
+		const oldSession = sfu.sessions[1] as string;
+		expect(sfu.openTracks(oldSession)).toHaveLength(4);
 
 		// The guest starts a new session, as after a lost connection. The old session number is stale, and the pulls
 		// of its old tracks by the host close.
 		const again = await callRoute(meeting.code, "/media/session", { token: guest.token, body: {} });
 		expect(again.body.session).toBe(guestMedia.session + 1);
+		// The SFU keeps the old session, and the old connection of the browser can stay open. So the tracks that the
+		// guest sent on the old session, and its pulls of the tracks of the host, close too.
+		await expect.poll(() => sfu.openTracks(oldSession)).toEqual([]);
 		const stale = await callRoute(meeting.code, "/media/publish", {
 			token: guest.token,
 			body: { session: guestMedia.session, offer: { sdp: "x" }, tracks: [{ mid: "0", kind: "audio" }] },
@@ -427,6 +508,24 @@ describe("meet", () => {
 		expect(
 			await codeOf(ada.call("meet.admit_participant", { code: meeting.code, participant_id: waiting.participant.id })),
 		).toBe("conflict");
+
+		// The object keeps the data of the ended meeting for 30 days, then it deletes each table.
+		const stub = env.MEETING.get(env.MEETING.idFromName(meeting.code));
+		const day = 24 * 60 * 60_000;
+		await runInDurableObject(stub, (_instance, state) => {
+			state.storage.sql.exec("UPDATE meeting SET ended_at = ?", Date.now() - 29 * day);
+		});
+		expect(await runDurableObjectAlarm(stub)).toBe(true);
+		expect((await callRoute(meeting.code, "")).body.status).toBe("ended");
+		await runInDurableObject(stub, (_instance, state) => {
+			state.storage.sql.exec("UPDATE meeting SET ended_at = ?", Date.now() - 30 * day - 1);
+		});
+		expect(await runDurableObjectAlarm(stub)).toBe(true);
+		expect((await callRoute(meeting.code, "")).status).toBe(404);
+		await runInDurableObject(stub, async (_instance, state) => {
+			expect(state.storage.sql.exec("SELECT name FROM sqlite_master WHERE type = 'table'").toArray()).toEqual([]);
+			expect(await state.storage.getAlarm()).toBeNull();
+		});
 	});
 
 	it("sends each change on the socket, and closes the socket of a removed guest", async () => {
@@ -466,6 +565,20 @@ describe("meet", () => {
 		expect((await callRoute(meeting.code, "/join", { body: {} })).status).toBe(400);
 		expect((await callRoute(meeting.code, "/join", { body: { display_name: "  " } })).status).toBe(400);
 		expect((await callRoute(meeting.code, "/join", { body: { display_name: "a\u0007b" } })).status).toBe(400);
+		// A name cannot turn the text of the lobby around, and a name without a visible character is no name.
+		expect((await callRoute(meeting.code, "/join", { body: { display_name: "Ada\u202Etsoh" } })).status).toBe(400);
+		expect((await callRoute(meeting.code, "/join", { body: { display_name: "\u200B" } })).status).toBe(400);
+		expect((await callRoute(meeting.code, "/join", { body: { display_name: "\u200D" } })).status).toBe(400);
+		// A body that is larger than a join request is refused before it is parsed.
+		expect((await callRoute(meeting.code, "/join", { body: { display_name: "x".repeat(2000) } })).status).toBe(413);
+		expect(
+			(
+				await callRoute(meeting.code, "/media/state", {
+					token: `mpt_${"a".repeat(43)}`,
+					body: { pad: "x".repeat(2000) },
+				})
+			).status,
+		).toBe(413);
 		for (let i = 0; i < MEET_LIMITS.waiting; i++) await joinAsGuest(meeting.code, `Guest ${i}`);
 		expect((await callRoute(meeting.code, "/join", { body: { display_name: "One more" } })).status).toBe(429);
 		// The host still joins.
@@ -477,9 +590,18 @@ describe("meet", () => {
 		const meeting = await newMeeting();
 		const host = await joinAsMember(meeting.code, await signIn("ada@dock.test"));
 		const waiting = await joinAsGuest(meeting.code);
+		const old = await joinAsGuest(meeting.code, "Old Guest");
+		await ada.call("meet.admit_participant", { code: meeting.code, participant_id: old.participant.id });
 		await sendMedia(meeting.code, host.token);
 		const stub = env.MEETING.get(env.MEETING.idFromName(meeting.code));
 		await runInDurableObject(stub, (_instance, state) => {
+			// The token of this guest is one day old. The guest is still there.
+			state.storage.sql.exec(
+				"UPDATE participants SET requested_at = ?, last_seen_at = ? WHERE id = ?",
+				Date.now() - MEET_LIMITS.tokenMs - 1,
+				Date.now(),
+				old.participant.id,
+			);
 			state.storage.sql.exec(
 				"UPDATE participants SET last_seen_at = ? WHERE id = ?",
 				Date.now() - 61_000,
@@ -491,6 +613,26 @@ describe("meet", () => {
 				host.participant.id,
 			);
 		});
+		// A token stops at the end of its life, also before the alarm runs: the next request with it is refused, and
+		// the media of its participant stops.
+		const stale = await joinAsGuest(meeting.code, "Stale Guest");
+		await ada.call("meet.admit_participant", { code: meeting.code, participant_id: stale.participant.id });
+		await sendMedia(meeting.code, stale.token);
+		const staleSession = sfu.sessions.at(-1) as string;
+		await runInDurableObject(stub, (_instance, state) => {
+			state.storage.sql.exec(
+				"UPDATE participants SET requested_at = ? WHERE id = ?",
+				Date.now() - MEET_LIMITS.tokenMs - 1,
+				stale.participant.id,
+			);
+		});
+		expect((await callRoute(meeting.code, "/media/session", { token: stale.token, body: {} })).status).toBe(403);
+		expect((await callRoute(meeting.code, "/state", { token: stale.token })).body.self).toMatchObject({
+			state: "left",
+			end_reason: "expired",
+		});
+		await expect.poll(() => sfu.openTracks(staleSession)).toEqual([]);
+
 		expect(await runDurableObjectAlarm(stub)).toBe(true);
 		const list = await ada.call("meet.list_participants", { code: meeting.code });
 		expect(list.participants.map((p) => p.display_name)).toEqual(["Ada Lovelace"]);
@@ -498,6 +640,11 @@ describe("meet", () => {
 			state: "left",
 			end_reason: "absent",
 		});
+		expect((await callRoute(meeting.code, "/state", { token: old.token })).body.self).toMatchObject({
+			state: "left",
+			end_reason: "expired",
+		});
+		expect((await callRoute(meeting.code, "/media/session", { token: old.token, body: {} })).status).toBe(403);
 		await runInDurableObject(stub, (_instance, state) => {
 			state.storage.sql.exec(
 				"UPDATE participants SET last_seen_at = ? WHERE id = ?",
@@ -568,5 +715,143 @@ describe("meet", () => {
 		expect(res.status).toBe(503);
 		const ok = await callRoute(meeting.code, "/media/session", { token: host.token, body: {} });
 		expect(ok.body.session).toBe(1);
+	});
+
+	it("tries a failed close of tracks again from the alarm, until the SFU confirms it", async () => {
+		const meeting = await newMeeting();
+		const host = await joinAsMember(meeting.code, await signIn("ada@dock.test"));
+		const guest = await joinAsGuest(meeting.code);
+		await ada.call("meet.admit_participant", { code: meeting.code, participant_id: guest.participant.id });
+		const hostMedia = await sendMedia(meeting.code, host.token);
+		const guestMedia = await sendMedia(meeting.code, guest.token);
+		await receive(
+			meeting.code,
+			host.token,
+			hostMedia.session,
+			guestMedia.tracks.map((t) => t.id),
+		);
+		const [hostSession, guestSession] = sfu.sessions as [string, string];
+		const open = () => [
+			...sfu.openTracks(guestSession),
+			...sfu.openTracks(hostSession).filter((track) => track.location === "remote"),
+		];
+		const stub = env.MEETING.get(env.MEETING.idFromName(meeting.code));
+		const pending = () =>
+			runInDurableObject(
+				stub,
+				(_instance, state) => state.storage.sql.exec("SELECT COUNT(*) AS n FROM pending_closes").one().n as number,
+			);
+
+		// The SFU refuses one of the two close calls of the removal. The removal itself still succeeds.
+		sfu.failNext(503);
+		const removed = await ada.call("meet.remove_participant", {
+			code: meeting.code,
+			participant_id: guest.participant.id,
+		});
+		expect(removed.participant.state).toBe("removed");
+		expect(open().length).toBeGreaterThan(0);
+		expect(await pending()).toBe(open().length);
+
+		// An alarm before the time of the next try, and a try that fails again, keep the record.
+		sfu.failNext(503);
+		await runInDurableObject(stub, (_instance, state) => {
+			state.storage.sql.exec("UPDATE pending_closes SET next_at = 0");
+		});
+		await runDurableObjectAlarm(stub);
+		expect(await pending()).toBeGreaterThan(0);
+		const calls = sfu.callsTo("/tracks/close").length;
+		await runDurableObjectAlarm(stub);
+		expect(sfu.callsTo("/tracks/close")).toHaveLength(calls);
+
+		await runInDurableObject(stub, (_instance, state) => {
+			state.storage.sql.exec("UPDATE pending_closes SET next_at = 0");
+		});
+		expect(await runDurableObjectAlarm(stub)).toBe(true);
+		expect(open()).toEqual([]);
+		expect(await pending()).toBe(0);
+		// The tracks of the host stay open.
+		expect(sfu.openTracks(hostSession)).toHaveLength(2);
+	});
+
+	it("limits the join requests of guests, and never locks out the host or a member", async () => {
+		const meeting = await newMeeting();
+		const stub = env.MEETING.get(env.MEETING.idFromName(meeting.code));
+		const adaCookie = await signIn("ada@dock.test");
+		const tryGuest = () => callRoute(meeting.code, "/join", { body: { display_name: "Guest" } });
+		// The lobby stays empty, so only the limit of one minute can refuse the next guest.
+		for (let i = 0; i < MEET_LIMITS.guestJoinsPerMinute; i++) {
+			const guest = await joinAsGuest(meeting.code, `Guest ${i}`);
+			await ada.call("meet.deny_participant", { code: meeting.code, participant_id: guest.participant.id });
+		}
+		expect((await tryGuest()).status).toBe(429);
+		expect((await joinAsMember(meeting.code, adaCookie)).participant.state).toBe("admitted");
+		await runInDurableObject(stub, (_instance, state) => {
+			state.storage.sql.exec("UPDATE participants SET requested_at = requested_at - 61000 WHERE kind = 'guest'");
+		});
+		expect((await tryGuest()).status).toBe(201);
+
+		// The meeting has the most rows of guests, each from a guest that the host removed from the call.
+		const guestRows = () =>
+			runInDurableObject(
+				stub,
+				(_instance, state) =>
+					state.storage.sql.exec("SELECT COUNT(*) AS n FROM participants WHERE kind = 'guest'").one().n as number,
+			);
+		await runInDurableObject(stub, (_instance, state) => {
+			state.storage.sql.exec(
+				`WITH RECURSIVE numbers (n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM numbers WHERE n < ?)
+				INSERT INTO participants (id, token_hash, kind, display_name, role, state, end_reason, requested_at,
+					decided_at, left_at, last_seen_at)
+				SELECT 'par_old' || n, 'hash' || n, 'guest', 'Old', 'participant', 'removed', 'removed', 0, 0, 0, 0 FROM numbers`,
+				MEET_LIMITS.participantRows,
+			);
+		});
+		expect((await tryGuest()).status).toBe(429);
+		expect((await joinAsMember(meeting.code, adaCookie)).participant.state).toBe("admitted");
+		// A guest that the host never admitted leaves no row after some minutes. Then a new guest can ask.
+		await runInDurableObject(stub, (_instance, state) => {
+			state.storage.sql.exec("UPDATE participants SET state = 'denied' WHERE id LIKE 'par_old%'");
+		});
+		expect((await tryGuest()).status).toBe(201);
+		// The rows that stay are from this test: the guests of the first minute, and two guests that wait.
+		expect(await guestRows()).toBe(MEET_LIMITS.guestJoinsPerMinute + 2);
+	});
+
+	it("closes the oldest socket at the third socket of a participant, and the first row of a member that joins again", async () => {
+		const meeting = await newMeeting();
+		const adaCookie = await signIn("ada@dock.test");
+		const host = await joinAsMember(meeting.code, adaCookie);
+		await sendMedia(meeting.code, host.token);
+		const open = async (token: string) => {
+			const res = await request(meetSocketPath(meeting.code), {
+				headers: { upgrade: "websocket", "sec-websocket-protocol": `asterra-meet.v1, token.${token}` },
+			});
+			expect(res.status).toBe(101);
+			const reader = readSocket(res);
+			expect(await reader.next()).toEqual({ type: "hello", protocol: 1 });
+			expect(await reader.next()).toMatchObject({ type: "state" });
+			return reader;
+		};
+		const first = await open(host.token);
+		const second = await open(host.token);
+		const third = await open(host.token);
+		expect(await first.next()).toEqual({ closed: MEET_SOCKET_CLOSE.replaced });
+
+		// The host opens the link in a different tab. The first row leaves, with its sockets and its media.
+		const again = await joinAsMember(meeting.code, adaCookie);
+		expect(again.participant.id).not.toBe(host.participant.id);
+		for (const reader of [second, third]) {
+			let event = (await reader.next()) as { type?: string };
+			while (event.type === "state") event = (await reader.next()) as typeof event;
+			expect(event).toEqual({ type: "closed", reason: "left" });
+			expect(await reader.next()).toEqual({ closed: MEET_SOCKET_CLOSE.over });
+		}
+		expect((await callRoute(meeting.code, "/state", { token: host.token })).body.self).toMatchObject({
+			state: "left",
+			end_reason: "left",
+		});
+		const list = await ada.call("meet.list_participants", { code: meeting.code });
+		expect(list.participants.map((p) => p.id)).toEqual([again.participant.id]);
+		await expect.poll(() => sfu.openTracks(sfu.sessions[0] as string)).toEqual([]);
 	});
 });

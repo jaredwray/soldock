@@ -5,6 +5,7 @@ import {
 	isMeetingCode,
 	JoinRequest,
 	type JoinResponse,
+	MEET_LIMITS,
 	MEET_SOCKET_SUBPROTOCOL,
 	MEET_TOKEN_HEADER,
 	MediaStateRequest,
@@ -17,7 +18,6 @@ import type { z } from "zod";
 import { type AuthContext, authenticate, credentialRef, isSameOrigin } from "../identity/index.ts";
 import {
 	log,
-	MAX_REQUEST_BYTES,
 	OperationError,
 	type RequestIdVariables,
 	randomToken,
@@ -43,6 +43,12 @@ const BASE = "/api/v1/meet/calls/:code";
 const NO_STORE = { "cache-control": "no-store" };
 const TOKEN_PREFIX = "mpt_";
 const TOKEN_PATTERN = /^mpt_[A-Za-z0-9_-]{43}$/;
+/** The most bytes of a body without an SDP text. A larger body gets `413`, and no object wakes for it. */
+const SMALL_BODY_BYTES = 1024;
+/** The most bytes of a subscribe body: the largest list of track ids. */
+const SUBSCRIBE_BODY_BYTES = 4 * 1024;
+/** The most bytes of a body with an SDP text. JSON makes each line end of the SDP text two times longer. */
+const SDP_BODY_BYTES = 2 * MEET_LIMITS.sdpBytes + SMALL_BODY_BYTES;
 
 function codeOf(c: Context<MeetEnv>): string {
 	const code = c.req.param("code") ?? "";
@@ -58,8 +64,8 @@ async function tokenHashOf(token: string | null | undefined): Promise<string> {
 	return sha256Hex(token);
 }
 
-async function bodyOf<S extends z.ZodType>(c: Context<MeetEnv>, schema: S): Promise<z.output<S>> {
-	const text = await readBodyText(c.req.raw, MAX_REQUEST_BYTES);
+async function bodyOf<S extends z.ZodType>(c: Context<MeetEnv>, schema: S, maxBytes: number): Promise<z.output<S>> {
+	const text = await readBodyText(c.req.raw, maxBytes);
 	let value: unknown = {};
 	if (text.trim() !== "") {
 		try {
@@ -108,11 +114,11 @@ export function mountMeetCalls(app: Hono<MeetEnv>): void {
 	app.post(`${BASE}/join`, async (c) => {
 		const code = codeOf(c);
 		if (!meetConfigured(c.env)) throw new OperationError("unavailable", "Meet is not set up on this server.");
+		const input = await bodyOf(c, JoinRequest, SMALL_BODY_BYTES);
 		const member = await memberOf(c);
 		if (member && !isSameOrigin(c.req.raw)) {
 			throw new OperationError("forbidden", "A join with the session cookie must come from this origin.");
 		}
-		const input = await bodyOf(c, JoinRequest);
 		if (!member && input.display_name === undefined) throw new OperationError("invalid", "Enter your name.");
 		const token = `${TOKEN_PREFIX}${randomToken(32)}`;
 		const self = accept(
@@ -155,7 +161,7 @@ export function mountMeetCalls(app: Hono<MeetEnv>): void {
 	app.post(`${BASE}/media/publish`, async (c) => {
 		const code = codeOf(c);
 		const hash = await tokenHashOf(c.req.header(MEET_TOKEN_HEADER));
-		const input = await bodyOf(c, PublishRequest);
+		const input = await bodyOf(c, PublishRequest, SDP_BODY_BYTES);
 		const result = accept(
 			await meetingStub(c.env, code).publish(hash, {
 				session: input.session,
@@ -169,7 +175,7 @@ export function mountMeetCalls(app: Hono<MeetEnv>): void {
 	app.post(`${BASE}/media/unpublish`, async (c) => {
 		const code = codeOf(c);
 		const hash = await tokenHashOf(c.req.header(MEET_TOKEN_HEADER));
-		const input = await bodyOf(c, UnpublishRequest);
+		const input = await bodyOf(c, UnpublishRequest, SMALL_BODY_BYTES);
 		accept(await meetingStub(c.env, code).unpublish(hash, input));
 		return json(c, {});
 	});
@@ -177,7 +183,7 @@ export function mountMeetCalls(app: Hono<MeetEnv>): void {
 	app.post(`${BASE}/media/subscribe`, async (c) => {
 		const code = codeOf(c);
 		const hash = await tokenHashOf(c.req.header(MEET_TOKEN_HEADER));
-		const input = await bodyOf(c, SubscribeRequest);
+		const input = await bodyOf(c, SubscribeRequest, SUBSCRIBE_BODY_BYTES);
 		const result = accept(
 			await meetingStub(c.env, code).subscribe(hash, { session: input.session, trackIds: input.track_ids }),
 		);
@@ -191,7 +197,7 @@ export function mountMeetCalls(app: Hono<MeetEnv>): void {
 	app.post(`${BASE}/media/answer`, async (c) => {
 		const code = codeOf(c);
 		const hash = await tokenHashOf(c.req.header(MEET_TOKEN_HEADER));
-		const input = await bodyOf(c, AnswerRequest);
+		const input = await bodyOf(c, AnswerRequest, SDP_BODY_BYTES);
 		accept(await meetingStub(c.env, code).answer(hash, { session: input.session, sdp: input.answer.sdp }));
 		return json(c, {});
 	});
@@ -199,7 +205,7 @@ export function mountMeetCalls(app: Hono<MeetEnv>): void {
 	app.post(`${BASE}/media/state`, async (c) => {
 		const code = codeOf(c);
 		const hash = await tokenHashOf(c.req.header(MEET_TOKEN_HEADER));
-		const input = await bodyOf(c, MediaStateRequest);
+		const input = await bodyOf(c, MediaStateRequest, SMALL_BODY_BYTES);
 		accept(await meetingStub(c.env, code).setMediaState(hash, { audioMuted: input.audio_muted }));
 		return json(c, {});
 	});

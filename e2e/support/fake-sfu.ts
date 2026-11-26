@@ -288,7 +288,9 @@ export async function startFakeSfu(port = FAKE_SFU_PORT): Promise<FakeSfu> {
 				([s, m]) => (window as never as { relay: { close(...a: unknown[]): unknown } }).relay.close(s, m),
 				[sid, mids] as const,
 			);
-			return send(response, 200, result);
+			// The SFU answers 410 for a session that it no longer has. Asterra then stops the tries to close its tracks.
+			const gone = (result as { errorCode?: string }).errorCode === "session_error";
+			return send(response, gone ? 410 : 200, result);
 		}
 		if (rest === "" && request.method === "GET") {
 			const state = await page.evaluate(

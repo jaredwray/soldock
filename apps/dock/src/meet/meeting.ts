@@ -72,6 +72,17 @@ const CREDENTIAL_CHECK_MS = 5 * 60_000;
 const ENDED_KEEP_MS = 30 * 24 * 60 * 60_000;
 /** An open meeting without activity for this time is deleted. */
 const IDLE_KEEP_MS = 90 * 24 * 60 * 60_000;
+/** The alarm tries a failed close of a track again after this time. Each later try waits two times longer. */
+const CLOSE_RETRY_MS = 5_000;
+const CLOSE_RETRY_MAX_MS = 5 * 60_000;
+/** The object stops the tries to close a track after this time. No TURN credential or token lives longer. */
+const CLOSE_KEEP_MS = 24 * 60 * 60_000;
+/** After a credential check that failed, the next check waits this time. */
+const CREDENTIAL_RETRY_MS = 60_000;
+/** The row of a guest that the host never admitted goes this long after the guest left the lobby. */
+const PRUNE_AFTER_MS = 10 * 60_000;
+/** The time window of the limit `MEET_LIMITS.guestJoinsPerMinute`. */
+const JOIN_WINDOW_MS = 60_000;
 
 const SCHEMA: readonly string[] = [
 	"CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)",
@@ -132,6 +143,16 @@ const SCHEMA: readonly string[] = [
 	)`,
 	"CREATE INDEX IF NOT EXISTS pulls_track ON pulls (track_id)",
 	"CREATE TABLE IF NOT EXISTS removed_principals (principal_id TEXT PRIMARY KEY)",
+	// The tracks that the SFU must close. A row goes only after the SFU confirmed the close.
+	`CREATE TABLE IF NOT EXISTS pending_closes (
+		session_id TEXT NOT NULL,
+		mid TEXT NOT NULL,
+		owner_id TEXT NOT NULL,
+		attempts INTEGER NOT NULL DEFAULT 0,
+		next_at INTEGER NOT NULL,
+		created_at INTEGER NOT NULL,
+		PRIMARY KEY (session_id, mid)
+	)`,
 ];
 
 const SCHEMA_VERSION = 1;
@@ -334,6 +355,19 @@ export class MeetingDO extends DurableObject<Env> {
 		if (!this.exists()) return refuse("not_found", NOT_FOUND);
 		const row = this.participantRow("token_hash", tokenHash);
 		if (!row) return refuse("forbidden", "The meeting does not know this participant token. Join again.");
+		// The life of a token ends at its time, also when the alarm is late. The alarm does the same change.
+		const now = Date.now();
+		if (isLive(row.state) && row.requested_at + MEET_LIMITS.tokenMs <= now) {
+			this.sql.exec(
+				"UPDATE participants SET state = 'left', end_reason = 'expired', left_at = ? WHERE id = ?",
+				now,
+				row.id,
+			);
+			this.endSockets(row.id, "expired");
+			// The rows of the media go in this call. The answer does not wait for the SFU.
+			this.ctx.waitUntil(this.teardown([row.id]));
+			return this.participantRow("id", row.id) as ParticipantRow;
+		}
 		return row;
 	}
 
@@ -507,11 +541,29 @@ export class MeetingDO extends DurableObject<Env> {
 		const meeting = this.meetingRow() as Row;
 		if (meeting.status === "cancelled") return refuse("conflict", "The meeting was cancelled.");
 		if (meeting.status !== "open") return refuse("conflict", "The meeting ended.");
-		const rows = this.sql.exec("SELECT COUNT(*) AS n FROM participants").one().n as number;
-		if (rows >= MEET_LIMITS.participantRows) {
-			return refuse("rate_limited", "The meeting has too many join requests. Ask the host for a new link.");
-		}
 		const now = Date.now();
+		// The limits of join requests are for guests only. The host and each member always get a row, so a person
+		// with the link cannot lock them out.
+		if (!input.member) {
+			this.sql.exec(
+				`DELETE FROM participants WHERE kind = 'guest' AND left_at <= ?
+					AND (state = 'denied' OR (state = 'left' AND decided_at IS NULL))`,
+				now - PRUNE_AFTER_MS,
+			);
+			const guests = this.sql
+				.exec(
+					`SELECT COUNT(*) AS n, COALESCE(SUM(CASE WHEN requested_at > ? THEN 1 ELSE 0 END), 0) AS recent
+						FROM participants WHERE kind = 'guest'`,
+					now - JOIN_WINDOW_MS,
+				)
+				.one();
+			if ((guests.recent as number) >= MEET_LIMITS.guestJoinsPerMinute) {
+				return refuse("rate_limited", "Too many guests asked to join this meeting. Try again in one minute.");
+			}
+			if ((guests.n as number) >= MEET_LIMITS.participantRows) {
+				return refuse("rate_limited", "The meeting has too many join requests. Ask the host for a new link.");
+			}
+		}
 		const id = newId("par");
 		let role: "host" | "participant" = "participant";
 		let state: ParticipantState = "waiting";
@@ -564,7 +616,8 @@ export class MeetingDO extends DurableObject<Env> {
 		);
 		this.touchActivity(now);
 		this.broadcast();
-		if (earlier.length > 0) void this.teardown(earlier);
+		// The rows of the earlier join are gone now. The answer does not wait for the SFU.
+		if (earlier.length > 0) this.ctx.waitUntil(this.teardown(earlier));
 		await this.schedule();
 		return this.self(this.participantRow("id", id) as ParticipantRow);
 	}
@@ -699,7 +752,9 @@ export class MeetingDO extends DurableObject<Env> {
 			const now = Date.now();
 			const epoch = after.session_epoch + 1;
 			const oldTurn = after.turn_username;
-			const dropped = this.dropMediaRows(after.id);
+			// The SFU has no call that ends a session, and the old connection of the browser can stay open. So the
+			// object closes each track and each pull of the old session, and each pull of its tracks by the others.
+			this.dropMedia(after.id);
 			this.sql.exec(
 				`UPDATE participants SET sfu_session_id = ?, session_epoch = ?, awaiting_answer = 0, turn_username = ?,
 					joined_at = COALESCE(joined_at, ?), last_seen_at = ? WHERE id = ?`,
@@ -712,48 +767,141 @@ export class MeetingDO extends DurableObject<Env> {
 			);
 			this.touchActivity(now);
 			this.broadcast();
-			// The old session of the participant is dead. Its pulls by others stop on their own sessions.
-			void this.closePulls(dropped);
-			if (oldTurn) void revokeTurn(config, oldTurn);
+			this.kick();
+			if (oldTurn) this.ctx.waitUntil(revokeTurn(config, oldTurn));
 			return { session: epoch, ice_servers: ice.servers };
 		});
 	}
 
 	/**
-	 * Deletes the tracks and the pulls of a participant from the tables. Returns the pulls of other participants
-	 * that read its tracks, so the caller can close them on their sessions.
+	 * Records tracks of one session that the SFU must close. `ownerId` is the participant of the session: the close
+	 * runs on its chain. The caller deletes the rows of the tracks in the same synchronous block, so a track is in
+	 * `tracks` or `pulls`, or it is in `pending_closes`, also after a restart of the object.
 	 */
-	private dropMediaRows(participantId: string): Map<string, string[]> {
-		const pulls = this.sql
-			.exec(
-				"SELECT subscriber_id, mid FROM pulls WHERE publisher_id = ? AND subscriber_id != ?",
-				participantId,
-				participantId,
-			)
-			.toArray();
-		const bySubscriber = new Map<string, string[]>();
-		for (const pull of pulls) {
-			const list = bySubscriber.get(pull.subscriber_id as string) ?? [];
-			list.push(pull.mid as string);
-			bySubscriber.set(pull.subscriber_id as string, list);
+	private queueCloses(ownerId: string, sessionId: string | null, mids: readonly string[]): void {
+		if (!sessionId) return;
+		const now = Date.now();
+		for (const mid of mids) {
+			this.sql.exec(
+				`INSERT OR IGNORE INTO pending_closes (session_id, mid, owner_id, attempts, next_at, created_at)
+					VALUES (?, ?, ?, 0, ?, ?)`,
+				sessionId,
+				mid,
+				ownerId,
+				now + CLOSE_RETRY_MS,
+				now,
+			);
 		}
-		this.sql.exec("DELETE FROM pulls WHERE publisher_id = ? OR subscriber_id = ?", participantId, participantId);
-		this.sql.exec("DELETE FROM tracks WHERE participant_id = ?", participantId);
-		return bySubscriber;
 	}
 
-	/** Closes pulls on the sessions of their subscribers, each after the earlier calls of that subscriber. */
-	private async closePulls(bySubscriber: Map<string, string[]>): Promise<void> {
+	/**
+	 * Records the close of each pull of a track, or of each track of a publisher. Each pull goes with the SFU
+	 * session of its subscriber at this moment, so a later new session of the subscriber cannot get the close.
+	 */
+	private queuePullCloses(column: "track_id" | "publisher_id", value: string): void {
+		const pulls = this.sql
+			.exec(
+				`SELECT p.subscriber_id, p.mid, s.sfu_session_id FROM pulls p
+					JOIN participants s ON s.id = p.subscriber_id WHERE p.${column} = ?`,
+				value,
+			)
+			.toArray();
+		for (const pull of pulls) {
+			this.queueCloses(pull.subscriber_id as string, pull.sfu_session_id as string | null, [pull.mid as string]);
+		}
+	}
+
+	/**
+	 * Deletes the tracks and the pulls of a participant from the tables, and records their close on the SFU: the
+	 * tracks and the pulls on the session of the participant, and the pulls of its tracks on the sessions of the
+	 * others.
+	 */
+	private dropMedia(participantId: string): void {
+		const row = this.participantRow("id", participantId);
+		if (!row) return;
+		const own = [
+			...this.tracksOf(participantId).map((track) => track.mid),
+			...this.sql
+				.exec("SELECT mid FROM pulls WHERE subscriber_id = ?", participantId)
+				.toArray()
+				.map((pull) => pull.mid as string),
+		];
+		this.queueCloses(participantId, row.sfu_session_id, own);
+		this.queuePullCloses("publisher_id", participantId);
+		this.sql.exec("DELETE FROM pulls WHERE publisher_id = ? OR subscriber_id = ?", participantId, participantId);
+		this.sql.exec("DELETE FROM tracks WHERE participant_id = ?", participantId);
+	}
+
+	/**
+	 * Closes the recorded tracks of one session on the SFU. It runs on the chain of the owner of the session. A row
+	 * goes when the SFU confirmed the close. A different row waits for the alarm, each time two times longer.
+	 */
+	private async closeSession(sessionId: string): Promise<void> {
 		const config = realtimeConfig(this.env);
-		if (!config) return;
-		await Promise.all(
-			[...bySubscriber].map(([subscriberId, mids]) =>
-				this.enqueue(subscriberId, async () => {
-					const subscriber = this.participantRow("id", subscriberId);
-					if (!subscriber?.sfu_session_id) return;
-					await closeTracks(config, subscriber.sfu_session_id, mids);
-				}),
-			),
+		const now = Date.now();
+		const mids = this.sql
+			.exec("SELECT mid FROM pending_closes WHERE session_id = ? AND (attempts = 0 OR next_at <= ?)", sessionId, now)
+			.toArray()
+			.map((row) => row.mid as string);
+		if (mids.length === 0) return;
+		const closed = config ? await closeTracks(config, sessionId, mids) : new Set<string>();
+		// The alarm can delete the data of an old meeting while the SFU call runs.
+		if (!this.exists()) return;
+		for (const mid of mids) {
+			if (closed.has(mid)) {
+				this.sql.exec("DELETE FROM pending_closes WHERE session_id = ? AND mid = ?", sessionId, mid);
+			} else {
+				this.sql.exec(
+					`UPDATE pending_closes SET next_at = ? + MIN(?, ? * (1 << MIN(attempts, 10))), attempts = attempts + 1
+						WHERE session_id = ? AND mid = ?`,
+					Date.now(),
+					CLOSE_RETRY_MAX_MS,
+					CLOSE_RETRY_MS,
+					sessionId,
+					mid,
+				);
+			}
+		}
+	}
+
+	/**
+	 * Sends the recorded closes to the SFU: the new ones, or for the alarm (`due`) the ones whose time came. The
+	 * alarm is set before the first SFU call, so a close that fails, or an object that stops, gets a later try.
+	 */
+	private async flushCloses(due: boolean): Promise<void> {
+		if (!this.exists()) return;
+		const now = Date.now();
+		if (due) {
+			const expired = this.sql.exec(
+				"DELETE FROM pending_closes WHERE created_at <= ?",
+				now - CLOSE_KEEP_MS,
+			).rowsWritten;
+			if (expired > 0) log("error", "meet: the media service did not close tracks in one day", { count: expired });
+		}
+		const sessions = (
+			due
+				? this.sql.exec("SELECT DISTINCT session_id, owner_id FROM pending_closes WHERE next_at <= ?", now)
+				: this.sql.exec("SELECT DISTINCT session_id, owner_id FROM pending_closes WHERE attempts = 0")
+		).toArray();
+		const scheduled = this.schedule();
+		const jobs = sessions.map((row) =>
+			this.enqueue(row.owner_id as string, () => this.closeSession(row.session_id as string)),
+		);
+		await Promise.all([scheduled, ...jobs]);
+		await this.schedule();
+	}
+
+	/**
+	 * Starts the new closes without a wait for them. Use it on the chain of a participant: a wait there for a
+	 * close on the same chain never ends.
+	 */
+	private kick(): void {
+		this.ctx.waitUntil(
+			this.flushCloses(false).catch((error: unknown) => {
+				log("warn", "meet: a close of tracks failed", {
+					error: error instanceof Error ? error.message : String(error),
+				});
+			}),
 		);
 	}
 
@@ -790,7 +938,8 @@ export class MeetingDO extends DurableObject<Env> {
 			const after = this.participantRow("id", row.id);
 			const made = result.tracks.filter((track) => !track.errorCode && track.mid).map((track) => track.mid as string);
 			if (after?.state !== "admitted" || after.session_epoch !== row.session_epoch) {
-				await closeTracks(config, row.sfu_session_id, made);
+				this.queueCloses(row.id, row.sfu_session_id, made);
+				this.kick();
 				return after?.state === "admitted" ? refuse("conflict", STALE) : refuse("forbidden", NOT_ADMITTED);
 			}
 			const out: { id: string; kind: "audio" | "video"; mid: string }[] = [];
@@ -827,25 +976,18 @@ export class MeetingDO extends DurableObject<Env> {
 			if (row.session_epoch !== input.session || !row.sfu_session_id) return refuse("conflict", STALE);
 			const tracks = this.tracksOf(row.id).filter((track) => input.kinds.includes(track.kind));
 			if (tracks.length === 0) return { ok: true } as const;
-			const bySubscriber = new Map<string, string[]>();
 			for (const track of tracks) {
-				for (const pull of this.sql
-					.exec("SELECT subscriber_id, mid FROM pulls WHERE track_id = ?", track.id)
-					.toArray()) {
-					const list = bySubscriber.get(pull.subscriber_id as string) ?? [];
-					list.push(pull.mid as string);
-					bySubscriber.set(pull.subscriber_id as string, list);
-				}
+				this.queuePullCloses("track_id", track.id);
 				this.sql.exec("DELETE FROM pulls WHERE track_id = ?", track.id);
 				this.sql.exec("DELETE FROM tracks WHERE id = ?", track.id);
 			}
-			this.broadcast();
-			await closeTracks(
-				config,
+			this.queueCloses(
+				row.id,
 				row.sfu_session_id,
 				tracks.map((track) => track.mid),
 			);
-			void this.closePulls(bySubscriber);
+			this.broadcast();
+			this.kick();
 			return { ok: true } as const;
 		});
 	}
@@ -907,7 +1049,8 @@ export class MeetingDO extends DurableObject<Env> {
 				.filter((track) => !track.errorCode && track.mid)
 				.map((track) => track.mid as string);
 			if (after?.state !== "admitted" || after.session_epoch !== row.session_epoch) {
-				await closeTracks(config, row.sfu_session_id, madeMids);
+				this.queueCloses(row.id, row.sfu_session_id, madeMids);
+				this.kick();
 				return after?.state === "admitted" ? refuse("conflict", STALE) : refuse("forbidden", NOT_ADMITTED);
 			}
 			const out: { id: string; mid: string }[] = [...existing];
@@ -938,7 +1081,10 @@ export class MeetingDO extends DurableObject<Env> {
 				);
 				out.push({ id: item.track.id, mid: answer.mid });
 			}
-			if (late.length > 0) await closeTracks(config, row.sfu_session_id, late);
+			if (late.length > 0) {
+				this.queueCloses(row.id, row.sfu_session_id, late);
+				this.kick();
+			}
 			if (result.offer) this.sql.exec("UPDATE participants SET awaiting_answer = 1 WHERE id = ?", row.id);
 			return { offer: result.offer, tracks: out, failed };
 		});
@@ -986,48 +1132,26 @@ export class MeetingDO extends DurableObject<Env> {
 	// --- Teardown ------------------------------------------------------------------------------------
 
 	/**
-	 * Stops the media of participants that are not in the call now: their own tracks and pulls on their sessions,
-	 * and the pulls of their tracks on the sessions of others. Each SFU call waits for the earlier calls of its
-	 * session. The rows go at once, so no later broker call can use them.
+	 * Stops the media of participants that are not in the call now. The rows go at once, so no later broker call
+	 * can use them, and `pending_closes` gets each track and each pull to close on the SFU in the same block. Then
+	 * the object closes them with `force`. A close that fails waits for the alarm. The revoke of the TURN
+	 * credential has one try.
 	 */
 	private async teardown(participantIds: readonly string[]): Promise<void> {
-		const config = realtimeConfig(this.env);
-		const own = new Map<string, { sessionId: string | null; mids: string[]; turn: string | null }>();
-		const others = new Map<string, string[]>();
-		// Read each mid first: a drop of one participant also deletes the pulls of its tracks by the next one.
+		const turns: string[] = [];
 		for (const id of participantIds) {
 			const row = this.participantRow("id", id);
 			if (!row) continue;
-			const mids = [
-				...this.tracksOf(id).map((track) => track.mid),
-				...this.sql
-					.exec("SELECT mid FROM pulls WHERE subscriber_id = ?", id)
-					.toArray()
-					.map((pull) => pull.mid as string),
-			];
-			own.set(id, { sessionId: row.sfu_session_id, mids, turn: row.turn_username });
-		}
-		for (const id of own.keys()) {
-			for (const [subscriber, list] of this.dropMediaRows(id)) {
-				if (participantIds.includes(subscriber)) continue;
-				others.set(subscriber, [...(others.get(subscriber) ?? []), ...list]);
-			}
+			this.dropMedia(id);
+			if (row.turn_username) turns.push(row.turn_username);
 			this.sql.exec(
 				"UPDATE participants SET sfu_session_id = NULL, awaiting_answer = 0, turn_username = NULL WHERE id = ?",
 				id,
 			);
 		}
 		this.broadcast();
-		if (!config) return;
-		await Promise.all([
-			...[...own].map(([id, media]) =>
-				this.enqueue(id, async () => {
-					if (media.sessionId && media.mids.length > 0) await closeTracks(config, media.sessionId, media.mids);
-					if (media.turn) await revokeTurn(config, media.turn);
-				}),
-			),
-			this.closePulls(others),
-		]);
+		const config = realtimeConfig(this.env);
+		await Promise.all([this.flushCloses(false), ...(config ? turns.map((turn) => revokeTurn(config, turn)) : [])]);
 	}
 
 	/** Ends or cancels the meeting: each participant leaves, and each socket closes. */
@@ -1187,6 +1311,8 @@ export class MeetingDO extends DurableObject<Env> {
 				next = Math.min(next, Math.max(checked + CREDENTIAL_CHECK_MS, now + 1000));
 			}
 		}
+		const close = this.sql.exec("SELECT MIN(next_at) AS at FROM pending_closes").one().at as number | null;
+		if (close !== null) next = Math.min(next, close);
 		await this.ctx.storage.setAlarm(Math.max(next, now + 1000));
 	}
 
@@ -1200,7 +1326,7 @@ export class MeetingDO extends DurableObject<Env> {
 				await this.ctx.storage.deleteAll();
 				return;
 			}
-			await this.schedule();
+			await this.flushCloses(true);
 			return;
 		}
 		if ((meeting.last_activity_at as number) + IDLE_KEEP_MS <= now) {
@@ -1239,6 +1365,11 @@ export class MeetingDO extends DurableObject<Env> {
 				log("warn", "meet: the credential check failed", {
 					error: error instanceof Error ? error.message : String(error),
 				});
+				// The next check waits CREDENTIAL_RETRY_MS. Without this time, the alarm runs each second.
+				this.sql.exec(
+					"INSERT INTO meta (key, value) VALUES ('credentials_at', ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value",
+					String(now - CREDENTIAL_CHECK_MS + CREDENTIAL_RETRY_MS),
+				);
 			}
 		}
 		if (gone.size > 0) {
@@ -1256,6 +1387,6 @@ export class MeetingDO extends DurableObject<Env> {
 			this.broadcast();
 			await this.teardown([...gone.keys()]);
 		}
-		await this.schedule();
+		await this.flushCloses(true);
 	}
 }

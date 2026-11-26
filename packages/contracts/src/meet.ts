@@ -13,8 +13,10 @@ export const MEET_LIMITS = {
 	admitted: 16,
 	/** The guests that wait in the lobby at one time. */
 	waiting: 20,
-	/** The participant rows of one meeting. Each join request adds a row. */
+	/** The participant rows of the guests of one meeting. Each join request of a guest adds a row. */
 	participantRows: 500,
+	/** The join requests of guests that one meeting accepts in one minute. */
+	guestJoinsPerMinute: 30,
 	/** The most bytes of one SDP text. */
 	sdpBytes: 64 * 1024,
 	/** The sockets of one participant. A new socket closes the oldest. */
@@ -40,7 +42,16 @@ export function isMeetingCode(value: string): boolean {
 export function parseMeetingCode(text: string): string | null {
 	const trimmed = text.trim();
 	const fromPath = /\/meet\/([^/?#]+)/.exec(trimmed);
-	const raw = (fromPath ? decodeURIComponent(fromPath[1] as string) : trimmed).toLowerCase().replaceAll("-", "");
+	let part = trimmed;
+	if (fromPath) {
+		try {
+			part = decodeURIComponent(fromPath[1] as string);
+		} catch {
+			// A path with a bad percent escape holds no code.
+			return null;
+		}
+	}
+	const raw = part.toLowerCase().replaceAll("-", "");
 	if (!/^[0-9a-hjkmnp-tv-z]{16}$/.test(raw)) return null;
 	return `${raw.slice(0, 4)}-${raw.slice(4, 8)}-${raw.slice(8, 12)}-${raw.slice(12)}`;
 }
@@ -61,6 +72,11 @@ export const ParticipantId = z
 	.describe("The id of a participant, as meet.list_participants returns it.");
 
 const CONTROL = /\p{Cc}/u;
+/**
+ * Control characters, and the format characters that change the direction of text or that are not visible. The
+ * joiners U+200C and U+200D are permitted: Persian and Indic names and some emoji need them.
+ */
+const CONTROL_OR_FORMAT = /\p{Cc}|[^\P{Cf}\u200C\u200D]/u;
 
 export const MeetingTitle = z
 	.string()
@@ -73,7 +89,8 @@ export const MeetDisplayName = z
 	.trim()
 	.min(1, "Enter your name.")
 	.max(MEET_LIMITS.displayNameChars)
-	.refine((value) => !CONTROL.test(value), "must not contain control characters");
+	.refine((value) => !CONTROL_OR_FORMAT.test(value), "must not contain control characters or format characters")
+	.refine((value) => value.replace(/[\u200C\u200D]/g, "").trim() !== "", "Enter your name.");
 
 export const MeetingStatus = z.enum(["open", "ended", "cancelled"]);
 export type MeetingStatus = z.infer<typeof MeetingStatus>;
