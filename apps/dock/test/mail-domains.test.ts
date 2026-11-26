@@ -14,6 +14,7 @@ import mailboxMemberScopesMigration from "../migrations/0029_mailbox_member_scop
 import {
 	api,
 	callTool,
+	codeOf,
 	createActor,
 	drainOutbox,
 	inject,
@@ -191,5 +192,53 @@ describe("mail domain settings", () => {
 		const { principals } = await owner.call("directory.list_principals");
 		const { mail_domains } = await owner.call("directory.list_mail_domains");
 		for (const principal of principals) expect(mail_domains).toContain(principal.address.split("@")[1]);
+	});
+});
+
+describe("the address check for a new member", () => {
+	const check = (actor: { call: ReturnType<typeof api> }, address: string) =>
+		actor.call("directory.check_address", { address });
+
+	it("tells owners and admins if a new member can get an address, and why not", async () => {
+		const { owner, ada, bot } = await seedOrg();
+		const admin = await createActor(owner, {
+			kind: "human",
+			display_name: "Admin",
+			address: "admin@dock.test",
+			org_role: "admin",
+		});
+		await owner.call("directory.create_team_mailbox", {
+			display_name: "Support",
+			address: "support@dock.test",
+			member_ids: [],
+		});
+		const taken = { available: false, reason: "taken", message: expect.stringContaining("another member") };
+		for (const [address, expected] of [
+			["grace@dock.test", { address: "grace@dock.test", available: true, reason: null, message: null }],
+			// The directory keeps addresses in lowercase, so a capital letter does not make a different address.
+			["Ada@Dock.TEST", { address: "ada@dock.test", ...taken }],
+			["support@dock.test", { address: "support@dock.test", ...taken }],
+			["grace@unsaved.example", { available: false, reason: "domain_not_saved", message: expect.any(String) }],
+			// Mail to grace+news@ goes to grace@, so a primary address cannot have a +.
+			["grace+news@unsaved.example", { available: false, reason: "plus_tag", message: expect.any(String) }],
+		] as const) {
+			expect(await check(admin, address)).toMatchObject(expected);
+		}
+
+		// An archived principal keeps its address. A deleted principal frees it, as for a create.
+		await owner.call("directory.archive_principal", { principal_id: bot.id });
+		expect(await check(owner, "bot@dock.test")).toMatchObject({ available: false, reason: "taken" });
+		await owner.call("directory.delete_principal", { principal_id: bot.id });
+		expect(await check(owner, "bot@dock.test")).toMatchObject({ available: true });
+
+		// The check is for the New member form, so a member and an agent cannot use it.
+		const agent = await createActor(owner, {
+			kind: "agent",
+			display_name: "Helper",
+			address: "helper@dock.test",
+			sponsor_id: ada.id,
+		});
+		expect(await codeOf(check(ada, "grace@dock.test"))).toBe("forbidden");
+		expect(await codeOf(check(agent, "grace@dock.test"))).toBe("forbidden");
 	});
 });

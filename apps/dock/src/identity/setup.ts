@@ -31,7 +31,8 @@ import driveShareRequestsSchema from "../../migrations/0032_drive_share_requests
 import resourceAccessSchema from "../../migrations/0033_resource_access.sql";
 import unusedAccessColumnsSchema from "../../migrations/0034_remove_unused_access_columns.sql";
 import inviteSchema from "../../migrations/0035_invites.sql";
-import mailboxDelegatesSchema from "../../migrations/0036_mailbox_delegates.sql";
+import addressFormatSchema from "../../migrations/0036_address_format.sql";
+import mailboxDelegatesSchema from "../../migrations/0037_mailbox_delegates.sql";
 import { log, OperationError, randomToken } from "../platform/index.ts";
 import { allMailboxIds } from "./team-mailboxes.ts";
 
@@ -174,6 +175,7 @@ function freshDirectoryStatements(db: D1Database): D1PreparedStatement[] {
 		...resourceAccessSchema.split("--> statement-breakpoint"),
 		...unusedAccessColumnsSchema.split("--> statement-breakpoint"),
 		...inviteSchema.split("--> statement-breakpoint"),
+		...addressFormatSchema.split("--> statement-breakpoint"),
 		...mailboxDelegatesSchema.split("--> statement-breakpoint"),
 		// The directory now has the schema of each bundled migration. Record them in the table that
 		// `wrangler d1 migrations apply` reads, or it runs them again later. A second run of 0004 would
@@ -220,5 +222,6 @@ const BUNDLED_MIGRATIONS = [
 	"0033_resource_access.sql",
 	"0034_remove_unused_access_columns.sql",
 	"0035_invites.sql",
-	"0036_mailbox_delegates.sql",
+	"0036_address_format.sql",
+	"0037_mailbox_delegates.sql",
 ] as const;

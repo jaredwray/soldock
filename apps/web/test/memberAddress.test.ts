@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { defaultMailDomain } from "../src/features/admin/memberAddress.ts";
+import { addressToCheck, defaultMailDomain } from "../src/features/admin/memberAddress.ts";
 
 describe("the first domain of the New member address", () => {
 	it.each([
@@ -11,5 +11,19 @@ describe("the first domain of the New member address", () => {
 		{ domains: [], own: "ada@dock.test", expected: "" },
 	])("is $expected for $own and $domains", ({ domains, own, expected }) => {
 		expect(defaultMailDomain(domains, own)).toBe(expected);
+	});
+});
+
+describe("the address that the New member form checks", () => {
+	it.each([
+		{ local: "ada.lovelace", domain: "dock.test", expected: "ada.lovelace@dock.test" },
+		{ local: "  ada ", domain: "dock.test", expected: "ada@dock.test" },
+		// Nothing to check: no mailbox name, no domain, a full address in the name field, or a name that is not valid.
+		{ local: "", domain: "dock.test", expected: null },
+		{ local: "ada", domain: "", expected: null },
+		{ local: "ada@dock.test", domain: "dock.test", expected: null },
+		{ local: "ada lovelace", domain: "dock.test", expected: null },
+	])("is $expected for '$local' and '$domain'", ({ local, domain, expected }) => {
+		expect(addressToCheck(local, domain)).toBe(expected);
 	});
 });

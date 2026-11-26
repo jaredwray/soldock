@@ -2,7 +2,7 @@ import { MAILBOX_DELEGATE_LIMITS, type MailboxMemberScope } from "@asterra/contr
 import { type MemberMailboxRecord, parseMemberScopes, storedMemberScopes } from "./team-mailboxes.ts";
 
 // The delegates of a mailbox: the people and agents that a person lets use their own mailbox (D1 table
-// `mailbox_delegates`, migration 0036). A mailbox has no delegate until its owner adds one. A grant counts
+// `mailbox_delegates`, migration 0037). A mailbox has no delegate until its owner adds one. A grant counts
 // only while the owner is a person who is not archived and not deleted: the queries here check that on each
 // read, so the access ends at once with the grant, and stops while the owner is archived.
 

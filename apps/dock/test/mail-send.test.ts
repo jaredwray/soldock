@@ -75,9 +75,11 @@ describe("mail.send to mailboxes of this deployment", () => {
 		const [received] = (await ada.call("mail.list_threads")).threads;
 		expect(received).toMatchObject({ subject: "Kickoff", unread: true, untrusted: false });
 		const thread = await ada.call("mail.get_thread", { thread_id: received?.id as string });
+		// The verdict is only for mail from the internet. The delivery path proves internal mail.
 		expect(thread.messages[0]).toMatchObject({
 			origin: "internal",
 			untrusted: false,
+			sender_verification: null,
 			from: { address: "owner@dock.test" },
 		});
 
@@ -93,32 +95,6 @@ describe("mail.send to mailboxes of this deployment", () => {
 			["Kickoff", "sent"],
 			["Re: Kickoff", "internal"],
 		]);
-	});
-
-	// A reply answers the thread, so it leaves Reply later. A forward joins the thread by its subject, but it
-	// answers nobody, so the thread stays there.
-	it("removes REPLY_LATER from the thread of a reply, and not for a forward or a new message", async () => {
-		await owner.call("mail.send", { to: ["ada@dock.test"], subject: "Budget", text: "Can you check?" });
-		await drainOutbox(owner.id);
-		const [received] = (await ada.call("mail.list_threads")).threads;
-		const threadId = received?.id as string;
-		await ada.call("mail.modify_threads", {
-			thread_ids: [threadId],
-			add_label_ids: ["REPLY_LATER"],
-			remove_label_ids: ["INBOX"],
-		});
-		const waiting = async () => (await ada.call("mail.list_threads", { query: "in:reply_later" })).threads;
-
-		const forward = await ada.call("mail.send", { to: ["bot@dock.test"], subject: "Fwd: Budget", text: "FYI" });
-		await ada.call("mail.send", { to: ["bot@dock.test"], subject: "Lunch", text: "Noon?" });
-		expect(forward.thread_id).toBe(threadId);
-		expect((await waiting()).map((thread) => thread.id)).toEqual([threadId]);
-
-		const [first] = (await ada.call("mail.get_thread", { thread_id: threadId })).messages;
-		await ada.call("mail.send", { to: ["owner@dock.test"], text: "Done.", reply_to_message_id: first?.id as string });
-		expect(await waiting()).toEqual([]);
-		const thread = await ada.call("mail.get_thread", { thread_id: threadId });
-		expect(thread.messages.flatMap((message) => message.label_ids)).not.toContain("REPLY_LATER");
 	});
 
 	// Internal mail must never leave the deployment, and must not count against the Email Service quota.

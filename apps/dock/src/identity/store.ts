@@ -198,6 +198,21 @@ export async function removeMailDomain(db: D1Database, domain: string): Promise<
 	}
 }
 
+/**
+ * True when a principal or a team mailbox has the address. An archived principal keeps its addresses. The
+ * deletion of a principal removes its addresses, so a deleted principal has none.
+ */
+export async function addressTaken(db: D1Database, address: string): Promise<boolean> {
+	const row = await db
+		.prepare(
+			`SELECT 1 FROM addresses WHERE address = ?1
+			UNION ALL SELECT 1 FROM team_mailboxes WHERE address = ?1 LIMIT 1`,
+		)
+		.bind(normalizeAddress(address))
+		.first();
+	return row !== null;
+}
+
 export function domainOf(address: string): string {
 	return address.slice(address.lastIndexOf("@") + 1).toLowerCase();
 }

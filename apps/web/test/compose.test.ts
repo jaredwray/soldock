@@ -37,6 +37,7 @@ function message(values: Partial<Message> = {}): Message {
 		origin: "internal",
 		untrusted: false,
 		authentication: null,
+		sender_verification: null,
 		body: { text: "Hello", html: null, remote_images_blocked: 0, truncated: false, omitted: false },
 		attachments: [],
 		delivery: null,

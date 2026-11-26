@@ -395,6 +395,12 @@ kbd {
 	font-size: 13px;
 }
 
+.field-ok {
+	margin-top: 4px;
+	color: var(--positive);
+	font-size: 13px;
+}
+
 .form-error {
 	margin: 12px 0;
 	padding: 10px 12px;
@@ -1967,38 +1973,41 @@ fieldset {
 	font-size: 13px;
 }
 
-/* Reply later: the banner above its list, the pile at the end of the inbox, and Focus. */
+/* Snooze: the time of a snoozed conversation in a list row, and the times that the dialog offers. */
 
-.reply-later-banner,
-.reply-later-pile {
-	display: flex;
-	flex-wrap: wrap;
+.thread-snooze {
+	display: inline-flex;
+	flex: none;
 	align-items: center;
-	justify-content: space-between;
-	gap: 8px 16px;
-	margin: 12px 16px;
-	padding: 10px 12px;
-	border: 1px solid var(--border);
-	border-radius: var(--radius-md);
-	background: var(--surface);
-	font-size: 14px;
-}
-
-.reply-later-banner p {
-	margin: 0;
+	gap: 4px;
+	max-width: none;
 	color: var(--muted-foreground);
 }
 
-.reply-later-pile-link {
-	display: inline-flex;
-	align-items: center;
-	gap: 8px;
-	color: var(--foreground);
-	text-decoration: none;
+/* The Snooze button of Focus is a list control with the look of the other actions. */
+.focus-snooze .select-icon,
+.focus-snooze .select-placeholder {
+	color: inherit;
 }
 
-.reply-later-pile-link:hover {
-	text-decoration: underline;
+.snooze-presets {
+	display: grid;
+	gap: 8px;
+	margin: 0 0 16px;
+	padding: 0;
+	list-style: none;
+}
+
+.snooze-preset {
+	display: flex;
+	justify-content: space-between;
+	gap: 16px;
+	width: 100%;
+}
+
+.snooze-preset-time {
+	color: var(--muted-foreground);
+	font-weight: 400;
 }
 
 /* The way into Focus in the header row of a list. A narrow row shows the icon only. */
@@ -2311,7 +2320,9 @@ fieldset {
 		justify-content: center;
 	}
 
-	.focus-actions-bar .button-ghost .focus-action-text {
+	.focus-actions-bar .button-ghost .focus-action-text,
+	.focus-actions-bar .focus-snooze .select-value,
+	.focus-actions-bar .focus-snooze .select-chevron {
 		display: none;
 	}
 
@@ -2427,14 +2438,82 @@ fieldset {
 	outline-offset: -2px;
 }
 
-.message-expanded .message-toggle {
+/* An open message: the toggle holds the avatar and the name. The address, the copy button and the date come after
+   it, outside the toggle. The toggle covers the full header, so a click on a different part closes the message. */
+.message-expanded .message-header {
+	position: relative;
+	display: flex;
 	align-items: flex-start;
+	padding: 14px 10px 0 58px;
+}
+
+/* The name, then the address and the copy button. Together, the address and the button go to a second line. */
+.message-expanded .message-from {
+	display: flex;
+	flex: 1 1 auto;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 0 6px;
+	min-width: 0;
+	line-height: 22px;
+}
+
+.message-expanded .message-heading {
+	flex: 0 1 auto;
+	min-width: 0;
+}
+
+.message-expanded .message-toggle {
 	margin: 0;
-	padding: 14px 10px 0;
+	padding: 0;
+}
+
+.message-expanded .message-toggle::before {
+	content: "";
+	position: absolute;
+	inset: 0;
+	border-radius: var(--radius-md);
 }
 
 .message-expanded .message-toggle:hover {
 	background: none;
+}
+
+.message-expanded .message-toggle:focus-visible {
+	outline: none;
+}
+
+.message-expanded .message-toggle:focus-visible::before {
+	outline: 2px solid var(--focus);
+	outline-offset: -2px;
+}
+
+/* Above the toggle, so the address is selectable and the copy button gets the click. */
+.message-sender-detail {
+	position: relative;
+	z-index: 1;
+	display: inline-flex;
+	align-items: center;
+	gap: 4px;
+	min-width: 0;
+}
+
+.message-copy-address {
+	width: 24px;
+	height: 24px;
+	margin: -1px 0;
+	opacity: 0;
+}
+
+.message-header:hover .message-copy-address,
+.message-copy-address:focus-visible {
+	opacity: 1;
+}
+
+@media (hover: none) {
+	.message-copy-address {
+		opacity: 1;
+	}
 }
 
 .message-avatar {
@@ -2442,6 +2521,13 @@ fieldset {
 	place-items: center;
 	flex: none;
 	width: 36px;
+}
+
+/* In an open message, the avatar is at the left of the header. The name and the address go next to it. */
+.message-expanded .message-avatar {
+	position: absolute;
+	top: 14px;
+	left: 10px;
 }
 
 .message-avatar-mark {
@@ -2476,9 +2562,9 @@ fieldset {
 	min-width: 0;
 }
 
+/* The sender can shrink, so a long name ends with an ellipsis and the address and the date keep their place. */
 .message-expanded .message-sender {
-	flex: 1;
-	flex-wrap: wrap;
+	flex: 0 1 auto;
 	max-width: none;
 }
 
@@ -2519,18 +2605,23 @@ fieldset {
 	white-space: nowrap;
 }
 
+.message-expanded .message-date {
+	padding-left: 12px;
+}
+
 .message-content {
 	padding: 0 10px 20px 58px;
 }
 
-/* The recipients are under the name of the sender, next to the avatar. The header is 50px high, and
-   the name is 22px high, so the list moves up 14px. */
+/* The recipients are under the name and the address of the sender, next to the avatar. The avatar is out
+   of the flow, so the header is as high as its text, and the list starts on the next line. The minimum
+   height keeps the content below the avatar, which is 50px from the top. */
 .message-recipients {
 	display: flex;
 	flex-wrap: wrap;
 	gap: 0 14px;
 	min-height: 14px;
-	margin: -14px 0 12px;
+	margin: 0 0 12px;
 	color: var(--muted-foreground);
 	font-size: 13px;
 	line-height: 20px;
@@ -2582,24 +2673,104 @@ fieldset {
 	color: var(--negative);
 }
 
-/* The SPF, DKIM and DMARC results: quiet chips. The color of the text shows pass or fail, and the text tells it. */
-.auth-results {
-	display: flex;
-	flex-wrap: wrap;
-	gap: 6px;
-	margin: 8px 0 0;
+/* A verified sender is not a safe message. The notice is quiet, and only the icon has a color. */
+.sender-verified {
+	border-color: var(--border);
+	background: var(--surface);
+}
+
+.sender-verified > .icon {
+	color: var(--positive);
+}
+
+.sender-notice-text {
+	flex: 1;
+	min-width: 0;
+	overflow-wrap: anywhere;
+}
+
+.sender-details > summary {
+	display: inline-flex;
+	gap: 4px;
+	align-items: center;
+	margin-top: 6px;
+	border-radius: var(--radius-sm);
+	color: var(--muted-foreground);
+	font-weight: 500;
+	cursor: pointer;
+	list-style: none;
+}
+
+.sender-details > summary::-webkit-details-marker {
+	display: none;
+}
+
+.sender-details > summary:hover,
+.sender-details[open] > summary {
+	color: var(--foreground);
+}
+
+.sender-details > summary:focus-visible {
+	outline: 2px solid var(--focus);
+	outline-offset: 2px;
+}
+
+.sender-details[open] > summary .icon {
+	transform: rotate(180deg);
+}
+
+/* The checks of the receiving server: a name and a sentence, and the SPF, DKIM or DMARC result as a quiet chip. */
+.sender-checks,
+.sender-checks-empty {
+	margin: 8px 0 2px;
+	border: 1px solid var(--border);
+	border-radius: var(--radius-sm);
+	background: var(--background);
+}
+
+.sender-checks {
 	padding: 0;
 	list-style: none;
 }
 
-.auth-results li {
+.sender-checks-empty {
+	padding: 8px 10px;
+	color: var(--muted-foreground);
+}
+
+.sender-checks li {
+	display: flex;
+	gap: 12px;
+	align-items: flex-start;
+	padding: 8px 10px;
+}
+
+.sender-checks li + li {
+	border-top: 1px solid var(--border);
+}
+
+.sender-check-text {
+	display: flex;
+	flex: 1;
+	flex-direction: column;
+	min-width: 0;
+}
+
+.sender-check-text > span {
+	color: var(--muted-foreground);
+}
+
+/* The color of the text shows a pass or a failure, and the text tells it. Each other result is muted. */
+.auth-result {
+	flex: none;
 	padding: 0 6px;
 	border: 1px solid var(--border);
 	border-radius: var(--radius-sm);
-	background: var(--background);
 	font-family: var(--mono);
 	font-size: 11px;
 	line-height: 18px;
+	white-space: nowrap;
+	color: var(--muted-foreground);
 }
 
 .auth-pass {
@@ -4882,6 +5053,11 @@ fieldset {
 		display: none;
 	}
 
+	/* The clock alone shows that the conversation is snoozed. The title has the time. */
+	.thread-snooze-time {
+		display: none;
+	}
+
 	.thread-date {
 		min-width: 0;
 	}
@@ -4915,11 +5091,18 @@ fieldset {
 		padding-left: 10px;
 	}
 
+	/* The recipients use the full width, so the header is at least as high as the avatar. */
+	.message-expanded .message-header {
+		min-height: 50px;
+	}
+
 	.message-recipients {
 		margin: 10px 0 12px;
 	}
 
+	/* The date goes to two lines, so the address and the copy button have space. */
 	.message-expanded .message-date {
+		max-width: 8em;
 		white-space: normal;
 		text-align: right;
 	}
@@ -4930,6 +5113,11 @@ fieldset {
 
 	.message-toggle {
 		min-height: 44px;
+	}
+
+	/* The full header of an open message is the target of its toggle. */
+	.message-expanded .message-toggle {
+		min-height: 0;
 	}
 
 	.compose-fields {
@@ -5348,6 +5536,11 @@ fieldset {
 	.toast-close {
 		width: 44px;
 		height: 44px;
+	}
+
+	/* The target is 44px, but the line of the name stays 22px high. */
+	.message-copy-address {
+		margin: -11px -10px;
 	}
 
 	/* The label around a box is the target. The box keeps its size. */

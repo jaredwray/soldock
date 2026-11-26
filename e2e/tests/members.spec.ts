@@ -32,7 +32,22 @@ test("an admin creates a person with no API key, and an agent with a first key, 
 		const person = unique("Cooper Wray");
 		await page.getByRole("button", { name: "New member" }).click();
 		await dialog.getByLabel("Display name").fill(person);
-		await dialog.getByLabel("Address", { exact: true }).fill(`cooper-${local}`);
+		// The address format of Admin › Mail is on at the start, with first.last: the address follows the name.
+		const address = dialog.getByLabel("Address", { exact: true });
+		const auto = `cooper.${person.split(" ").at(-1)}`;
+		await expect(address).toHaveValue(auto);
+		await expect(dialog.getByText(`${auto}@example.com is available.`)).toHaveClass("field-ok");
+		// An address that a member has gets red text with the reason.
+		await address.fill("tomasz");
+		await expect(dialog.getByText("That address belongs to another member or a shared mailbox.")).toHaveClass(
+			"field-error",
+		);
+		// The address that the admin types stays when the name changes.
+		await address.fill(`cooper-${local}`);
+		await dialog.getByLabel("Display name").fill(`${person} Jr`);
+		await expect(address).toHaveValue(`cooper-${local}`);
+		await dialog.getByLabel("Display name").fill(person);
+		await expect(dialog.getByText(`cooper-${local}@example.com is available.`)).toBeVisible();
 		// The domain is a list of the saved domains, not free text. It starts on the domain of the admin.
 		await expect(dialog.getByRole("combobox", { name: "Email domain" })).toHaveText("example.com");
 		// An invite link is the default. The admin can choose the first password instead.

@@ -9,6 +9,7 @@ import { isAgentMailbox } from "../../routes.ts";
 import { AUTO_MARK_TEXT, AUTO_MARK_TITLE } from "./autoLabels.ts";
 import { MessageBody } from "./MessageBody.tsx";
 import { mailboxInput, useMailboxId, useMailboxRights } from "./mailbox.tsx";
+import { messageNotices, senderChecks, senderDomain } from "./senderCheck.ts";
 import { labelChipName } from "./views.ts";
 
 export type ReplyMode = "reply" | "replyAll" | "forward";
@@ -81,6 +82,8 @@ export function MessageCard({
 		if (body) onFullBodyRef.current?.({ ...message, body });
 	}, [message, body]);
 	const bodyId = useId();
+	const addressId = useId();
+	const dateId = useId();
 	// In a team mailbox, more than one person sends from the address, so the sender is not "me". In the
 	// mailbox of an agent, the sender is the agent, not the person who reads.
 	const mailboxId = useMailboxId();
@@ -89,7 +92,7 @@ export function MessageCard({
 	const selfAddress = mailboxId === null ? myAddress : "";
 	// Reply and Forward quote the full body. They wait for a body that mail.get_thread left out.
 	const withBody = body ? { ...message, body } : null;
-	const spam = message.label_ids.includes("SPAM");
+	const notices = messageNotices(message);
 	const sender = message.from;
 	const senderName = sender
 		? sameAddress(sender.address, selfAddress)
@@ -101,37 +104,60 @@ export function MessageCard({
 		return name ? [{ id, name, auto: message.auto_label_ids.includes(id) }] : [];
 	});
 
+	const date = (
+		<time id={dateId} className="message-date" dateTime={message.date} title={fullDate(message.date)}>
+			{expanded ? fullDate(message.date) : shortDate(message.date)}
+		</time>
+	);
+
 	return (
 		<article className={expanded ? "message message-expanded" : "message"}>
-			<Heading className="message-heading">
-				<button
-					type="button"
-					className="message-toggle"
-					aria-expanded={expanded}
-					aria-controls={bodyId}
-					onClick={() => setExpanded((value) => !value)}
-				>
-					<span className="message-avatar" aria-hidden="true">
-						<span className="avatar message-avatar-mark">{sender ? initials(addressName(sender)) : "?"}</span>
-					</span>
-					<span className="message-summary">
-						<span className="message-sender">
-							<span className="message-sender-name">{senderName}</span>
-							{expanded && sender?.name && <span className="message-sender-address">&lt;{sender.address}&gt;</span>}
-						</span>
-						{!expanded && <span className="message-snippet">{message.snippet}</span>}
-					</span>
-					{!expanded && message.attachments.length > 0 && (
-						<span className="message-mark">
-							<Icon name="paperclip" size={16} />
-							<span className="visually-hidden">Has attachments, </span>
+			{/* In an open message, the address, the copy button and the date are outside the toggle, because a button
+			    cannot hold a button. The toggle keeps its place in the tree, so React keeps it, and its focus, when the
+			    message opens. */}
+			<div className="message-header">
+				<div className="message-from">
+					<Heading className="message-heading">
+						<button
+							type="button"
+							className="message-toggle"
+							aria-expanded={expanded}
+							aria-controls={bodyId}
+							// The address and the date of an open message are outside the toggle. They describe it.
+							aria-describedby={expanded ? (sender?.name ? `${addressId} ${dateId}` : dateId) : undefined}
+							onClick={() => setExpanded((value) => !value)}
+						>
+							<span className="message-avatar" aria-hidden="true">
+								<span className="avatar message-avatar-mark">{sender ? initials(addressName(sender)) : "?"}</span>
+							</span>
+							<span className="message-summary">
+								<span className="message-sender">
+									<span className="message-sender-name">{senderName}</span>
+								</span>
+								{!expanded && <span className="message-snippet">{message.snippet}</span>}
+							</span>
+							{!expanded && message.attachments.length > 0 && (
+								<span className="message-mark">
+									<Icon name="paperclip" size={16} />
+									<span className="visually-hidden">Has attachments, </span>
+								</span>
+							)}
+							{!expanded && date}
+						</button>
+					</Heading>
+					{expanded && sender && (
+						<span className="message-sender-detail">
+							{sender.name && (
+								<span id={addressId} className="message-sender-address">
+									&lt;{sender.address}&gt;
+								</span>
+							)}
+							<CopyAddressButton address={sender.address} />
 						</span>
 					)}
-					<time className="message-date" dateTime={message.date} title={fullDate(message.date)}>
-						{expanded ? fullDate(message.date) : shortDate(message.date)}
-					</time>
-				</button>
-			</Heading>
+				</div>
+				{expanded && date}
+			</div>
 			<div id={bodyId} hidden={!expanded} className="message-content">
 				{expanded && (
 					<>
@@ -165,8 +191,8 @@ export function MessageCard({
 								))}
 							</ul>
 						)}
-						{spam && <SpamNotice />}
-						{message.untrusted && <ExternalNotice message={message} />}
+						{notices.spamNotice && <SpamNotice />}
+						{notices.sender && <SenderNotice message={message} verdict={notices.sender} inSpam={notices.inSpam} />}
 						{body ? (
 							<MessageBody body={body} subject={message.subject} />
 						) : full.status === "error" ? (
@@ -224,6 +250,41 @@ export function MessageCard({
 	);
 }
 
+/** Puts the address of the sender on the clipboard. It shows when the pointer is on the header of the message. */
+function CopyAddressButton({ address }: { address: string }) {
+	const toast = useToast();
+	const [copied, setCopied] = useState(false);
+
+	useEffect(() => {
+		if (!copied) return;
+		const timer = window.setTimeout(() => setCopied(false), 2000);
+		return () => window.clearTimeout(timer);
+	}, [copied]);
+
+	async function copy() {
+		try {
+			await navigator.clipboard.writeText(address);
+			setCopied(true);
+		} catch {
+			toast({ message: "The browser did not permit a copy to the clipboard.", tone: "error" });
+		}
+	}
+
+	return (
+		<button
+			type="button"
+			className="icon-button message-copy-address"
+			title={copied ? "Copied" : "Copy the address"}
+			onClick={() => void copy()}
+		>
+			<Icon name={copied ? "check" : "copy"} size={16} />
+			<span className="visually-hidden" aria-live="polite">
+				{copied ? `Copied ${address}` : `Copy the address ${address}`}
+			</span>
+		</button>
+	);
+}
+
 function RecipientLine({
 	term,
 	addresses,
@@ -264,31 +325,74 @@ function SpamNotice() {
 	);
 }
 
-function ExternalNotice({ message }: { message: Message }) {
-	const auth = message.authentication;
-	const results: [name: string, value: string][] = [];
-	if (auth) {
-		if (auth.spf !== null) results.push(["SPF", auth.spf]);
-		if (auth.dkim !== null) results.push(["DKIM", auth.dkim]);
-		if (auth.dmarc !== null) results.push(["DMARC", auth.dmarc]);
-	}
+const SENDER_NOTICES = {
+	verified: { icon: "shield", className: "external-notice sender-verified" },
+	unverified: { icon: "warning", className: "external-notice" },
+	failed: { icon: "spam", className: "external-notice spam-notice" },
+} as const;
+
+/**
+ * The notice of external mail. It answers one question in plain words: did the From domain send this
+ * message? The SPF, DKIM and DMARC results are in the details. A verified sender is not a safe message,
+ * so that notice is quiet and keeps the caution.
+ */
+function SenderNotice({
+	message,
+	verdict,
+	inSpam,
+}: {
+	message: Message;
+	verdict: NonNullable<Message["sender_verification"]>;
+	inSpam: boolean;
+}) {
+	const domain = senderDomain(message.from?.address);
+	const checks = senderChecks(message.authentication, domain, verdict);
+	const from = domain ? <strong>{domain}</strong> : "the domain of its sender";
+	const { icon, className } = SENDER_NOTICES[verdict];
 	return (
-		<div className="external-notice">
-			<Icon name="warning" size={18} />
-			<div>
-				<p>
-					<strong>External sender.</strong> This message came from outside your organization. Be careful with links,
-					attachments and requests in it.
-				</p>
-				{results.length > 0 && (
-					<ul className="auth-results" aria-label="Sender authentication">
-						{results.map(([name, value]) => (
-							<li key={name} className={value.toLowerCase() === "pass" ? "auth-pass" : "auth-fail"}>
-								{name}: {value}
-							</li>
-						))}
-					</ul>
+		<div className={className}>
+			<Icon name={icon} size={18} />
+			<div className="sender-notice-text">
+				{verdict === "verified" && (
+					<p>
+						<strong>Verified sender.</strong> {domain ? <>The domain {from}</> : "The domain of its sender"} sent this
+						message. The message came from outside your organization, so be careful with links, attachments and
+						requests.
+					</p>
 				)}
+				{verdict === "unverified" && (
+					<p>
+						<strong>Unverified sender.</strong> No check confirms that this message came from {from}. Be careful with
+						links, attachments and requests in it.
+					</p>
+				)}
+				{verdict === "failed" && (
+					<p>
+						<strong>Sender check failed.</strong> This message says that it is from {from}, but it failed the checks of
+						that domain. The sender is probably forged.{inSpam ? " The message is in Spam." : ""}
+					</p>
+				)}
+				<details className="sender-details">
+					<summary>
+						Details
+						<Icon name="chevronDown" size={14} />
+					</summary>
+					{checks.length > 0 ? (
+						<ul className="sender-checks" aria-label="Sender checks">
+							{checks.map((check) => (
+								<li key={check.key}>
+									<span className="sender-check-text">
+										<strong>{check.name}</strong>
+										<span>{check.text}</span>
+									</span>
+									<span className={`auth-result auth-${check.tone}`}>{check.chip}</span>
+								</li>
+							))}
+						</ul>
+					) : (
+						<p className="sender-checks-empty">The receiving server recorded no checks for this message.</p>
+					)}
+				</details>
 			</div>
 		</div>
 	);

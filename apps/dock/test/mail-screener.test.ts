@@ -109,21 +109,28 @@ async function createSupport(members: { id: string; scopes: ("mail.read" | "mail
 }
 
 describe("the mail settings of the organization", () => {
-	it("start off, and only owners and admins read and change them", async () => {
-		expect(await owner.call("mail.get_org_settings")).toEqual({ screener: { default_enabled: false } });
+	const DEFAULTS = { screener: { default_enabled: false }, address_format: { enabled: true, format: "first.last" } };
+
+	it("start with the defaults, and only owners and admins read and change them", async () => {
+		expect(await owner.call("mail.get_org_settings")).toEqual(DEFAULTS);
 		const lines = await auditLines(() =>
 			admin.call("mail.update_org_settings", { screener: { default_enabled: true } }),
 		);
 		expect(lines).toEqual([
 			expect.objectContaining({ op: "mail.update_org_settings", actor: admin.id, target: "screener", code: "on" }),
 		]);
-		expect(await owner.call("mail.get_org_settings")).toEqual({ screener: { default_enabled: true } });
+		// A change of one setting keeps the other setting.
+		const changed = { ...DEFAULTS, screener: { default_enabled: true } };
+		expect(await owner.call("mail.get_org_settings")).toEqual(changed);
 
 		// A member without the role, an agent and a service account cannot read or change them.
 		expect(await codeOf(ada.call("mail.get_org_settings"))).toBe("forbidden");
 		expect(await codeOf(ada.call("mail.update_org_settings", { screener: { default_enabled: false } }))).toBe(
 			"forbidden",
 		);
+		expect(
+			await codeOf(ada.call("mail.update_org_settings", { address_format: { enabled: false, format: "first" } })),
+		).toBe("forbidden");
 		expect(await codeOf(bot.call("mail.get_org_settings"))).toBe("forbidden");
 		const tools = await toolNames(bot.key);
 		expect(tools).not.toContain("mail_get_org_settings");
@@ -132,10 +139,48 @@ describe("the mail settings of the organization", () => {
 		// A key of the owner with directory.read only reads them.
 		const { api_key } = await owner.call("account.create_api_key", { label: "Read", scopes: ["directory.read"] });
 		const reader = api(api_key.secret);
-		expect(await reader("mail.get_org_settings")).toEqual({ screener: { default_enabled: true } });
+		expect(await reader("mail.get_org_settings")).toEqual(changed);
 		expect(await codeOf(reader("mail.update_org_settings", { screener: { default_enabled: false } }))).toBe(
 			"forbidden",
 		);
+	});
+
+	it("change the address format with one audit line for each setting, and keep the Screener", async () => {
+		await setDefault(true);
+		const flast = await auditLines(() =>
+			admin.call("mail.update_org_settings", { address_format: { enabled: true, format: "flast" } }),
+		);
+		expect(flast).toEqual([expect.objectContaining({ actor: admin.id, target: "address_format", code: "flast" })]);
+		expect(await owner.call("mail.get_org_settings")).toEqual({
+			screener: { default_enabled: true },
+			address_format: { enabled: true, format: "flast" },
+		});
+
+		// A format that is off reads as "off" in the audit line, and keeps the format for the next time.
+		const both = await auditLines(() =>
+			admin.call("mail.update_org_settings", {
+				screener: { default_enabled: false },
+				address_format: { enabled: false, format: "flast" },
+			}),
+		);
+		expect(both).toEqual([
+			expect.objectContaining({ target: "screener", code: "off" }),
+			expect.objectContaining({ target: "address_format", code: "off" }),
+		]);
+		expect(await owner.call("mail.get_org_settings")).toEqual({
+			screener: { default_enabled: false },
+			address_format: { enabled: false, format: "flast" },
+		});
+
+		// A request without a setting is not a change, and a format outside the list is not valid.
+		expect(await codeOf(admin.call("mail.update_org_settings", {}))).toBe("invalid");
+		expect(
+			await codeOf(
+				admin.call("mail.update_org_settings", {
+					address_format: { enabled: true, format: "last.first" as "first" },
+				}),
+			),
+		).toBe("invalid");
 	});
 });
 
@@ -429,6 +474,9 @@ describe("decisions in the Screener", () => {
 		}
 		expect(await codeOf(modify({ add_label_ids: ["INBOX"], dry_run: true }))).toBe("conflict");
 		expect(await codeOf(modify({ remove_label_ids: ["STARRED", "INBOX"] }))).toBe("conflict");
+		// A snooze moves the mail out of a view and back, so it is refused too.
+		const until = new Date(Date.now() + 3_600_000).toISOString();
+		expect(await codeOf(ada.call("mail.snooze_threads", { thread_ids: [threadId], until }))).toBe("conflict");
 		// An agent with mail.modify gets the same refusal.
 		const support = await createSupport([{ id: bot.id, scopes: ["mail.read", "mail.modify"] }]);
 		await receive("stranger@outside.example", "Held for the team", { to: "support@dock.test" });
@@ -640,6 +688,10 @@ describe("the Screener in a mailbox from before", () => {
 					sql.exec("DROP INDEX messages_from");
 					sql.exec("ALTER TABLE messages DROP COLUMN screen");
 					sql.exec("ALTER TABLE recipients DROP COLUMN person_sent");
+					// Snooze (migration 8) adds columns, and a column cannot be added two times.
+					sql.exec("DROP INDEX threads_snoozed");
+					sql.exec("ALTER TABLE threads DROP COLUMN snoozed_until");
+					sql.exec("ALTER TABLE threads DROP COLUMN woke_at");
 					// Schema 5 is the schema before the Screener (migration 6). Later migrations run again too.
 					sql.exec("UPDATE meta SET value = '5' WHERE key = 'schema_version'");
 					await state.storage.sync();

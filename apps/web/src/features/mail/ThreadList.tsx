@@ -7,6 +7,7 @@ import { type MailView, mailboxKindOf, threadPath } from "../../routes.ts";
 import { AUTO_MARK_TEXT, AUTO_MARK_TITLE } from "./autoLabels.ts";
 import type { ListState } from "./data.ts";
 import { useMailboxId, useReadOnlyMailbox } from "./mailbox.tsx";
+import { snoozeTime } from "./snooze.ts";
 import { isUserLabelId } from "./views.ts";
 
 interface ThreadListProps {
@@ -101,6 +102,9 @@ export function ThreadList(props: ThreadListProps) {
 
 function emptyText(view: MailView, title: string, owner: ReturnType<typeof mailboxKindOf>): string {
 	if (view.kind === "search") return `No conversations match “${view.query}”.`;
+	if (view.kind === "system" && view.view === "snoozed") {
+		return "No conversation is snoozed. Snooze a conversation to take it out of the inbox until a time that you pick.";
+	}
 	if (view.kind === "system" && view.view === "inbox") {
 		if (owner === "team") return "The inbox of this team mailbox is empty.";
 		if (owner === "delegated") return "The inbox of this mailbox is empty.";
@@ -234,6 +238,16 @@ function ThreadRow({
 									<span className="visually-hidden"> more</span>
 								</span>
 							)}
+						</span>
+					)}
+					{thread.snoozed_until !== null && (
+						<span className="thread-label thread-snooze" title={`Snoozed until ${snoozeTime(thread.snoozed_until)}`}>
+							<Icon name="clock" size={11} />
+							<span className="visually-hidden">Snoozed until {snoozeTime(thread.snoozed_until)}, </span>
+							{/* A narrow row shows the clock only. */}
+							<span className="thread-snooze-time" aria-hidden="true">
+								{snoozeTime(thread.snoozed_until)}
+							</span>
 						</span>
 					)}
 					{thread.has_attachments && (

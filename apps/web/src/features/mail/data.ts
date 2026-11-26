@@ -10,7 +10,7 @@ import {
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, errorMessage } from "../../lib/api.ts";
 import { type MailView, markPersonMailboxes } from "../../routes.ts";
-import { applyToSummary, belongsInView, changeLabels, type LabelChange } from "./actions.ts";
+import { applyToSummary, belongsInView, changeLabels, type LabelChange, snoozedAfter } from "./actions.ts";
 import { mailboxInput } from "./mailbox.tsx";
 
 export type Profile = OutputOf<"mail.get_profile">;
@@ -356,9 +356,11 @@ export function useThread(mailboxId: string | null, threadId: string | null) {
 	const patch = useCallback((change: LabelChange) => {
 		setState((current) => {
 			if (!current.thread) return current;
+			const labelIds = changeLabels(current.thread.label_ids, change);
 			const thread: Thread = {
 				...current.thread,
-				label_ids: changeLabels(current.thread.label_ids, change),
+				label_ids: labelIds,
+				snoozed_until: snoozedAfter(labelIds, current.thread.snoozed_until, change),
 				messages: current.thread.messages.map((message) => ({
 					...message,
 					label_ids: changeLabels(message.label_ids, change),

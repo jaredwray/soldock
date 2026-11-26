@@ -44,7 +44,7 @@ import {
 import { mailboxStub, storeRaw } from "./delivery.ts";
 import type { Refusal, SendInput, SettingsPatch, StoredMessage } from "./mailbox.ts";
 import { composeMessage } from "./mime/compose.ts";
-import { parseMail, readAttachment } from "./mime/parse.ts";
+import { parseMail, readAttachment, senderVerification } from "./mime/parse.ts";
 import { readOrgSettings, screenerDefault, updateOrgSettings } from "./org-settings.ts";
 import { deniedOutboundAddresses, outboundMode, outboundPolicyDenial } from "./outbound.ts";
 import { sanitizeHtml } from "./sanitize.ts";
@@ -80,6 +80,7 @@ type MailOperation =
 	| "mail.get_thread"
 	| "mail.get_message"
 	| "mail.modify_threads"
+	| "mail.snooze_threads"
 	| "mail.send"
 	| "mail.suggest_recipients"
 	| "mail.get_attachment"
@@ -305,6 +306,8 @@ async function safeHtml(stored: StoredMessage): Promise<{ html: string; remoteIm
 
 async function toMessage(stored: StoredMessage): Promise<Message> {
 	const html = await safeHtml(stored);
+	const external = stored.origin === "external";
+	const auth = stored.authentication;
 	return {
 		id: stored.id,
 		thread_id: stored.threadId,
@@ -321,8 +324,9 @@ async function toMessage(stored: StoredMessage): Promise<Message> {
 		auto_label_ids: stored.autoLabels,
 		snippet: stored.snippet,
 		origin: stored.origin,
-		untrusted: stored.origin === "external",
-		authentication: stored.origin === "external" ? stored.authentication : null,
+		untrusted: external,
+		authentication: external && auth ? { spf: auth.spf, dkim: auth.dkim, dmarc: auth.dmarc } : null,
+		sender_verification: external ? senderVerification(auth, stored.from?.address) : null,
 		body: {
 			// When the HTML cannot be sanitized and the message has no text part, a text form keeps it readable.
 			text: stored.text ?? (html === null && stored.html !== null ? htmlToText(stored.html) : null),
@@ -555,17 +559,23 @@ export const mailHandlers: Pick<HandlerMap<CallContext>, MailOperation> = {
 
 	async "mail.update_org_settings"(call, input) {
 		requireAdmin(call, "change the mail settings of the organization");
-		const settings = await updateOrgSettings(call.env.DIRECTORY, input.screener.default_enabled, Date.now());
-		audit({
-			op: "mail.update_org_settings",
-			actor: call.caller.id,
-			actorKind: call.caller.kind,
-			credential: call.caller.credential,
-			target: "screener",
-			code: settings.screener.default_enabled ? "on" : "off",
-			result: "ok",
-			requestId: call.requestId,
-		});
+		const settings = await updateOrgSettings(call.env.DIRECTORY, input, Date.now());
+		// One audit line for each setting in the request.
+		const auditSetting = (target: string, code: string) =>
+			audit({
+				op: "mail.update_org_settings",
+				actor: call.caller.id,
+				actorKind: call.caller.kind,
+				credential: call.caller.credential,
+				target,
+				code,
+				result: "ok",
+				requestId: call.requestId,
+			});
+		if (input.screener) auditSetting("screener", settings.screener.default_enabled ? "on" : "off");
+		if (input.address_format) {
+			auditSetting("address_format", settings.address_format.enabled ? settings.address_format.format : "off");
+		}
 		return settings;
 	},
 
@@ -716,6 +726,7 @@ export const mailHandlers: Pick<HandlerMap<CallContext>, MailOperation> = {
 				label_ids: thread.labels,
 				auto_label_ids: thread.autoLabels,
 				last_message_at: iso(thread.lastMessageAt),
+				snoozed_until: thread.snoozedUntil === null ? null : iso(thread.snoozedUntil),
 				untrusted: thread.untrusted,
 			})),
 			next_cursor: result.nextCursor,
@@ -737,6 +748,7 @@ export const mailHandlers: Pick<HandlerMap<CallContext>, MailOperation> = {
 			auto_label_ids: labelIds.filter((id) =>
 				messages.every((m) => !m.label_ids.includes(id) || m.auto_label_ids.includes(id)),
 			),
+			snoozed_until: thread.snoozedUntil === null ? null : iso(thread.snoozedUntil),
 			untrusted: messages.some((m) => m.untrusted),
 			messages,
 		};
@@ -764,6 +776,13 @@ export const mailHandlers: Pick<HandlerMap<CallContext>, MailOperation> = {
 		);
 		if (!input.dry_run) auditOk(call, record, "mail.modify_threads", input.thread_ids.join(","));
 		return result;
+	},
+
+	async "mail.snooze_threads"(call, input) {
+		const { record, box } = await openMailbox(call, input.mailbox_id, "mail.snooze_threads");
+		const result = accept(await box.snoozeThreads({ threadIds: input.thread_ids, until: Date.parse(input.until) }));
+		auditOk(call, record, "mail.snooze_threads", input.thread_ids.join(","));
+		return { threads_changed: result.threads_changed, until: iso(result.until) };
 	},
 
 	async "mail.send"(call, input) {

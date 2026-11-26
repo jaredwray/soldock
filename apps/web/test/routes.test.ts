@@ -30,7 +30,7 @@ import {
 
 const VIEWS: readonly MailView[] = [
 	{ kind: "system", view: "inbox" },
-	{ kind: "system", view: "reply-later" },
+	{ kind: "system", view: "snoozed" },
 	{ kind: "system", view: "starred" },
 	{ kind: "system", view: "sent" },
 	{ kind: "system", view: "spam" },
@@ -162,7 +162,7 @@ describe("routes", () => {
 	// Focus has its own path under each view. It is not the thread with the id "focus".
 	it("parses the Focus path of each view and mailbox back to Focus in that view", () => {
 		const views: MailView[] = [
-			{ kind: "system", view: "reply-later" },
+			{ kind: "system", view: "snoozed" },
 			{ kind: "system", view: "inbox" },
 			{ kind: "label", labelId: "lbl_01JD0000000000000000LABEL1" },
 			{ kind: "search", query: "from:ana has:attachment" },
@@ -178,11 +178,11 @@ describe("routes", () => {
 				});
 			}
 		}
-		expect(focusPath({ kind: "system", view: "reply-later" })).toBe("/mail/reply-later/focus");
+		expect(focusPath({ kind: "system", view: "snoozed" })).toBe("/mail/snoozed/focus");
 		expect(focusPath({ kind: "system", view: "inbox" }, TEAM)).toBe(`/mail/team/${TEAM}/inbox/focus`);
 		expect(focusPath({ kind: "label", labelId: "lbl_1" })).toBe("/mail/label/lbl_1/focus");
 		expect(focusPath({ kind: "search", query: "a b" })).toBe("/mail/search/focus?q=a%20b");
-		expect(parseRoute("/mail/reply-later/focus/more")).toEqual({ page: "not-found" });
+		expect(parseRoute("/mail/snoozed/focus/more")).toEqual({ page: "not-found" });
 		expect(parseRoute("/mail/label/lbl_1/focus/more")).toEqual({ page: "not-found" });
 		expect(ownMailboxPath(parseRoute(focusPath({ kind: "label", labelId: "lbl_1" }, AGENT)), AGENT)).toBe(
 			"/mail/label/lbl_1/focus",

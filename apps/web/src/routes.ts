@@ -1,6 +1,6 @@
 // The app routes. Each path is a deep link: the dock Worker serves index.html for it.
 
-export const SYSTEM_VIEWS = ["inbox", "reply-later", "starred", "sent", "spam", "trash", "all"] as const;
+export const SYSTEM_VIEWS = ["inbox", "snoozed", "starred", "sent", "spam", "trash", "all"] as const;
 export type SystemView = (typeof SYSTEM_VIEWS)[number];
 
 export type MailView =
@@ -472,9 +472,6 @@ export function ownMailboxPath(route: Route, selfId: string): string | null {
 	if (route.focus) return focusPath(route.view);
 	return route.threadId ? threadPath(route.view, route.threadId) : viewPath(route.view);
 }
-
-/** The Reply later view: the conversations that the mailbox answers later. */
-export const REPLY_LATER_VIEW: MailView = { kind: "system", view: "reply-later" };
 
 /**
  * The path of Focus in a view: `/mail/inbox/focus`, `/mail/label/<id>/focus` or

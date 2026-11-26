@@ -1,22 +1,14 @@
+import { AddressFormat } from "./address-format.ts";
 import { Address, EmailAddress, prefixedId, Timestamp } from "./common.ts";
 import { defineOperation } from "./operation.ts";
 import { MAIL_WEBHOOK_EVENTS, MailWebhookSubscription } from "./webhooks.ts";
 import { z } from "./zod.ts";
 
 /**
- * System labels. Every mailbox has them, and nobody can rename or delete them. REPLY_LATER holds the threads
- * that the mailbox answers later. A reply in the thread removes it.
+ * System labels. Every mailbox has them, and nobody can rename or delete them. SNOOZED holds the threads
+ * that wait for the time of their snooze. Only `mail.snooze_threads` adds it.
  */
-export const SYSTEM_LABELS = [
-	"INBOX",
-	"STARRED",
-	"IMPORTANT",
-	"REPLY_LATER",
-	"SENT",
-	"SPAM",
-	"TRASH",
-	"UNREAD",
-] as const;
+export const SYSTEM_LABELS = ["INBOX", "STARRED", "IMPORTANT", "SNOOZED", "SENT", "SPAM", "TRASH", "UNREAD"] as const;
 export type SystemLabel = (typeof SYSTEM_LABELS)[number];
 
 export const MAIL_LIMITS = {
@@ -133,7 +125,13 @@ export const ThreadSummary = z.object({
 	label_ids: z.array(z.string()),
 	/** The ids in `label_ids` that auto labels applied. A person or an agent applied the others. */
 	auto_label_ids: z.array(z.string()),
+	/**
+	 * The time of the newest message that matches the query. After a snooze ends at its time, it is that time
+	 * when that time is later. The threads of a list are in the order of this time, newest first.
+	 */
 	last_message_at: Timestamp,
+	/** The time when the snooze of the thread ends, or null for a thread that is not snoozed. */
+	snoozed_until: Timestamp.nullable(),
 	/** True when a message in the thread came from outside the organization. The subject and snippet are then untrusted. */
 	untrusted: z.boolean(),
 });
@@ -144,6 +142,15 @@ export const Authentication = z.object({
 	dkim: z.string().nullable(),
 	dmarc: z.string().nullable(),
 });
+
+/**
+ * The answer to one question: did the From domain send this message? `verified`: the receiving server
+ * recorded a DMARC pass for the domain of `from`. `failed`: it recorded a DMARC failure, so the sender is probably forged.
+ * `unverified`: each other result, and no result. An SPF pass or a DKIM pass alone proves nothing
+ * about the From address. `verified` does not mean that the content is safe.
+ */
+export const SenderVerification = z.enum(["verified", "unverified", "failed"]);
+export type SenderVerification = z.infer<typeof SenderVerification>;
 
 export const AttachmentInfo = z.object({
 	index: z.number().int(),
@@ -187,6 +194,8 @@ export const Message = z.object({
 	untrusted: z.boolean(),
 	/** SPF, DKIM and DMARC results from the receiving server, when it recorded them. */
 	authentication: Authentication.nullable(),
+	/** The verdict on the sender of `external` mail, from `authentication`. Null for other mail. */
+	sender_verification: SenderVerification.nullable(),
 	body: z.object({
 		text: z.string().nullable(),
 		/** HTML after the server-side allowlist sanitizer. Render it only in a sandboxed iframe. */
@@ -223,6 +232,8 @@ export const Thread = z.object({
 	label_ids: z.array(z.string()),
 	/** The ids in `label_ids` that auto labels applied to a message of the thread. */
 	auto_label_ids: z.array(z.string()),
+	/** The time when the snooze of the thread ends, or null for a thread that is not snoozed. */
+	snoozed_until: Timestamp.nullable(),
 	untrusted: z.boolean(),
 	messages: z.array(Message),
 });
@@ -272,7 +283,7 @@ export const getProfile = defineOperation({
 export const listLabels = defineOperation({
 	name: "mail.list_labels",
 	summary: "List the labels of a mailbox, with counts",
-	description: `Returns the system labels (INBOX, STARRED, IMPORTANT, REPLY_LATER, SENT, SPAM, TRASH, UNREAD) and the user labels of the mailbox, each with its total and unread thread counts. ${IN_MAILBOX_READ} The members of a team mailbox share its labels.`,
+	description: `Returns the system labels (INBOX, STARRED, IMPORTANT, SNOOZED, SENT, SPAM, TRASH, UNREAD) and the user labels of the mailbox, each with its total and unread thread counts. ${IN_MAILBOX_READ} The members of a team mailbox share its labels.`,
 	http: { method: "GET", path: "/api/v1/mail/labels" },
 	scopes: ["mail.read"],
 	callers: ["human", "agent", "service"],
@@ -321,7 +332,7 @@ export const listThreads = defineOperation({
 	summary: "List or search threads",
 	description: [
 		"Returns threads that match a Gmail-style search query, newest first. The default query is in:inbox.",
-		"Operators: from:, to:, cc:, subject:, label:, in:inbox|sent|starred|reply_later|spam|trash|all|anywhere, is:unread|read|starred|important,",
+		"Operators: from:, to:, cc:, subject:, label:, in:inbox|sent|starred|snoozed|spam|trash|all|anywhere, is:unread|read|starred|important,",
 		"has:attachment, filename:, before:YYYY/MM/DD, after:YYYY/MM/DD (UTC days), older_than:/newer_than: (with d, m or y, for example 7d),",
 		"larger:/smaller: (with K or M, for example 2M), quoted phrases, a leading - to negate a term, and OR between terms.",
 		"Other words search the subject, the people, the body and the attachment names.",
@@ -380,8 +391,7 @@ export const modifyThreads = defineOperation({
 		"Adds and removes labels on every message of the given threads.",
 		"Archive: remove INBOX. Mark as read: remove UNREAD. Star: add STARRED. Move to trash: add TRASH. Report spam: add SPAM.",
 		"Restore from trash or spam: remove TRASH or SPAM.",
-		"Reply later: add REPLY_LATER and remove INBOX. The thread then waits in the Reply later list (in:reply_later). Done: remove REPLY_LATER.",
-		"A reply with mail.send (reply_to_message_id) removes REPLY_LATER from its thread. A forward or a new message does not.",
+		"To snooze a thread, use mail.snooze_threads: SNOOZED cannot be added here. To end a snooze before its time, remove SNOOZED. Add INBOX in the same call to put the thread back in the inbox.",
 		"Set dry_run to true to get the counts without a change.",
 		"On a thread that the Screener holds, only UNREAD, STARRED and IMPORTANT can change. A different label fails with conflict: a person screens the sender in or out to move the mail (mail.screen_sender).",
 		`${IN_MAILBOX} A change in a team mailbox applies for each member: the members share the labels and the read state.`,
@@ -401,6 +411,10 @@ export const modifyThreads = defineOperation({
 		})
 		.refine((input) => input.add_label_ids.length + input.remove_label_ids.length > 0, "name a label to add or remove")
 		.refine(
+			(input) => !input.add_label_ids.includes("SNOOZED"),
+			"SNOOZED cannot be added here: a snooze needs a time, so use mail.snooze_threads",
+		)
+		.refine(
 			(input) => !input.add_label_ids.some((id) => input.remove_label_ids.includes(id)),
 			"a label cannot be added and removed in one call",
 		),
@@ -410,6 +424,35 @@ export const modifyThreads = defineOperation({
 		dry_run: z.boolean(),
 	}),
 	errors: ["not_found", "conflict"],
+});
+
+export const snoozeThreads = defineOperation({
+	name: "mail.snooze_threads",
+	summary: "Snooze threads until a time",
+	description: [
+		"Takes the given threads out of the inbox until a time. Each message of a thread gets SNOOZED and loses INBOX, and the thread waits in the Snoozed list (in:snoozed).",
+		"At the time, the mailbox removes SNOOZED and adds INBOX: the thread comes back to the top of the inbox. New mail in the thread that goes to the inbox ends the snooze before the time. A reply that the mailbox sends does not end it.",
+		"A call on a thread that is snoozed already changes its time. snoozed_until of a thread in mail.list_threads and mail.get_thread gives the time.",
+		"To end a snooze before its time, call mail.modify_threads: remove SNOOZED, and add INBOX to put the thread back in the inbox.",
+		"until must be later than now. A thread that the Screener holds fails with conflict.",
+		`${IN_MAILBOX} A snooze in a team mailbox applies for each member.`,
+		AGENT_READ_ONLY,
+	].join(" "),
+	http: { method: "POST", path: "/api/v1/mail/threads/snooze" },
+	scopes: ["mail.modify"],
+	callers: ["human", "agent", "service"],
+	annotations: { readOnly: false, destructive: false, idempotent: true, openWorld: false },
+	input: z.strictObject({
+		mailbox_id: MailboxParam,
+		thread_ids: z.array(ThreadId).min(1).max(MAIL_LIMITS.threadsPerModify),
+		until: Timestamp.describe("The time when the threads come back to the inbox, for example 2027-01-04T08:00:00Z."),
+	}),
+	output: z.object({
+		/** The threads that the call snoozed, or whose time it changed. */
+		threads_changed: z.number().int(),
+		until: Timestamp,
+	}),
+	errors: ["not_found", "conflict", "invalid"],
 });
 
 const OutgoingAttachment = z.strictObject({
@@ -442,7 +485,7 @@ export const send = defineOperation({
 		AGENT_READ_ONLY,
 		"For formatted mail, also set html. The message then has two parts: text for mail apps without HTML, and html. Make text the plain-text form of html.",
 		"The signature of the mailbox is not added. Read it with mail.get_mailbox_settings, and add it to text and html yourself.",
-		"To reply, set reply_to_message_id: the message joins that thread, and the subject defaults to Re: and the original subject. A reply removes REPLY_LATER from the thread.",
+		"To reply, set reply_to_message_id: the message joins that thread, and the subject defaults to Re: and the original subject.",
 		"A reply reads the message that it answers. So it also needs mail.read: in your credential, and in your membership of a team mailbox or your grant in the mailbox of a person.",
 		"A send by a person to a sender that waits in the Screener screens that sender in, when the credential and the membership or the grant have mail.modify. Without mail.modify, and for an agent, the send decides nothing.",
 		"An agent can send only to the recipients that its policy allows, also from a team mailbox and from the mailbox of a person. Otherwise the call fails with policy_denied and nothing is sent.",
@@ -701,16 +744,25 @@ export const MailOrgSettings = z.object({
 		/** True when the Screener is on in each mailbox of a person and each team mailbox whose setting is inherit. */
 		default_enabled: z.boolean(),
 	}),
+	address_format: z.object({
+		/** True when the New member form fills in the address of a new person from the display name. */
+		enabled: z.boolean(),
+		/** The format of that address. */
+		format: AddressFormat,
+	}),
 });
 export type MailOrgSettings = z.infer<typeof MailOrgSettings>;
 
 const ORG_SETTINGS_TEXT =
 	"Owners and admins only. The default applies to each mailbox of a person and each team mailbox whose Screener setting is inherit (see mail.update_mailbox_settings). It never applies to the mailbox of an agent or a service account.";
 
+const ADDRESS_FORMAT_TEXT =
+	"The address format tells the New member form of the web app how to fill in the address of a new person from the display name: first.last gives ada.lovelace, first gives ada, and flast gives alovelace. It is on by default, with first.last. It is advice for the form only: directory.create_principal accepts each valid address.";
+
 export const getOrgSettings = defineOperation({
 	name: "mail.get_org_settings",
 	summary: "Get the mail settings of the organization",
-	description: `Returns the mail settings of the organization: for now, the default of the Screener. ${SCREENER_TEXT} ${ORG_SETTINGS_TEXT}`,
+	description: `Returns the mail settings of the organization: the default of the Screener and the address format. ${SCREENER_TEXT} ${ORG_SETTINGS_TEXT} ${ADDRESS_FORMAT_TEXT}`,
 	http: { method: "GET", path: "/api/v1/mail/org-settings" },
 	scopes: ["directory.read"],
 	callers: ["human"],
@@ -724,16 +776,27 @@ export const getOrgSettings = defineOperation({
 export const updateOrgSettings = defineOperation({
 	name: "mail.update_org_settings",
 	summary: "Change the mail settings of the organization",
-	description: `Changes the default of the Screener and returns the mail settings of the organization. ${SCREENER_TEXT} ${ORG_SETTINGS_TEXT} A change applies to the next mail from outside that each mailbox gets. When the default goes off, a mailbox moves the mail that waits in its Screener to the inbox at that time.`,
+	description: `Changes the default of the Screener, the address format, or both, and returns the mail settings of the organization. A setting that the call does not name stays the same. ${SCREENER_TEXT} ${ORG_SETTINGS_TEXT} A change of the Screener applies to the next mail from outside that each mailbox gets. When the default goes off, a mailbox moves the mail that waits in its Screener to the inbox at that time. ${ADDRESS_FORMAT_TEXT}`,
 	http: { method: "POST", path: "/api/v1/mail/org-settings" },
 	scopes: ["directory.write"],
 	callers: ["human"],
 	annotations: { readOnly: false, destructive: false, idempotent: true, openWorld: false },
-	input: z.strictObject({
-		screener: z.strictObject({
-			default_enabled: z.boolean().describe("True turns the Screener on in each mailbox whose setting is inherit."),
-		}),
-	}),
+	input: z
+		.strictObject({
+			screener: z
+				.strictObject({
+					default_enabled: z.boolean().describe("True turns the Screener on in each mailbox whose setting is inherit."),
+				})
+				.optional(),
+			address_format: z
+				.strictObject({
+					enabled: z.boolean().describe("True turns on the address format in the New member form."),
+					format: AddressFormat.describe("first.last, first or flast."),
+				})
+				.optional(),
+		})
+		// Without a setting to change, the call would only read the settings. Use mail.get_org_settings to read them.
+		.refine((input) => input.screener !== undefined || input.address_format !== undefined, "name a setting to change"),
 	output: MailOrgSettings,
 	errors: [],
 });
@@ -1175,6 +1238,7 @@ export const mailOperations = {
 	"mail.get_thread": getThread,
 	"mail.get_message": getMessage,
 	"mail.modify_threads": modifyThreads,
+	"mail.snooze_threads": snoozeThreads,
 	"mail.send": send,
 	"mail.suggest_recipients": suggestRecipients,
 	"mail.get_attachment": getAttachment,

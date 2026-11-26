@@ -15,7 +15,7 @@
 | **Purpose** | Gmail replacement backend: address routing, inbound pipeline (`email()` → R2 → queue → `MailboxDO`), threading, labels, search, sanitization, outbound pipeline via Email Service, filters, vacation, groups, team mailboxes, delegation, agent outbound policy enforcement, webhooks for new mail. |
 | **Owns** | `MailboxDO` (messages, threads, labels, search index, delivery status, outbox, event outbox, idempotency keys, sent recipients, auto-label settings, corrections, classifier outbox and Screener senders); the D1 table `mail_settings` (the mail settings of the organization); raw MIME in R2 `blobs`. The `webhooks` module owns the D1 subscriptions. The `ai` module owns the AI settings and the usage ledger. |
 | **Depends on** | `platform`, `identity`, `webhooks`, `ai`. Later: `drive` (attachments ↔ Drive). |
-| **Operations** | `mail.list_mailboxes`, `mail.list_delegates`, `mail.set_delegate`, `mail.remove_delegate`, `mail.get_settings`, `mail.update_settings`, `mail.get_mailbox_settings`, `mail.update_mailbox_settings`, `mail.get_org_settings`, `mail.update_org_settings`, `mail.list_screener`, `mail.screen_sender`, `mail.get_profile`, `mail.list_labels`, `mail.create_label`, `mail.delete_label`, `mail.list_threads`, `mail.get_thread`, `mail.get_message`, `mail.modify_threads`, `mail.send`, `mail.suggest_recipients`, `mail.get_attachment`, `mail.create_webhook_subscription`, `mail.list_webhook_subscriptions`, `mail.delete_webhook_subscription`, `mail.get_auto_labels`, `mail.update_auto_labels`, `mail.create_auto_label`, `mail.delete_auto_label`, `mail.run_auto_labels` |
+| **Operations** | `mail.list_mailboxes`, `mail.list_delegates`, `mail.set_delegate`, `mail.remove_delegate`, `mail.get_settings`, `mail.update_settings`, `mail.get_mailbox_settings`, `mail.update_mailbox_settings`, `mail.get_org_settings`, `mail.update_org_settings`, `mail.list_screener`, `mail.screen_sender`, `mail.get_profile`, `mail.list_labels`, `mail.create_label`, `mail.delete_label`, `mail.list_threads`, `mail.get_thread`, `mail.get_message`, `mail.modify_threads`, `mail.snooze_threads`, `mail.send`, `mail.suggest_recipients`, `mail.get_attachment`, `mail.create_webhook_subscription`, `mail.list_webhook_subscriptions`, `mail.delete_webhook_subscription`, `mail.get_auto_labels`, `mail.update_auto_labels`, `mail.create_auto_label`, `mail.delete_auto_label`, `mail.run_auto_labels` |
 | **Data inventory** | See [Data inventory](#data-inventory). Backups: not built yet. |
 
 Public surface: `index.ts` only. Other domains must not import files from this folder directly.
@@ -26,7 +26,7 @@ Public surface: `index.ts` only. Other domains must not import files from this f
 | --- | --- |
 | `inbound.ts` | The `email()` handler and the `soldock-mail-inbound` queue consumer |
 | `delivery.ts` | R2 keys of raw messages, and delivery of a raw message to a mailbox |
-| `mailbox.ts` | `MailboxDO`: schema, threading, labels, search, sends, recipient suggestions, the outbox alarm and the watch sockets |
+| `mailbox.ts` | `MailboxDO`: schema, threading, labels, snoozes, search, sends, recipient suggestions, the outbox alarm and the watch sockets |
 | `handlers.ts` | The operation handlers. They run in the Worker. They find the mailbox of the call, check that the caller can use it, and call its `MailboxDO` |
 | `outbound.ts` | The outbound policy rule for an agent. `mail.send` and the outbox both use it |
 | `watch.ts` | The change feed of the `mail.inbox` resource, for MCP `subscriptions/listen` |
@@ -42,7 +42,7 @@ Public surface: `index.ts` only. Other domains must not import files from this f
 | `autolabel/store.ts` | The schema and the SQL helpers of auto labels in `MailboxDO` |
 | `autolabel/consumer.ts` | The consumer of the `soldock-mail-autolabel` queue: one classifier call for each message |
 | `screener/store.ts` | The schema and the SQL helpers of the Screener in `MailboxDO` |
-| `org-settings.ts` | The mail settings of the organization in the D1 table `mail_settings`: the default of the Screener |
+| `org-settings.ts` | The mail settings of the organization in the D1 table `mail_settings`: the default of the Screener and the address format |
 
 ## Mailboxes
 
@@ -188,7 +188,7 @@ who can.
   `mail.list_labels`, `mail.list_threads`, `mail.get_thread`, `mail.get_message`,
   `mail.get_attachment` and `mail.suggest_recipients`.
 - The operations that change the mailbox or send from it get `forbidden`: `mail.create_label`,
-  `mail.delete_label`, `mail.modify_threads` (also with `dry_run`) and `mail.send`. A change would
+  `mail.delete_label`, `mail.modify_threads` (also with `dry_run`), `mail.snooze_threads` and `mail.send`. A change would
   change what the agent sees, for example the read state. A send would come from the address of the agent.
 - The mailbox of a person stays private: the id of a person gets `forbidden`, also for the owner of the
   organization. Only a grant of that person opens it ([Delegated mailboxes](#delegated-mailboxes)).
@@ -304,6 +304,38 @@ in the mailbox.
 | A delegate, in the mailbox of a person | `mail.read` in the grant, and in the credential of a person | `forbidden` |
 | A principal who is not a member, or the id of a different person who gave no grant | `forbidden` | `forbidden` |
 
+### Settings of the organization
+
+`mail.get_org_settings` and `mail.update_org_settings` read and change the mail settings of the
+organization. An owner or an admin changes them in Admin › Mail. The D1 table `mail_settings` holds them
+in one row (migrations `0031` and `0036`). There are two settings:
+
+- `screener.default_enabled`: the default of [the Screener](#the-screener). It is off at the start.
+- `address_format`: `enabled` and `format`. The New member form of the web app fills in the address of a
+  new person from the display name in this format. It is on at the start, with `first.last`.
+
+| `format` | Ada Lovelace | Rule |
+| --- | --- | --- |
+| `first.last` | `ada.lovelace` | The first word, a dot, and the last word |
+| `first` | `ada` | The first word |
+| `flast` | `alovelace` | The first letter of the first word, and the last word |
+
+- `addressLocalPart` in `packages/contracts` makes the mailbox name. It removes accents, changes the
+  letters to lowercase, and keeps only `a` to `z` and `0` to `9` in each word. A name with one word gives
+  that word in each format. A name with no usable letter gives an empty name, and the admin types one.
+  The result has at most 64 characters.
+- The address format is advice for the form only. `directory.create_principal` accepts each valid
+  address, and the admin can change the address before the create. The form applies the format to people
+  only, because agents and service accounts have no first name and last name.
+- `mail.update_org_settings` must name a setting, or it gets `invalid`. A setting that the request does
+  not name keeps its value. `address_format` takes `enabled` and `format` together, so a format that is
+  off keeps its value for the next time.
+- A missing row reads as the defaults. The update writes the row with an upsert that keeps each column
+  that the request does not name.
+- A change writes one audit line `mail.update_org_settings` for each setting in the request. The line of
+  the Screener has `target: "screener"` and the code `on` or `off`. The line of the address format has
+  `target: "address_format"` and the code of the format, or `off`.
+
 ## Inbound
 
 1. Email Routing calls `email()` once for each recipient.
@@ -357,8 +389,8 @@ or out. The sender is never told: the mailbox sends no bounce and no reply.
 ### Settings
 
 - An owner or an admin sets the default of the organization in Admin › Mail
-  (`mail.update_org_settings`). It is off at the start. The D1 table `mail_settings` (migration
-  `0031`) holds it in one row.
+  (`mail.update_org_settings`, see [Settings of the organization](#settings-of-the-organization)). It
+  is off at the start. The D1 table `mail_settings` (migration `0031`) holds it in one row.
 - Each mailbox of a person and each team mailbox has the setting `screener` in
   `mail.update_mailbox_settings`: `inherit` (the default) follows the organization, and `on` or `off`
   is the choice of the mailbox. The members of a team mailbox share it.
@@ -453,7 +485,7 @@ from outside, so each row has `untrusted: true`, and MCP adds its notice before 
 A decision writes the audit line `mail.screen_sender` with the mailbox as `target`, `mailbox` for a team
 mailbox, and the decision as `code`. The line never holds the address of the sender. A send that screens
 a sender in writes the same line with the code `in`, one line for each sender. A change of the
-default writes `mail.update_org_settings` with the code `on` or `off`.
+default writes `mail.update_org_settings` with the target `screener` and the code `on` or `off`.
 
 ### Known limits
 
@@ -484,7 +516,7 @@ send screens the sender in.
 
 ## Labels
 
-- System labels: `INBOX`, `STARRED`, `IMPORTANT`, `REPLY_LATER`, `SENT`, `SPAM`, `TRASH`, `UNREAD`.
+- System labels: `INBOX`, `STARRED`, `IMPORTANT`, `SNOOZED`, `SENT`, `SPAM`, `TRASH`, `UNREAD`.
 - User labels have `lbl_` ids. Their names are unique without regard to case, so a user label
   cannot be named `inbox`. The comparison uses the NFC form in lowercase, for all scripts:
   `Café` and `CAFÉ` are the same name. The `label:` operator uses the same comparison.
@@ -494,30 +526,47 @@ send screens the sender in.
 - Views and counts hide messages in `SPAM` or `TRASH`, except the spam and trash views.
 - Views and counts hide the mail that the [Screener](#the-screener) holds.
 
-### Reply later
+### Snooze
 
-`REPLY_LATER` holds the conversations that the mailbox answers later. It is a system label, so
-`mail.modify_threads`, `mail.list_labels` and the search use it with no new operation. A person, an agent
-and the web app use it in the same way.
+A snooze takes a thread out of the inbox until a time. `SNOOZED` is the system label of the threads that wait,
+so `mail.list_labels` and the search use it. A person, an agent and the web app snooze in the same way.
 
-- Reply later: add `REPLY_LATER` and remove `INBOX` in one `mail.modify_threads` call. The thread leaves the
-  inbox and waits in `in:reply_later`. Done: remove `REPLY_LATER`. The thread then stays out of the inbox.
-- A reply removes `REPLY_LATER` from each message of its thread, in the transaction that stores the sent
-  copy. A reply is a send with `reply_to_message_id`. A forward and a new message can join the thread by its
-  subject, but they answer nobody, so the thread stays in Reply later.
-- New mail in the thread does not get the label. The thread stays in Reply later through its older
-  messages, and the new mail also puts it in the inbox.
-- `mail.list_labels` gives its total and unread counts. The web app shows the total.
-- The members of a team mailbox share it, as they share each label. A reply of one member removes it for
-  each member.
-- A change through `mail.modify_threads` needs `mail.modify`. The removal by a reply needs only the scopes of
-  the reply (`mail.send`, and `mail.read` for `reply_to_message_id`). A reply answers the thread, so a member
-  that can answer it can also take it out of Reply later.
-- A `+tag` never selects it, as for each system label.
-- Migration 7 adds the label to each mailbox when the object starts. Label names are unique without regard
-  to case, so a user label named `reply_later` first gets the lowest free number after its name, for example
-  `Reply_Later (1)`. A number is free when no label has that name. The label keeps its id, its threads and
-  its auto label. Mail to `user+reply_later@` then matches no label.
+- `mail.snooze_threads` takes `thread_ids` and `until`. Each message of a thread gets `SNOOZED` and loses
+  `INBOX`, and the thread gets the time. The thread waits in `in:snoozed`. A call on a snoozed thread changes
+  its time.
+- `until` must be later than now, or the call fails with `invalid`. An unknown thread fails with `not_found`,
+  and a thread that the [Screener](#the-screener) holds fails with `conflict`. A call changes each thread or
+  none.
+- `snoozed_until` of a thread in `mail.list_threads` and `mail.get_thread` gives the time. It is null for a
+  thread that is not snoozed.
+- At the time, the alarm of the mailbox removes `SNOOZED` from each message and adds `INBOX`. The watch
+  sockets get the inbox signal. No webhook event goes out: the thread is not new mail.
+- The thread then shows at the top of the inbox. A list has the order of the newest message that matches, and
+  a thread whose snooze ended at its time has the place of that time when it is later. `last_message_at` of
+  the thread in `mail.list_threads` is then that time. A new snooze of the thread removes that place.
+- New mail in the thread that goes to the inbox ends the snooze: each message of the thread goes back to the
+  inbox. A message that the mailbox sends to itself does the same. Spam, and mail that the rules of the
+  [auto labels](#auto-labels) keep out of the inbox, do not end it.
+- The snooze ends when the new mail arrives. When the model of the auto labels archives that mail later, the
+  thread stays in the inbox, and the snooze does not come back. So the person sees the thread too early, and
+  never too late.
+- A reply that the mailbox sends does not end the snooze. The time decides.
+- `mail.modify_threads` cannot add `SNOOZED`: a snooze needs a time. It can remove `SNOOZED`, and the time
+  goes with the label. With `INBOX` in `add_label_ids`, the same call puts the thread back in the inbox.
+- Trash hides a snoozed thread from `in:snoozed`, as from each view. At the time, the thread gets `INBOX` and
+  stays in Trash.
+- `mail.list_labels` gives the total and unread counts of `SNOOZED`. The web app shows the total.
+- The members of a team mailbox share a snooze, as they share each label. A snooze needs `mail.modify`.
+- When a new message merges two threads, the thread that stays keeps the earliest snooze time of the two. When
+  that message does not go to the inbox (spam, for example), and one thread was in the inbox, the thread shows
+  in the inbox and in `in:snoozed` until the time. The merge does not snooze the inbox thread: mail from
+  outside must not hide mail of the inbox.
+- A `+tag` never selects `SNOOZED`, as for each system label.
+- Migration 8 adds the label and the two time columns of `threads` when the object starts. A thread of the
+  earlier Reply later feature has no time. So each one goes back to the top of the inbox at the time of the
+  migration, as a thread whose snooze ends then, and the label `REPLY_LATER` goes away. The version of the
+  mailbox grows, so an open client gets its lists again. A user label named `snoozed` first gets the lowest free number after its name, for example
+  `Snoozed (1)`, as migration 7 did for `reply_later`. The label keeps its id, its threads and its auto label.
 
 ## Auto labels
 
@@ -621,7 +670,7 @@ message of a run has `may_archive` 0, so the classifier stage keeps the message 
 
 ### Lifecycle and retries
 
-- A send in a thread removes Needs reply from the thread. Only a reply removes [Reply later](#reply-later).
+- A send in a thread removes Needs reply from the thread. A send does not end a [snooze](#snooze).
 - The mailbox sends a job again after 15 minutes when no result came, at most 3 times. Then the
   message leaves the outbox with no model label.
 - The consumer retries a timeout, `408`, `429` and `5xx` of the gateway with backoff.
@@ -642,7 +691,7 @@ message of a run has `may_archive` 0, so the classifier stage keeps the message 
   and quoted phrases.
 - `from:me` and `to:me` use the address of the mailbox. They also find the address with a
   `+tag`.
-- `in:` takes `inbox`, `sent`, `starred`, `reply_later`, `important`, `unread`, `spam`, `trash`,
+- `in:` takes `inbox`, `sent`, `starred`, `snoozed`, `important`, `unread`, `spam`, `trash`,
   `screener`, `screened_out`, `all` and `anywhere`.
 - Other words search the FTS5 index: subject, people, body (first 100,000 characters) and
   attachment names.
@@ -662,6 +711,8 @@ message of a run has `may_archive` 0, so the classifier stage keeps the message 
   and RPC allows 32 MiB. The bodies of a thread share a budget of 6,000,000 characters.
 - The newest bodies get the budget first. A message without its body has `body.omitted: true`.
   `mail.get_message` returns that message with its body.
+- An external message has `authentication` (the SPF, DKIM and DMARC results of the receiving server)
+  and `sender_verification` (the verdict from them, see [Safety](#safety)). REST and MCP return both.
 - Each message is sanitized alone. When the sanitizer fails on one message, that message gets
   `body.html: null` and a text body from its HTML. The other messages of the thread do not change.
 
@@ -730,7 +781,8 @@ web app uses it to complete an address while the person types it.
    row is deleted sends again.
 7. One alarm takes 25 outbox rows. It sets the next alarm while rows stay. When the object starts
    with outbox rows and no alarm, it sets an alarm, so a stop between the transaction and the
-   alarm cannot lose mail.
+   alarm cannot lose mail. The same alarm ends each [snooze](#snooze) whose time came, and a snoozed thread
+   is work for this rule too.
 
 A directory reset pauses all old mailboxes and waits for their active deliveries before it replaces the accounts.
 The pause marker survives object eviction. A paused mailbox refuses new sends and starts no further deliveries.
@@ -926,6 +978,28 @@ A disabled endpoint stays disabled. Delete it and create a new one.
   `allow-same-origin`, under a CSP that refuses each remote load.
 - Only the topmost `Authentication-Results` header from `MAIL_AUTHSERV_ID` counts. A sender cannot
   forge a pass with its own header.
+- A result counts only at the start of a part of that header (`method=result` after a `;`, after any
+  comment). The receiving server can copy text of the sender into a comment or a quoted string, so the
+  parser reads such text as no result. A quoted value counts only when it is one plain word, for
+  example `header.from="sender.example"`. With two SPF results, the result for the envelope sender (`smtp.mailfrom`) counts. A DKIM
+  pass of one signature is a DKIM pass.
+- Each external message has a verdict, `sender_verification`. It answers one question: did the From
+  domain send this message? The rule is `senderVerification()` in `mime/parse.ts`:
+  - `verified`: the receiving server recorded a DMARC pass for the domain of the stored From address.
+  - `failed`: it recorded a DMARC failure. Such mail goes to Spam.
+  - `unverified`: each other result, and no result.
+
+  Only DMARC ties a result to the From domain, so an SPF pass or a DKIM pass alone is `unverified`.
+  Spam, auto labels and the verdict use this one rule. Internal mail and sent mail have `null`.
+  `verified` proves the domain only. The content stays `untrusted: true`.
+- A person sees the domain of the stored From address beside the verdict. The receiving server can
+  read a From header in a different way than the mailbox, for example a header with two addresses. So
+  a DMARC pass counts only when its `header.from` is equal to that domain. A domain with other
+  characters than ASCII letters, digits, `-` and `.` is never `verified`, because it can look like a
+  different domain. An internationalized domain is `verified` only in its `xn--` form.
+- Assumption: the receiving server names the domain in `header.from`. A DMARC pass without
+  `header.from` is `verified` for the domain of the stored From address. Results that the mailbox
+  stored before `dmarcFrom` are in this group.
 - Attachments are returned as base64 JSON, never served as active content on the origin.
 - Auto labels: the classifier gets the message as delimited data, with a nonce for each call. Its
   answer can only choose candidate labels of the mailbox, which the mailbox checks again. It can
@@ -952,19 +1026,19 @@ A disabled endpoint stays disabled. Delete it and create a new one.
 | --- | --- | --- |
 | Messages, threads, references, labels, message labels | `MailboxDO` SQLite | One object for each principal and each team mailbox, keyed by the mailbox id (`prn_…` or `tmb_…`) |
 | Who sent a message from the mailbox | `MailboxDO` table `messages`, column `sent_by_json` | The principal id, the kind and the name at the time of the send. Null for mail that arrived, and for mail sent before this column |
-| Reply later | `MailboxDO` tables `labels` (the system label `REPLY_LATER`, migration 7) and `message_labels` | No new table. The label is a row of `labels`, and each waiting message has a row in `message_labels` |
+| Snooze | `MailboxDO` tables `labels` (the system label `SNOOZED`, migration 8), `message_labels`, and `threads` (columns `snoozed_until` and `woke_at`) | No new table. Each snoozed message has a row in `message_labels`. `snoozed_until` is the time when the thread comes back, and null for a thread that is not snoozed. `woke_at` is the time when the last snooze of the thread ended at its time |
 | Search index | `MailboxDO` SQLite, FTS5 table `messages_fts` | Rebuildable from the messages |
 | Delivery status of sent mail | `MailboxDO` table `delivery` | |
 | Outbox | `MailboxDO` table `outbox` | Rows are deleted after delivery or after the last retry |
 | Reset pause | `MailboxDO` table `meta`, keys `delivery_pause`, `delivery_pause_generation` | Keeps the old mailbox paused and rejects calls from an older reset |
 | Idempotency keys of `mail.send` | `MailboxDO` table `idempotency` | Kept 24 hours, with the SHA-256 hash of the request. In a team mailbox, and for a delegate in the mailbox of a person, the key has the principal id of its caller in front |
-| Delegates of the mailbox of a person | D1 table `mailbox_delegates` (migration `0036`) | The [`identity`](../identity/README.md#mailbox-delegates) module owns it. One row for each grant: the owner, the delegate and the scopes |
+| Delegates of the mailbox of a person | D1 table `mailbox_delegates` (migration `0037`) | The [`identity`](../identity/README.md#mailbox-delegates) module owns it. One row for each grant: the owner, the delegate and the scopes |
 | Change counter | `MailboxDO` table `meta` (`version`) | |
 | Sent recipients | `MailboxDO` table `recipients` | One row for each address that the mailbox sent mail to: the address, the number of sent messages, the time of the last one, and `person_sent` (1 when a person sent mail to the address, for the Screener). Rebuildable from the sent messages |
 | Watch sockets | `MailboxDO` hibernatable WebSockets, tag `watch` | Not stored. A socket ends with its `subscriptions/listen` stream, and a restart of the object ends it. No backup |
 | Mail settings of a person | `MailboxDO` table `meta` (`settings`) | JSON. Only in the own mailbox of a person. The sidebar sections that the person collapsed, and the default From address of each mailbox (`default_from`) |
 | Settings of a mailbox | `MailboxDO` table `meta` (`mailbox_settings`) | JSON. In each mailbox: the plain-text signature, at most 2,000 characters, and the Screener mode (`inherit`, `on` or `off`). The members of a team mailbox share it |
-| Mail settings of the organization | D1 table `mail_settings` (migration `0031`) | One row: the default of the Screener. A directory reset drops it |
+| Mail settings of the organization | D1 table `mail_settings` (migrations `0031` and `0036`) | One row: the default of the Screener, and the address format of a new person (`address_format_enabled`, `address_format`). A directory reset drops it and makes it again with the defaults |
 | Screener state of a message | `MailboxDO` table `messages`, column `screen` | `pending` or `out` for held mail. Null for mail in the views |
 | Screener senders | `MailboxDO` table `screener_senders` | One row for each sender that waits and for each decision of a person: the address in lowercase, the newest display name, the status, the times, and who decided. Rows that wait are rebuildable from the held mail. Decisions are not |
 | Raw MIME of each message | R2 `blobs`, key `mail/raw/<mailbox id>/<sha256>` | One owner for each object: each mailbox has its own copy. Inbound: the key comes from the content, so a retry writes the same object. Sends: a duplicate attempt deletes its object. An error after the R2 write and before the mailbox answers can leave an orphan, which blob GC will collect |
@@ -1017,8 +1091,8 @@ Backups: not built yet. mbox/EML export comes with Takeout.
 ## Not built yet
 
 - Drafts, undo send and scheduled send
-- For Reply later: a time that brings a thread back to the inbox, and the order in which threads came into
-  Reply later
+- For Snooze: a list of the snoozed threads in the order of their times, and a webhook event when a thread
+  comes back
 - For recipient suggestions: the names of the people (from the directory, or from mail that they
   sent), the addresses of the directory that the mailbox never wrote to, and a way to remove a
   suggestion
