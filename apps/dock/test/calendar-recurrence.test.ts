@@ -399,6 +399,30 @@ describe("a moved occurrence outside the bounds of its series", () => {
 		await owner.call("calendar.cancel_occurrence", { occurrence_id: last });
 		expect((await owner.call("calendar.list_events", { ...later, time_zone: LA })).events).toEqual([]);
 	});
+
+	it("lists an all-day occurrence that moved to a day after the end of the series", async () => {
+		await owner.call("calendar.create_event", {
+			title: "Office day",
+			when: { kind: "all_day", start_date: "2030-10-22", end_date: "2030-10-23" },
+			recurrence: { frequency: "weekly", interval: 1, count: 2 },
+		});
+		const { events } = await owner.call("calendar.list_events", RANGE);
+		const last = events[1]?.occurrence_id;
+		if (!last) throw new Error("The series has no second occurrence.");
+		// The last occurrence is on 2030-10-29. It moves to 2030-11-12.
+		await owner.call("calendar.update_occurrence", {
+			occurrence_id: last,
+			when: { kind: "all_day", start_date: "2030-11-12", end_date: "2030-11-13" },
+		});
+		const listed = await owner.call("calendar.list_events", {
+			time_min: "2030-11-12T08:00:00Z",
+			time_max: "2030-11-13T08:00:00Z",
+			time_zone: LA,
+		});
+		expect(listed.events.map((event) => [event.occurrence_id, event.when])).toEqual([
+			[last, { kind: "all_day", start_date: "2030-11-12", end_date: "2030-11-13" }],
+		]);
+	});
 });
 
 describe("a reminder that waits for a retry", () => {
@@ -474,6 +498,59 @@ describe("a reminder that waits for a retry", () => {
 			state.storage.sql.exec<{ start_at: number }>("SELECT start_at FROM reminders").toArray(),
 		);
 		expect(next.map((row) => new Date(row.start_at).toISOString())).toEqual(["2031-11-27T17:00:00.000Z"]);
+	});
+
+	it("keeps the reminder of an attendee after more declined occurrences than a count series can have", async () => {
+		const { event } = await owner.call("calendar.create_event", {
+			...meeting,
+			recurrence: { frequency: "daily", interval: 1 },
+			attendee_ids: [ada.id],
+		});
+		await drain(owner.id, ada.id);
+		// Ada declines the first 800 occurrences. The rows go in directly: 800 calls are slow.
+		const declinedUntil = await runInDurableObject(calendar(ada.id), (_instance, state) => {
+			let last = 0;
+			for (let day = 0; day < 800; day++) {
+				const local = new Date(Date.parse("2030-10-22T12:00:00Z") + day * 86_400_000).toISOString().slice(0, 10);
+				// 09:00 in Los Angeles, with the offset of the day.
+				const offset = new Intl.DateTimeFormat("en-US", { timeZone: LA, timeZoneName: "shortOffset" })
+					.formatToParts(new Date(`${local}T12:00:00Z`))
+					.find((part) => part.type === "timeZoneName")?.value;
+				const at = Date.parse(`${local}T09:00:00${offset === "GMT-7" ? "-07:00" : "-08:00"}`);
+				last = at;
+				state.storage.sql.exec(
+					"INSERT INTO occurrence_responses (event_id, occ_key, principal_id, response, responded_at) VALUES (?, ?, ?, 'declined', 1)",
+					event.id,
+					`${new Date(at).toISOString().slice(0, 19).replace(/[-:]/g, "")}Z`,
+					ada.id,
+				);
+			}
+			return last;
+		});
+		// A change of the own reminder computes the next reminder again.
+		await ada.call("calendar.set_reminder", { event_id: event.id, minutes: 30 });
+		const next = await runInDurableObject(calendar(ada.id), (_instance, state) =>
+			state.storage.sql.exec<{ start_at: number }>("SELECT start_at FROM reminders").toArray(),
+		);
+		expect(next).toHaveLength(1);
+		expect(next[0]?.start_at).toBe(declinedUntil + 86_400_000);
+	});
+
+	it("reminds an attendee who declined the series of a far occurrence that the attendee accepted", async () => {
+		const { event } = await owner.call("calendar.create_event", {
+			...meeting,
+			recurrence: { frequency: "daily", interval: 1 },
+			attendee_ids: [ada.id],
+		});
+		await drain(owner.id, ada.id);
+		await ada.call("calendar.respond_to_event", { event_id: event.id, response: "declined" });
+		// An occurrence two years later.
+		const far = `${event.id}_20321022T160000Z`;
+		await ada.call("calendar.respond_to_event", { event_id: event.id, occurrence_id: far, response: "accepted" });
+		const next = await runInDurableObject(calendar(ada.id), (_instance, state) =>
+			state.storage.sql.exec<{ occ_key: string }>("SELECT occ_key FROM reminders").toArray(),
+		);
+		expect(next).toEqual([{ occ_key: "20321022T160000Z" }]);
 	});
 });
 

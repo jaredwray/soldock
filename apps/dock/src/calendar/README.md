@@ -232,8 +232,10 @@ can come later without a change of the data:
 - **Declined.** A one-off event that the participant declined has no reminder. For a series, the response
   to one occurrence comes before the response to the series. So an accepted occurrence of a declined series
   has a reminder, and a declined occurrence of an accepted series has none.
-- `rearm` reads the occurrences one at a time and stops at the first one that can have a reminder. It
-  reads at most 731 occurrences, which is more than the overrides of a series.
+- `rearm` reads the occurrences one at a time and stops at the first one that can have a reminder. Only an
+  override, a declined occurrence or a fired reminder skips an occurrence, so it reads at most the count of
+  those rows and one more. When an attendee declined the series, `rearm` reads only the occurrences that the
+  attendee did not decline.
 - **A fire.** The alarm writes a row of `reminder_log` (event, key, start) and an outbox row
   `calrem:<event>:<key>:<start ms>`, then computes the next reminder. `rearm` skips each occurrence that has a
   row in `reminder_log`, so an occurrence gets one reminder. A moved occurrence has a new start, so it

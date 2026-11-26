@@ -206,11 +206,6 @@ export interface OverrideRecord {
 const IDEMPOTENCY_TTL_MS = 24 * 60 * 60 * 1000;
 /** A fired reminder stays in `reminder_log` this long after the start of its occurrence. */
 const REMINDER_LOG_MS = 7 * 24 * 60 * 60 * 1000;
-/**
- * The most occurrences that `rearm` reads for the next reminder of a series. It is more than the overrides and
- * more than the occurrences of a count, so cancelled occurrences cannot stop the reminders of a series.
- */
-const REARM_SCAN = Math.max(CALENDAR_LIMITS.exceptions, CALENDAR_LIMITS.recurrenceCount) + 1;
 const OUTBOX_BATCH = 50;
 
 const MIGRATIONS: readonly (readonly string[])[] = [
@@ -1552,13 +1547,38 @@ export class CalendarDO extends DurableObject<Env> {
 			const declined = (key: string) =>
 				invited && (responses.get(key)?.get(owner)?.response ?? event.my_response) === "declined";
 			const anchor = anchorOf(event);
-			// The walk stops at the first occurrence that can have a reminder. It builds no list.
-			const next = firstOccurrenceAfter(anchor, event.recurrence, now, REARM_SCAN, (occurrence) => {
-				const override = overrides.get(occurrence.key);
-				if (override?.cancelled || override?.start_at != null || declined(occurrence.key)) return false;
-				return !fired(occurrence.key, occurrence.start_at);
-			});
-			if (next) best = { key: next.key, start: next.start_at };
+			if (invited && event.my_response === "declined") {
+				// The attendee declined the series: only an occurrence with a different response of its own can have
+				// a reminder. A walk of the rule could find none in all the occurrences of a series without an end.
+				for (const [key, answers] of responses) {
+					const answer = answers.get(owner);
+					if (answer === undefined || answer.response === "declined") continue;
+					const override = overrides.get(key);
+					const occurrence = occurrenceAt(anchor, event.recurrence, key);
+					if (override?.cancelled || !occurrence) continue;
+					const start = override?.start_at ?? occurrence.start_at;
+					if (start <= now || fired(key, start)) continue;
+					if (best === null || start < best.start) best = { key, start };
+				}
+			} else {
+				// Only an override, a declined occurrence or a fired reminder skips an occurrence of the rule. So the walk
+				// finds the next occurrence in at most that many occurrences and one more. It stops at the first one.
+				const skips = this.sql
+					.exec<{ n: number }>(
+						`SELECT (SELECT COUNT(*) FROM event_overrides WHERE event_id = ?1)
+							+ (SELECT COUNT(*) FROM occurrence_responses WHERE event_id = ?1 AND principal_id = ?2 AND response = 'declined')
+							+ (SELECT COUNT(*) FROM reminder_log WHERE event_id = ?1) AS n`,
+						eventId,
+						owner,
+					)
+					.one().n;
+				const next = firstOccurrenceAfter(anchor, event.recurrence, now, skips + 1, (occurrence) => {
+					const override = overrides.get(occurrence.key);
+					if (override?.cancelled || override?.start_at != null || declined(occurrence.key)) return false;
+					return !fired(occurrence.key, occurrence.start_at);
+				});
+				if (next) best = { key: next.key, start: next.start_at };
+			}
 			for (const override of overrides.values()) {
 				if (override.cancelled || override.start_at === null || override.start_at <= now) continue;
 				if (declined(override.occ_key) || fired(override.occ_key, override.start_at)) continue;
