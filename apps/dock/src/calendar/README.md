@@ -128,6 +128,10 @@ Public surface: `index.ts` only. Other domains must not import files from this f
 - The `CalendarDO` of a deleted principal stays in storage, as its drive does.
 - The web app polls the events of the open period every 30 seconds while the page shows. No change
   feed exists yet.
+- The week grid has one line for each hour of the wall clock. On the day that the clock goes back,
+  the hour from 01:00 to 02:00 occurs two times. An event in that hour keeps its real length in the
+  grid, so it can share columns with an event that it does not overlap. The data, the dialog, the
+  month view and the agenda list are correct.
 
 ## Not built yet
 
@@ -145,6 +149,7 @@ Public surface: `index.ts` only. Other domains must not import files from this f
 11. Invitations by mail to addresses outside the organization, and **Add to calendar** on a message
     with the Meeting label.
 12. Text search of events.
-13. A day view, a link to one event, and drag to move an event in the week grid.
+13. A day view, a link to one event, and drag to move an event in the week grid. A grid of 25 hours on
+    the day that the clock goes back.
 14. A link to a meeting of Meet.
 15. The removal of the calendar of a deleted principal, and the backup of events.
