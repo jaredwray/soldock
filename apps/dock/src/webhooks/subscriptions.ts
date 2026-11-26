@@ -38,7 +38,7 @@ export interface SubscriptionView {
 	status: SubscriptionRow["status"];
 	disabled_reason: SubscriptionRow["disabled_reason"];
 	created_at: string;
-	/** Chat only. Mail and Drive leave it out of their results. */
+	/** Chat only. Mail, Drive and Calendar leave it out of their results. */
 	chat_filter: ChatWebhookFilter;
 	endpoint: WebhookEndpoint;
 }
@@ -103,7 +103,7 @@ function listedEndpoint(row: ListedEndpoint, callerId: string): WebhookEndpoint 
 /**
  * The target the caller can subscribe to. Mail: own mailbox, a team mailbox, or a sponsored agent.
  * Chat: self or a sponsored agent. Drive: own drive, a shared drive the caller belongs to, or the
- * drive of a sponsored agent.
+ * drive of a sponsored agent. Calendar: own calendar only.
  */
 export async function creatableTarget(
 	call: CallContext,
@@ -155,6 +155,11 @@ async function visibleSubscriptions(
 ): Promise<"all" | "own"> {
 	const { caller } = call;
 	if (targetId === caller.id) return "own";
+	// A calendar subscription is for the calendar of its creator only. A sponsor, an owner and an admin see
+	// nothing of the calendar of a different principal, and the answer does not tell if the id exists.
+	if (domain === "calendar") {
+		throw new OperationError("forbidden", "You can see only the subscriptions of your own calendar.");
+	}
 	if (domain === "drive" && targetId.startsWith("drv_")) {
 		if (canReadAgentMailboxes(caller)) return "all";
 		const member = await call.env.DIRECTORY.prepare(
@@ -181,6 +186,8 @@ async function visibleSubscriptions(
 }
 
 async function managesSubscriptionsOf(call: CallContext, targetId: string, domain: WebhookDomain): Promise<boolean> {
+	// Only the creator of a calendar subscription can delete it.
+	if (domain === "calendar") return false;
 	if (domain === "drive" && targetId.startsWith("drv_")) {
 		if (canReadAgentMailboxes(call.caller)) return true;
 		const member = await call.env.DIRECTORY.prepare(
@@ -235,7 +242,7 @@ export function createSubscriptionHandlers(
 				);
 			}
 			await beforeCreate?.(call, targetId);
-			// A chat target is the caller, or an agent that the caller sponsors. Mail and Drive have no filter.
+			// A chat target is the caller, or an agent that the caller sponsors. The other products have no filter.
 			const filter =
 				domain === "chat"
 					? (input.filter ??

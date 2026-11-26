@@ -15,13 +15,16 @@ import {
 } from "./store.ts";
 import { outboundHostAllowed, webhookUrlProblem } from "./url.ts";
 
+/** Each product that has webhook events. The record makes a new product a type error here until it has a key. */
+const DOMAINS = Object.keys({
+	mail: true,
+	chat: true,
+	drive: true,
+	calendar: true,
+} satisfies Record<WebhookDomain, true>) as WebhookDomain[];
+
 function heldDomains(call: CallContext): WebhookDomain[] {
-	const domains: WebhookDomain[] = [];
-	if (call.caller.scopes.has("mail.webhooks")) domains.push("mail");
-	if (call.caller.scopes.has("chat.webhooks")) domains.push("chat");
-	if (call.caller.scopes.has("drive.webhooks")) domains.push("drive");
-	if (call.caller.scopes.has("calendar.webhooks")) domains.push("calendar");
-	return domains;
+	return DOMAINS.filter((domain) => call.caller.scopes.has(webhookScope(domain)));
 }
 
 /**
@@ -141,7 +144,7 @@ export const endpointHandlers: Pick<
 		const held = heldDomains(call);
 		const db = call.env.DIRECTORY;
 		const statement =
-			held.length === 3
+			held.length === DOMAINS.length
 				? db
 						.prepare(
 							`SELECT ${ENDPOINT_COLUMNS} FROM webhook_endpoints WHERE created_by = ? AND protocol = 'webhook'

@@ -338,6 +338,7 @@ export {
 	authorizationConflict,
 	CALENDAR_WEBHOOK_EVENTS,
 	type CalendarWebhookEvent,
+	type CalendarWebhookSubscription,
 	CHAT_ADDRESSED_REASONS,
 	CHAT_EVENT_REASONS,
 	CHAT_WEBHOOK_EVENTS,

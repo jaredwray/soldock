@@ -1,6 +1,6 @@
 import { EmailAddress, prefixedId, Timestamp } from "./common.ts";
 import { defineOperation } from "./operation.ts";
-import { CALENDAR_WEBHOOK_EVENTS } from "./webhooks.ts";
+import { CALENDAR_WEBHOOK_EVENTS, CalendarWebhookSubscription } from "./webhooks.ts";
 import { z } from "./zod.ts";
 
 // The calendar of a principal. Each person, agent and service account has one calendar. A call reaches
@@ -613,6 +613,60 @@ export const listChanges = defineOperation({
 	errors: [],
 });
 
+const OwnCalendarParam = prefixedId("prn")
+	.optional()
+	.describe("Your own id: the calendar of the caller. No other calendar is allowed. The default is your calendar.");
+
+const createCalendarWebhookSubscription = defineOperation({
+	name: "calendar.create_webhook_subscription",
+	summary: "Send calendar events to an endpoint",
+	description: [
+		"Adds a subscription for your own calendar. No person or agent can subscribe for the calendar of a different principal.",
+		"Choose the event. Each POST is one change of calendar.list_changes, with the same id (change_id) and its cursor.",
+		"The POST has ids only, and no title, time or answer. Read the event with calendar.get_event.",
+		"A change from before the subscription sends no POST. Read it with calendar.list_changes.",
+		"The endpoint must be yours and active.",
+	].join(" "),
+	http: { method: "POST", path: "/api/v1/calendar/webhook-subscriptions" },
+	scopes: ["calendar.webhooks", "calendar.read"],
+	callers: ["human", "agent"],
+	annotations: { readOnly: false, destructive: false, idempotent: false, openWorld: true },
+	input: z.strictObject({
+		endpoint_id: prefixedId("whe"),
+		event: z.enum(CALENDAR_WEBHOOK_EVENTS),
+		calendar_id: OwnCalendarParam,
+	}),
+	output: z.object({ subscription: CalendarWebhookSubscription }),
+	errors: ["not_found", "policy_denied", "conflict", "forbidden"],
+});
+
+const listCalendarWebhookSubscriptions = defineOperation({
+	name: "calendar.list_webhook_subscriptions",
+	summary: "List calendar webhook subscriptions",
+	description:
+		"Lists the calendar subscriptions of your endpoints. A calendar subscription is always for the calendar of its creator, so calendar_id can only be your own id.",
+	http: { method: "GET", path: "/api/v1/calendar/webhook-subscriptions" },
+	scopes: ["calendar.webhooks"],
+	callers: ["human", "agent"],
+	annotations: READ,
+	input: z.strictObject({ calendar_id: OwnCalendarParam }),
+	output: z.object({ subscriptions: z.array(CalendarWebhookSubscription) }),
+	errors: ["forbidden"],
+});
+
+const deleteCalendarWebhookSubscription = defineOperation({
+	name: "calendar.delete_webhook_subscription",
+	summary: "Delete a calendar webhook subscription",
+	description: "Deletes a subscription. The endpoint stays. Only the creator of a subscription can delete it.",
+	http: { method: "DELETE", path: "/api/v1/calendar/webhook-subscriptions/{subscription_id}" },
+	scopes: ["calendar.webhooks"],
+	callers: ["human", "agent"],
+	annotations: { readOnly: false, destructive: true, idempotent: true, openWorld: false },
+	input: z.strictObject({ subscription_id: prefixedId("whk") }),
+	output: z.object({ deleted: z.boolean() }),
+	errors: ["not_found"],
+});
+
 export const calendarOperations = {
 	"calendar.list_events": listEvents,
 	"calendar.get_event": getEvent,
@@ -621,4 +675,7 @@ export const calendarOperations = {
 	"calendar.delete_event": deleteEvent,
 	"calendar.respond_to_invitation": respondToInvitation,
 	"calendar.list_changes": listChanges,
+	"calendar.create_webhook_subscription": createCalendarWebhookSubscription,
+	"calendar.list_webhook_subscriptions": listCalendarWebhookSubscriptions,
+	"calendar.delete_webhook_subscription": deleteCalendarWebhookSubscription,
 } as const;

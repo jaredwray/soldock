@@ -313,6 +313,12 @@ export const DriveWebhookSubscription = SubscriptionBase.extend({
 }).and(EndpointRef);
 export type DriveWebhookSubscription = z.infer<typeof DriveWebhookSubscription>;
 
+export const CalendarWebhookSubscription = SubscriptionBase.extend({
+	event: z.enum(CALENDAR_WEBHOOK_EVENTS),
+	calendar_id: z.string(),
+}).and(EndpointRef);
+export type CalendarWebhookSubscription = z.infer<typeof CalendarWebhookSubscription>;
+
 const createEndpoint = defineOperation({
 	name: "webhooks.create_endpoint",
 	summary: "Create a webhook endpoint",

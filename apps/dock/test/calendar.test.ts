@@ -368,6 +368,7 @@ describe("who reaches a calendar", () => {
 			"calendar.list_events",
 			"calendar.get_event",
 			"calendar.list_changes",
+			"calendar.create_webhook_subscription",
 		]);
 	});
 

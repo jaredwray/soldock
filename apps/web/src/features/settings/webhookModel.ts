@@ -93,11 +93,14 @@ export const DOMAIN_LABELS: Record<WebhookDomain, string> = {
 	calendar: "Calendar",
 };
 
+/** The products in the sequence that a list of events uses. */
+export const WEBHOOK_DOMAINS: readonly WebhookDomain[] = ["mail", "chat", "drive", "calendar"];
+
 /**
- * The products in the sequence that a list of events uses. Calendar sends its changes through MCP Events only
- * in this version, so Settings does not offer it yet.
+ * The products whose events a sponsor can get for an agent. A calendar subscription is for the calendar of its
+ * creator only (`calendar.create_webhook_subscription`), so the page of an agent does not offer Calendar.
  */
-export const WEBHOOK_DOMAINS: readonly WebhookDomain[] = ["mail", "chat", "drive"];
+export const AGENT_WEBHOOK_DOMAINS: readonly WebhookDomain[] = ["mail", "chat", "drive"];
 
 /** A subscription of one product, with the id of its target in one field. */
 export interface ListedSubscription {

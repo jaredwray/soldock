@@ -21,6 +21,7 @@ import {
 } from "../identity/index.ts";
 import { decodeCursor, encodeCursor, type HandlerMap, newId, OperationError, sha256Hex } from "../platform/index.ts";
 import type { AttendeeRef, CalendarCall, EventFields, EventRecord, EventTime, Refusal } from "./calendar.ts";
+import { calendarWebhookHandlers } from "./webhooks.ts";
 
 type CalendarOperation = Extract<OperationName, `calendar.${string}`>;
 
@@ -305,4 +306,6 @@ export const calendarHandlers: Pick<HandlerMap<CallContext>, CalendarOperation> 
 			expired: page.expired,
 		};
 	},
+
+	...calendarWebhookHandlers,
 };
