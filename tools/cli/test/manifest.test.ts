@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { checkUpgrade, type Manifest, parseManifest, Refusal } from "../src/manifest.ts";
+import { Refusal } from "../src/errors.ts";
+import { checkUpgrade, type Manifest, parseManifest } from "../src/manifest.ts";
 
 const manifest: Manifest = {
 	version: "0.3.0",

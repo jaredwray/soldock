@@ -1,5 +1,6 @@
 // The manifest of a release bundle, and the check that an upgrade may go from the schema of an
 // instance to the schema of this release.
+import { Refusal } from "./errors.ts";
 
 export interface Manifest {
 	/** The Asterra version of the bundle. It is also the version of the CLI. */
@@ -15,11 +16,6 @@ export interface Manifest {
 	 * it when its Worker cannot run on an older schema in the time between the migrations and the deploy.
 	 */
 	min_applied_migration: string | null;
-}
-
-/** A stop that the operator can act on. The CLI shows the message without a stack. */
-export class Refusal extends Error {
-	override name = "Refusal";
 }
 
 /** Reads and checks manifest.json. */

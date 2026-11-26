@@ -4,7 +4,8 @@ import { existsSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { WranglerConfig } from "./config.ts";
-import { type Manifest, parseManifest, Refusal } from "./manifest.ts";
+import { Refusal } from "./errors.ts";
+import { type Manifest, parseManifest } from "./manifest.ts";
 
 export interface Bundle {
 	dir: string;
