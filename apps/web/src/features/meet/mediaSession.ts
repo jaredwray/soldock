@@ -14,6 +14,8 @@ export interface MediaEvents {
 	track(trackId: string, track: MediaStreamTrack): void;
 	/** A remote track is gone. */
 	removed(trackId: string): void;
+	/** The camera stopped by itself: the person removed the device, or the browser took the permission away. */
+	videoEnded(): void;
 }
 
 const GATHER_MS = 3000;
@@ -51,6 +53,11 @@ export class MediaSession {
 	private generation = 0;
 	private status: MediaStatus = "idle";
 	private disconnectTimer: ReturnType<typeof setTimeout> | null = null;
+	/** True while a restart is in the queue or runs. A second request then only asks for one more round. */
+	private restarting = false;
+	private restartAgain = false;
+	/** The mute state that the person chose. The server gets it after each new session. */
+	private muted = false;
 	/** The local tracks to send. A null track is not sent. */
 	private local: { audio: MediaStreamTrack | null; video: MediaStreamTrack | null } = { audio: null, video: null };
 	/** The transceiver of each local kind in the current connection. */
@@ -70,11 +77,6 @@ export class MediaSession {
 		this.events = events;
 	}
 
-	/** The connection, for a test that reads its statistics. */
-	get connection(): RTCPeerConnection | null {
-		return this.pc;
-	}
-
 	private setStatus(status: MediaStatus): void {
 		if (this.status === status) return;
 		this.status = status;
@@ -88,10 +90,21 @@ export class MediaSession {
 		return next;
 	}
 
-	/** Starts the media with the local tracks. Each later step waits for it. */
-	start(local: { audio: MediaStreamTrack | null; video: MediaStreamTrack | null }): Promise<void> {
+	/** Starts the media with the local tracks and the mute state. Each later step waits for it. */
+	start(local: { audio: MediaStreamTrack | null; video: MediaStreamTrack | null }, muted: boolean): Promise<void> {
 		this.local = { ...local };
+		this.muted = muted;
+		// A track from an earlier call can be off. The track must agree with the state that the page shows.
+		if (local.audio) local.audio.enabled = !muted;
+		if (local.video) this.watchVideo(local.video);
 		return this.run(() => this.connect(false));
+	}
+
+	/** Tells the page when the camera stops by itself. A stop by `stopVideo` does not cause this event. */
+	private watchVideo(track: MediaStreamTrack): void {
+		track.addEventListener("ended", () => {
+			if (this.local.video === track && !this.closed) this.events.videoEnded();
+		});
 	}
 
 	/** A new SFU session and a new connection. It sends the local tracks and receives the wanted tracks again. */
@@ -112,6 +125,9 @@ export class MediaSession {
 		pc.addEventListener("connectionstatechange", () => this.watch(pc, generation));
 		await this.publish((["audio", "video"] as const).filter((kind) => this.local[kind] !== null));
 		await this.pull();
+		// A new participant row and a new session start with the microphone on at the server. Send the real state
+		// each time, so the others never see an open microphone for a person who is muted.
+		await callApi.mediaState(this.code, this.token, this.muted || !this.local.audio);
 		if (pc.connectionState === "connected") this.setStatus("connected");
 	}
 
@@ -133,26 +149,50 @@ export class MediaSession {
 		}
 	}
 
-	/** Starts again after a lost connection, with a few tries. */
+	/** Starts again after a lost connection or a failed step, with a few tries. */
 	restart(): void {
 		if (this.closed) return;
+		if (this.restarting) {
+			this.restartAgain = true;
+			return;
+		}
+		this.restarting = true;
 		void this.run(async () => {
-			for (const delay of RETRY_DELAYS) {
-				if (this.closed) return;
-				try {
-					await this.connect(true);
-					return;
-				} catch (error) {
-					// A participant that the host removed, or a meeting that ended, cannot start again.
-					if (isFinal(error)) {
-						this.setStatus("failed");
-						return;
-					}
-					await new Promise((done) => setTimeout(done, delay));
-				}
+			try {
+				do {
+					this.restartAgain = false;
+					await this.reconnect();
+				} while (this.restartAgain && !this.closed && this.status !== "failed");
+			} finally {
+				this.restarting = false;
 			}
-			this.setStatus("failed");
 		});
+	}
+
+	private async reconnect(): Promise<void> {
+		for (const delay of RETRY_DELAYS) {
+			if (this.closed) return;
+			try {
+				await this.connect(true);
+				return;
+			} catch (error) {
+				// A participant that the host removed, or a meeting that ended, cannot start again.
+				if (isFinal(error)) {
+					this.setStatus("failed");
+					return;
+				}
+				await new Promise((done) => setTimeout(done, delay));
+			}
+		}
+		this.setStatus("failed");
+	}
+
+	/**
+	 * A step failed in the middle of an exchange with the SFU. The connection and the server can then disagree: a
+	 * local offer without an answer, or an offer of the SFU that waits. Only a new session puts that right.
+	 */
+	private recover(error: unknown): void {
+		if (!isFinal(error)) this.restart();
 	}
 
 	/** Sends local tracks of these kinds in new transceivers. */
@@ -193,7 +233,9 @@ export class MediaSession {
 				this.events.removed(trackId);
 			}
 		}
-		if ([...next].some((trackId) => !this.pulled.has(trackId))) void this.run(() => this.pull()).catch(() => {});
+		if ([...next].some((trackId) => !this.pulled.has(trackId))) {
+			void this.run(() => this.pull()).catch((error: unknown) => this.recover(error));
+		}
 	}
 
 	private async pull(): Promise<void> {
@@ -221,8 +263,9 @@ export class MediaSession {
 
 	/** Mutes or unmutes the microphone. The track keeps sending silence, so the SFU keeps it. */
 	async setMuted(muted: boolean): Promise<void> {
+		this.muted = muted;
 		if (this.local.audio) this.local.audio.enabled = !muted;
-		await callApi.mediaState(this.code, this.token, muted);
+		await callApi.mediaState(this.code, this.token, muted || !this.local.audio);
 	}
 
 	/** Stops the camera: the others stop receiving it, and the camera light goes off. */
@@ -236,15 +279,36 @@ export class MediaSession {
 			this.senders.delete("video");
 			await transceiver.sender.replaceTrack(null);
 			transceiver.direction = "inactive";
-			await callApi.unpublish(this.code, this.token, { session: this.session, kinds: ["video"] });
+			try {
+				await callApi.unpublish(this.code, this.token, { session: this.session, kinds: ["video"] });
+			} catch (error) {
+				// The server still has the track. A new session has no video track.
+				this.recover(error);
+				throw error;
+			}
 		});
 	}
 
-	/** Sends a new camera track. */
+	/** Sends a new camera track. When the step fails, the camera stops and no later session sends the track. */
 	async startVideo(track: MediaStreamTrack): Promise<void> {
 		await this.run(async () => {
 			this.local.video = track;
-			await this.publish(["video"]);
+			this.watchVideo(track);
+			try {
+				await this.publish(["video"]);
+			} catch (error) {
+				this.local.video = null;
+				track.stop();
+				const transceiver = this.senders.get("video");
+				this.senders.delete("video");
+				try {
+					transceiver?.stop();
+				} catch {
+					// The connection closed already.
+				}
+				this.recover(error);
+				throw error;
+			}
 		});
 	}
 

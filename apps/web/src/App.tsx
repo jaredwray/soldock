@@ -37,7 +37,8 @@ const MeetRoomPage = lazy(() =>
 /** The code of the meeting of a path `/meet/<code>`, or null. `/meet` alone is the Meet page of the app. */
 function meetingCodeOf(pathname: string): string | null {
 	const match = /^\/meet\/([^/]+)\/?$/.exec(pathname);
-	return match ? parseMeetingCode(decodeURIComponent(match[1] as string)) : null;
+	// `parseMeetingCode` decodes the path, and gives null for a bad percent escape.
+	return match ? parseMeetingCode(`/meet/${match[1] as string}`) : null;
 }
 
 /**

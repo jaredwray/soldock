@@ -43,6 +43,7 @@ export function CallView({ code, info, token, local, startMuted, startWithoutVid
 	const localRef = useRef(local);
 	const overRef = useRef(onOver);
 	overRef.current = onOver;
+	const videoEndedRef = useRef<() => void>(() => {});
 	const toast = useToast();
 	const blockSound = useCallback(() => setSoundBlocked(true), []);
 
@@ -59,17 +60,19 @@ export function CallView({ code, info, token, local, startMuted, startWithoutVid
 					return next;
 				});
 			},
+			videoEnded: () => videoEndedRef.current(),
 		});
 		session.current = media;
 		const start = localRef.current;
-		if (start?.audio && startMuted) start.audio.enabled = false;
 		if (start?.video && startWithoutVideo) {
 			start.video.stop();
 			start.stream.removeTrack(start.video);
 		}
 		void media
-			.start({ audio: start?.audio ?? null, video: startWithoutVideo ? null : (start?.video ?? null) })
-			.then(() => (start?.audio && startMuted ? media.setMuted(true) : undefined))
+			.start(
+				{ audio: start?.audio ?? null, video: startWithoutVideo ? null : (start?.video ?? null) },
+				startMuted || !start?.audio,
+			)
 			.catch((error: unknown) => {
 				const status = (error as { status?: number }).status;
 				if (status === 403 || status === 401) watch.current?.refresh();
@@ -101,21 +104,32 @@ export function CallView({ code, info, token, local, startMuted, startWithoutVid
 		}
 	}
 
+	async function turnOffVideo(media: MediaSession) {
+		setVideoOn(false);
+		const current = localRef.current;
+		if (current) {
+			for (const track of current.stream.getVideoTracks()) current.stream.removeTrack(track);
+			const next = { ...current, video: null };
+			localRef.current = next;
+			onLocal(next);
+		}
+		await media.stopVideo();
+	}
+
+	// A camera that stops by itself is the same as the button "Turn off camera".
+	videoEndedRef.current = () => {
+		const media = session.current;
+		if (!media || !videoOn) return;
+		void turnOffVideo(media).catch((error: unknown) => toast({ message: errorMessage(error), tone: "error" }));
+	};
+
 	async function toggleVideo() {
 		const media = session.current;
 		if (!media || busy) return;
 		setBusy(true);
 		try {
 			if (videoOn) {
-				setVideoOn(false);
-				await media.stopVideo();
-				const current = localRef.current;
-				if (current) {
-					for (const track of current.stream.getVideoTracks()) current.stream.removeTrack(track);
-					const next = { ...current, video: null };
-					localRef.current = next;
-					onLocal(next);
-				}
+				await turnOffVideo(media);
 			} else {
 				const track = await openCamera();
 				if (!track) {

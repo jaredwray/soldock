@@ -100,6 +100,9 @@ export function MeetRoomPage({ code }: { code: string }) {
 	const finish = useCallback(
 		(info: CallInfo | null, reason: EndReason | null) => {
 			if (reason !== "left" && reason !== "absent") saveToken(code, null);
+			// The microphone and the camera stop at each exit: from the device check, from the lobby and from the call.
+			stopMedia(mediaRef.current?.stream ?? null);
+			setMedia(null);
 			setPhase({ name: "over", info, reason });
 		},
 		[code],
@@ -170,11 +173,7 @@ export function MeetRoomPage({ code }: { code: string }) {
 					startMuted={!want.audio}
 					startWithoutVideo={!want.video}
 					onLocal={setMedia}
-					onOver={(reason) => {
-						stopMedia(mediaRef.current?.stream ?? null);
-						setMedia(null);
-						finish(phase.info, reason);
-					}}
+					onOver={(reason) => finish(phase.info, reason)}
 				/>
 			);
 		case "over": {
