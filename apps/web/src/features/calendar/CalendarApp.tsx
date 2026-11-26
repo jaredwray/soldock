@@ -7,6 +7,7 @@ import { setPageTitle } from "../../lib/pageTitle.ts";
 import { Link } from "../../lib/router.tsx";
 import { type CalendarView, calendarPath, isCalendarDate } from "../../routes.ts";
 import { PageHeader } from "../../shell/PageHeader.tsx";
+import { CalendarSharing } from "./CalendarSharing.tsx";
 import { useEvents } from "./data.ts";
 import { EventDialog } from "./EventDialog.tsx";
 import { clampDay, type EventForm, type FirstDay, newEventForm, periodOf, periodTitle, shiftTarget } from "./model.ts";
@@ -61,6 +62,7 @@ export function CalendarApp({ view, date }: CalendarAppProps) {
 	const { state, reload, retry } = useEvents(period.timeMin, period.timeMax, zone);
 	const phone = useMediaQuery(PHONE_QUERY);
 	const [dialog, setDialog] = useState<DialogState>(null);
+	const [sharing, setSharing] = useState(false);
 	const title = periodTitle(view, anchor, FIRST_DAY);
 	const unit = view === "week" ? "week" : "month";
 
@@ -88,6 +90,9 @@ export function CalendarApp({ view, date }: CalendarAppProps) {
 	return (
 		<main id="main" className="page-main cal-main" tabIndex={-1}>
 			<PageHeader title="Calendar" icon="calendar">
+				<button type="button" className="button" onClick={() => setSharing(true)}>
+					Sharing
+				</button>
 				<button type="button" className="button button-primary" onClick={() => createAt(newEventDay)}>
 					<Icon name="plus" />
 					New event
@@ -179,6 +184,7 @@ export function CalendarApp({ view, date }: CalendarAppProps) {
 					/>
 				)}
 			</div>
+			{sharing && <CalendarSharing onClose={() => setSharing(false)} />}
 			{dialog && (
 				<EventDialog
 					event={dialog.event}

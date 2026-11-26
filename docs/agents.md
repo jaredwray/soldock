@@ -28,7 +28,8 @@ OAuth is the main way to add an agent. The agent needs only one URL.
    - **An agent that exists**: an agent that you sponsor, or any agent if you are an owner or an admin.
 6. Select **Approve and connect**. The page has no scopes: the app does not choose what it can do.
    - A new agent reaches its own mailbox, its own drive and its own calendar. It reaches a shared mailbox, a shared drive
-     or a room after a member adds it there: see [Access of an agent](#access-of-an-agent).
+     or a room after a member adds it there, and the calendar of a person after that person gives it access: see
+     [Access of an agent](#access-of-an-agent) and [Calendar](#calendar).
 
 The client then gets an access token for one hour and a refresh token. Each refresh gives a new
 refresh token. A connection that the client does not refresh for 30 days stops. The tokens act as
@@ -711,17 +712,40 @@ So a person who manages that account must agree.
 
 ## Calendar
 
-Each agent and each service account has its own calendar, as each person has. The calendar tools act
-on the own calendar of the caller only. No tool reads or changes the calendar of a different
-principal. The sponsor of an agent, and an owner or an admin, do not read the calendar of the agent.
+Each agent and each service account has its own calendar, as each person has. Without `calendar_id`,
+the calendar tools act on the own calendar of the caller. With `calendar_id`, they act on the calendar of
+a person who gave the agent access. The sponsor of an agent, and an owner or an admin, do not read the
+calendar of the agent.
 
 | Tool | Scope | What |
 | --- | --- | --- |
 | `calendar_list_events` | `calendar.read` | The events that overlap a range, first start first, with pages |
 | `calendar_get_event` | `calendar.read` | One event |
-| `calendar_create_event` | `calendar.write` | Add an event. Takes `idempotency_key` |
+| `calendar_find_times` | `calendar.read` | The busy times of people, and free times for a meeting |
+| `calendar_create_event` | `calendar.write` | Add an event and invite `attendees`. Takes `idempotency_key` |
 | `calendar_update_event` | `calendar.write` | Change the fields that you give. Takes `base_revision` |
 | `calendar_delete_event` | `calendar.write` | Delete an event. Takes `base_revision` and `dry_run` |
+
+Only a person gives access to a calendar (`calendar_set_grant` and **Calendar › Sharing** in the web
+app). An agent never gets these tools, so it cannot change its own access.
+
+- **Access to the calendar of a person.** The person gives `free_busy` or `schedule`. With `schedule`,
+  pass the id of the person as `calendar_id`. You add events and invite attendees from that calendar,
+  and the person is the organizer. You change and delete only the events that you added. You see the
+  time of each other event, and the title of an event that is not private. You never see its
+  description, location or attendees. The grant alone decides: your account scopes do not.
+- **Find a time.** Call `calendar_find_times` with `attendee_ids` (comma-separated), a range of at most
+  31 days, `duration_minutes` and `time_zone`. With `calendar_id`, you see the busy times that the
+  attendees share with that person. `availability: "unknown"` means that the owner shares nothing with
+  you. **Never treat unknown as free.** When `complete` is false, a suggestion is free only for the
+  known calendars.
+- **Invitations.** Each attendee gets one copy of the event on the own calendar, with the owner of the
+  calendar as organizer. An agent or a service account cannot invite an agent or a service account:
+  the call returns `forbidden`. No mail goes out: attendees are principals of the organization.
+- **The end of access.** When the person removes the grant, your next call with `calendar_id` returns
+  `forbidden`. The events that you added stay.
+- **Audit.** Each change in the calendar of a person records you as the actor and the person as the
+  calendar. The event keeps your id in `created_by`.
 
 - **Timed events.** Give `start` and `end` as ISO 8601 times with an offset or `Z`, and `time_zone`, an
   IANA name such as `America/New_York`. The output gives `start` and `end` in UTC, with `time_zone`.
@@ -737,7 +761,8 @@ principal. The sponsor of an agent, and an owner or an admin, do not read the ca
   events.
 - **An agent from before Calendar.** Migration `0038` gives an agent `calendar.read` when it holds
   `mail.read`, and `calendar.write` when it holds `mail.modify`. An agent with narrower account scopes
-  has no calendar tools, and `account_whoami` names the scopes that it does not hold.
+  cannot use its own calendar. It still gets the calendar tools, because a grant of a person can give
+  it the calendar of that person.
 
 Example: an agent adds a one-hour review on the clock of New York.
 
@@ -753,6 +778,41 @@ Example: an agent adds a one-hour review on the clock of New York.
       "time_zone": "America/New_York"
     },
     "idempotency_key": "design-review-2026-12-01"
+  }
+}
+```
+
+Example: Jared gave his agent `schedule`, and his teammate shares busy times with Jared. The agent finds 30
+minutes, and invites the teammate from the calendar of Jared.
+
+```json
+{
+  "name": "calendar_find_times",
+  "arguments": {
+    "calendar_id": "prn_JARED",
+    "attendee_ids": "prn_TEAMMATE",
+    "time_min": "2026-12-01T00:00:00-05:00",
+    "time_max": "2026-12-05T00:00:00-05:00",
+    "duration_minutes": 30,
+    "time_zone": "America/New_York"
+  }
+}
+```
+
+```json
+{
+  "name": "calendar_create_event",
+  "arguments": {
+    "calendar_id": "prn_JARED",
+    "title": "Roadmap sync",
+    "when": {
+      "kind": "timed",
+      "start": "2026-12-01T16:00:00Z",
+      "end": "2026-12-01T16:30:00Z",
+      "time_zone": "America/New_York"
+    },
+    "attendees": ["prn_TEAMMATE"],
+    "idempotency_key": "roadmap-sync-2026-12-01"
   }
 }
 ```

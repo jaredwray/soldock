@@ -7,6 +7,7 @@ import {
 	type DaySegment,
 	eventLabel,
 	eventsByDay,
+	eventTitle,
 	HOURS,
 	hourText,
 	longDate,
@@ -69,7 +70,7 @@ function EventButton({
 			{!segment.allDay && start !== null && !segment.continued && (
 				<span className="cal-event-time">{timeText(start, zone)}</span>
 			)}
-			<span className="cal-event-title">{event.title}</span>
+			<span className="cal-event-title">{eventTitle(event)}</span>
 			{!compact && event.location && <span className="cal-event-location">{event.location}</span>}
 		</button>
 	);

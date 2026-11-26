@@ -31,8 +31,11 @@ export const SCOPES = {
 		"Give and remove access to the items of your drive, and change the members of the shared drives that you manage",
 	"chat.read": "Read your rooms and direct messages, and find the public rooms",
 	"chat.write": "Create and join rooms, change their members, post, change and delete messages, and set what you read",
-	"calendar.read": "Read the events of your calendar",
-	"calendar.write": "Add, change and delete the events of your calendar",
+	"calendar.read":
+		"Read the events of your calendar and of the calendars that their owners let you schedule in, and find free times",
+	"calendar.write":
+		"Add, change and delete the events of your calendar and the events that you add to the calendars that their owners let you schedule in",
+	"calendar.share": "Give and remove the access of other people and agents to your own calendar",
 } as const;
 
 export type Scope = keyof typeof SCOPES;
@@ -42,9 +45,10 @@ export const ALL_SCOPES = Object.keys(SCOPES) as Scope[];
 /**
  * The scopes that only the person gives to a key of the person. An owner or an admin who creates or rotates a
  * key of a different person cannot give them. `mail.share` gives other principals access to the mailbox of
- * the person, and that access stays after the key ends.
+ * the person, and `calendar.share` gives them access to the calendar of the person. That access stays after
+ * the key ends.
  */
-export const OWN_KEY_SCOPES: readonly Scope[] = ["mail.share"];
+export const OWN_KEY_SCOPES: readonly Scope[] = ["mail.share", "calendar.share"];
 
 /**
  * The account scopes of a new agent, and the most that an agent can hold. An agent cannot manage keys or the

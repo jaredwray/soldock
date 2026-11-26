@@ -7,6 +7,7 @@ import {
 	checkWhen,
 	DAY_MS,
 	dateToUtcMs,
+	type EventVisibility,
 	type EventWhenValue,
 	zonedDate,
 	zonedDayStart,
@@ -212,6 +213,9 @@ export interface EventForm {
 	endTime: string;
 	location: string;
 	description: string;
+	/** The principal ids of the attendees, without the owner of the calendar. */
+	attendees: string[];
+	visibility: EventVisibility;
 }
 
 function wallTime(ms: number, zone: string): string {
@@ -232,12 +236,20 @@ export function newEventForm(date: string, hour = 9): EventForm {
 		endTime: `${String(end % 24).padStart(2, "0")}:00`,
 		location: "",
 		description: "",
+		attendees: [],
+		visibility: "default",
 	};
 }
 
 /** The form of an existing event, in the time zone of the person. */
 export function formOf(event: CalendarEvent, zone: string): EventForm {
-	const base = { title: event.title, location: event.location, description: event.description };
+	const base = {
+		title: event.title,
+		location: event.location,
+		description: event.description,
+		attendees: event.attendees.map((attendee) => attendee.principal_id),
+		visibility: event.visibility,
+	};
 	if (event.when.kind === "all_day") {
 		return {
 			...base,
@@ -258,6 +270,26 @@ export function formOf(event: CalendarEvent, zone: string): EventForm {
 		endDate: zonedDate(end, zone),
 		endTime: wallTime(end, zone),
 	};
+}
+
+/**
+ * The form with the time of a suggestion of Find a time. The start and the end are instants: the form shows
+ * them on the clock of the time zone of the dialog, which can differ from the zone of the search.
+ */
+export function withSlot(form: EventForm, start: number, end: number, zone: string): EventForm {
+	return {
+		...form,
+		allDay: false,
+		startDate: zonedDate(start, zone),
+		startTime: wallTime(start, zone),
+		endDate: zonedDate(end, zone),
+		endTime: wallTime(end, zone),
+	};
+}
+
+/** True when an event is an invitation from a different calendar: only its organizer changes it. */
+export function isInvitation(event: CalendarEvent): boolean {
+	return event.organizer_id !== event.calendar_id;
 }
 
 /** The time of an event from the fields of the form. The last day of an all-day form is in the event. */
@@ -358,9 +390,25 @@ export function whenText(event: CalendarEvent, zone: string): string {
 	return `${shortDate(zonedDate(start, zone))}, ${startText} – ${shortDate(zonedDate(end, zone))}, ${endText}`;
 }
 
+/**
+ * An interval of busy or free time in a time zone: "Mon, Mar 4, 10:00 AM – 12:30 PM", with the date of the end
+ * when it is on a different day.
+ */
+export function intervalText(start: number, end: number, zone: string): string {
+	const day = format(zone, { weekday: "short", month: "short", day: "numeric" });
+	const startText = `${day.format(start)}, ${timeText(start, zone)}`;
+	if (zonedDate(start, zone) === zonedDate(end - 1, zone)) return `${startText} – ${timeText(end, zone)}`;
+	return `${startText} – ${day.format(end)}, ${timeText(end, zone)}`;
+}
+
+/** The title of an event, or "Busy" for a private event of a different person that has no title for the caller. */
+export function eventTitle(event: CalendarEvent): string {
+	return event.title || "Busy";
+}
+
 /** The accessible name of an event: its title, its time and its place. */
 export function eventLabel(event: CalendarEvent, zone: string): string {
-	return [event.title, whenText(event, zone), event.location].filter(Boolean).join(", ");
+	return [eventTitle(event), whenText(event, zone), event.location].filter(Boolean).join(", ");
 }
 
 /** The hours of the grid of the week view. */

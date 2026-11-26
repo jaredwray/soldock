@@ -341,9 +341,10 @@ describe("who reaches a calendar", () => {
 		expect(await codeOf(ada.call("calendar.get_event", { event_id: botEvent.id }))).toBe("not_found");
 		// The sponsor and the owner of the organization do not read the calendar of an agent.
 		expect(await codeOf(owner.call("calendar.get_event", { event_id: botEvent.id }))).toBe("not_found");
-		// No field names a different calendar.
-		const other = { event_id: adaEvent.id, calendar_id: ada.id } as unknown as InputOf<"calendar.get_event">;
-		expect(await codeOf(bot.call("calendar.get_event", other))).toBe("invalid");
+		// calendar_id names a different calendar only with a grant of its owner.
+		expect(await codeOf(bot.call("calendar.get_event", { event_id: adaEvent.id, calendar_id: ada.id }))).toBe(
+			"forbidden",
+		);
 		expect((await ada.call("calendar.get_event", { event_id: adaEvent.id })).event).toEqual(adaEvent);
 	});
 
@@ -363,11 +364,10 @@ describe("who reaches a calendar", () => {
 		// An agent from before Calendar has the account scopes that it got at creation.
 		await setLegacyScopes(bot.id, ["account.read", "mail.read"]);
 		expect(await codeOf(bot.call("calendar.list_events", range))).toBe("forbidden");
+		// A grant of a person can still give it the calendar of that person, so whoami does not list the scope as
+		// missing, as for a mailbox delegate.
 		const { missing_scopes } = await bot.call("account.whoami");
-		expect(missing_scopes.find((entry) => entry.scope === "calendar.read")?.operations).toEqual([
-			"calendar.list_events",
-			"calendar.get_event",
-		]);
+		expect(missing_scopes.find((entry) => entry.scope === "calendar.read")).toBeUndefined();
 	});
 
 	it("gives an agent from before Calendar the calendar scopes that match its mail scopes, one time", async () => {

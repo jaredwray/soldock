@@ -1,9 +1,10 @@
-import { prefixedId, Timestamp } from "./common.ts";
+import { ID_CHARS, prefixedId, Timestamp } from "./common.ts";
 import { defineOperation } from "./operation.ts";
 import { z } from "./zod.ts";
 
-// The calendar of a principal. Each person, agent and service account has one calendar. A call reaches
-// only the calendar of its caller. The time helpers are here, so the server and the web app agree.
+// The calendar of a principal. Each person, agent and service account has one calendar. A call reaches the
+// calendar of its caller, or the calendar of a person who gave the caller access (`calendar.set_grant`). The
+// time helpers are here, so the server and the web app agree.
 
 export const CALENDAR_LIMITS = {
 	titleChars: 300,
@@ -22,6 +23,20 @@ export const CALENDAR_LIMITS = {
 	firstDate: "1970-01-01",
 	/** The last day that an event can use. */
 	lastDate: "2100-12-31",
+	/** The attendees of one event, without the organizer. */
+	attendees: 50,
+	/** The grants of one calendar. */
+	grants: 200,
+	/** The longest time range of one calendar.find_times, in days. */
+	findRangeDays: 31,
+	/** The attendees of one calendar.find_times, without the calendar of the call. */
+	findAttendees: 20,
+	/** The suggestions of one calendar.find_times, without `limit`. */
+	defaultSuggestions: 20,
+	suggestions: 50,
+	/** The shortest and the longest meeting of calendar.find_times, in minutes. */
+	minDurationMinutes: 5,
+	maxDurationMinutes: 1440,
 } as const;
 
 export const DAY_MS = 86_400_000;
@@ -274,12 +289,40 @@ export const EventWhen = z.discriminatedUnion("kind", [
 ]);
 export type EventWhen = z.infer<typeof EventWhen>;
 
+/** Who sees the details of an event. `private`: a delegate of the calendar sees only the time. */
+export const EventVisibility = z.enum(["default", "private"]);
+export type EventVisibility = z.infer<typeof EventVisibility>;
+
+/** What a grant on a calendar lets its principal do. `schedule` includes `free_busy`. */
+export const CalendarAccess = z.enum(["free_busy", "schedule"]);
+export type CalendarAccess = z.infer<typeof CalendarAccess>;
+
+export const EventAttendee = z.object({
+	principal_id: z.string(),
+	/** The answer of the attendee. No operation sets it yet: it is always needs_action. */
+	response: z.enum(["needs_action", "accepted", "declined", "tentative"]),
+});
+export type EventAttendee = z.infer<typeof EventAttendee>;
+
 export const CalendarEvent = z.object({
 	id: z.string(),
+	/** The principal whose calendar holds this event. */
+	calendar_id: z.string(),
+	/** The organizer: the owner of the calendar for an own event, the calendar of the organizer for an invitation. */
+	organizer_id: z.string(),
+	/** The principal that added the event: the owner, or a delegate that schedules for the owner. */
+	created_by: z.string(),
 	title: z.string(),
 	description: z.string(),
 	location: z.string(),
 	when: EventWhen,
+	visibility: EventVisibility,
+	attendees: z.array(EventAttendee),
+	/**
+	 * True when the caller sees only a part of the event: a delegate sees the time, and the title of an event
+	 * that is not private, of an event that it did not add.
+	 */
+	redacted: z.boolean(),
 	/** 1 for a new event. Each change adds 1. */
 	revision: z.number().int(),
 	created_at: Timestamp,
@@ -287,10 +330,45 @@ export const CalendarEvent = z.object({
 });
 export type CalendarEvent = z.infer<typeof CalendarEvent>;
 
+export const CalendarGrant = z.object({
+	principal_id: z.string(),
+	access: CalendarAccess,
+	created_at: Timestamp,
+});
+export type CalendarGrant = z.infer<typeof CalendarGrant>;
+
+/** An interval of busy time, in UTC. */
+export const BusyInterval = z.object({ start: Timestamp, end: Timestamp });
+export type BusyInterval = z.infer<typeof BusyInterval>;
+
 const READ = { readOnly: true, destructive: false, idempotent: true, openWorld: false } as const;
 
-const OWN_NOTE =
-	"The calendar is your own calendar. Each person, agent and service account has one. Nobody else can read or change it.";
+const OWN_NOTE = [
+	"Without calendar_id, the call uses your own calendar. Each person, agent and service account has one.",
+	"Set calendar_id to the id of a person who gave you schedule access (calendar.set_grant) to use the calendar of that person.",
+	"In that calendar you see the time of each event, and the title of an event that is not private. You see all fields only of the events that you added, and you change only those events.",
+].join(" ");
+
+const PrincipalId = prefixedId("prn");
+
+const CALENDAR_ID = PrincipalId.optional().describe(
+	"The id of the person whose calendar the call uses. Leave it out for your own calendar. The person must give you schedule access first.",
+);
+
+const ATTENDEES_NOTE = [
+	"attendees lists the principal ids of the people and agents of the organization to invite.",
+	"Each attendee gets one copy of the event on the own calendar, with the owner of the calendar as organizer.",
+	"An agent or a service account cannot invite an agent or a service account.",
+].join(" ");
+
+const Attendees = z
+	.array(PrincipalId)
+	.max(CALENDAR_LIMITS.attendees)
+	.describe(`${ATTENDEES_NOTE} At most ${CALENDAR_LIMITS.attendees} attendees.`);
+
+const Visibility = EventVisibility.describe(
+	"private: a delegate of the calendar sees only the time of the event. default: a delegate also sees the title.",
+);
 
 const BASE_REVISION = z
 	.number()
@@ -308,9 +386,9 @@ const RangeTime = z
 
 export const listEvents = defineOperation({
 	name: "calendar.list_events",
-	summary: "List the events of your calendar in a time range",
+	summary: "List the events of a calendar in a time range",
 	description: [
-		"Returns the events of your calendar that overlap the range from time_min to time_max, first start first.",
+		"Returns the events of the calendar that overlap the range from time_min to time_max, first start first.",
 		"An event that ends at time_min, or starts at time_max, is not in the range.",
 		`The range can be at most ${CALENDAR_LIMITS.rangeDays} days long.`,
 		"time_zone sets the days of all-day events: an all-day event is in the range when one of its days, from 00:00 to 00:00 in time_zone, overlaps the range. The default is UTC. Give your own time zone.",
@@ -336,6 +414,7 @@ export const listEvents = defineOperation({
 				.optional()
 				.describe(`The most events on one page. The default is ${CALENDAR_LIMITS.defaultPageSize}.`),
 			cursor: z.string().max(600).optional(),
+			calendar_id: CALENDAR_ID,
 		})
 		.refine((input) => Date.parse(input.time_max) > Date.parse(input.time_min), "time_max must be after time_min")
 		.refine(
@@ -343,28 +422,30 @@ export const listEvents = defineOperation({
 			`The range can be at most ${CALENDAR_LIMITS.rangeDays} days long`,
 		),
 	output: z.object({ events: z.array(CalendarEvent), next_cursor: z.string().nullable() }),
-	errors: [],
+	errors: ["not_found", "forbidden"],
 });
 
 export const getEvent = defineOperation({
 	name: "calendar.get_event",
-	summary: "Read one event of your calendar",
-	description: ["Returns one event of your calendar.", OWN_NOTE].join(" "),
+	summary: "Read one event of a calendar",
+	description: ["Returns one event of the calendar.", OWN_NOTE].join(" "),
 	http: { method: "GET", path: "/api/v1/calendar/events/{event_id}" },
 	scopes: ["calendar.read"],
 	callers: ["human", "agent", "service"],
 	annotations: READ,
-	input: z.strictObject({ event_id: EventId }),
+	input: z.strictObject({ event_id: EventId, calendar_id: CALENDAR_ID }),
 	output: z.object({ event: CalendarEvent }),
-	errors: ["not_found"],
+	errors: ["not_found", "forbidden"],
 });
 
 export const createEvent = defineOperation({
 	name: "calendar.create_event",
-	summary: "Add an event to your calendar",
+	summary: "Add an event to a calendar, and invite attendees",
 	description: [
-		"Adds an event to your calendar and returns it.",
+		"Adds an event to the calendar and returns it.",
 		WHEN_NOTE,
+		ATTENDEES_NOTE,
+		"In the calendar of a different person, that person is the organizer, and the event records you in created_by.",
 		`A calendar can have at most ${CALENDAR_LIMITS.events} events.`,
 		"Set idempotency_key to make a retry safe.",
 		OWN_NOTE,
@@ -378,6 +459,9 @@ export const createEvent = defineOperation({
 		when: EventWhenInput,
 		description: Description.default("").describe("Plain text. Line breaks stay."),
 		location: Location.default(""),
+		attendees: Attendees.default([]),
+		visibility: Visibility.default("default"),
+		calendar_id: CALENDAR_ID,
 		idempotency_key: z
 			.string()
 			.min(1)
@@ -388,15 +472,17 @@ export const createEvent = defineOperation({
 			),
 	}),
 	output: z.object({ event: CalendarEvent }),
-	errors: ["conflict"],
+	errors: ["conflict", "not_found", "forbidden"],
 });
 
 export const updateEvent = defineOperation({
 	name: "calendar.update_event",
-	summary: "Change an event of your calendar",
+	summary: "Change an event of a calendar",
 	description: [
 		"Changes the fields that you give. A field that you do not give stays. when replaces the whole time of the event, so you can change a timed event to an all-day event.",
 		WHEN_NOTE,
+		"attendees replaces the whole list. Each new attendee gets a copy of the event, and each removed attendee loses it.",
+		"Only the organizer changes an event. An attendee can only delete its copy.",
 		"A call that changes nothing keeps the revision.",
 		"Set base_revision to the revision that you read. When the event has a different revision now, the call fails with conflict and changes nothing: read the event again.",
 		"Without base_revision, the change applies to the current event.",
@@ -412,17 +498,21 @@ export const updateEvent = defineOperation({
 		when: EventWhenInput.optional(),
 		description: Description.optional(),
 		location: Location.optional(),
+		attendees: Attendees.optional(),
+		visibility: Visibility.optional(),
+		calendar_id: CALENDAR_ID,
 		base_revision: BASE_REVISION,
 	}),
 	output: z.object({ event: CalendarEvent }),
-	errors: ["not_found", "conflict"],
+	errors: ["not_found", "conflict", "forbidden"],
 });
 
 export const deleteEvent = defineOperation({
 	name: "calendar.delete_event",
-	summary: "Delete an event of your calendar",
+	summary: "Delete an event of a calendar",
 	description: [
-		"Deletes an event of your calendar. This cannot be undone.",
+		"Deletes an event of the calendar. This cannot be undone. Each attendee loses its copy.",
+		"The delete of an invitation that you got removes only your copy.",
 		"Set dry_run to true to get the event without a change.",
 		"Set base_revision to the revision that you read. When the event has a different revision now, the call fails with conflict and deletes nothing: read the event again.",
 		"Without base_revision, the call deletes the current event.",
@@ -434,11 +524,166 @@ export const deleteEvent = defineOperation({
 	annotations: { readOnly: false, destructive: true, idempotent: false, openWorld: false },
 	input: z.strictObject({
 		event_id: EventId,
+		calendar_id: CALENDAR_ID,
 		base_revision: BASE_REVISION,
 		dry_run: z.boolean().default(false),
 	}),
 	output: z.object({ event: CalendarEvent, dry_run: z.boolean() }),
-	errors: ["not_found", "conflict"],
+	errors: ["not_found", "conflict", "forbidden"],
+});
+
+const WallTime = z
+	.string()
+	.regex(/^([01]\d|2[0-3]):[0-5]\d$/, "must be a time of the wall clock in HH:MM form, such as 09:00");
+
+/** The principal ids of a comma-separated list. */
+export function splitIds(value: string | undefined): string[] {
+	if (value === undefined) return [];
+	return value
+		.split(",")
+		.map((id) => id.trim())
+		.filter((id) => id.length > 0);
+}
+
+const PRINCIPAL_ID_PATTERN = new RegExp(`^prn_${ID_CHARS}$`);
+
+export const findTimes = defineOperation({
+	name: "calendar.find_times",
+	summary: "Find the busy times of people and suggest free times for a meeting",
+	description: [
+		"Returns the busy intervals of each calendar, and suggested times of duration_minutes when each known calendar is free.",
+		"The calendar of the call (your own calendar, or calendar_id) is always the first entry of calendars. attendee_ids adds more calendars.",
+		"busy holds only merged intervals of busy time: no title, no detail and no count of events. A private event is busy time too.",
+		"availability is unknown when the owner of a calendar shares no availability with you. Never treat unknown as free.",
+		"When complete is false, a suggestion is free only for the calendars with known availability.",
+		"With calendar_id, the call asks each attendee calendar as the owner of calendar_id: you see the busy times that the attendees share with that person. You must hold schedule access to calendar_id.",
+		"Suggestions are between day_start and day_end on each day in time_zone, and never in the past.",
+		`The range can be at most ${CALENDAR_LIMITS.findRangeDays} days long.`,
+	].join(" "),
+	http: { method: "GET", path: "/api/v1/calendar/find-times" },
+	scopes: ["calendar.read"],
+	callers: ["human", "agent", "service"],
+	annotations: READ,
+	input: z
+		.strictObject({
+			attendee_ids: z
+				.string()
+				.max(CALENDAR_LIMITS.findAttendees * 31)
+				.refine(
+					(value) => splitIds(value).every((id) => PRINCIPAL_ID_PATTERN.test(id)),
+					"must be principal ids that start with prn_, separated by commas",
+				)
+				.refine(
+					(value) => splitIds(value).length <= CALENDAR_LIMITS.findAttendees,
+					`can have at most ${CALENDAR_LIMITS.findAttendees} ids`,
+				)
+				.optional()
+				.describe(
+					"The principal ids of the people to meet, separated by commas, such as prn_A,prn_B. Leave it out to see only the calendar of the call.",
+				),
+			time_min: RangeTime.describe("The start of the range: an ISO 8601 time, such as 2026-12-01T00:00:00Z."),
+			time_max: RangeTime.describe("The end of the range: an ISO 8601 time. It is not in the range."),
+			duration_minutes: z.coerce
+				.number()
+				.int()
+				.min(CALENDAR_LIMITS.minDurationMinutes)
+				.max(CALENDAR_LIMITS.maxDurationMinutes)
+				.describe("The length of the meeting, in minutes, such as 30."),
+			time_zone: TimeZone.describe(
+				"The IANA time zone of the days, such as America/New_York. day_start, day_end and all-day events use it.",
+			),
+			day_start: WallTime.optional().describe(
+				"The first time of a day for a suggestion, in HH:MM. The default is 09:00.",
+			),
+			day_end: WallTime.optional().describe(
+				"The last time of a day for a suggestion to end, in HH:MM. The default is 17:00.",
+			),
+			limit: z.coerce
+				.number()
+				.int()
+				.min(1)
+				.max(CALENDAR_LIMITS.suggestions)
+				.optional()
+				.describe(`The most suggestions. The default is ${CALENDAR_LIMITS.defaultSuggestions}.`),
+			calendar_id: CALENDAR_ID,
+		})
+		.refine((input) => Date.parse(input.time_max) > Date.parse(input.time_min), "time_max must be after time_min")
+		.refine(
+			(input) => Date.parse(input.time_max) - Date.parse(input.time_min) <= CALENDAR_LIMITS.findRangeDays * DAY_MS,
+			`The range can be at most ${CALENDAR_LIMITS.findRangeDays} days long`,
+		)
+		.refine((input) => (input.day_start ?? "09:00") < (input.day_end ?? "17:00"), "day_end must be after day_start"),
+	output: z.object({
+		time_zone: z.string(),
+		calendars: z.array(
+			z.object({
+				principal_id: z.string(),
+				availability: z.enum(["known", "unknown"]),
+				/** Empty when the availability is unknown. */
+				busy: z.array(BusyInterval),
+			}),
+		),
+		suggestions: z.array(BusyInterval),
+		/** False when the availability of a calendar is unknown. */
+		complete: z.boolean(),
+	}),
+	errors: ["not_found", "forbidden"],
+});
+
+const OWN_CALENDAR = "People only, for their own calendar. An owner or an admin cannot do this for a different person.";
+
+const GRANT_RULES = [
+	"free_busy lets the principal see when you are busy, through calendar.find_times. It sees no detail of an event.",
+	"schedule also lets it add events to your calendar, invite attendees from your calendar, and change and delete the events that it added. You are the organizer of these events.",
+	"A principal with schedule access sees the time of each event of your calendar, and the title of an event that is not private. It sees no description, location or attendees of an event that it did not add.",
+	"It also sees the busy times that other people share with you, when it calls calendar.find_times with your calendar_id.",
+].join(" ");
+
+const Grants = z.object({ grants: z.array(CalendarGrant) });
+
+export const listGrants = defineOperation({
+	name: "calendar.list_grants",
+	summary: "List the people and agents that can see your busy times or schedule for you",
+	description: `Returns each grant of your own calendar, in the order in which you added them. ${OWN_CALENDAR}`,
+	http: { method: "GET", path: "/api/v1/calendar/grants" },
+	scopes: ["calendar.read"],
+	callers: ["human"],
+	annotations: READ,
+	input: z.strictObject({}),
+	output: Grants,
+	errors: [],
+});
+
+export const setGrant = defineOperation({
+	name: "calendar.set_grant",
+	summary: "Let a person or an agent see your busy times or schedule for you",
+	description: [
+		OWN_CALENDAR,
+		"access is free_busy or schedule. For a principal that has a grant, access replaces it.",
+		GRANT_RULES,
+		"The grant applies at once. Your credential must hold calendar.read to give free_busy, and calendar.read and calendar.write to give schedule.",
+		`A calendar can have at most ${CALENDAR_LIMITS.grants} grants.`,
+	].join(" "),
+	http: { method: "POST", path: "/api/v1/calendar/grants" },
+	scopes: ["calendar.share"],
+	callers: ["human"],
+	annotations: { readOnly: false, destructive: false, idempotent: true, openWorld: false },
+	input: z.strictObject({ principal_id: PrincipalId, access: CalendarAccess }),
+	output: Grants,
+	errors: ["not_found"],
+});
+
+export const removeGrant = defineOperation({
+	name: "calendar.remove_grant",
+	summary: "Remove the access of a person or an agent to your calendar",
+	description: `${OWN_CALENDAR} The access ends at once. The events that the principal added stay in your calendar. A second call changes nothing.`,
+	http: { method: "DELETE", path: "/api/v1/calendar/grants/{principal_id}" },
+	scopes: ["calendar.share"],
+	callers: ["human"],
+	annotations: { readOnly: false, destructive: true, idempotent: true, openWorld: false },
+	input: z.strictObject({ principal_id: PrincipalId }),
+	output: Grants,
+	errors: [],
 });
 
 export const calendarOperations = {
@@ -447,4 +692,8 @@ export const calendarOperations = {
 	"calendar.create_event": createEvent,
 	"calendar.update_event": updateEvent,
 	"calendar.delete_event": deleteEvent,
+	"calendar.find_times": findTimes,
+	"calendar.list_grants": listGrants,
+	"calendar.set_grant": setGrant,
+	"calendar.remove_grant": removeGrant,
 } as const;

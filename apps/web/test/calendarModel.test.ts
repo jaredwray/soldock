@@ -16,6 +16,7 @@ import {
 	weekDays,
 	whenOf,
 	whenText,
+	withSlot,
 } from "../src/features/calendar/model.ts";
 
 const NY = "America/New_York";
@@ -23,10 +24,16 @@ const NY = "America/New_York";
 function event(id: string, when: CalendarEvent["when"], title = id): CalendarEvent {
 	return {
 		id,
+		calendar_id: "prn_me",
+		organizer_id: "prn_me",
+		created_by: "prn_me",
 		title,
 		description: "",
 		location: "",
 		when,
+		visibility: "default",
+		attendees: [],
+		redacted: false,
 		revision: 1,
 		created_at: "2026-11-01T00:00:00.000Z",
 		updated_at: "2026-11-01T00:00:00.000Z",
@@ -194,5 +201,24 @@ describe("the form of an event", () => {
 			expect(sameTimeFields({ ...opened, ...change }, opened), JSON.stringify(change)).toBe(false);
 		}
 		expect(newEventForm("2026-12-01", 23)).toMatchObject({ endDate: "2026-12-02", endTime: "00:00" });
+	});
+
+	// Find a time can search in a different zone. A suggestion is two instants, so the form must show them on the
+	// clock of the dialog, and a save must send the same instants back.
+	it("fills the form with a suggestion of Find a time on the clock of the dialog zone", () => {
+		const allDay = { ...newEventForm("2026-12-01"), allDay: true, title: "Sync", attendees: ["prn_a"] };
+		// 09:00 in Berlin on 2026-12-02 is 03:00 in New York.
+		const start = Date.parse("2026-12-02T08:00:00Z");
+		const filled = withSlot(allDay, start, start + 30 * 60_000, NY);
+		expect(filled).toMatchObject({
+			title: "Sync",
+			attendees: ["prn_a"],
+			allDay: false,
+			startDate: "2026-12-02",
+			startTime: "03:00",
+			endDate: "2026-12-02",
+			endTime: "03:30",
+		});
+		expect(whenOf(filled, NY)).toMatchObject({ start: "2026-12-02T08:00:00.000Z", end: "2026-12-02T08:30:00.000Z" });
 	});
 });

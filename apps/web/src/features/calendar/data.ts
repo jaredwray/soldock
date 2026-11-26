@@ -89,3 +89,19 @@ export function updateEvent(input: InputOf<"calendar.update_event">) {
 export function deleteEvent(eventId: string, baseRevision: number) {
 	return api.call("calendar.delete_event", { event_id: eventId, base_revision: baseRevision });
 }
+
+export function findTimes(input: InputOf<"calendar.find_times">) {
+	return api.call("calendar.find_times", input);
+}
+
+export function listGrants() {
+	return api.call("calendar.list_grants", {});
+}
+
+export function setGrant(input: InputOf<"calendar.set_grant">) {
+	return api.call("calendar.set_grant", input);
+}
+
+export function removeGrant(principalId: string) {
+	return api.call("calendar.remove_grant", { principal_id: principalId });
+}
