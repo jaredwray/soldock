@@ -21,6 +21,12 @@ export default defineProject(async () => ({
 					// At least 32 characters. Each test seals its secrets, as a deployment with the secret does.
 					// The tests of the plaintext form remove it with `withEnv` or with an env of their own.
 					ENCRYPTION_KEY: "test-encryption-key-0123456789abcdef",
+					// Meet is set up. Tests replace `fetch` with a stand-in of the Realtime API (test/realtime-fake.ts), so
+					// these values never leave the test.
+					REALTIME_APP_ID: "testrealtimeapp00000000000000001",
+					REALTIME_APP_SECRET: "test-realtime-app-secret",
+					REALTIME_TURN_KEY_ID: "testturnkey000000000000000000001",
+					REALTIME_TURN_KEY_TOKEN: "test-turn-key-token",
 				},
 			},
 		}),

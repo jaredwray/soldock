@@ -21,6 +21,7 @@ export { DocumentDO } from "./collab/index.ts";
 export { DriveSpaceDO } from "./drive/index.ts";
 export { PrincipalDO } from "./identity/index.ts";
 export { MailboxDO } from "./mail/index.ts";
+export { MeetingDO } from "./meet/index.ts";
 
 const app = createApp(handlers, watchers, events);
 

@@ -20,6 +20,7 @@ import {
 } from "./drive/index.ts";
 import { type CallContext, getPrincipal, identityHandlers } from "./identity/index.ts";
 import { closeAutoLabels, enableMailEvents, mailHandlers, mailWatchers } from "./mail/index.ts";
+import { meetHandlers } from "./meet/index.ts";
 import type { EventSubscriptions, HandlerMap, WatcherMap } from "./platform/index.ts";
 import { log, OperationError } from "./platform/index.ts";
 import { sheetsHandlers } from "./sheets/index.ts";
@@ -35,6 +36,7 @@ export const handlers: HandlerMap<CallContext> = {
 	...endpointHandlers,
 	...aiHandlers,
 	...calendarHandlers,
+	...meetHandlers,
 	async "chat.invoke_slash_command"(call, input) {
 		return await invokeSlashCommand(call, handlers, {
 			room_id: input.room_id,

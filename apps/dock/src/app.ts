@@ -4,6 +4,7 @@ import { mountChatFiles, mountChatIncomingWebhooks, mountChatSocket } from "./ch
 import { mountDriveTransfer } from "./drive/index.ts";
 import { type CallContext, mountAuthRoutes, mountEventsSocket, mountOAuthRoutes } from "./identity/index.ts";
 import { mountMcp } from "./mcp/index.ts";
+import { mountMeetCalls, mountMeetSocket } from "./meet/index.ts";
 import {
 	type EventSubscriptions,
 	type HandlerMap,
@@ -19,7 +20,8 @@ export type AppEnv = { Bindings: Env; Variables: RequestIdVariables };
 
 /**
  * The HTTP app for Worker-owned paths (see `WORKER_PREFIXES`): `/auth/*`, the OAuth server (`/oauth/*`,
- * `/.well-known/*`), REST, MCP, the uploads and downloads of Drive (`/blob/drive/*`, `/dl/drive/*`), the files of Chat (`/dl/chat/*`), the room sockets of Chat (`/ws/chat/*`) and the events socket (`/ws/events`). The REST routes and the MCP tools
+ * `/.well-known/*`), REST, MCP, the uploads and downloads of Drive (`/blob/drive/*`, `/dl/drive/*`), the files of Chat (`/dl/chat/*`), the room sockets of Chat (`/ws/chat/*`), the events socket (`/ws/events`), and the call routes
+ * of Meet (`/api/v1/meet/calls/*`, `/ws/meet/*`). The REST routes and the MCP tools
  * come from the operation registry, with the handlers that the composition root passes in. MCP
  * resource subscriptions use the change feeds that it passes in. MCP Events uses the subscriptions that
  * it passes in.
@@ -44,6 +46,8 @@ export function createApp(
 	mountChatIncomingWebhooks(app);
 	mountChatSocket(app);
 	mountEventsSocket(app);
+	mountMeetCalls(app);
+	mountMeetSocket(app);
 
 	app.notFound((c) => {
 		const { pathname } = new URL(c.req.url);

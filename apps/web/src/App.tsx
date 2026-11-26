@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { parseMeetingCode } from "@asterra/contracts";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { endSession, onSessionChange } from "./features/auth/auth.ts";
 import { loadSession, type SessionState } from "./features/auth/boot.ts";
 import { InvitePage } from "./features/auth/InvitePage.tsx";
@@ -28,10 +29,43 @@ function forgetOtherPeople(): void {
 }
 onAccountChange(forgetOtherPeople);
 
+// The page of a meeting is a separate chunk. A guest who opens a meeting link loads only it.
+const MeetRoomPage = lazy(() =>
+	import("./features/meet/MeetRoomPage.tsx").then((module) => ({ default: module.MeetRoomPage })),
+);
+
+/** The code of the meeting of a path `/meet/<code>`, or null. `/meet` alone is the Meet page of the app. */
+function meetingCodeOf(pathname: string): string | null {
+	const match = /^\/meet\/([^/]+)\/?$/.exec(pathname);
+	return match ? parseMeetingCode(decodeURIComponent(match[1] as string)) : null;
+}
+
 /**
  * Boot checks setup before session authentication. A setup token also permits a fresh start.
  */
 export function App() {
+	// A meeting link opens its own page, for a guest without an account and for a member. It needs no session.
+	const [meetingCode] = useState(() => meetingCodeOf(window.location.pathname));
+	return meetingCode ? (
+		<ToastProvider>
+			<Suspense
+				fallback={
+					<div className="boot" aria-live="polite">
+						<span className="spinner" aria-hidden="true" />
+						<span>Opening the meeting…</span>
+					</div>
+				}
+			>
+				<MeetRoomPage code={meetingCode} />
+			</Suspense>
+		</ToastProvider>
+	) : (
+		<WorkspaceApp />
+	);
+}
+
+/** The signed-in app, with its boot, setup, sign-in and invite pages. */
+function WorkspaceApp() {
 	const [state, setState] = useState<SessionState>({ status: "loading" });
 	// An invite link opens its own page, also while somebody is signed in. It leaves the page after the sign-in.
 	const [invite, setInvite] = useState(() => window.location.pathname === INVITE_PATH);

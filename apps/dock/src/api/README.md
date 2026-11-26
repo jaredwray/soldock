@@ -28,6 +28,14 @@ Public surface: `index.ts` only. Other domains must not import files from this f
 6. Errors are `application/problem+json` (RFC 9457) with the `code` from the error catalogue.
    A missing or bad credential gets `401` with `WWW-Authenticate: Bearer`.
 
+## The call routes of Meet
+
+`/api/v1/meet/calls/{code}/…` are not operations, and the REST adapter does not mount them: the `meet` module does
+(`mountMeetCalls`). A guest of a meeting is not a principal, and an agent sends no media, so these routes carry only
+the join, the state and the media of a browser. They take a participant token in the header `x-asterra-meet-token`,
+never in `Authorization`. Each capability of a host is an operation (`meet.*`). See the
+[`meet`](../meet/README.md#routes-of-a-browser) module.
+
 ## The call of a request outside the registry
 
 `callOf()` gives the call of a request for a path that is a second transport of one operation, without

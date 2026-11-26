@@ -1,6 +1,6 @@
 # End-to-end tests
 
-> Status: **started**. The harness runs on each pull request. The Chat flows of layer 2, the files of a chat message, the search of Chat, the webhook check boxes, the reload after a deploy, the images of a doc, the download of a doc, a paste of Markdown into a doc, the service accounts of Admin, a new person or agent in Admin and its access, the invite link of a new person, the member scopes of a shared mailbox and of a room, the member requests and the share requests of agents, Admin › AI, inbox auto labels, the sender notice of external mail, the mailbox settings, the delegates of the own mailbox, the Screener, Snooze, Focus in the inbox and in Starred, the copy button of the sender address in an open message, the week, month and phone views of Calendar, and the tooltip of the Asterra mark have tests.
+> Status: **started**. The harness runs on each pull request. The Chat flows of layer 2, the files of a chat message, the search of Chat, the webhook check boxes, the reload after a deploy, the images of a doc, the download of a doc, a paste of Markdown into a doc, the service accounts of Admin, a new person or agent in Admin and its access, the invite link of a new person, the member scopes of a shared mailbox and of a room, the member requests and the share requests of agents, Admin › AI, inbox auto labels, the sender notice of external mail, the mailbox settings, the delegates of the own mailbox, the Screener, Snooze, Focus in the inbox and in Starred, the copy button of the sender address in an open message, the week, month and phone views of Calendar, the lobby, the call, the removal, the end and the reconnect of Meet, and the tooltip of the Asterra mark have tests.
 > The run after a deploy, and the other flows below, are not built yet.
 
 Playwright tests run in two places, both in GitHub Actions:
@@ -30,6 +30,12 @@ pnpm e2e
   in as a person of the seed data ([`support/chat.ts`](support/chat.ts)). [`support/docs.ts`](support/docs.ts) makes a doc, a PNG
   file that a browser shows, and a drop of files. [`support/agents.ts`](support/agents.ts) makes an agent with an API key, and
   deletes the agents of a test.
+- The Meet tests send real audio and video between browsers with synthetic devices. Without credentials, the Worker
+  sends the media through a stand-in SFU on port 8798 ([`support/fake-sfu.ts`](support/fake-sfu.ts)): one headless
+  Chromium that holds a real `RTCPeerConnection` for each SFU session and sends each received track on. It proves
+  the gate, the broker and the client of Asterra, not the paths of Cloudflare. With `MEET_LIVE=1`, `global-setup.ts`
+  starts no stand-in, and the Worker uses the Realtime secrets of `apps/dock/.dev.vars`: the
+  [`live-meet`](../.github/workflows/live-meet.yaml) workflow runs the Meet tests this way.
 - No test is tried again after a failure. A test that fails some of the time is a defect to fix.
 - In CI, the job installs Chromium with `playwright install --with-deps chromium`. Cloud sessions
   have Chromium. Do not run `playwright install` there.
@@ -38,6 +44,8 @@ pnpm e2e
 
 | File | Flows |
 | --- | --- |
+| [`tests/meet.spec.ts`](tests/meet.spec.ts) | A host and a guest in two browsers. The guest in the lobby has no connection, and the server refuses its media requests. After the admit, audio and video grow in both directions, and the remote video has a size. Mute and the camera show on the other side, and the camera comes back. The guest page then stops reading the server, and the host removes the guest: the media stops in both directions, and the token gets `403`. The host ends the call: both pages show the end, and a new visitor cannot join. A reload rejoins with one click and no lobby. A lost connection on the SFU side makes a new session, and the media flows again. A phone that allows the microphone and refuses the camera joins with audio. A browser that refuses both devices can ask to listen, and the host refuses it |
+| [`tests/meetLive.spec.ts`](tests/meetLive.spec.ts) | Only in the `live-meet` workflow, against Cloudflare Realtime: the media flows over the default path and over the TURN relay, with the selected ICE pair in the job summary |
 | [`tests/chat.spec.ts`](tests/chat.spec.ts) | A send shows at once and goes out one time. A send with lost answers shows one time. A failed send shows "Not sent", and **Try again** sends it. A message that waits stays after a reload. A change and a delete show at once, and come back after a refusal. A page of older messages keeps the place of the list. The **New messages** line and the button to the newest messages. The draft of a room after a change of room, a reload and a sign-out. A room from the cache before the answer of the server. A link to one message. The unread count of the sidebar from the events socket, without a read of the list, and its end after a read on a different device. A star moves a room to the **Starred** part, also on a second page of the person without a read of the list, and **Remove star** moves it back. A reply in a thread stays out of the room list of an open page. A thread opens beside the room, shows each new reply, keeps the actions of the room usable, sends a reply and a reply that also goes to the room, keeps a typed reply on Escape, and gives the focus back to its opener. A mention links to the profile of its principal, and the `@` list puts the members of the room first, with no read of the whole directory. The profile of an agent shows when the read of its sponsor fails |
 | [`tests/chatPresence.spec.ts`](tests/chatPresence.spec.ts) | A person sets and clears a status. A second browser sees both changes on the open profile |
 | [`tests/chatLive.spec.ts`](tests/chatLive.spec.ts) | A member sees another member type. The indicator expires. A new message updates the title and app badge outside Chat. A read on another device clears the count |

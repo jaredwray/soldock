@@ -1,0 +1,446 @@
+/* Meet: the Meet page of the app, and the page of a meeting (device check, lobby, call, end). */
+
+.meet-home-body {
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+	gap: 16px;
+	max-width: 960px;
+	padding: 16px 22px;
+}
+
+.meet-home-card {
+	padding: 16px;
+	border: 1px solid var(--border);
+	border-radius: var(--radius);
+	background: var(--card);
+}
+
+.meet-home-form {
+	display: flex;
+	flex-direction: column;
+	align-items: flex-start;
+	gap: 12px;
+}
+
+.meet-home-form .field {
+	align-self: stretch;
+}
+
+.meet-link {
+	margin-top: 16px;
+}
+
+.meet-link-label {
+	margin: 0 0 8px;
+	font-weight: 600;
+}
+
+.meet-link-row {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
+}
+
+.meet-link-row .input {
+	flex: 1 1 220px;
+	min-width: 0;
+}
+
+.meet-panel-title {
+	margin: 0 0 8px;
+	font-size: 16px;
+	font-weight: 600;
+}
+
+.meet-muted {
+	color: var(--muted-foreground);
+}
+
+/* The page of a meeting fills the window. It has no rail and no sidebar. */
+.meet-page {
+	min-height: 100dvh;
+	background: var(--surface);
+	color: var(--foreground);
+}
+
+.meet-center {
+	display: grid;
+	place-items: center;
+	padding: 16px;
+}
+
+.meet-card {
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	gap: 12px;
+	max-width: 420px;
+	padding: 24px;
+	border: 1px solid var(--border);
+	border-radius: var(--radius);
+	background: var(--card);
+	text-align: center;
+}
+
+.meet-title {
+	margin: 0;
+	font-size: 22px;
+	font-weight: 600;
+}
+
+.meet-prejoin {
+	display: grid;
+	grid-template-columns: minmax(0, 3fr) minmax(280px, 2fr);
+	align-items: center;
+	gap: 24px;
+	max-width: 1080px;
+	margin: 0 auto;
+	padding: 24px 16px;
+}
+
+.meet-prejoin-media {
+	display: flex;
+	flex-direction: column;
+	gap: 12px;
+}
+
+.meet-prejoin-form {
+	display: flex;
+	flex-direction: column;
+	gap: 12px;
+}
+
+.meet-prejoin-form form {
+	display: flex;
+	flex-direction: column;
+	gap: 12px;
+}
+
+.meet-preview {
+	position: relative;
+	aspect-ratio: 16 / 9;
+	overflow: hidden;
+	border-radius: var(--radius);
+	background: #202124;
+}
+
+.meet-preview-off {
+	display: grid;
+	place-items: center;
+	height: 100%;
+	color: #e8eaed;
+}
+
+.meet-video {
+	display: block;
+	width: 100%;
+	height: 100%;
+	object-fit: cover;
+	background: #202124;
+}
+
+.meet-mirror {
+	transform: scaleX(-1);
+}
+
+.meet-level {
+	width: 100%;
+	height: 6px;
+	accent-color: var(--positive);
+}
+
+.meet-notice {
+	margin: 0;
+	padding: 10px 12px;
+	border: 1px solid var(--warning-border);
+	border-radius: var(--radius-sm);
+	background: var(--warning-soft);
+}
+
+.meet-lobby {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	margin: 0;
+	font-weight: 600;
+}
+
+.meet-controls {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	justify-content: center;
+	gap: 12px;
+}
+
+.meet-round {
+	display: inline-grid;
+	place-items: center;
+	width: 48px;
+	height: 48px;
+	border: 1px solid var(--border);
+	border-radius: 50%;
+	background: var(--control);
+	color: var(--foreground);
+	cursor: pointer;
+}
+
+.meet-round:hover:not(:disabled) {
+	background: var(--control-hover);
+}
+
+.meet-round:disabled {
+	cursor: not-allowed;
+	opacity: 0.5;
+}
+
+.meet-round-off {
+	border-color: var(--destructive);
+	background: var(--destructive);
+	color: var(--destructive-foreground);
+}
+
+.meet-round-off:hover:not(:disabled) {
+	background: var(--destructive-hover);
+}
+
+.meet-round-leave {
+	width: 64px;
+	border-color: var(--destructive);
+	border-radius: 24px;
+	background: var(--destructive);
+	color: var(--destructive-foreground);
+}
+
+.meet-round-leave:hover {
+	background: var(--destructive-hover);
+}
+
+/* The call. */
+.meet-call {
+	display: flex;
+	flex-direction: column;
+	height: 100dvh;
+	min-height: 0;
+	background: #202124;
+	color: #e8eaed;
+}
+
+.meet-call .meet-muted {
+	color: #bdc1c6;
+}
+
+.meet-call-header {
+	display: flex;
+	align-items: baseline;
+	gap: 12px;
+	padding: 12px 16px;
+}
+
+.meet-call-title {
+	margin: 0;
+	overflow: hidden;
+	font-size: 16px;
+	font-weight: 600;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.meet-banner {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	justify-content: center;
+	gap: 12px;
+	margin: 0 16px 8px;
+	padding: 8px 12px;
+	border-radius: var(--radius-sm);
+	background: #3c4043;
+	color: #e8eaed;
+}
+
+.meet-banner-error {
+	background: #5c2b29;
+}
+
+.meet-body {
+	display: flex;
+	flex: 1;
+	gap: 12px;
+	min-height: 0;
+	padding: 0 16px;
+}
+
+.meet-grid {
+	display: grid;
+	flex: 1;
+	grid-auto-rows: minmax(0, 1fr);
+	gap: 8px;
+	min-height: 0;
+}
+
+.meet-grid-1 {
+	grid-template-columns: 1fr;
+}
+
+.meet-grid-2 {
+	grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.meet-grid-3,
+.meet-grid-4 {
+	grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.meet-grid-5,
+.meet-grid-6,
+.meet-grid-7,
+.meet-grid-8,
+.meet-grid-9 {
+	grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.meet-tile {
+	position: relative;
+	display: grid;
+	place-items: center;
+	min-height: 120px;
+	margin: 0;
+	overflow: hidden;
+	border-radius: var(--radius);
+	background: #3c4043;
+}
+
+.meet-tile .meet-video {
+	position: absolute;
+	inset: 0;
+}
+
+.meet-avatar {
+	display: grid;
+	place-items: center;
+	width: 72px;
+	height: 72px;
+	border-radius: 50%;
+	background: #5f6368;
+	color: #fff;
+	font-size: 28px;
+	font-weight: 600;
+}
+
+.meet-audio {
+	display: none;
+}
+
+.meet-tile-name {
+	position: absolute;
+	bottom: 8px;
+	left: 8px;
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	max-width: calc(100% - 16px);
+	padding: 2px 8px;
+	overflow: hidden;
+	border-radius: var(--radius-sm);
+	background: rgb(0 0 0 / 0.55);
+	color: #fff;
+	font-size: 13px;
+	white-space: nowrap;
+}
+
+.meet-tile-muted {
+	flex: none;
+	color: #f28b82;
+}
+
+.meet-tile-action {
+	position: absolute;
+	top: 8px;
+	right: 8px;
+}
+
+.meet-badge {
+	padding: 0 6px;
+	border-radius: 4px;
+	background: rgb(255 255 255 / 0.18);
+	font-size: 11px;
+}
+
+.meet-lobby-panel {
+	flex: 0 0 280px;
+	align-self: flex-start;
+	padding: 12px;
+	border-radius: var(--radius);
+	background: var(--card);
+	color: var(--foreground);
+}
+
+.meet-lobby-list {
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+	margin: 0;
+	padding: 0;
+	list-style: none;
+}
+
+.meet-lobby-entry {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	justify-content: space-between;
+	gap: 8px;
+}
+
+.meet-lobby-name {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	min-width: 0;
+	overflow-wrap: anywhere;
+}
+
+.meet-lobby-name .meet-badge {
+	background: var(--hover);
+}
+
+.meet-lobby-actions {
+	display: flex;
+	gap: 6px;
+}
+
+.meet-call-controls {
+	padding: 12px 16px calc(12px + env(safe-area-inset-bottom));
+}
+
+@media (max-width: 760px) {
+	.meet-prejoin {
+		grid-template-columns: 1fr;
+		align-items: start;
+		padding: 16px;
+	}
+
+	.meet-body {
+		flex-direction: column;
+		overflow-y: auto;
+	}
+
+	.meet-grid,
+	.meet-grid-2,
+	.meet-grid-3,
+	.meet-grid-4,
+	.meet-grid-5,
+	.meet-grid-6,
+	.meet-grid-7,
+	.meet-grid-8,
+	.meet-grid-9 {
+		grid-template-columns: 1fr;
+		grid-auto-rows: minmax(180px, 1fr);
+	}
+
+	.meet-lobby-panel {
+		flex: none;
+		align-self: stretch;
+	}
+}

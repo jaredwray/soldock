@@ -88,6 +88,11 @@ const FILES: Record<IconName, string> = {
 	alignLeft: "align-left",
 	alignCenter: "align-center",
 	alignRight: "align-right",
+	video: "video-camera",
+	videoOff: "video-camera-off",
+	microphone: "microphone",
+	microphoneOff: "microphone-mute",
+	callEnd: "phone-disabled",
 };
 
 const sources = import.meta.glob<string>("../src/lib/iconoir/**/*.svg", {
@@ -106,7 +111,10 @@ function attributes(tag: string): Record<string, string> {
 	return Object.fromEntries([...tag.matchAll(/([a-zA-Z-]+)="([^"]*)"/g)].map((match) => [match[1], match[2]]));
 }
 
-/** The drawing of an SVG: the grid, the stroke width, and each path with the attributes that change its look. */
+/**
+ * The drawing of an SVG: the grid, the stroke width, and each path with the attributes that change its look. A
+ * `<rect>` has its box in `rect`.
+ */
 function drawing(svg: string) {
 	const root = attributes(/<svg[^>]*>/.exec(svg)?.[0] ?? "");
 	const inner = svg.replace(/<svg[^>]*>/, "").replace("</svg>", "");
@@ -119,6 +127,7 @@ function drawing(svg: string) {
 			const path = attributes(tag[0]);
 			return {
 				d: path.d,
+				rect: tag[1] === "rect" ? [path.x, path.y, path.width, path.height, path.rx].join(" ") : undefined,
 				fill: path.fill ?? "none",
 				stroke: path.stroke,
 				// A path of Iconoir has the stroke width of its file, or its own.
@@ -137,7 +146,7 @@ function rendered(name: IconName, filled = false): string {
 describe("Icon", () => {
 	it.each(Object.entries(FILES) as [IconName, string][])("draws %s as iconoir/%s.svg", (name, file) => {
 		const expected = drawing(source(file));
-		expect(expected.elements.every((element) => element === "path")).toBe(true);
+		expect(expected.elements.every((element) => element === "path" || element === "rect")).toBe(true);
 		expect(drawing(rendered(name))).toEqual(expected);
 	});
 

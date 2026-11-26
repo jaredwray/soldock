@@ -184,6 +184,15 @@ const ACCOUNT_PARTS: readonly AccountPart[] = [
 		text: can,
 	},
 	{
+		key: "meet",
+		name: "Meet",
+		words: [
+			["meet.read", "read"],
+			["meet.write", "host meetings"],
+		],
+		text: can,
+	},
+	{
 		key: "webhooks",
 		name: "Webhooks",
 		words: [
