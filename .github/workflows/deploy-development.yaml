@@ -1,10 +1,10 @@
 name: deploy-development
 
-# Continuous deployment: each push to main builds the SPA, applies the D1 migrations, deploys the
-# dock Worker to the development environment (`soldock-dock-dev`, wrangler `--env development`),
-# then runs the smoke check against its host, https://work.soldock.org. The host is the custom domain
-# in apps/dock/wrangler.jsonc. Production deploys come later. The dock Worker has no other
-# deployment environment.
+# Continuous deployment: each push to main builds the release bundle of the operator CLI and runs
+# `asterra upgrade` on the development instance (`soldock-dock-dev`, at https://work.soldock.org), as an
+# operator runs `npx asterra upgrade`. The CLI checks the schema, applies the D1 migrations, deploys,
+# runs the smoke check, and rolls back to the earlier version when the smoke check fails. The
+# development instance keeps the resource names from before the CLI (prefix `soldock`).
 #
 # This workflow uses the development Cloudflare token, so it follows the workflow rules in
 # docs/self-hosting.md:
@@ -34,7 +34,7 @@ jobs:
       url: ${{ steps.deploy.outputs.url }}
     permissions:
       contents: read
-    timeout-minutes: 15
+    timeout-minutes: 20
     env:
       WRANGLER_SEND_METRICS: "false"
     steps:
@@ -70,70 +70,34 @@ jobs:
           node-version-file: .node-version
           # No dependency cache: a restored pnpm store skips the downloads that Socket Firewall examines.
           package-manager-cache: false
-      # Only the dock Worker, the SPA and the workspace packages that they use, and no secrets in this step.
-      - run: sfw pnpm install --frozen-lockfile --filter "@asterra/dock..." --filter "@asterra/web..."
+      # Only the Worker, the SPA, the CLI and the workspace packages that they use, and no secrets in this step.
+      - run: sfw pnpm install --frozen-lockfile --filter "@asterra/dock..." --filter "@asterra/web..." --filter "asterra..."
 
-      # The dock Worker serves apps/web/dist as its static assets.
-      - name: Build the SPA (apps/web)
-        run: pnpm build
-
-      # A migration adds, or removes only what the running Worker does not use, so the running Worker
-      # keeps working with the new schema. On the first deploy the database does not exist yet: the
-      # deploy creates it, and the step after the deploy applies the migrations. Any other failure here
-      # stops the deploy.
-      - name: Apply the D1 migrations before the deploy
-        working-directory: apps/dock
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      # The release bundle holds the Worker, the SPA as its assets, the migrations and the config template.
+      - name: Build the release bundle
         run: |
-          if pnpm exec wrangler d1 info soldock-directory --env development > /dev/null 2>&1; then
-            pnpm run migrate:development
-          else
-            echo "::notice::The D1 database does not exist yet. The deploy creates it, and the next step migrates it."
-          fi
+          pnpm build
+          pnpm release:build
+          pnpm --filter asterra build
 
-      # wrangler provisions the D1 database, the R2 bucket and the queues by name on the first deploy.
-      # It also attaches the custom domain, and fails if it cannot.
-      - name: Deploy the dock Worker to development
+      # The CLI uses the wrangler of apps/dock: `pnpm exec` puts it on PATH. The CLI writes the URL and the
+      # version to GITHUB_OUTPUT.
+      - name: Upgrade the development instance with the CLI
         id: deploy
         working-directory: apps/dock
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          WRANGLER_OUTPUT_FILE_PATH: ${{ runner.temp }}/wrangler-output.ndjson
-        run: |
-          pnpm run deploy:development
-          # The deploy output shows the custom domain as "work.soldock.org (custom domain)".
-          host=$(jq -rn '[inputs | select(.type == "deploy") | .targets[]?
-            | capture("^(?<host>[a-z0-9.-]+) \\(custom domain\\)$").host] | first // empty' "$WRANGLER_OUTPUT_FILE_PATH")
-          version=$(jq -rn '[inputs | select(.type == "deploy") | .version_id] | first // empty' "$WRANGLER_OUTPUT_FILE_PATH")
-          if [[ -z "$host" ]]; then
-            echo "::error::The deploy output has no custom domain. Make sure that env.development in apps/dock/wrangler.jsonc has a route with custom_domain: true."
-            exit 1
-          fi
-          echo "url=https://$host" >> "$GITHUB_OUTPUT"
-          echo "version=$version" >> "$GITHUB_OUTPUT"
-
-      - name: Apply the D1 migrations after the deploy
-        working-directory: apps/dock
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-        run: pnpm run migrate:development
-
-      - name: Smoke check the development host
-        id: smoke
-        env:
-          URL: ${{ steps.deploy.outputs.url }}
-        run: scripts/smoke-check.sh "$URL"
+        run: >-
+          pnpm exec node ../../tools/cli/dist/bin.js upgrade --yes
+          --prefix soldock --worker-name soldock-dock-dev --hostname work.soldock.org
 
       - name: Write the job summary
-        if: ${{ always() && steps.deploy.outcome == 'success' }}
+        if: ${{ always() && steps.deploy.outputs.url != '' }}
         env:
           URL: ${{ steps.deploy.outputs.url }}
           VERSION: ${{ steps.deploy.outputs.version }}
-          SMOKE: ${{ steps.smoke.outcome }}
+          OUTCOME: ${{ steps.deploy.outcome }}
         run: |
           # GET /auth/setup is public. Before setup it returns setup_needed: true.
           setup=$(curl --silent --max-time 10 "$URL/auth/setup" | jq -r '.setup_needed | tostring' 2> /dev/null || true)
@@ -142,12 +106,16 @@ jobs:
             false) setup_line="done" ;;
             *) setup_line="unknown" ;;
           esac
+          case "$OUTCOME" in
+            success) upgrade_line="passed" ;;
+            *) upgrade_line="failed. The CLI rolled back to the earlier version when the smoke check failed. See the step log." ;;
+          esac
           {
             echo "## Development deploy"
             echo
             echo "- Commit: \`$GITHUB_SHA\`"
             echo "- Worker version: \`${VERSION:-unknown}\`"
             echo "- Host: $URL"
-            echo "- Smoke check: $SMOKE"
+            echo "- Upgrade and smoke check: $upgrade_line"
             echo "- First-run setup: $setup_line"
           } >> "$GITHUB_STEP_SUMMARY"

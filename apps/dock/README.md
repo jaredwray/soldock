@@ -10,11 +10,12 @@ The entire backend as one deployable Worker (modular monolith): `fetch`, `email`
 
 | Path | What |
 | --- | --- |
-| [`wrangler.jsonc`](wrangler.jsonc) | Worker config: pinned compatibility date, `nodejs_compat` and `enable_request_signal`, observability, static assets with SPA fallback, and `run_worker_first` for every Worker-owned prefix. The top level is production. `env.development` is the `soldock-dock-dev` Worker at its custom domain `work.soldock.org` ([docs/self-hosting.md](../../docs/self-hosting.md)). Neither Worker serves `workers.dev` or Preview URLs: one origin each |
+| [`wrangler.jsonc`](wrangler.jsonc) | Worker config: pinned compatibility date, `nodejs_compat` and `enable_request_signal`, observability, static assets with SPA fallback, and `run_worker_first` for every Worker-owned prefix. It is the app and names no instance: the operator CLI ([`tools/cli`](../../tools/cli/README.md)) makes the config of each instance from it, with the resource names `<prefix>-<suffix>`, the Worker name and the custom domain ([docs/self-hosting.md](../../docs/self-hosting.md)). No instance serves `workers.dev` or Preview URLs: one origin each |
 | [`src/index.ts`](src/index.ts) | Composition root. Sends Worker-owned paths to the Hono app and everything else to static assets. Exports the `email`, `queue` and `scheduled` handlers, and the Durable Object classes `MailboxDO`, `DriveSpaceDO`, `DocumentDO`, `ChatRoomDO`, `ChatSearchDO` and `PrincipalDO` |
 | [`src/handlers.ts`](src/handlers.ts) | The operation handlers of each domain, joined into one map for the REST and MCP adapters, and the change feed of each resource kind for MCP subscriptions |
 | [`src/scheduled.ts`](src/scheduled.ts) | The jobs of the hourly cron: the notice before a token of a service account ends |
 | [`src/routes.ts`](src/routes.ts) | `WORKER_PREFIXES`, the paths the Worker owns. Must match `run_worker_first`; `test/config.test.ts` enforces it |
+| [`src/queues.ts`](src/queues.ts) | `isQueue`: a queue name is `<prefix>-<suffix>`, so the queue handler matches the suffix. Each instance has its own prefix |
 | [`src/app.ts`](src/app.ts) | The Hono app: request ids, problem+json errors, `/auth/*`, `/oauth/*` and `/.well-known/*`, the REST routes and `/mcp` |
 | [`src/platform/`](src/platform/) | Cross-cutting runtime services: HTTP plumbing, ids, crypto, logs, the operation invoker |
 | [`src/identity/`](src/identity/) | Directory, API keys, sessions, first-run setup, the OAuth server for agents, account, directory and OAuth operations |
@@ -67,9 +68,9 @@ The entire backend as one deployable Worker (modular monolith): `fetch`, `email`
 - Any other path is served by static assets (the `apps/web` build), which fall back to `index.html`
   for SPA routes. In production, browser navigations go to the assets, and the Worker does not run.
 - `email` accepts mail for known addresses and rejects other mail at SMTP time. `queue` consumes
-  `soldock-mail-inbound`, `soldock-webhooks`, `soldock-chat-push`, `soldock-chat-previews` and
-  `soldock-mail-autolabel`, and acknowledges batches of other queues.
-  `scheduled` runs once an hour (`triggers.crons` in `wrangler.jsonc`, which each env inherits) and calls
+  the queues with the suffixes `mail-inbound`, `webhooks`, `chat-push`, `chat-previews` and `mail-autolabel`
+  of any instance prefix (`src/queues.ts`), and acknowledges batches of other queues.
+  `scheduled` runs once an hour (`triggers.crons` in `wrangler.jsonc`) and calls
   `runScheduled` ([`src/scheduled.ts`](src/scheduled.ts)): today, the notice before a token of a service
   account ends ([`identity`](src/identity/README.md#notice-before-a-token-ends)), and the cleanup of AI
   usage older than 400 days ([`ai`](src/ai/README.md#data-inventory)).
@@ -112,13 +113,17 @@ pnpm --filter @asterra/dock dev             # wrangler dev
 pnpm --filter @asterra/dock types           # regenerate worker-configuration.d.ts after editing wrangler.jsonc
 pnpm types:check                            # fails if worker-configuration.d.ts is stale (CI)
 pnpm budgets:check                          # builds with --dry-run, profiles startup, compares to budgets.json (CI)
-pnpm run deploy:check                       # wrangler deploy --dry-run --env development (CI)
-scripts/smoke-check.sh http://localhost:8787  # the post-deploy smoke check, against wrangler dev
+pnpm release:build && pnpm release:check   # the release bundle of the CLI, and its deploy dry runs (CI)
+node tools/cli/src/bin.ts smoke http://localhost:8787  # the post-deploy smoke check, against wrangler dev
 ```
 
-`deploy-development.yaml` runs `pnpm run deploy:development` and the remote D1 migrations in GitHub
-Actions on each push to `main`, then smoke checks `https://work.soldock.org`. Never run them from a
-developer machine or an agent session.
+`deploy-development.yaml` runs `asterra upgrade` on the development instance in GitHub Actions on each
+push to `main`: the D1 migrations, the deploy, and the smoke check of `https://work.soldock.org`. Never run
+it from a developer machine or an agent session.
+
+Each instance has its own queue names, `<prefix>-<suffix>`. The module READMEs use the prefix `soldock` of
+the development instance (for example `soldock-mail-inbound`). The Worker matches a queue batch by its
+suffix (`src/queues.ts`).
 [`docs/development.md`](../../docs/development.md) shows how to run the whole product locally,
 with injected inbound mail.
 

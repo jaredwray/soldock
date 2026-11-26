@@ -168,3 +168,6 @@ test-results/
 
 # The release bundle of the operator CLI (pnpm release:build)
 tools/cli/release/
+
+# The license file that the release workflow copies into the npm package
+tools/cli/LICENSE

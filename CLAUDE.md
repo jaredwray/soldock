@@ -40,7 +40,7 @@ picture.
 
 ```sh
 pnpm install            # Node >= 22.18 (CI uses 24), pnpm 11 (pinned in package.json)
-pnpm verify             # lint + types + typecheck + test + budgets + deploy dry run + spike builds + license check (what CI runs)
+pnpm verify             # lint + types + typecheck + test + budgets + release bundle and deploy dry runs + spike builds + license check (what CI runs)
 pnpm lint:fix           # Biome format + lint fixes
 pnpm test               # Vitest (all projects)
 ```
