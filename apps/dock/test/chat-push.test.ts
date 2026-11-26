@@ -94,7 +94,7 @@ it("delivers an offline mention, retries only the failed device and removes expi
 	} as Env;
 	async function consume(bodies: unknown[], attempts = 1) {
 		const batch = createMessageBatch(
-			CHAT_PUSH_QUEUE,
+			`asterra-rivus-${CHAT_PUSH_QUEUE}`,
 			bodies.map((body, index) => ({ id: String(index), timestamp: new Date(), attempts, body })),
 		);
 		const context = createExecutionContext();

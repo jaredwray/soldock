@@ -3,7 +3,8 @@ import { checkPublicHost, log } from "../platform/index.ts";
 import { fanOutPush, isChatPushFanout } from "./push-fanout.ts";
 import { encryptPush, pushAuthorization } from "./web-push.ts";
 
-export const CHAT_PUSH_QUEUE = "soldock-chat-push";
+/** The queue that carries Web Push deliveries. A suffix: see `queues.ts`. */
+export const CHAT_PUSH_QUEUE = "chat-push";
 const PUSH_LIFETIME_MS = 60 * 60_000;
 
 /** One delivery to one device. The endpoint and the encryption keys stay in its PrincipalDO. */
