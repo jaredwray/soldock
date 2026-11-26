@@ -73,7 +73,10 @@ to it, so a list of that state reads one object and not the directory.
   adds it, with the id of the reminder as the idempotency key. The column `event_json` has the event id,
   the occurrence id, the title, the start and the minutes. It is null for each other kind. The method
   returns the push devices of the principal, or none during the quiet hours. `calendarPushTarget` checks
-  the device, its credential, the quiet hours and the Activity item before each push.
+  the device, its credential, the quiet hours and the Activity item before each push. The item has content
+  of the calendar: `listChatActivity` leaves it out when the credential of the call does not hold
+  `calendar.read`, and only a socket whose credential held `calendar.read` at the open gets the
+  `calendar.reminder` event.
 - `CHAT_ACTIVITY_ITEM_MIGRATION` (`chat-personal.ts`) adds the column `item_json` with
   `ALTER TABLE … ADD COLUMN`. The rows stay, and each row from before gets null.
 - `CHAT_ACTIVITY_SUBJECT_MIGRATION` (`chat-personal.ts`) makes the table `chat_activity` again with the

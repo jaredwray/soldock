@@ -405,9 +405,12 @@ export class ChatPersonalStore {
 		filter: "all" | "unread" | ChatActivityKind;
 		after: { createdAt: number; id: string } | null;
 		limit: number;
+		/** False leaves out the calendar reminders: the credential of the call cannot read the calendar. */
+		calendar?: boolean;
 	}): { items: ActivityRecord[]; unreadCount: number } {
 		const conditions: string[] = [];
 		const params: SqlStorageValue[] = [];
+		if (query.calendar === false) conditions.push("kind != 'calendar_reminder'");
 		if (query.filter === "unread") {
 			conditions.push("read_at IS NULL");
 		} else if (query.filter !== "all") {

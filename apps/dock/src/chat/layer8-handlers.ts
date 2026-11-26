@@ -329,6 +329,8 @@ export const chatLayer8Handlers: Pick<HandlerMap<CallContext>, Layer8ChatOperati
 			filter: input.filter ?? "all",
 			after: cursor === null ? null : { createdAt: cursor[0], id: cursor[1] },
 			limit,
+			// A reminder has the title and the start of an event. A credential without calendar.read does not get it.
+			calendar: call.caller.scopes.has("calendar.read"),
 		});
 		const shown = listed.items.slice(0, limit);
 		const last = shown[shown.length - 1];

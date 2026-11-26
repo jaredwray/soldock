@@ -99,7 +99,7 @@ export const listActivity = defineOperation({
 	name: "chat.list_activity",
 	summary: "List your activity: mentions, replies, reactions, reminders, card clicks and member requests",
 	description:
-		"Returns recent activity items for you, newest first. Filter by kind or by unread. Pass next_cursor as cursor for the next page. An item of the kind member_request is a request of an agent to add an agent or a service account that you manage to a room: approve or deny it with chat.approve_member_request or chat.deny_member_request.",
+		"Returns recent activity items for you, newest first. Filter by kind or by unread. Pass next_cursor as cursor for the next page. An item of the kind member_request is a request of an agent to add an agent or a service account that you manage to a room: approve or deny it with chat.approve_member_request or chat.deny_member_request. An item of the kind calendar_reminder has the title and the start of an event: the list leaves it out when the credential does not have the scope calendar.read.",
 	http: { method: "GET", path: "/api/v1/chat/activity" },
 	scopes: ["chat.read"],
 	callers: ["human", "agent", "service"],

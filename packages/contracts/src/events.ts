@@ -42,7 +42,8 @@ export const EVENTS_SOCKET_CLOSE = {
  *   followed thread, or a delete of a message of the principal by a different member. Changes of one
  *   room in a short time give one event, with the newest change.
  * - `calendar.reminder` tells that an occurrence of an event of the principal starts soon. The same reminder
- *   is in chat.list_activity, with the kind `calendar_reminder`.
+ *   is in chat.list_activity, with the kind `calendar_reminder`. Only a socket of a credential with
+ *   `calendar.read` gets it.
  */
 export const PrincipalEvent = z.discriminatedUnion("type", [
 	z.object({ type: z.literal("hello"), protocol: z.number().int() }),

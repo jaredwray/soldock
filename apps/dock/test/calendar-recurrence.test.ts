@@ -6,11 +6,11 @@ import {
 	runInDurableObject,
 } from "cloudflare:test";
 import { env } from "cloudflare:workers";
-import type { CalendarEvent, InputOf } from "@asterra/contracts";
+import { CALENDAR_LIMITS, type CalendarEvent, EVENTS_SOCKET_PATH, type InputOf } from "@asterra/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CHAT_PUSH_QUEUE } from "../src/chat/push.ts";
 import worker from "../src/index.ts";
-import { type Actor, codeOf, seedOrg } from "./helpers.ts";
+import { type Actor, api, bearer, codeOf, readSocket, request, seedOrg } from "./helpers.ts";
 
 // The acceptance scenario of recurring events and reminders: "Our team meets every other Tuesday at 9 a.m.
 // Seattle time. I can move one meeting, and everyone gets reminded at the right time."
@@ -259,6 +259,67 @@ describe("a biweekly meeting across a change of the clock", () => {
 		expect(await reminders(ada)).not.toContain("2030-12-03T17:00:00.000Z");
 	});
 
+	it("reminds an attendee of an occurrence that the attendee accepted in a series that the attendee declined", async () => {
+		const { series } = await setUp();
+		const { events } = await ada.call("calendar.list_events", RANGE);
+		const december = events[2];
+		if (!december?.occurrence_id) throw new Error("No occurrence on 2030-12-03.");
+		await ada.call("calendar.respond_to_event", { event_id: series.id, response: "declined" });
+		await ada.call("calendar.respond_to_event", {
+			event_id: series.id,
+			occurrence_id: december.occurrence_id,
+			response: "accepted",
+		});
+		await at("2030-10-22T15:50:00Z", owner.id, ada.id);
+		await at("2030-11-05T18:50:00Z", owner.id, ada.id);
+		expect(await reminders(ada)).toEqual([]);
+		await at("2030-12-03T16:50:00Z", owner.id, ada.id);
+		expect(await reminders(ada)).toEqual(["2030-12-03T17:00:00.000Z"]);
+	});
+
+	it("asks each attendee again for an occurrence that the organizer moves", async () => {
+		const { event: series } = await owner.call("calendar.create_event", { ...meeting, attendee_ids: [ada.id] });
+		await drain(owner.id, ada.id);
+		const first = (await ada.call("calendar.list_events", RANGE)).events[0]?.occurrence_id;
+		if (!first) throw new Error("The series has no occurrences.");
+		await ada.call("calendar.respond_to_event", { event_id: series.id, occurrence_id: first, response: "declined" });
+		await drain(ada.id, owner.id);
+		const responses = async () => [
+			(await owner.call("calendar.list_events", RANGE)).events.slice(0, 2).map((e) => e.attendees[0]?.response),
+			(await ada.call("calendar.list_events", RANGE)).events.slice(0, 2).map((e) => e.my_response),
+		];
+		expect(await responses()).toEqual([
+			["declined", "needs_action"],
+			["declined", "needs_action"],
+		]);
+		// Ada accepts the series. Her response to the first occurrence stays, then the organizer moves it.
+		await ada.call("calendar.respond_to_event", { event_id: series.id, response: "accepted" });
+		await ada.call("calendar.respond_to_event", { event_id: series.id, occurrence_id: first, response: "declined" });
+		await drain(ada.id, owner.id);
+		await owner.call("calendar.update_occurrence", {
+			occurrence_id: first,
+			when: { kind: "timed", start: "2030-10-22T11:00:00-07:00", end: "2030-10-22T12:00:00-07:00", time_zone: LA },
+		});
+		await drain(owner.id, ada.id);
+		expect(await responses()).toEqual([
+			["needs_action", "accepted"],
+			["needs_action", "accepted"],
+		]);
+		const { calendars } = await owner.call("calendar.query_free_busy", {
+			principal_ids: ada.id,
+			time_min: "2030-10-22T00:00:00Z",
+			time_max: "2030-10-23T00:00:00Z",
+		});
+		expect(calendars[0]?.busy).toEqual([{ start: "2030-10-22T18:00:00.000Z", end: "2030-10-22T19:00:00.000Z" }]);
+		await at("2030-10-22T17:50:00Z", owner.id, ada.id);
+		expect(await reminders(ada)).toEqual(["2030-10-22T18:00:00.000Z"]);
+		// A change of the title of the moved occurrence does not ask again.
+		await ada.call("calendar.respond_to_event", { event_id: series.id, occurrence_id: first, response: "accepted" });
+		await owner.call("calendar.update_occurrence", { occurrence_id: first, title: "Team sync, late" });
+		await drain(ada.id, owner.id, ada.id);
+		expect((await responses()).map((side) => side[0])).toEqual(["accepted", "accepted"]);
+	});
+
 	it("lets each participant change or remove the own reminder", async () => {
 		const { series } = await setUp();
 		await ada.call("calendar.set_reminder", { event_id: series.id, minutes: 30 });
@@ -288,6 +349,131 @@ describe("a biweekly meeting across a change of the clock", () => {
 		await drain(owner.id, ada.id);
 		expect(await starts(ada)).toEqual([]);
 		expect(await codeOf(ada.call("calendar.get_event", { event_id: series.id }))).toBe("not_found");
+	});
+});
+
+describe("a moved occurrence outside the bounds of its series", () => {
+	const busyOf = async (time_min: string, time_max: string) =>
+		(await owner.call("calendar.query_free_busy", { principal_ids: owner.id, time_min, time_max })).calendars[0]?.busy;
+
+	it("lists an occurrence that moved to a time before the first start of the series, and gives it as busy", async () => {
+		await owner.call("calendar.create_event", meeting);
+		const { events } = await owner.call("calendar.list_events", RANGE);
+		const first = events[0]?.occurrence_id;
+		if (!first) throw new Error("The series has no occurrences.");
+		// The series starts on Tuesday 2030-10-22. Its first occurrence moves to Monday.
+		await owner.call("calendar.update_occurrence", {
+			occurrence_id: first,
+			when: { kind: "timed", start: "2030-10-21T11:00:00-07:00", end: "2030-10-21T12:00:00-07:00", time_zone: LA },
+		});
+		const monday = { time_min: "2030-10-21T07:00:00Z", time_max: "2030-10-22T07:00:00Z" };
+		const listed = await owner.call("calendar.list_events", { ...monday, time_zone: LA });
+		expect(listed.events.map((event) => [event.occurrence_id, event.when])).toEqual([
+			[first, { kind: "timed", start: "2030-10-21T18:00:00.000Z", end: "2030-10-21T19:00:00.000Z", time_zone: LA }],
+		]);
+		expect(await busyOf(monday.time_min, monday.time_max)).toEqual([
+			{ start: "2030-10-21T18:00:00.000Z", end: "2030-10-21T19:00:00.000Z" },
+		]);
+	});
+
+	it("lists an occurrence that moved to a time after the end of the series, and gives it as busy", async () => {
+		await owner.call("calendar.create_event", {
+			...meeting,
+			recurrence: { frequency: "daily", interval: 1, count: 3 },
+		});
+		const { events } = await owner.call("calendar.list_events", RANGE);
+		const last = events[2]?.occurrence_id;
+		if (!last) throw new Error("The series has no third occurrence.");
+		// The last occurrence is on 2030-10-24. It moves to 2030-10-28.
+		await owner.call("calendar.update_occurrence", {
+			occurrence_id: last,
+			when: { kind: "timed", start: "2030-10-28T09:00:00-07:00", end: "2030-10-28T10:00:00-07:00", time_zone: LA },
+		});
+		const later = { time_min: "2030-10-27T07:00:00Z", time_max: "2030-10-29T07:00:00Z" };
+		const listed = await owner.call("calendar.list_events", { ...later, time_zone: LA });
+		expect(listed.events.map((event) => event.occurrence_id)).toEqual([last]);
+		expect(await busyOf(later.time_min, later.time_max)).toEqual([
+			{ start: "2030-10-28T16:00:00.000Z", end: "2030-10-28T17:00:00.000Z" },
+		]);
+		// A cancelled override in a range adds nothing.
+		await owner.call("calendar.cancel_occurrence", { occurrence_id: last });
+		expect((await owner.call("calendar.list_events", { ...later, time_zone: LA })).events).toEqual([]);
+	});
+});
+
+describe("a reminder that waits for a retry", () => {
+	/** Makes the first delivery of a reminder of a calendar fail, as a PrincipalDO that is not reachable does. */
+	async function failFirstDelivery(principalId: string): Promise<void> {
+		await runInDurableObject(calendar(principalId), (instance) => {
+			const binding = instance as unknown as { env: Env };
+			const real = binding.env;
+			let calls = 0;
+			const PRINCIPAL = {
+				idFromName: (name: string) => real.PRINCIPAL.idFromName(name),
+				get: (id: DurableObjectId) => {
+					calls += 1;
+					if (calls > 1) return real.PRINCIPAL.get(id);
+					return {
+						recordCalendarReminder: async () => {
+							throw new Error("The PrincipalDO is not available.");
+						},
+					};
+				},
+			} as unknown as Env["PRINCIPAL"];
+			binding.env = { ...real, PRINCIPAL };
+		});
+	}
+
+	const pending = (principalId: string) =>
+		runInDurableObject(
+			calendar(principalId),
+			(_instance, state) =>
+				state.storage.sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM outbox WHERE kind = 'reminder'").one().n,
+		);
+
+	it("drops the reminder when the occurrence is cancelled before the retry", async () => {
+		await owner.call("calendar.create_event", meeting);
+		const { events } = await owner.call("calendar.list_events", RANGE);
+		const first = events[0]?.occurrence_id;
+		if (!first) throw new Error("The series has no occurrences.");
+		await failFirstDelivery(owner.id);
+		vi.setSystemTime(new Date("2030-10-22T15:50:00Z"));
+		await runDurableObjectAlarm(calendar(owner.id));
+		expect(await pending(owner.id)).toBe(1);
+		await owner.call("calendar.cancel_occurrence", { occurrence_id: first });
+		await at("2030-10-22T15:52:00Z", owner.id);
+		expect(await pending(owner.id)).toBe(0);
+		expect(await reminders(owner)).toEqual([]);
+	});
+
+	it("keeps the reminders of a series with more cancelled occurrences than one range can show", async () => {
+		const { event } = await owner.call("calendar.create_event", {
+			...meeting,
+			recurrence: { frequency: "daily", interval: 1 },
+		});
+		// The first 401 occurrences are cancelled. The rows go in directly: 401 calls are slow.
+		await runInDurableObject(calendar(owner.id), (_instance, state) => {
+			const first = Date.parse("2030-10-22T16:00:00Z");
+			for (let day = 0; day < 401; day++) {
+				// 09:00 in Los Angeles is 16:00 UTC before 2030-11-03, and 17:00 UTC after it until 2031-03-09.
+				const local = new Date(first + day * 86_400_000).toISOString().slice(0, 10);
+				const hour = local < "2030-11-03" || local >= "2031-03-09" ? (local >= "2031-11-02" ? 17 : 16) : 17;
+				const at = Date.parse(`${local}T${hour}:00:00Z`);
+				const key = `${new Date(at).toISOString().slice(0, 19).replace(/[-:]/g, "")}Z`;
+				state.storage.sql.exec(
+					"INSERT INTO event_overrides (event_id, occ_key, original_at, cancelled) VALUES (?, ?, ?, 1)",
+					event.id,
+					key,
+					at,
+				);
+			}
+		});
+		// A change of the reminder computes the next reminder again.
+		await owner.call("calendar.set_reminder", { event_id: event.id, minutes: 30 });
+		const next = await runInDurableObject(calendar(owner.id), (_instance, state) =>
+			state.storage.sql.exec<{ start_at: number }>("SELECT start_at FROM reminders").toArray(),
+		);
+		expect(next.map((row) => new Date(row.start_at).toISOString())).toEqual(["2031-11-27T17:00:00.000Z"]);
 	});
 });
 
@@ -323,6 +509,87 @@ describe("invitations and access", () => {
 		expect((await ada.call("calendar.get_event", { event_id: series.id })).event.title).toBe("Team sync");
 	});
 
+	it("changes nothing and returns nothing for a call with the id of a different owner", async () => {
+		const { series } = await setUp();
+		const week = [Date.parse("2030-10-20T00:00:00Z"), Date.parse("2030-10-27T00:00:00Z")] as const;
+		// The calendar of Ada, opened for the owner of the organization.
+		const wrong = calendar(ada.id);
+		expect(await wrong.freeBusy(ada.id, ...week)).toHaveLength(1);
+		expect(await wrong.freeBusy(owner.id, ...week)).toEqual([]);
+		const before = await starts(ada);
+		await wrong.applySnapshot(owner.id, { v: 1, event_id: series.id, sequence: 1_000, deleted: true });
+		expect(await starts(ada)).toEqual(before);
+		// The calendar of the organizer, opened for Ada: her response does not go in.
+		await calendar(owner.id).applyResponse(ada.id, {
+			event_id: series.id,
+			attendee_id: ada.id,
+			key: "",
+			response: "accepted",
+			at: Date.now() + 60_000,
+		});
+		await drain(owner.id, ada.id);
+		const { event } = await owner.call("calendar.get_event", { event_id: series.id });
+		expect(event.attendees.map((attendee) => attendee.response)).toEqual(["needs_action"]);
+	});
+
+	it("resets the response of an attendee on both sides when the time changes, also for a response on its way", async () => {
+		const { series } = await setUp();
+		const responses = async () => [
+			(await owner.call("calendar.get_event", { event_id: series.id })).event.attendees[0]?.response,
+			(await ada.call("calendar.get_event", { event_id: series.id })).event.my_response,
+		];
+		await ada.call("calendar.respond_to_event", { event_id: series.id, response: "accepted" });
+		await drain(ada.id, owner.id);
+		expect(await responses()).toEqual(["accepted", "accepted"]);
+		// Ada declines. Before the organizer gets the response, the organizer changes the time.
+		await ada.call("calendar.respond_to_event", { event_id: series.id, response: "declined" });
+		await owner.call("calendar.update_event", {
+			event_id: series.id,
+			when: { kind: "timed", start: "2030-10-22T10:00:00-07:00", end: "2030-10-22T11:00:00-07:00", time_zone: LA },
+		});
+		await drain(owner.id, ada.id);
+		expect(await responses()).toEqual(["needs_action", "needs_action"]);
+		// A response after the reset stays when a later state of the organizer comes.
+		await ada.call("calendar.respond_to_event", { event_id: series.id, response: "accepted" });
+		await owner.call("calendar.update_event", { event_id: series.id, title: "Team sync, new room" });
+		await drain(owner.id, ada.id);
+		expect(await responses()).toEqual(["accepted", "accepted"]);
+	});
+
+	it("does not store a new invitation over a limit of the calendar of the attendee, and updates a copy that exists", async () => {
+		const { event: kept } = await owner.call("calendar.create_event", { ...meeting, attendee_ids: [ada.id] });
+		await drain(owner.id, ada.id);
+		const setCount = (value: number) =>
+			runInDurableObject(calendar(ada.id), (_instance, state) => {
+				state.storage.sql.exec("UPDATE meta SET value = ? WHERE key = 'event_count'", String(value));
+			});
+		await setCount(CALENDAR_LIMITS.events);
+		const lunch: InputOf<"calendar.create_event"> = { ...meeting, title: "Lunch", recurrence: undefined };
+		await owner.call("calendar.create_event", { ...lunch, attendee_ids: [ada.id] });
+		await owner.call("calendar.update_event", { event_id: kept.id, title: "Team sync, room 4" });
+		await drain(owner.id, ada.id);
+		const titles = async () =>
+			[...new Set((await ada.call("calendar.list_events", RANGE)).events.map((e) => e.title))].sort();
+		expect(await titles()).toEqual(["Team sync, room 4"]);
+
+		// The limit of series: a new series is not stored, a new one-off event is.
+		await setCount(1);
+		await runInDurableObject(calendar(ada.id), (_instance, state) => {
+			state.storage.sql.exec(
+				`WITH RECURSIVE n (i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?)
+				INSERT INTO events (id, title, description, location, all_day, start_at, end_at, time_zone, revision,
+					created_at, updated_at, recurrence)
+				SELECT 'evt_fill_' || i, 'Fill', '', '', 0, 0, 1, 'UTC', 1, 0, 0, '{"frequency":"daily","interval":1,"until":"1970-01-01","count":null}'
+				FROM n`,
+				CALENDAR_LIMITS.recurringEvents - 1,
+			);
+		});
+		await owner.call("calendar.create_event", { ...meeting, title: "Second series", attendee_ids: [ada.id] });
+		await owner.call("calendar.create_event", { ...lunch, title: "Dinner", attendee_ids: [ada.id] });
+		await drain(owner.id, ada.id);
+		expect(await titles()).toEqual(["Dinner", "Team sync, room 4"]);
+	});
+
 	it("pages through occurrences and one-off events in order", async () => {
 		await owner.call("calendar.create_event", {
 			...meeting,
@@ -347,6 +614,40 @@ describe("invitations and access", () => {
 			"Team sync 2030-10-25T16:00:00.000Z",
 			"Team sync 2030-10-26T16:00:00.000Z",
 		]);
+	});
+});
+
+describe("a credential without calendar.read", () => {
+	it("gets no reminder in the Activity and none on the events socket", async () => {
+		await ada.call("calendar.create_event", { ...meeting, title: "Secret plan", recurrence: undefined });
+		const keyOf = async (scopes: InputOf<"account.create_api_key">["scopes"]) =>
+			(await ada.call("account.create_api_key", { label: "narrow", scopes })).api_key.secret;
+		const chatOnly = await keyOf(["chat.read"]);
+		const both = await keyOf(["chat.read", "calendar.read"]);
+		vi.setSystemTime(new Date("2030-10-22T15:50:00Z"));
+		const open = async (key: string) => {
+			const reader = readSocket(
+				await request(EVENTS_SOCKET_PATH, { headers: { upgrade: "websocket", ...bearer(key) } }),
+			);
+			await reader.next();
+			return reader;
+		};
+		const narrow = await open(chatOnly);
+		const wide = await open(both);
+		await drain(ada.id);
+
+		expect(await wide.next()).toMatchObject({ type: "calendar.reminder", title: "Secret plan" });
+		expect(await narrow.next()).toMatchObject({ type: "chat.activity" });
+		for (const filter of ["all", "calendar_reminder"] as const) {
+			expect((await api(both)("chat.list_activity", { filter })).items.map((item) => item.kind)).toEqual([
+				"calendar_reminder",
+			]);
+			const listed = await api(chatOnly)("chat.list_activity", { filter });
+			expect(listed.items).toEqual([]);
+			expect(JSON.stringify(listed)).not.toContain("Secret");
+		}
+		// The item is left out, not deleted: the session of the person shows it.
+		expect(await reminders(ada)).toEqual(["2030-10-22T16:00:00.000Z"]);
 	});
 });
 

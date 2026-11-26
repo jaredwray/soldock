@@ -6,10 +6,10 @@ import {
 	DEFAULT_REMINDER_MINUTES,
 	type EventResponse,
 	expandOccurrences,
+	firstOccurrenceAfter,
 	type Occurrence,
 	occurrenceAt,
 	occurrenceId,
-	occurrencesAfter,
 	type RecurrenceRule,
 	seriesEnd,
 } from "@asterra/contracts";
@@ -206,8 +206,11 @@ export interface OverrideRecord {
 const IDEMPOTENCY_TTL_MS = 24 * 60 * 60 * 1000;
 /** A fired reminder stays in `reminder_log` this long after the start of its occurrence. */
 const REMINDER_LOG_MS = 7 * 24 * 60 * 60 * 1000;
-/** The occurrences that `rearm` reads for the next reminder of a series. */
-const REARM_SCAN = 400;
+/**
+ * The most occurrences that `rearm` reads for the next reminder of a series. It is more than the overrides and
+ * more than the occurrences of a count, so cancelled occurrences cannot stop the reminders of a series.
+ */
+const REARM_SCAN = Math.max(CALENDAR_LIMITS.exceptions, CALENDAR_LIMITS.recurrenceCount) + 1;
 const OUTBOX_BATCH = 50;
 
 const MIGRATIONS: readonly (readonly string[])[] = [
@@ -657,12 +660,24 @@ export class CalendarDO extends DurableObject<Env> {
 		return { events: page.slice(0, query.limit), more: page.length > query.limit };
 	}
 
-	/** The occurrences of each series in a range, without the cancelled occurrences. */
+	/**
+	 * The occurrences of each series in a range, without the cancelled occurrences. A moved occurrence can be
+	 * before the first start of its series or after `series_end_at`, so the query also reads each series with
+	 * a moved occurrence in the range.
+	 */
 	private seriesInRange(query: Pick<ListQuery, "min" | "max" | "minDate" | "maxDate">): EventView[] {
 		const series = this.sql
 			.exec<Row>(
 				`SELECT ${COLUMNS} FROM events
-				WHERE recurrence IS NOT NULL AND start_at < ? AND (series_end_at IS NULL OR series_end_at > ?)`,
+				WHERE recurrence IS NOT NULL AND (
+					(start_at < ? AND (series_end_at IS NULL OR series_end_at > ?))
+					OR EXISTS (
+						SELECT 1 FROM event_overrides AS moved
+						WHERE moved.event_id = events.id AND moved.cancelled = 0 AND moved.start_at < ? AND moved.end_at > ?
+					)
+				)`,
+				query.max,
+				query.min,
 				query.max,
 				query.min,
 			)
@@ -882,8 +897,9 @@ export class CalendarDO extends DurableObject<Env> {
 			if (timeChanged) {
 				this.sql.exec("DELETE FROM event_overrides WHERE event_id = ?", eventId);
 				this.sql.exec("DELETE FROM occurrence_responses WHERE event_id = ?", eventId);
+				// The time of the reset is after each response that the organizer has, so the reset is the newer one.
 				this.sql.exec(
-					"UPDATE event_attendees SET response = 'needs_action', responded_at = ? WHERE event_id = ?",
+					"UPDATE event_attendees SET response = 'needs_action', responded_at = MAX(responded_at + 1, ?) WHERE event_id = ?",
 					now,
 					eventId,
 				);
@@ -949,6 +965,7 @@ export class CalendarDO extends DurableObject<Env> {
 		this.sql.exec("DELETE FROM event_attendees WHERE event_id = ?", eventId);
 		this.sql.exec("DELETE FROM occurrence_responses WHERE event_id = ?", eventId);
 		this.sql.exec("DELETE FROM reminders WHERE event_id = ?", eventId);
+		this.sql.exec("DELETE FROM outbox WHERE event_id = ? AND kind = 'reminder'", eventId);
 		this.addCount(-1);
 	}
 
@@ -1030,12 +1047,16 @@ export class CalendarDO extends DurableObject<Env> {
 			);
 		}
 		const now = Date.now();
+		const moved = (["start_at", "end_at", "start_date", "end_date"] as const).some(
+			(field) => (existing?.[field] ?? null) !== next[field],
+		);
 		this.ctx.storage.transactionSync(() => {
 			if (empty) {
 				this.sql.exec("DELETE FROM event_overrides WHERE event_id = ? AND occ_key = ?", eventId, key);
 			} else {
 				this.writeOverride(eventId, next);
 			}
+			if (moved) this.askAgain(eventId, key, now);
 			this.sql.exec("UPDATE events SET revision = revision + 1, updated_at = ? WHERE id = ?", now, eventId);
 			this.fanOut(eventId, []);
 			this.rearm(eventId);
@@ -1043,6 +1064,26 @@ export class CalendarDO extends DurableObject<Env> {
 		await this.scheduleAlarm();
 		const updated = this.row(eventId) as EventRecord;
 		return { event: this.occurrenceView(updated, key) as EventView, changed: true };
+	}
+
+	/**
+	 * Sets the response of each attendee to one occurrence to `needs_action`, after a change of its time. The row
+	 * of the occurrence comes before the response of the series. Its time is after each response that the
+	 * organizer has, so the reset is the newer one, and the copy of the attendee takes it from the state.
+	 */
+	private askAgain(eventId: string, key: string, now: number): void {
+		const answers = this.occurrenceResponses(eventId).get(key);
+		for (const attendee of this.attendeesOf(eventId)) {
+			const at = Math.max(now, attendee.responded_at + 1, (answers?.get(attendee.principal_id)?.at ?? 0) + 1);
+			this.sql.exec(
+				`INSERT OR REPLACE INTO occurrence_responses (event_id, occ_key, principal_id, response, responded_at)
+				VALUES (?, ?, ?, 'needs_action', ?)`,
+				eventId,
+				key,
+				attendee.principal_id,
+				at,
+			);
+		}
 	}
 
 	private writeOverride(eventId: string, record: OverrideRecord): void {
@@ -1196,6 +1237,12 @@ export class CalendarDO extends DurableObject<Env> {
 	/**
 	 * Takes the state of an event from its organizer. A state with a `sequence` that is not higher than the
 	 * stored one changes nothing, so a retry and a late delivery are safe. Only the outbox of a CalendarDO calls it.
+	 *
+	 * - The response of the owner: the state has the response that the organizer keeps for the owner, with its
+	 *   time. When that time is not older than the time of the own response, the copy takes it. So a reset of the
+	 *   organizer (a change of the time or of the rule) applies, and a newer own response stays. The same rule
+	 *   applies to the response to one occurrence, so a move of one occurrence asks again for that occurrence.
+	 * - The limits: a new copy over a limit of the calendar is not stored. A copy that exists always updates.
 	 */
 	async applySnapshot(ownerId: string, snapshot: EventSnapshot): Promise<void> {
 		if (!this.pin(ownerId)) return;
@@ -1209,13 +1256,27 @@ export class CalendarDO extends DurableObject<Env> {
 		const fields = snapshot.fields;
 		if (!fields || !snapshot.organizer) return;
 		const recurrence = snapshot.recurrence ?? null;
-		const timeChanged =
-			existing !== null &&
-			(TIME_KEYS.some((key) => fields[key] !== existing[key]) || !sameRule(recurrence, existing.recurrence));
+		if (!existing) {
+			const limit =
+				Number(this.meta("event_count") ?? 0) >= CALENDAR_LIMITS.events
+					? "events"
+					: recurrence !== null && this.seriesCount() >= CALENDAR_LIMITS.recurringEvents
+						? "series"
+						: null;
+			if (limit) {
+				log("warn", "calendar invitation not stored: the calendar is at a limit", { limit });
+				return;
+			}
+		}
 		const now = Date.now();
+		const theirs = snapshot.attendees?.find((attendee) => attendee.principal_id === ownerId);
+		// With no row of the owner in the state, a copy that exists keeps its response.
+		const mine =
+			existing && (!theirs || theirs.responded_at < existing.my_responded_at)
+				? { response: existing.my_response ?? "needs_action", at: existing.my_responded_at }
+				: { response: theirs?.response ?? "needs_action", at: theirs?.responded_at ?? now };
 		this.ctx.storage.transactionSync(() => {
 			const reminder = existing ? existing.reminder_minutes : fields.all_day ? null : DEFAULT_REMINDER_MINUTES;
-			const myResponse = existing && !timeChanged ? (existing.my_response ?? "needs_action") : "needs_action";
 			this.sql.exec(
 				`INSERT OR REPLACE INTO events (${COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'attendee', ?, ?, ?, ?, ?)`,
 				snapshot.event_id,
@@ -1235,8 +1296,8 @@ export class CalendarDO extends DurableObject<Env> {
 				snapshot.series_end_at ?? null,
 				JSON.stringify(snapshot.organizer),
 				snapshot.sequence,
-				myResponse,
-				existing && !timeChanged ? existing.my_responded_at : now,
+				mine.response,
+				mine.at,
 				reminder,
 			);
 			if (!existing) this.addCount(1);
@@ -1253,16 +1314,22 @@ export class CalendarDO extends DurableObject<Env> {
 					attendee.responded_at,
 				);
 			}
-			// The own responses of single occurrences stay: they can be newer than the state of the organizer.
+			// The own responses of single occurrences that are newer than the response of the series stay: they can
+			// be newer than the state of the organizer.
 			this.sql.exec(
-				timeChanged
-					? "DELETE FROM occurrence_responses WHERE event_id = ?"
-					: "DELETE FROM occurrence_responses WHERE event_id = ? AND principal_id != ?",
+				"DELETE FROM occurrence_responses WHERE event_id = ? AND (principal_id != ? OR responded_at <= ?)",
 				snapshot.event_id,
-				...(timeChanged ? [] : [ownerId]),
+				ownerId,
+				mine.at,
 			);
+			const own = this.occurrenceResponses(snapshot.event_id);
 			for (const answer of snapshot.occurrence_responses ?? []) {
-				if (answer.principal_id === ownerId) continue;
+				if (answer.principal_id === ownerId) {
+					// The row of the owner in the state is a reset of the organizer, or a response that the owner sent.
+					// The newer one of it and the own row stays.
+					const local = own.get(answer.occ_key)?.get(ownerId);
+					if (answer.responded_at <= mine.at || (local && local.at > answer.responded_at)) continue;
+				}
 				this.sql.exec(
 					"INSERT OR REPLACE INTO occurrence_responses (event_id, occ_key, principal_id, response, responded_at) VALUES (?, ?, ?, ?, ?)",
 					snapshot.event_id,
@@ -1415,8 +1482,8 @@ export class CalendarDO extends DurableObject<Env> {
 			return true;
 		}
 		const item = JSON.parse(row.payload) as CalendarReminderItem;
-		// A reminder after the start helps nobody.
-		if (item.start_at <= Date.now()) return true;
+		// A reminder after the start helps nobody. A reminder that the current state does not give is dropped.
+		if (item.start_at <= Date.now() || !this.reminderIsCurrent(item)) return true;
 		const principal = this.env.PRINCIPAL.get(this.env.PRINCIPAL.idFromName(owner));
 		const devices = await principal.recordCalendarReminder(item);
 		if (devices.length > 0) {
@@ -1439,15 +1506,34 @@ export class CalendarDO extends DurableObject<Env> {
 	// --- Reminders ----------------------------------------------------------------------------------
 
 	/**
+	 * True when the current state of the event still gives this reminder. A reminder row can wait in the outbox
+	 * for a retry. A move, a cancel, a decline, a delete or the removal of the reminder in that time makes the
+	 * row stale.
+	 */
+	private reminderIsCurrent(item: CalendarReminderItem): boolean {
+		const event = this.row(item.event_id);
+		if (!event || event.reminder_minutes === null || event.all_day) return false;
+		if (item.occurrence_id === null) {
+			if (event.role === "attendee" && event.my_response === "declined") return false;
+			return event.recurrence === null && event.start_at === item.start_at;
+		}
+		const view = this.occurrenceView(event, item.occurrence_id.slice(item.event_id.length + 1));
+		if (!view || view.start_at !== item.start_at) return false;
+		return !(event.role === "attendee" && view.my_response === "declined");
+	}
+
+	/**
 	 * Computes the next reminder of an event again from the current state. It picks the first occurrence that
-	 * starts after now, is not cancelled or declined, and has no fired reminder. When its reminder time is in the
+	 * starts after now, is not cancelled or declined, and has no fired reminder. For an occurrence, declined is
+	 * the response of the occurrence, or the response of the series when the occurrence has none. When its reminder time is in the
 	 * past, the reminder fires at once.
 	 */
 	private rearm(eventId: string): void {
 		this.sql.exec("DELETE FROM reminders WHERE event_id = ?", eventId);
 		const event = this.row(eventId);
 		if (!event || event.reminder_minutes === null || event.all_day) return;
-		if (event.role === "attendee" && event.my_response === "declined") return;
+		const invited = event.role === "attendee";
+		if (invited && event.recurrence === null && event.my_response === "declined") return;
 		const lead = event.reminder_minutes * 60_000;
 		const now = Date.now();
 		const fired = (key: string, start: number) =>
@@ -1461,16 +1547,18 @@ export class CalendarDO extends DurableObject<Env> {
 			const owner = this.meta("owner_id") ?? "";
 			const overrides = this.overridesOf(eventId);
 			const responses = this.occurrenceResponses(eventId);
+			// The response of one occurrence comes before the response of the series, as in the views. So an accepted
+			// occurrence of a declined series has a reminder.
 			const declined = (key: string) =>
-				responses.get(key)?.get(owner)?.response === "declined" && event.role === "attendee";
+				invited && (responses.get(key)?.get(owner)?.response ?? event.my_response) === "declined";
 			const anchor = anchorOf(event);
-			for (const occurrence of occurrencesAfter(anchor, event.recurrence, now, REARM_SCAN)) {
+			// The walk stops at the first occurrence that can have a reminder. It builds no list.
+			const next = firstOccurrenceAfter(anchor, event.recurrence, now, REARM_SCAN, (occurrence) => {
 				const override = overrides.get(occurrence.key);
-				if (override?.cancelled || override?.start_at != null || declined(occurrence.key)) continue;
-				if (fired(occurrence.key, occurrence.start_at)) continue;
-				best = { key: occurrence.key, start: occurrence.start_at };
-				break;
-			}
+				if (override?.cancelled || override?.start_at != null || declined(occurrence.key)) return false;
+				return !fired(occurrence.key, occurrence.start_at);
+			});
+			if (next) best = { key: next.key, start: next.start_at };
 			for (const override of overrides.values()) {
 				if (override.cancelled || override.start_at === null || override.start_at <= now) continue;
 				if (declined(override.occ_key) || fired(override.occ_key, override.start_at)) continue;

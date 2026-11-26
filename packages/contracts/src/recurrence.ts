@@ -44,7 +44,7 @@ export interface SeriesTime {
 
 /** The first occurrence of a series, in the form that the engine uses. */
 export type SeriesAnchor =
-	| { kind: "timed"; date: string; msOfDay: number; durationMs: number; timeZone: string }
+	| { kind: "timed"; date: string; msOfDay: number; durationMs: number; timeZone: string; startAt: number }
 	| { kind: "all_day"; date: string; days: number };
 
 /** One occurrence. `key` is its original start, as the rule gives it: the RECURRENCE-ID of iCalendar. */
@@ -76,6 +76,7 @@ export function anchorOf(time: SeriesTime): SeriesAnchor {
 		msOfDay: wall.msOfDay,
 		durationMs: time.end_at - time.start_at,
 		timeZone: zone,
+		startAt: time.start_at,
 	};
 }
 
@@ -157,7 +158,9 @@ function build(anchor: SeriesAnchor, date: string): Occurrence {
 			end_date: end,
 		};
 	}
-	const start = zonedInstant(date, anchor.msOfDay, anchor.timeZone);
+	// The first occurrence is the stored start. A start at the second instance of a time that the clock shows
+	// two times is not the instant that the wall clock time gives.
+	const start = date === anchor.date ? anchor.startAt : zonedInstant(date, anchor.msOfDay, anchor.timeZone);
 	return {
 		key: compactUtc(start),
 		start_at: start,
@@ -230,18 +233,25 @@ export function expandOccurrences(
 	return found;
 }
 
-/** The first `limit` occurrences that start after `after`, first start first. */
-export function occurrencesAfter(
+/**
+ * The first occurrence that starts after `after` and that `accept` takes, or null. The walk reads at most
+ * `scan` occurrences that start after `after`, and builds no list.
+ */
+export function firstOccurrenceAfter(
 	anchor: SeriesAnchor,
 	rule: RecurrenceRule,
 	after: number,
-	limit: number,
-): Occurrence[] {
-	const found: Occurrence[] = [];
-	if (limit <= 0) return found;
+	scan: number,
+	accept: (occurrence: Occurrence) => boolean,
+): Occurrence | null {
+	let found: Occurrence | null = null;
+	let seen = 0;
+	if (scan <= 0) return found;
 	walk(anchor, rule, firstPeriodNear(anchor, rule, after), (occurrence) => {
-		if (occurrence.start_at > after) found.push(occurrence);
-		return found.length < limit;
+		if (occurrence.start_at <= after) return true;
+		seen += 1;
+		if (accept(occurrence)) found = occurrence;
+		return found === null && seen < scan;
 	});
 	return found;
 }

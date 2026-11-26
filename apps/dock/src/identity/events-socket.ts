@@ -24,7 +24,11 @@ export async function openEventsSocket(
 	caller: AuthContext,
 	options: { feed: boolean },
 ): Promise<Response> {
-	const open: EventsSocketOpen = { credential: credentialRef(caller), feed: options.feed };
+	const open: EventsSocketOpen = {
+		credential: credentialRef(caller),
+		feed: options.feed,
+		calendar: caller.scopes.has("calendar.read"),
+	};
 	const principal = env.PRINCIPAL.get(env.PRINCIPAL.idFromName(caller.principal.id));
 	const response = await principal.fetch("https://principal.internal/events", {
 		headers: { upgrade: "websocket", [EVENTS_SOCKET_HEADER]: encodeURIComponent(JSON.stringify(open)) },

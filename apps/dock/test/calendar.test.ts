@@ -348,7 +348,7 @@ describe("who reaches a calendar", () => {
 	});
 
 	it("needs calendar.read to read and calendar.write to change, for a key of a person and for an agent", async () => {
-		await ada.call("calendar.create_event", standup);
+		const { event } = await ada.call("calendar.create_event", standup);
 		const range = { time_min: "2026-12-01T00:00:00Z", time_max: "2026-12-02T00:00:00Z" };
 		const readOnly = api(
 			(await ada.call("account.create_api_key", { label: "read", scopes: ["calendar.read"] })).api_key.secret,
@@ -359,6 +359,19 @@ describe("who reaches a calendar", () => {
 			(await ada.call("account.create_api_key", { label: "mail", scopes: ["mail.read"] })).api_key.secret,
 		);
 		expect(await codeOf(none("calendar.list_events", range))).toBe("forbidden");
+
+		// The operations on occurrences, responses, reminders and free/busy use the same scopes.
+		const occurrence_id = `${event.id}_20261201T140000Z`;
+		const busy = { principal_ids: ada.id, ...range };
+		expect((await readOnly("calendar.query_free_busy", busy)).calendars).toHaveLength(1);
+		expect(await codeOf(none("calendar.query_free_busy", busy))).toBe("forbidden");
+		expect(await codeOf(readOnly("calendar.update_occurrence", { occurrence_id, title: "Mine" }))).toBe("forbidden");
+		expect(await codeOf(readOnly("calendar.cancel_occurrence", { occurrence_id }))).toBe("forbidden");
+		expect(await codeOf(readOnly("calendar.respond_to_event", { event_id: event.id, response: "accepted" }))).toBe(
+			"forbidden",
+		);
+		expect(await codeOf(readOnly("calendar.set_reminder", { event_id: event.id, minutes: 5 }))).toBe("forbidden");
+		expect((await ada.call("calendar.get_event", { event_id: event.id })).event).toEqual(event);
 
 		// An agent from before Calendar has the account scopes that it got at creation.
 		await setLegacyScopes(bot.id, ["account.read", "mail.read"]);

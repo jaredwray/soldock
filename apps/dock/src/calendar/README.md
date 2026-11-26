@@ -142,7 +142,13 @@ Public surface: `index.ts` only. Other domains must not import files from this f
   `occurrence_id` is null.
 - The cursor of a page holds the start and the occurrence id (or the event id) of the last entry.
 - A query reads the series with a start before the end of the range and a `series_end_at` after its
-  start. `series_end_at` is the end of the last occurrence, or null for a series without an end.
+  start. `series_end_at` is the end of the last occurrence by the rule, or null for a series without an
+  end.
+- A moved occurrence can be before the first start of its series, or after `series_end_at`. So a query
+  also reads each series that has an override with a new time in the range. `calendar.list_events` and
+  `calendar.query_free_busy` use the same query.
+- The first occurrence of a timed series is the stored start. This is important for a start at the
+  second instance of a time that the clock shows two times: the wall clock time gives the first instance.
 
 ### This occurrence and the entire series
 
@@ -172,14 +178,21 @@ Public surface: `index.ts` only. Other domains must not import files from this f
   in `outbox` (`snap:<event>:<attendee>`). The alarm sends the full current state of the event
   (`applySnapshot`). A copy takes a state only when its `sequence` is higher, so a retry and a late
   delivery change nothing. A removed attendee and a deleted event get a delete.
-- An attendee keeps their own reminder and their own response when a state comes. A change of the time
-  or of the rule sets their response to `needs_action` again.
+- An attendee keeps their own reminder when a state comes.
+- **A reset of the responses.** A change of the time or of the rule of the event sets the response of each
+  attendee to `needs_action` again. A change of the time of one occurrence does the same for that
+  occurrence only: the organizer writes a `needs_action` row of `occurrence_responses` for each attendee.
+  The response to one occurrence comes before the response to the series.
+- The state carries each response that the organizer keeps, with its time. The time of a reset is after
+  each response that the organizer has. The copy of an attendee takes the response of the organizer when
+  its time is not older than the time of the own response. So the organizer and the attendee agree after a
+  reset, and a response that the attendee gave after the reset stays.
 - **Responses.** `calendar.respond_to_event` sets `accepted` or `declined`, for the series or for one
   occurrence. The copy changes at once, and the organizer gets the response through the outbox
   (`resp:<event>:<key>`). The organizer takes a response only when it is newer than the stored one, so
   the order of delivery does not matter. A response for the series removes the older responses of single
   occurrences.
-- A delivery that fails waits 5 seconds, then 2 times longer for each attempt, up to 1 hour.
+- A delivery that fails waits 10 seconds, then 2 times longer for each attempt, up to 1 hour.
 
 ### iCalendar
 
@@ -216,10 +229,19 @@ can come later without a change of the data:
   series, a state from the organizer, a decline, and a change of the reminder. So a reminder of a moved,
   cancelled or declined occurrence cannot stay. The alarm of the object fires at the earliest reminder
   or outbox row.
+- **Declined.** A one-off event that the participant declined has no reminder. For a series, the response
+  to one occurrence comes before the response to the series. So an accepted occurrence of a declined series
+  has a reminder, and a declined occurrence of an accepted series has none.
+- `rearm` reads the occurrences one at a time and stops at the first one that can have a reminder. It
+  reads at most 731 occurrences, which is more than the overrides of a series.
 - **A fire.** The alarm writes a row of `reminder_log` (event, key, start) and an outbox row
-  `rem:<event>:<key>:<start>`, then computes the next reminder. `rearm` skips each occurrence that has a
+  `calrem:<event>:<key>:<start ms>`, then computes the next reminder. `rearm` skips each occurrence that has a
   row in `reminder_log`, so an occurrence gets one reminder. A moved occurrence has a new start, so it
   gets one reminder at the new time. A change of the reminder after a fire gives no second reminder.
+- **A retry.** A reminder row can wait in the outbox for a retry. Before each delivery, the object
+  examines the current state: the event exists, it has a reminder, the participant did not decline, and
+  the occurrence still starts at the time of the row. If not, the object removes the row and delivers
+  nothing. A delete of an event also removes its reminder rows.
 - **Late.** When the time of a reminder is past but the occurrence did not start, the reminder fires at
   once. After the start, it does not fire.
 - **Delivery.** The outbox calls `recordCalendarReminder` of the `PrincipalDO` of the owner. It adds an
@@ -250,6 +272,10 @@ can come later without a change of the data:
   calendar.
 - No content of a calendar comes from outside the organization in this layer, so the output marks
   nothing untrusted. An invitation comes from a person of the organization.
+- **Reminders and the Chat scopes.** A reminder has the title and the start of an event, and it shows in
+  the Activity of Chat. `chat.list_activity` leaves out the items of the kind `calendar_reminder` for a
+  credential without `calendar.read`. It does not delete them. The unread count includes them. The events
+  socket sends `calendar.reminder` only to a socket whose credential held `calendar.read` at the open.
 - `applySnapshot`, `applyResponse` and `freeBusy` are not open to a handler of a different principal:
   only the outbox of a `CalendarDO` and the free/busy handler call them, and each one checks the owner of
   the object.
@@ -258,6 +284,12 @@ can come later without a change of the data:
 
 - An attendee follows a change of the organizer after the delivery of the outbox, normally at once.
   While the calendar of an attendee is not reachable, a reminder of the old time can fire there.
+- A copy of an invitation counts for the limits of the calendar of the attendee. A new copy is not stored
+  when that calendar has 50,000 events, or when the copy is a series and that calendar has 500 series. The
+  object writes a log line. The organizer sees the attendee with `needs_action`. A later change of the
+  event sends the state again, and the copy is stored if the calendar is below the limit then. A copy
+  that exists always updates.
+- An attendee cannot remove the copy of an invitation. The attendee can decline it.
 - The names of the attendees are a copy from the time of the invitation. A new name shows after the next
   change of the event.
 - The revision is one for a series, so two people who change different occurrences at the same time get
@@ -290,3 +322,6 @@ can come later without a change of the data:
     the day that the clock goes back.
 12. A link to a meeting of Meet.
 13. The removal of the calendar of a deleted principal, and the backup of events.
+14. The removal of the copy of an invitation by the attendee.
+15. A check of `calendar.read` for the device notification of a reminder. The device shows the start of
+    the event, also when a key without `calendar.read` registered it.

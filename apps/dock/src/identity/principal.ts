@@ -229,6 +229,8 @@ export interface EventsSocketOpen {
 	 * ends the stream. So the object never closes a feed to make room for a new socket.
 	 */
 	feed: boolean;
+	/** True when the credential holds `calendar.read`. Only such a socket gets the `calendar.reminder` event. */
+	calendar?: boolean;
 }
 
 export const EVENTS_SOCKET_HEADER = "x-soldock-events-socket";
@@ -893,7 +895,9 @@ export class PrincipalDO extends DurableObject<Env> {
 				start: new Date(item.start_at).toISOString(),
 				minutes: item.minutes,
 			};
-			this.ctx.waitUntil(this.publish(() => [reminder, { type: "chat.activity", unread_count: unread }]));
+			// The reminder has content of the calendar. A socket of a credential without `calendar.read` does not get it.
+			this.ctx.waitUntil(this.enqueue([JSON.stringify(reminder)], undefined, (state) => state.calendar === true));
+			this.ctx.waitUntil(this.publish(() => [{ type: "chat.activity", unread_count: unread }]));
 		}
 		if (this.notifications.quiet(now)) return [];
 		return this.notifications.credentials(now).map(({ id }) => id);
@@ -1047,6 +1051,7 @@ export class PrincipalDO extends DurableObject<Env> {
 		server.serializeAttachment({
 			credential: open.credential,
 			feed: open.feed === true,
+			...(open.calendar === true ? { calendar: true } : {}),
 			openedAt: Date.now(),
 			checkedAt: 0,
 		} satisfies EventsSocketState);
@@ -1143,6 +1148,7 @@ export class PrincipalDO extends DurableObject<Env> {
 		filter: "all" | "unread" | ChatActivityKind;
 		after: { createdAt: number; id: string } | null;
 		limit: number;
+		calendar?: boolean;
 	}): { items: ActivityRecord[]; unreadCount: number } {
 		return this.personal.listActivity(query);
 	}
@@ -1532,11 +1538,15 @@ export class PrincipalDO extends DurableObject<Env> {
 
 	/**
 	 * Puts a send behind each send from before. An empty list sends nothing, and checks each socket whose
-	 * check is due, as for a send.
+	 * check is due, as for a send. With `only`, the events go only to the sockets that it accepts.
 	 */
-	private enqueue(texts: string[], notificationAt?: number | null): Promise<void> {
+	private enqueue(
+		texts: string[],
+		notificationAt?: number | null,
+		only?: (state: EventsSocketState) => boolean,
+	): Promise<void> {
 		this.announced = this.announced
-			.then(() => this.deliver(texts, notificationAt))
+			.then(() => this.deliver(texts, notificationAt, only))
 			.catch((error: unknown) => {
 				log("error", "events socket send failed", { error: error instanceof Error ? error.message : String(error) });
 			});
@@ -1549,7 +1559,11 @@ export class PrincipalDO extends DurableObject<Env> {
 	 * of all sockets with one query. A socket whose credential stopped closes. If the check fails, the
 	 * sockets that waited for it close, and their clients open new ones, which the Worker authenticates.
 	 */
-	private async deliver(texts: string[], notificationAt?: number | null): Promise<void> {
+	private async deliver(
+		texts: string[],
+		notificationAt?: number | null,
+		only?: (state: EventsSocketState) => boolean,
+	): Promise<void> {
 		const now = Date.now();
 		const open: { socket: WebSocket; state: EventsSocketState; waits: boolean }[] = [];
 		for (const socket of this.ctx.getWebSockets()) {
@@ -1559,6 +1573,7 @@ export class PrincipalDO extends DurableObject<Env> {
 				continue;
 			}
 			if (socket.readyState !== WebSocket.OPEN) continue;
+			if (only && !only(state)) continue;
 			if (notificationAt === null && (!state.activity || state.feed)) continue;
 			if (typeof notificationAt === "number" && !listensForSound(state, notificationAt, now)) continue;
 			const waits = now - state.checkedAt >= EVENTS_SOCKET_RECHECK_MS;

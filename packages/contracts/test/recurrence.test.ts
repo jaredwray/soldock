@@ -3,8 +3,8 @@ import {
 	anchorOf,
 	checkRecurrence,
 	expandOccurrences,
+	firstOccurrenceAfter,
 	occurrenceAt,
-	occurrencesAfter,
 	parseOccurrenceId,
 	type RecurrenceRule,
 	type SeriesTime,
@@ -35,6 +35,7 @@ function rule(frequency: RecurrenceRule["frequency"], extra: Partial<RecurrenceR
 	return { frequency, interval: 1, until: null, count: null, ...extra };
 }
 
+const YEAR_2026 = { min: Date.parse("2026-01-01T00:00:00Z"), max: Date.parse("2028-01-01T00:00:00Z") };
 const YEAR = { min: Date.parse("2030-01-01T00:00:00Z"), max: Date.parse("2032-01-01T00:00:00Z") };
 
 describe("a timed series", () => {
@@ -72,6 +73,21 @@ describe("a timed series", () => {
 		const anchor = anchorOf(timed("2030-11-02", "01:30", 30, LA));
 		const found = expandOccurrences(anchor, rule("daily"), YEAR, 2);
 		expect(iso(found[1]?.start_at ?? 0)).toBe("2030-11-03T08:30:00.000Z"); // 01:30 PDT, not PST
+	});
+
+	it("keeps a first start at the second instance of a time that the clock shows two times", () => {
+		// The clock in Los Angeles shows 01:30 two times on 2026-11-01. The series starts at the second one.
+		const start = Date.parse("2026-11-01T01:30:00-08:00");
+		const time: SeriesTime = { ...timed("2026-11-01", "01:30", 30, LA), start_at: start, end_at: start + 1_800_000 };
+		const anchor = anchorOf(time);
+		const found = expandOccurrences(anchor, rule("daily"), YEAR_2026, 2);
+		expect(found.map((occurrence) => iso(occurrence.start_at))).toEqual([
+			"2026-11-01T09:30:00.000Z", // 01:30 PST, as stored
+			"2026-11-02T09:30:00.000Z",
+		]);
+		expect(found[0]?.key).toBe("20261101T093000Z");
+		expect(occurrenceAt(anchor, rule("daily"), "20261101T093000Z")?.start_at).toBe(start);
+		expect(occurrenceAt(anchor, rule("daily"), "20261101T083000Z")).toBeNull();
 	});
 
 	it("gives the same occurrences for a range far from the start as a walk from the start", () => {
@@ -170,10 +186,20 @@ describe("the key of an occurrence", () => {
 		expect(occurrenceAt(anchor, ruleOf, "20301105")).toBeNull(); // a date key for a timed series
 	});
 
-	it("gives the next occurrences after an instant", () => {
+	it("gives the first occurrence after an instant that the caller accepts, in the scan limit", () => {
 		const anchor = anchorOf(timed("2030-10-22", "09:00", 60, LA));
-		const next = occurrencesAfter(anchor, rule("weekly", { interval: 2 }), Date.parse("2030-11-05T17:00:00Z"), 2);
-		expect(next.map((occurrence) => occurrence.key)).toEqual(["20301119T170000Z", "20301203T170000Z"]);
+		const biweekly = rule("weekly", { interval: 2 });
+		const after = Date.parse("2030-11-05T17:00:00Z");
+		const seen: string[] = [];
+		const next = firstOccurrenceAfter(anchor, biweekly, after, 10, (occurrence) => {
+			seen.push(occurrence.key);
+			return occurrence.key !== "20301119T170000Z";
+		});
+		expect(next?.key).toBe("20301203T170000Z");
+		// The walk stops at the first accepted occurrence.
+		expect(seen).toEqual(["20301119T170000Z", "20301203T170000Z"]);
+		expect(firstOccurrenceAfter(anchor, biweekly, after, 3, () => false)).toBeNull();
+		expect(firstOccurrenceAfter(anchor, rule("weekly", { count: 2 }), after, 10, () => true)).toBeNull();
 	});
 
 	it("splits an occurrence id into the event id and the key", () => {
