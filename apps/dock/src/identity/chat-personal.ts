@@ -435,11 +435,16 @@ export class ChatPersonalStore {
 		};
 	}
 
+	/**
+	 * Marks one item or each item read. `calendar` false leaves the calendar reminders as they are: a credential
+	 * without calendar.read does not see them, and a read reminder gets no push.
+	 */
 	markActivityRead(activityId: string | undefined, now: number, calendar = true): number {
+		const filter = calendar ? "" : " AND kind != 'calendar_reminder'";
 		if (activityId !== undefined) {
-			this.sql.exec("UPDATE chat_activity SET read_at = COALESCE(read_at, ?) WHERE id = ?", now, activityId);
+			this.sql.exec(`UPDATE chat_activity SET read_at = COALESCE(read_at, ?) WHERE id = ?${filter}`, now, activityId);
 		} else {
-			this.sql.exec("UPDATE chat_activity SET read_at = ? WHERE read_at IS NULL", now);
+			this.sql.exec(`UPDATE chat_activity SET read_at = ? WHERE read_at IS NULL${filter}`, now);
 		}
 		return this.activityUnreadCount(calendar);
 	}

@@ -699,7 +699,7 @@ describe("a credential without calendar.read", () => {
 		await ada.call("calendar.create_event", { ...meeting, title: "Secret plan", recurrence: undefined });
 		const keyOf = async (scopes: InputOf<"account.create_api_key">["scopes"]) =>
 			(await ada.call("account.create_api_key", { label: "narrow", scopes })).api_key.secret;
-		const chatOnly = await keyOf(["chat.read"]);
+		const chatOnly = await keyOf(["chat.read", "chat.write"]);
 		const both = await keyOf(["chat.read", "calendar.read"]);
 		vi.setSystemTime(new Date("2030-10-22T15:50:00Z"));
 		const open = async (key: string) => {
@@ -728,6 +728,11 @@ describe("a credential without calendar.read", () => {
 		}
 		// The item is left out, not deleted: the session of the person shows it.
 		expect(await reminders(ada)).toEqual(["2030-10-22T16:00:00.000Z"]);
+		// The credential cannot mark the reminder read, so it cannot stop its push.
+		await api(chatOnly)("chat.mark_activity_read", {});
+		expect((await api(both)("chat.list_activity", { filter: "unread" })).items.map((item) => item.kind)).toEqual([
+			"calendar_reminder",
+		]);
 	});
 });
 
