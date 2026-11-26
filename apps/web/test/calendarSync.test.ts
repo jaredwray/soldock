@@ -64,15 +64,20 @@ function gate<T>() {
 	return { promise, open };
 }
 
-/** The parts of a sync with a log of each call. A test replaces the parts that it controls. */
-function parts(over: Partial<Omit<SyncParts, "cursor">> & { cursor?: string | null }) {
+/**
+ * The parts of a sync with a log of each call. A test replaces the parts that it controls. As in the page, a load
+ * that succeeds puts the range on screen, and `screen.shown` also changes for a load outside the sync.
+ */
+function parts(over: Partial<Omit<SyncParts, "cursor" | "shown">> & { cursor?: string | null }) {
 	const log: string[] = [];
 	const cursor = { current: over.cursor ?? null };
+	const screen = { shown: false };
 	const base: SyncParts = {
 		cursor,
 		head: async () => "c0",
 		list: async () => NONE,
 		load: async () => true,
+		shown: () => screen.shown,
 		stopped: () => false,
 	};
 	const all = { ...base, ...over, cursor };
@@ -86,13 +91,16 @@ function parts(over: Partial<Omit<SyncParts, "cursor">> & { cursor?: string | nu
 			log.push(`list ${after}`);
 			return all.list(after);
 		},
-		load: (fresh) => {
+		load: async (fresh) => {
 			log.push(`load ${fresh ? "fresh" : "kept"}`);
-			return all.load(fresh);
+			const loaded = await all.load(fresh);
+			if (loaded) screen.shown = true;
+			return loaded;
 		},
+		shown: base.shown,
 		stopped: all.stopped,
 	};
-	return { log, cursor, sync: createSync(logged) };
+	return { log, cursor, screen, sync: createSync(logged) };
 }
 
 describe("the sync of one range of the web calendar", () => {
@@ -161,6 +169,19 @@ describe("the sync of one range of the web calendar", () => {
 		await sync();
 		expect(log).toEqual(["head", "load fresh", "head", "load fresh"]);
 		expect(cursor.current).toBe("c0");
+	});
+
+	// Try again loaded the range outside the sync after a failed first load. A later sync whose feed read fails
+	// must keep those events on screen, not show the loading state again.
+	it("keeps the events of Try again on screen when the feed fails after it", async () => {
+		const { log, screen, sync } = parts({
+			head: async () => {
+				throw new Error("no feed");
+			},
+		});
+		screen.shown = true;
+		await sync();
+		expect(log).toEqual(["head", "load kept"]);
 	});
 
 	// While the feed gives no cursor, each sync reads the range. A read after the first must keep the events on

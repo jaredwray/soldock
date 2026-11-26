@@ -46,6 +46,11 @@ export interface SyncParts {
 	 * put its events on screen. It is false after a failure, and when a newer read replaced this one.
 	 */
 	load: (fresh: boolean) => Promise<boolean>;
+	/**
+	 * True when the events of this range are on screen, also after a load outside the sync, such as Try again.
+	 * Then a read of the range keeps the events while it loads.
+	 */
+	shown: () => boolean;
 	/** True after the page left the range of this sync. */
 	stopped: () => boolean;
 }
@@ -67,31 +72,26 @@ export function createSync(parts: SyncParts): () => Promise<void> {
 	const { cursor, stopped } = parts;
 	let running = false;
 	let again = false;
-	/** True after one read of this range put its events on screen. A later read keeps them while it loads. */
-	let loaded = false;
-	const load = async (fresh: boolean) => {
-		const shown = await parts.load(fresh);
-		if (shown) loaded = true;
-		return shown;
-	};
+	/** A read after the events of this range are on screen keeps them while it loads. */
+	const loadRange = () => parts.load(!parts.shown());
 	const first = async () => {
 		let head: string;
 		try {
 			head = await parts.head();
 		} catch {
-			if (!stopped()) await load(!loaded);
+			if (!stopped()) await loadRange();
 			return;
 		}
 		if (stopped()) return;
 		// The cursor of now applies only when the range read after it is on screen. After a failed read, the next
 		// sync gets a new cursor and reads the range again.
-		const shown = await load(!loaded);
+		const shown = await loadRange();
 		if (shown && !stopped()) cursor.current = head;
 	};
 	const next = async (from: string) => {
 		const result = await catchUp(from, parts.list);
 		if (stopped()) return;
-		if (result.reload && !(await load(false))) return;
+		if (result.reload && !(await parts.load(false))) return;
 		if (!stopped()) cursor.current = result.cursor;
 	};
 	return async () => {

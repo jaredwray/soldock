@@ -62,15 +62,22 @@ export function useEvents(timeMin: string, timeMax: string, zone: string) {
 	const generation = useRef(0);
 	/** The position of the page in the change feed. It stays when the range changes. */
 	const cursor = useRef<string | null>(null);
+	/** The range whose events are on screen, or null. A load of the range sets it, also a load of Try again. */
+	const shownRange = useRef<string | null>(null);
+	const rangeKey = `${timeMin}|${timeMax}|${zone}`;
 
 	const load = useCallback(
 		async (fresh: boolean): Promise<boolean> => {
 			const current = ++generation.current;
-			if (fresh) setState({ status: "loading", events: [] });
+			if (fresh) {
+				shownRange.current = null;
+				setState({ status: "loading", events: [] });
+			}
 			try {
 				const events = await loadRange(timeMin, timeMax, zone);
 				if (current !== generation.current) return false;
 				setState({ status: "ready", events });
+				shownRange.current = rangeKey;
 				return true;
 			} catch (error) {
 				if (current !== generation.current) return false;
@@ -81,7 +88,7 @@ export function useEvents(timeMin: string, timeMax: string, zone: string) {
 				return false;
 			}
 		},
-		[timeMin, timeMax, zone],
+		[timeMin, timeMax, zone, rangeKey],
 	);
 
 	useEffect(() => {
@@ -91,6 +98,7 @@ export function useEvents(timeMin: string, timeMax: string, zone: string) {
 			head: headCursor,
 			list: (after) => api.call("calendar.list_changes", { cursor: after }),
 			load,
+			shown: () => shownRange.current === rangeKey,
 			stopped: () => stopped,
 		});
 		// A range change keeps the cursor: the range loads now, and the changes after the cursor still come.
@@ -121,7 +129,7 @@ export function useEvents(timeMin: string, timeMax: string, zone: string) {
 			document.removeEventListener("visibilitychange", syncIfVisible);
 			generation.current++;
 		};
-	}, [load]);
+	}, [load, rangeKey]);
 
 	const reload = useCallback(() => load(false), [load]);
 	const retry = useCallback(() => load(true), [load]);
