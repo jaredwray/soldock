@@ -379,10 +379,16 @@ function copyChanges(
 		const earlier = before.get(attendee.key);
 		return attendee.key !== ownerId && earlier !== undefined && earlier.response !== attendee.response;
 	});
+	// An answer that went back to `pending` is a new invitation of the organizer, not an answer of the attendee.
+	const reset = answered.length > 0 && answered.every((attendee) => attendee.response === "pending");
 	return {
 		fields: setChanged || FIELD_KEYS.some((key) => record[key] !== fields[key]),
 		answers: answered.length > 0,
-		answerActor: answered.length === 1 ? (answered[0]?.principal_id ?? null) : null,
+		answerActor: reset
+			? message.organizer.principal_id
+			: answered.length === 1 && answered[0]?.response !== "pending"
+				? (answered[0]?.principal_id ?? null)
+				: null,
 	};
 }
 
@@ -473,18 +479,21 @@ export class CalendarDO extends DurableObject<Env> {
 		const published = this.metaNumber("change_published");
 		const byCount = this.metaNumber("change_head") - CALENDAR_LIMITS.changes;
 		const cutoff = now - CALENDAR_LIMITS.changeDays * DAY_MS;
-		let last = Math.min(published, Math.max(byCount, 0));
-		const rows = this.sql
-			.exec<{ seq: number; at: number }>(
-				"SELECT seq, at FROM changes WHERE seq > ? AND seq <= ? ORDER BY seq LIMIT ?",
-				last,
-				published,
-				PRUNE_BATCH,
-			)
-			.toArray();
-		for (const row of rows) {
-			if (row.at >= cutoff) break;
-			last = row.seq;
+		let last = Math.max(Math.min(published, Math.max(byCount, 0)), this.metaNumber("change_floor"));
+		// The feed keeps at most `CALENDAR_LIMITS.changes` published rows, so these rounds read each old row.
+		for (let round = 0; round * PRUNE_BATCH <= CALENDAR_LIMITS.changes; round++) {
+			const rows = this.sql
+				.exec<{ seq: number; at: number }>(
+					"SELECT seq, at FROM changes WHERE seq > ? AND seq <= ? ORDER BY seq LIMIT ?",
+					last,
+					published,
+					PRUNE_BATCH,
+				)
+				.toArray();
+			const young = rows.findIndex((row) => row.at >= cutoff);
+			const old = young === -1 ? rows : rows.slice(0, young);
+			last = old.at(-1)?.seq ?? last;
+			if (young !== -1 || rows.length < PRUNE_BATCH) break;
 		}
 		if (last <= this.metaNumber("change_floor")) return;
 		this.ctx.storage.transactionSync(() => {

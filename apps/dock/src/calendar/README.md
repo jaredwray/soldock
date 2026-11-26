@@ -193,7 +193,7 @@ the delivery.
 | `uid` | The meeting: the same on the event of the organizer and on each copy |
 | `occurrence_id` | Null in this layer. Recurring events will set it to the occurrence that changed |
 | `revision` | The revision of the event after the change. The revisions of the records of one event are not contiguous ([below](#revision-and-order)), so a client deduplicates by `id`, not by `revision` |
-| `actor_id` | The principal that caused the change, or null when two attendees answered in one snapshot |
+| `actor_id` | The principal that caused the change, or null when two attendees answered in one snapshot. An answer that went back to `pending` because the organizer invited the attendee again has the organizer |
 | `at` | The time of the commit |
 | `cursor` | The position after the change |
 
@@ -238,9 +238,10 @@ or `calendar.list_events`, which check its access again. After `calendar.event.d
 - A cursor is opaque. It holds the random id of the feed (`change_feed`) and the `seq` of the last change.
 - `calendar.list_changes` without a cursor gives no change and the cursor of now. With a cursor, it gives the
   changes after it, oldest first, at most `limit` (default and most 200), and `has_more`.
-- The alarm deletes a published change after 30 days, or when the feed has more than 10,000 published changes.
-  It deletes only the oldest changes, never a change that waits to be published, and it keeps the last `seq`
-  that it deleted in `change_floor`.
+- After each publish, the alarm deletes each published change that is older than 30 days, and the oldest ones
+  when the feed has more than 10,000 published changes. It deletes only the oldest changes, never a change that
+  waits to be published, and it keeps the last `seq` that it deleted in `change_floor`. A calendar with no new
+  change keeps its old changes until its next change. Only its owner can read them.
 - A cursor expires when its `seq` is before `change_floor`, after the head, or of a different feed (for
   example a cursor of a different calendar). An expired cursor gives `expired: true`, no change and the cursor
   of now. The client then reads its events again with `calendar.list_events`, and continues from that cursor.

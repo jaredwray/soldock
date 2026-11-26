@@ -7,6 +7,7 @@ import {
 	type Actor,
 	api,
 	bearer,
+	breakCalendarDelivery,
 	calendarMeta,
 	calendarStub,
 	callTool,
@@ -194,6 +195,36 @@ describe("the change feed of a calendar", () => {
 		]);
 	});
 
+	// The organizer removed an attendee and invited it again before the removal arrived. The answer of that
+	// attendee goes back to pending on the copy of each other attendee. The attendee did not answer, so the record
+	// must not name it as the actor: an agent that skips its own changes, or trusts the actor, would be misled.
+	it("names the organizer for an answer that a new invitation reset on a different copy", async () => {
+		const { event } = await ada.call(
+			"calendar.create_event",
+			meeting([{ principal_id: grace.id }, { principal_id: bot.id }]),
+		);
+		await settleCalendars(ada.id, grace.id, bot.id);
+		const { events } = await bot.call("calendar.list_events", {
+			time_min: "2026-12-01T00:00:00Z",
+			time_max: "2026-12-08T00:00:00Z",
+		});
+		const botCopy = events.find((item) => item.uid === event.id);
+		await bot.call("calendar.respond_to_invitation", { event_id: botCopy?.id ?? "", response: "accepted" });
+		await settleCalendars(ada.id, grace.id, bot.id);
+		const graceStart = await head(grace);
+
+		const broken = await breakCalendarDelivery(ada.id);
+		await ada.call("calendar.update_event", { event_id: event.id, attendees: [{ principal_id: grace.id }] });
+		await ada.call("calendar.update_event", {
+			event_id: event.id,
+			attendees: [{ principal_id: grace.id }, { principal_id: bot.id }],
+		});
+		broken.fail = null;
+		await settleCalendars(ada.id, grace.id, bot.id);
+		const answers = (await changesAfter(grace, graceStart)).filter((change) => change.type === "calendar.rsvp.changed");
+		expect(answers.map((change) => change.actor_id)).toEqual([ada.id]);
+	});
+
 	// A page that missed many edits reads them in pages, and an expired cursor makes it read the range again.
 	it("pages the changes, refuses a cursor that is not one, and expires a cursor before the feed", async () => {
 		const start = await head(ada);
@@ -222,6 +253,36 @@ describe("the change feed of a calendar", () => {
 		const expired = await ada.call("calendar.list_changes", { cursor: start });
 		expect(expired).toEqual({ changes: [], cursor: await head(ada), has_more: false, expired: true });
 		expect(typesOf(await changesAfter(ada, second.cursor))).toEqual(["calendar.event.created"]);
+	});
+
+	// A calendar can have far more old changes than one read of the prune. Each old change must go after the
+	// publish, or a cursor before them would stay valid past the retention.
+	it("prunes each change past the retention after a publish, also more than one batch of them", async () => {
+		const start = await head(ada);
+		await runInDurableObject(calendarStub(ada.id), (_instance, state) => {
+			const sql = state.storage.sql;
+			const old = Date.now() - (CALENDAR_LIMITS.changeDays + 1) * 86_400_000;
+			for (let i = 0; i < 1200; i++) {
+				sql.exec(
+					"INSERT INTO changes (id, type, event_id, uid, revision, at) VALUES (?, 'calendar.event.updated', 'evt_old', 'evt_old', 1, ?)",
+					`chg_old_${i}`,
+					old,
+				);
+			}
+			const last = String(sql.exec<{ seq: number }>("SELECT MAX(seq) AS seq FROM changes").one().seq);
+			sql.exec(
+				"INSERT OR REPLACE INTO meta (key, value) VALUES ('change_head', ?), ('change_published', ?)",
+				last,
+				last,
+			);
+		});
+		const { event } = await ada.call("calendar.create_event", { title: "New", when: WHEN });
+		await publishCalendarChanges(ada.id);
+		const rows = await runInDurableObject(calendarStub(ada.id), (_instance, state) =>
+			state.storage.sql.exec<{ event_id: string }>("SELECT event_id FROM changes").toArray(),
+		);
+		expect(rows).toEqual([{ event_id: event.id }]);
+		expect((await ada.call("calendar.list_changes", { cursor: start })).expired).toBe(true);
 	});
 
 	// The feed is part of the calendar: only its owner reads it, and it needs calendar.read, through REST and MCP.
