@@ -23,6 +23,9 @@ CREATE TABLE feedback_reports (
 	issue_number INTEGER,
 	issue_url TEXT,
 	idempotency_key TEXT,
+	-- The requests to GitHub for this row. A failed row can try again with the same key, at most
+	-- FEEDBACK_LIMITS.attemptsPerReport times in all.
+	attempts INTEGER NOT NULL DEFAULT 1,
 	created_at INTEGER NOT NULL,
 	updated_at INTEGER NOT NULL
 );

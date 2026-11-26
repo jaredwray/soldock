@@ -351,6 +351,15 @@ describe("a report", () => {
 		expect(github.calls).toHaveLength(6);
 	});
 
+	it("stops the tries of one key after three requests to GitHub", async () => {
+		await turnOn();
+		const github = fakeGitHub(() => new Response("{}", { status: 500 }));
+		const input = { ...report, idempotency_key: "retry-many" };
+		for (let i = 0; i < 3; i++) expect(await codeOf(ada.call("feedback.submit", input))).toBe("unavailable");
+		expect(await codeOf(ada.call("feedback.submit", input))).toBe("rate_limited");
+		expect(github.calls).toHaveLength(3);
+	});
+
 	it("gives conflict for a key whose report did not complete, and sends nothing", async () => {
 		await turnOn();
 		const github = fakeGitHub();

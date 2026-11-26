@@ -36,6 +36,7 @@ interface ReportRow {
 	status: "pending" | "sent" | "failed";
 	issue_number: number | null;
 	issue_url: string | null;
+	attempts: number;
 	updated_at: number;
 }
 
@@ -45,7 +46,7 @@ type SentIssue = { issue_number: number; issue_url: string };
 async function reportOfKey(env: Env, principalId: string, idempotencyKey: string | undefined) {
 	if (idempotencyKey === undefined) return null;
 	return await env.DIRECTORY.prepare(
-		"SELECT id, status, issue_number, issue_url, updated_at FROM feedback_reports WHERE principal_id = ? AND idempotency_key = ?",
+		"SELECT id, status, issue_number, issue_url, attempts, updated_at FROM feedback_reports WHERE principal_id = ? AND idempotency_key = ?",
 	)
 		.bind(principalId, idempotencyKey)
 		.first<ReportRow>();
@@ -109,13 +110,29 @@ async function claimReport(
 ): Promise<string> {
 	const db = env.DIRECTORY;
 	if (existing) {
+		// The row of a failed report does not count again in the limits, so its tries have their own limit. Without
+		// it, one key could send requests to GitHub with no end while GitHub fails.
+		if (existing.status === "failed" && existing.attempts >= FEEDBACK_LIMITS.attemptsPerReport) {
+			throw new OperationError(
+				"rate_limited",
+				`GitHub refused this report ${FEEDBACK_LIMITS.attemptsPerReport} times. Discard the draft, or ask an admin to examine the GitHub token.`,
+			);
+		}
 		// A failed row that starts again gets the time of this try, so it counts in the current hour and day.
 		const claimed = await db
 			.prepare(
-				`UPDATE feedback_reports SET status = 'pending', kind = ?, created_at = ?, updated_at = ?
-				WHERE id = ? AND status = 'failed' AND updated_at = ? AND ${UNDER_LIMITS}`,
+				`UPDATE feedback_reports SET status = 'pending', kind = ?, attempts = attempts + 1, created_at = ?, updated_at = ?
+				WHERE id = ? AND status = 'failed' AND updated_at = ? AND attempts < ? AND ${UNDER_LIMITS}`,
 			)
-			.bind(input.kind, now, now, existing.id, existing.updated_at, ...limitValues(input.principalId, now, existing.id))
+			.bind(
+				input.kind,
+				now,
+				now,
+				existing.id,
+				existing.updated_at,
+				FEEDBACK_LIMITS.attemptsPerReport,
+				...limitValues(input.principalId, now, existing.id),
+			)
 			.run();
 		if ((claimed.meta.changes ?? 0) === 0) throw await claimError(env, input.principalId, now, existing.id);
 		return existing.id;

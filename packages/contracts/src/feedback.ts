@@ -19,6 +19,8 @@ export const FEEDBACK_LIMITS = {
 	reportsPerHour: 5,
 	reportsPerDay: 20,
 	orgReportsPerDay: 200,
+	/** The requests to GitHub for one report: the first try and the tries again with the same idempotency key. */
+	attemptsPerReport: 3,
 	/** The hours that an attachment that no report holds stays. */
 	pendingHours: 24,
 	/** The days that an attachment of a sent report stays. */

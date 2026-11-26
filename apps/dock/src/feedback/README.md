@@ -92,6 +92,8 @@ The issue never holds the principal id. The report id (`fbr_…`) lets an admin 
 - **Idempotency.** The server writes the report row as `pending` before the call to GitHub, then `sent` or
   `failed`. The same `idempotency_key` returns the stored issue after `sent`, and tries again after `failed`. The
   new try gets the current time, so it counts in the current hour and day.
+  - One key makes at most 3 requests to GitHub (`attemptsPerReport`). After 3 failures, the same key gets
+    `rate_limited`, and the person discards the draft. Thus a GitHub that fails cannot get requests with no end.
   - The row becomes `failed` only when GitHub made no issue.
   - After GitHub made the issue, one D1 batch writes `sent` and puts the attachments in the report. The batch
     runs one more time after an error.
@@ -142,5 +144,5 @@ addresses stop at once.
 | State | Where | Notes |
 | --- | --- | --- |
 | Feedback settings | D1 `feedback_settings` (migration `0041`) | One row: on or off, the repository, the GitHub token (sealed with `ENCRYPTION_KEY`). A directory reset makes a new row with feedback off |
-| Reports | D1 `feedback_reports` | The person, the kind, the state, the issue number and address, the idempotency key. Not the title or the text: GitHub holds them. Removed after 180 days |
+| Reports | D1 `feedback_reports` | The person, the kind, the state, the issue number and address, the idempotency key, the number of tries. Not the title or the text: GitHub holds them. Removed after 180 days |
 | Attachments | D1 `feedback_attachments` and R2 `BLOBS` `feedback/<attachment id>` | The person, the report, the SHA-256 of the token, the type, the size and the pixels. Removed after 24 hours without a report, or 180 days in a report |
