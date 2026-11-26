@@ -392,7 +392,7 @@ export const chatLayer8Handlers: Pick<HandlerMap<CallContext>, Layer8ChatOperati
 		}
 		let unreadCount = listed.unreadCount;
 		if (staleIds.length > 0) {
-			unreadCount = await principal.deleteChatActivities(staleIds);
+			unreadCount = await principal.deleteChatActivities(staleIds, call.caller.scopes.has("calendar.read"));
 		}
 		return {
 			items: liveItems.map(toActivity),
@@ -402,7 +402,10 @@ export const chatLayer8Handlers: Pick<HandlerMap<CallContext>, Layer8ChatOperati
 	},
 
 	async "chat.mark_activity_read"(call, input) {
-		const unread = await principalStub(call.env, call.caller.id).markChatActivityRead(input.activity_id);
+		const unread = await principalStub(call.env, call.caller.id).markChatActivityRead(
+			input.activity_id,
+			call.caller.scopes.has("calendar.read"),
+		);
 		return { unread_count: unread };
 	},
 

@@ -397,8 +397,11 @@ export class ChatPersonalStore {
 		return true;
 	}
 
-	activityUnreadCount(): number {
-		return this.sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM chat_activity WHERE read_at IS NULL").one().n;
+	/** The unread items. `calendar` false leaves out the calendar reminders, for a credential without calendar.read. */
+	activityUnreadCount(calendar = true): number {
+		const filter = calendar ? "" : " AND kind != 'calendar_reminder'";
+		return this.sql.exec<{ n: number }>(`SELECT COUNT(*) AS n FROM chat_activity WHERE read_at IS NULL${filter}`).one()
+			.n;
 	}
 
 	listActivity(query: {
@@ -428,25 +431,25 @@ export class ChatPersonalStore {
 			.toArray();
 		return {
 			items: rows.map(toActivity),
-			unreadCount: this.activityUnreadCount(),
+			unreadCount: this.activityUnreadCount(query.calendar !== false),
 		};
 	}
 
-	markActivityRead(activityId: string | undefined, now: number): number {
+	markActivityRead(activityId: string | undefined, now: number, calendar = true): number {
 		if (activityId !== undefined) {
 			this.sql.exec("UPDATE chat_activity SET read_at = COALESCE(read_at, ?) WHERE id = ?", now, activityId);
 		} else {
 			this.sql.exec("UPDATE chat_activity SET read_at = ? WHERE read_at IS NULL", now);
 		}
-		return this.activityUnreadCount();
+		return this.activityUnreadCount(calendar);
 	}
 
-	deleteActivities(ids: readonly string[]): number {
-		if (ids.length === 0) return this.activityUnreadCount();
+	deleteActivities(ids: readonly string[], calendar = true): number {
+		if (ids.length === 0) return this.activityUnreadCount(calendar);
 		for (const id of ids) {
 			this.sql.exec("DELETE FROM chat_activity WHERE id = ?", id);
 		}
-		return this.activityUnreadCount();
+		return this.activityUnreadCount(calendar);
 	}
 
 	removeRoomPersonalState(roomId: string): void {

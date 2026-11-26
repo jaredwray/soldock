@@ -534,6 +534,7 @@ export class PrincipalDO extends DurableObject<Env> {
 					]),
 				);
 				const events: PrincipalEvent[] = [];
+				const activityChanged = false;
 				for (const row of kept) {
 					const entry = joined.get(row.room_id);
 					if (entry) events.push({ type: "chat.room", room: chatRoomOutput(entry) });
@@ -886,7 +887,6 @@ export class PrincipalDO extends DurableObject<Env> {
 			});
 		});
 		if (added && this.ctx.getWebSockets().length > 0) {
-			const unread = this.personal.activityUnreadCount();
 			const reminder: PrincipalEvent = {
 				type: "calendar.reminder",
 				event_id: item.event_id,
@@ -897,7 +897,7 @@ export class PrincipalDO extends DurableObject<Env> {
 			};
 			// The reminder has content of the calendar. A socket of a credential without `calendar.read` does not get it.
 			this.ctx.waitUntil(this.enqueue([JSON.stringify(reminder)], undefined, (state) => state.calendar === true));
-			this.ctx.waitUntil(this.publish(() => [{ type: "chat.activity", unread_count: unread }]));
+			this.ctx.waitUntil(this.publishActivityCount());
 		}
 		if (this.notifications.quiet(now)) return [];
 		return this.notifications.credentials(now).map(({ id }) => id);
@@ -1134,14 +1134,11 @@ export class PrincipalDO extends DurableObject<Env> {
 				if (this.personal.recordActivity(item)) added += 1;
 			}
 		});
-		if (added > 0 && this.ctx.getWebSockets().length > 0) {
-			const unread = this.personal.activityUnreadCount();
-			this.ctx.waitUntil(this.publish(() => [{ type: "chat.activity", unread_count: unread }]));
-		}
+		if (added > 0 && this.ctx.getWebSockets().length > 0) this.ctx.waitUntil(this.publishActivityCount());
 	}
 
-	deleteChatActivities(ids: readonly string[]): number {
-		return this.personal.deleteActivities(ids);
+	deleteChatActivities(ids: readonly string[], calendar = true): number {
+		return this.personal.deleteActivities(ids, calendar);
 	}
 
 	listChatActivity(query: {
@@ -1153,12 +1150,26 @@ export class PrincipalDO extends DurableObject<Env> {
 		return this.personal.listActivity(query);
 	}
 
-	markChatActivityRead(activityId?: string): number {
-		const unread = this.personal.markActivityRead(activityId, Date.now());
-		if (this.ctx.getWebSockets().length > 0) {
-			this.ctx.waitUntil(this.publish(() => [{ type: "chat.activity", unread_count: unread }]));
-		}
+	/** Marks items read. Returns the unread count, without the calendar reminders when `calendar` is false. */
+	markChatActivityRead(activityId?: string, calendar = true): number {
+		const unread = this.personal.markActivityRead(activityId, Date.now(), calendar);
+		if (this.ctx.getWebSockets().length > 0) this.ctx.waitUntil(this.publishActivityCount());
 		return unread;
+	}
+
+	/**
+	 * Sends the unread count of the Activity to the sockets. A socket of a credential without `calendar.read`
+	 * gets the count without the calendar reminders, so it cannot tell that a reminder came.
+	 */
+	private publishActivityCount(): Promise<void> {
+		const event = (count: number) =>
+			JSON.stringify({ type: "chat.activity", unread_count: count } satisfies PrincipalEvent);
+		void this.enqueue([event(this.personal.activityUnreadCount())], undefined, (state) => state.calendar === true);
+		return this.enqueue(
+			[event(this.personal.activityUnreadCount(false))],
+			undefined,
+			(state) => state.calendar !== true,
+		);
 	}
 
 	listChatSections(): SectionRecord[] {
@@ -1332,6 +1343,7 @@ export class PrincipalDO extends DurableObject<Env> {
 	async processDuePersonalWork(): Promise<void> {
 		const now = Date.now();
 		const events: PrincipalEvent[] = [];
+		let activityChanged = false;
 
 		// 1. Trigger due reminders.
 		const dueRem = this.personal.dueReminders(now);
@@ -1359,7 +1371,7 @@ export class PrincipalDO extends DurableObject<Env> {
 					});
 				}
 			}
-			events.push({ type: "chat.activity", unread_count: this.personal.activityUnreadCount() });
+			activityChanged = true;
 		}
 
 		// 2. Deliver due scheduled messages.
@@ -1456,6 +1468,7 @@ export class PrincipalDO extends DurableObject<Env> {
 			}
 		}
 
+		if (activityChanged && this.ctx.getWebSockets().length > 0) this.ctx.waitUntil(this.publishActivityCount());
 		if (events.length > 0 && this.ctx.getWebSockets().length > 0) {
 			this.ctx.waitUntil(this.publish(() => events));
 		}

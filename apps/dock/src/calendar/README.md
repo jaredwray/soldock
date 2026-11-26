@@ -274,8 +274,10 @@ can come later without a change of the data:
   nothing untrusted. An invitation comes from a person of the organization.
 - **Reminders and the Chat scopes.** A reminder has the title and the start of an event, and it shows in
   the Activity of Chat. `chat.list_activity` leaves out the items of the kind `calendar_reminder` for a
-  credential without `calendar.read`. It does not delete them. The unread count includes them. The events
-  socket sends `calendar.reminder` only to a socket whose credential held `calendar.read` at the open.
+  credential without `calendar.read`. It does not delete them. The unread count of that credential does not
+  count them, in the output of `chat.list_activity` and `chat.mark_activity_read` and in the `chat.activity`
+  event of its socket. The events socket sends `calendar.reminder` only to a socket whose credential held
+  `calendar.read` at the open.
 - `applySnapshot`, `applyResponse` and `freeBusy` are not open to a handler of a different principal:
   only the outbox of a `CalendarDO` and the free/busy handler call them, and each one checks the owner of
   the object.

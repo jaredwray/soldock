@@ -637,13 +637,16 @@ describe("a credential without calendar.read", () => {
 		await drain(ada.id);
 
 		expect(await wide.next()).toMatchObject({ type: "calendar.reminder", title: "Secret plan" });
-		expect(await narrow.next()).toMatchObject({ type: "chat.activity" });
+		expect(await wide.next()).toEqual({ type: "chat.activity", unread_count: 1 });
+		// The count of a socket without calendar.read does not tell that a reminder came.
+		expect(await narrow.next()).toEqual({ type: "chat.activity", unread_count: 0 });
 		for (const filter of ["all", "calendar_reminder"] as const) {
-			expect((await api(both)("chat.list_activity", { filter })).items.map((item) => item.kind)).toEqual([
-				"calendar_reminder",
-			]);
+			const full = await api(both)("chat.list_activity", { filter });
+			expect(full.items.map((item) => item.kind)).toEqual(["calendar_reminder"]);
+			expect(full.unread_count).toBe(1);
 			const listed = await api(chatOnly)("chat.list_activity", { filter });
 			expect(listed.items).toEqual([]);
+			expect(listed.unread_count).toBe(0);
 			expect(JSON.stringify(listed)).not.toContain("Secret");
 		}
 		// The item is left out, not deleted: the session of the person shows it.
