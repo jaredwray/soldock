@@ -306,6 +306,11 @@ describe("invitations by mail to addresses outside the organization", () => {
 		);
 		const { event: internal } = await calendarOnly("calendar.create_event", meeting([{ principal_id: owner.id }]));
 		expect(internal.attendees).toHaveLength(1);
+
+		// The cancellation of a meeting with an attendee outside goes by mail too: the key cannot delete it.
+		const { event: outside } = await ada.call("calendar.create_event", meeting([{ email: "guest@partner.example" }]));
+		expect(await codeOf(calendarOnly("calendar.delete_event", { event_id: outside.id }))).toBe("forbidden");
+		expect((await ada.call("calendar.get_event", { event_id: outside.id })).event.attendees).toHaveLength(1);
 	});
 });
 
@@ -517,8 +522,14 @@ describe("invitations by mail from outside the organization", () => {
 		await receive(googleUpdate, "Unverified update", "priya@partner.example", null);
 		await receive(googleUpdate.replaceAll("priya@partner.example", "other@partner.example"), "Other organizer");
 		expect(await startOf()).toMatchObject({ start: "2026-12-03T15:00:00.000Z" });
-		await receive(googleCancel, "Forged cancel", "mallory@evil.example");
+		const forged = await receive(googleCancel, "Forged cancel", "mallory@evil.example");
 		expect(await startOf()).toBeDefined();
+		// The card of a cancellation that changed nothing does not tell that the meeting is cancelled.
+		expect((await ada.call("calendar.get_mail_invitation", { message_id: forged })).invitation).toMatchObject({
+			method: "cancel",
+			state: "on_calendar",
+			can_respond: false,
+		});
 
 		// The real change moves the meeting with no call, and keeps the answer.
 		await receive(googleUpdate, "Updated invitation: Façade review");
@@ -527,8 +538,14 @@ describe("invitations by mail from outside the organization", () => {
 		const { invitation: old } = await ada.call("calendar.get_mail_invitation", { message_id: first });
 		expect(old).toMatchObject({ state: "outdated", can_respond: false });
 
-		// The real cancellation removes it. The old invitation after it cannot bring it back.
-		await receive(googleCancel, "Cancelled: Façade review");
+		// A cancellation of the same SEQUENCE from before the change is older than the change: it removes nothing.
+		const sameSequence = googleCancel.replace("SEQUENCE:2", "SEQUENCE:1");
+		await receive(sameSequence.replace("DTSTAMP:20261128T080000Z", "DTSTAMP:20261126T080000Z"), "Old cancel");
+		expect(await startOf()).toMatchObject({ start: "2026-12-04T17:00:00.000Z" });
+
+		// The real cancellation removes it, also with the SEQUENCE of the change and a newer DTSTAMP. The old
+		// invitation after it cannot bring it back.
+		await receive(sameSequence, "Cancelled: Façade review");
 		expect(await eventsOf(ada)).toEqual([]);
 		expect((await ada.call("calendar.get_mail_invitation", { message_id: first })).invitation?.state).toBe("cancelled");
 		expect(
@@ -539,6 +556,26 @@ describe("invitations by mail from outside the organization", () => {
 			await codeOf(ada.call("calendar.respond_to_mail_invitation", { message_id: late, response: "accepted" })),
 		).toBe("conflict");
 		expect(await eventsOf(ada)).toEqual([]);
+	});
+
+	// The answer on the copy goes to the organizer by mail, so it has the rules of a send.
+	it("needs mail.send to change the answer on a copy by mail", async () => {
+		const messageId = await receive(googleTimed, "Invitation: Façade review");
+		const { event } = await ada.call("calendar.respond_to_mail_invitation", {
+			message_id: messageId,
+			response: "accepted",
+		});
+		const calendarOnly = api(
+			(await ada.call("account.create_api_key", { label: "cal", scopes: ["calendar.read", "calendar.write"] })).api_key
+				.secret,
+		);
+		const event_id = event?.id as string;
+		expect(await codeOf(calendarOnly("calendar.respond_to_invitation", { event_id, response: "declined" }))).toBe(
+			"forbidden",
+		);
+		expect((await ada.call("calendar.get_event", { event_id })).event.my_response).toBe("accepted");
+		await deliverAll(ada.id);
+		expect(email.sent).toHaveLength(1);
 	});
 
 	it("adds nothing for No, and adds the meeting for a later Yes", async () => {

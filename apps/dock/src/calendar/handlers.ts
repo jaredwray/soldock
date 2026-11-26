@@ -413,7 +413,9 @@ async function invitationOf(call: CallContext, part: CalendarPart, invite: ICalI
 	const { stub, ctx } = openCalendar(call);
 	const onCalendar = accept(await stub.mailInvitationState(ctx, invite.uid, invite.sequence));
 	let state: MailInvitation["state"] = onCalendar.state;
-	if (method === "cancel" || invite.cancelled) state = "cancelled";
+	// A cancellation that the calendar did not apply leaves the event: the state then tells that it is there.
+	const unapplied = method === "cancel" && onCalendar.event_id !== null;
+	if ((method === "cancel" || invite.cancelled) && !unapplied) state = "cancelled";
 	else if (method === "request" && (invite.recurring || invite.when === null)) state = "unsupported";
 	else if (method === "request" && myEmail === null && onCalendar.state === "new") state = "not_invited";
 	const can_respond =
@@ -459,7 +461,9 @@ function cannotRespond(invitation: MailInvitation, part: CalendarPart): string {
 	}
 	if (invitation.state === "outdated")
 		return "Your calendar has a newer version of this meeting. Answer the newest mail.";
-	if (invitation.state === "not_invited") return "No address of yours is an attendee of this invitation.";
+	if (invitation.state === "not_invited" || !invitation.attendees.some((attendee) => attendee.self)) {
+		return "No address of yours is an attendee of this invitation.";
+	}
 	if (part.spam || part.verification === "failed") return "This mail is in Spam. Move it out of Spam to answer it.";
 	if (part.held) return "The Screener holds this mail. Screen the sender in to answer it.";
 	return "This invitation names no organizer, so Asterra cannot send an answer.";

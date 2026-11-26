@@ -216,7 +216,7 @@ message that replaces an older one.
   | Method | Applied when each rule is true | Effect |
   | --- | --- | --- |
   | `REPLY` | An event of the owner has the `uid`. The reply has exactly one `ATTENDEE`, its address is the From address, and it is an attendee of the event. The receiving server did not record a DMARC failure. `PARTSTAT` is ACCEPTED, TENTATIVE or DECLINED. The stamp (the `DTSTAMP`, at most the time of arrival) is newer than the last answer and not before the invitation of that attendee | The answer of that attendee. The meeting gets a new `sequence`, and the attendees of the organization get the new answers |
-  | `CANCEL` | A copy by mail has the `uid`. `ORGANIZER` is the organizer of the copy, the From address is the sender of the accepted invitation, the receiving server verified the sender (DMARC pass) or the mail is internal, and `SEQUENCE` is not smaller | The copy goes away. A tombstone stops the old invitation |
+  | `CANCEL` | A copy by mail has the `uid`. `ORGANIZER` is the organizer of the copy, the From address is the sender of the accepted invitation, the receiving server verified the sender (DMARC pass) or the mail is internal, and the version is not older: a larger `SEQUENCE`, or the same `SEQUENCE` with a `DTSTAMP` that is not before the `DTSTAMP` of the last applied change | The copy goes away. A tombstone stops the old invitation |
   | `REQUEST` | The same rules as `CANCEL`, and the version (`SEQUENCE`, then `DTSTAMP`) is newer | The fields of the copy change. The answer stays |
   | Each other mail, or a rule that is not true | | Nothing. The mail stays in Mail, and its card tells the state |
 
@@ -224,7 +224,9 @@ message that replaces an older one.
   reads the calendar part of a message, with its state: `new`, `on_calendar`, `outdated`, `cancelled`,
   `not_invited` (no address or alias of the caller is an attendee) or `unsupported` (a recurring meeting, or a
   time that Asterra cannot read). `can_respond` is true only for a REQUEST in the state `new` or
-  `on_calendar`, outside Spam and the Screener, with an organizer and a From address.
+  `on_calendar`, outside Spam and the Screener, with an organizer and a From address. A CANCEL that
+  `applyMail` did not apply has the state `on_calendar` or `outdated`, not `cancelled`: the meeting is on the
+  calendar, and the card tells that.
 - `calendar.respond_to_mail_invitation` answers it. Yes and Maybe add a copy by mail (`untrusted: true`,
   `organizer.principal_id: null`), or change the answer of the copy. No without a copy adds nothing. Each new
   answer goes to the organizer as `METHOD:REPLY` from the own address, with the address of the caller that the
@@ -244,12 +246,15 @@ message that replaces an older one.
   and at most 500 `ATTENDEE` lines with `CN`, `PARTSTAT` and the `mailto:` address or the `EMAIL` parameter. It
   ignores `VALARM`, `VTIMEZONE`, `X-` properties and each other property.
 - A time in UTC, a `TZID` with an IANA name, and a `TZID` with a Windows name of Outlook from a fixed list
-  give an instant. A floating time and an unknown `TZID` give no time: the invitation is `unsupported`.
+  give an instant. A floating time, an unknown `TZID`, a time that is not real (month 13, hour 25) and a
+  `DURATION` that the parser cannot read give no time: the invitation is `unsupported`. The parser gives no
+  error for bad content, so one bad mail cannot fail its delivery again and again.
 - `RRULE`, `RDATE`, `EXDATE`, `RECURRENCE-ID` and a second `VEVENT` mark a recurring meeting: `unsupported`.
 - The texts lose their control characters (the description keeps tabs and line breaks) and are cut to the
   limits of an event. An empty title becomes "(No title)".
 - The builder writes CRLF line ends and folds each line at 75 octets. A `CN` loses its quotes and control
-  characters, so a name cannot add a parameter or a property.
+  characters, so a name cannot add a parameter or a property. The parser keeps a `UID` as the sender wrote it,
+  and an answer writes the same characters back, so the organizer finds the meeting.
 
 ### Interoperability to verify with live clients
 

@@ -415,6 +415,10 @@ export function hasCalendarPart(attachments: readonly { filename: string; mime_t
 /** The line of the card of an invitation by mail that tells where the meeting is now. Null for no line. */
 export function invitationStateText(invitation: Pick<MailInvitation, "method" | "state">): string | null {
 	if (invitation.method === "reply") return null;
+	// A cancellation changes the calendar only when it comes from the verified sender of the invitation.
+	if (invitation.method === "cancel" && (invitation.state === "on_calendar" || invitation.state === "outdated")) {
+		return "Asterra did not apply this cancellation. The meeting is on your calendar.";
+	}
 	switch (invitation.state) {
 		case "on_calendar":
 			return "This meeting is on your calendar.";

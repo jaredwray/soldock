@@ -588,7 +588,8 @@ export const MailInvitation = z.object({
 	/**
 	 * new: not on your calendar. on_calendar: this version is on your calendar. outdated: your calendar has a newer
 	 * version. cancelled: the organizer cancelled the meeting, or this mail cancels it. not_invited: no address of
-	 * yours is an attendee. unsupported: a recurring meeting, or a time that Asterra cannot read.
+	 * yours is an attendee. unsupported: a recurring meeting, or a time that Asterra cannot read. A cancellation
+	 * that Asterra did not apply has on_calendar or outdated: the meeting is on your calendar.
 	 */
 	state: z.enum(["new", "on_calendar", "outdated", "cancelled", "not_invited", "unsupported"]),
 	/** True when calendar.respond_to_mail_invitation can answer this mail. */

@@ -257,6 +257,10 @@ describe("an invitation by mail", () => {
 		expect(invitationStateText({ method: "request", state: "new" })).toBeNull();
 		expect(invitationStateText({ method: "request", state: "on_calendar" })).toBe("This meeting is on your calendar.");
 		expect(invitationStateText({ method: "cancel", state: "cancelled" })).toBe("The organizer cancelled this meeting.");
+		// A cancellation that the server did not apply: the meeting is there, so the card does not tell "cancelled".
+		expect(invitationStateText({ method: "cancel", state: "on_calendar" })).toBe(
+			"Asterra did not apply this cancellation. The meeting is on your calendar.",
+		);
 		expect(invitationStateText({ method: "reply", state: "on_calendar" })).toBeNull();
 		expect(
 			replyText({ attendees: [{ name: "Priya", email: "p@x.example", response: "tentative", self: false }] }),

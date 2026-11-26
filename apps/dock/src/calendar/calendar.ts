@@ -1276,7 +1276,11 @@ export class CalendarDO extends DurableObject<Env> {
 				return;
 			}
 			if (invite.method === "CANCEL") {
-				if (invite.sequence < record.sequence) {
+				// The same rule as for a change, but a cancellation with the stamp of the last change also counts.
+				const current =
+					invite.sequence > record.sequence ||
+					(invite.sequence === record.sequence && invite.stamp >= stored.organizerStamp);
+				if (!current) {
 					result = { applied: false, reason: "stale" };
 					return;
 				}
