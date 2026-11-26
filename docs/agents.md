@@ -3,7 +3,7 @@
 > Status: **first draft**. It grows with each capability.
 
 An agent is a principal, like a person. It has its own address, its own mailbox, its own drive, its
-own rooms in Chat, and its own OAuth connections and API keys. A human **sponsor** is accountable for it. Agents use the same operations as the web app,
+own calendar, its own rooms in Chat, and its own OAuth connections and API keys. A human **sponsor** is accountable for it. Agents use the same operations as the web app,
 through MCP or REST.
 
 ## Connect an agent with OAuth
@@ -27,7 +27,7 @@ OAuth is the main way to add an agent. The agent needs only one URL.
      are the sponsor of the agent. It gets the `internal-only` outbound policy.
    - **An agent that exists**: an agent that you sponsor, or any agent if you are an owner or an admin.
 6. Select **Approve and connect**. The page has no scopes: the app does not choose what it can do.
-   - A new agent reaches its own mailbox and its own drive. It reaches a shared mailbox, a shared drive
+   - A new agent reaches its own mailbox, its own drive and its own calendar. It reaches a shared mailbox, a shared drive
      or a room after a member adds it there: see [Access of an agent](#access-of-an-agent).
 
 The client then gets an access token for one hour and a refresh token. Each refresh gives a new
@@ -82,7 +82,7 @@ Use an API key for a client that cannot use OAuth.
    ```
 
 An agent can hold only `account.read`, `directory.read`, `mail.read`,
-`mail.modify`, `mail.send`, `mail.webhooks`, `drive.read`, `drive.write`, `drive.share`, `drive.webhooks`, `chat.read`, `chat.write` and `chat.webhooks`.
+`mail.modify`, `mail.send`, `mail.webhooks`, `drive.read`, `drive.write`, `drive.share`, `drive.webhooks`, `chat.read`, `chat.write`, `chat.webhooks`, `calendar.read` and `calendar.write`.
 A new agent holds each of them as account scopes. An agent can never manage keys or connections, create
 principals, or change its own policy or access.
 
@@ -115,7 +115,7 @@ or for a key.
   (`directory.get_member_access`). Each row has a link to the place that changes it. The page changes
   nothing. An owner or an admin sees the same summary on the page of a person. **Apps connected as …** lists its
   OAuth connections.
-- **Account scopes.** The account scopes of an agent apply to its own mailbox, its own drive, and the
+- **Account scopes.** The account scopes of an agent apply to its own mailbox, its own drive, its own calendar and the
   actions that have no mailbox, room or drive. Examples are `directory.read`, a new room, a direct message,
   the personal views of Chat and webhooks. They also apply to the personal state of the agent for a room.
   This state is its read marker, its star, its drafts, its saved messages and its reminders. An agent also needs the
@@ -150,7 +150,7 @@ Drive and Chat it acts as an agent, so its outbound policy applies.
    The account gets a display name, an address on a mail domain, a description and a sponsor. The REST
    and MCP operation is `directory.create_service_account`. It takes no `scopes`, and the account has no
    token yet.
-   A new account reaches its own mailbox and its own drive. It reaches a shared mailbox, a shared drive
+   A new account reaches its own mailbox, its own drive and its own calendar. It reaches a shared mailbox, a shared drive
    or a room after a member adds it there.
 2. The owner or the admin opens the account and creates a token: a label, an optional description, and
    a lifetime of 1, 7, 30, 90 or 180 days, a custom date or Never (`account.create_api_key` with
@@ -180,7 +180,7 @@ at once.
 3. Select **Stop old secret now** to stop the old secret before its time
    (`account.end_api_key_rotation`).
 
-**Where an account can act.** A service account reaches its own mailbox and its own drive, and each team
+**Where an account can act.** A service account reaches its own mailbox, its own drive and its own calendar, and each team
 mailbox, shared drive and room that it is a member of. The membership decides what it can do there. The
 same rule applies when a person shares a Drive item with the account. See
 [Access of an agent](#access-of-an-agent).
@@ -699,6 +699,54 @@ So a person who manages that account must agree.
   - In each case a person decided the container: the grant on the folder, the membership of the drive, or
     the membership of the room.
 
+## Calendar
+
+Each agent and each service account has its own calendar, as each person has. The calendar tools act
+on the own calendar of the caller only. No tool reads or changes the calendar of a different
+principal. The sponsor of an agent, and an owner or an admin, do not read the calendar of the agent.
+
+| Tool | Scope | What |
+| --- | --- | --- |
+| `calendar_list_events` | `calendar.read` | The events that overlap a range, first start first, with pages |
+| `calendar_get_event` | `calendar.read` | One event |
+| `calendar_create_event` | `calendar.write` | Add an event. Takes `idempotency_key` |
+| `calendar_update_event` | `calendar.write` | Change the fields that you give. Takes `base_revision` |
+| `calendar_delete_event` | `calendar.write` | Delete an event. Takes `base_revision` and `dry_run` |
+
+- **Timed events.** Give `start` and `end` as ISO 8601 times with an offset or `Z`, and `time_zone`, an
+  IANA name such as `America/New_York`. The output gives `start` and `end` in UTC, with `time_zone`.
+- **All-day events.** Give `start_date` and `end_date` in `YYYY-MM-DD` form. `end_date` is the day after
+  the last day. A one-day event on 2026-12-01 has `start_date` `2026-12-01` and `end_date` `2026-12-02`.
+- **A range.** `calendar_list_events` takes `time_min` and `time_max` (at most 366 days apart). An event
+  that ends at `time_min`, or starts at `time_max`, is not in the range. Give your own `time_zone`: it
+  sets the days of all-day events. The default is UTC.
+- **Changes.** Send `base_revision` with the revision that you read. When the event changed after your
+  read, the call returns `conflict` and changes nothing. Read the event again, then try again.
+- **Limits.** A title has 1 to 300 characters, a location at most 500, and a description at most 8000. An
+  event can be at most 366 days long, from 1970-01-01 to 2100-12-31. A calendar holds at most 50,000
+  events.
+- **An agent from before Calendar.** Migration `0038` gives an agent `calendar.read` when it holds
+  `mail.read`, and `calendar.write` when it holds `mail.modify`. An agent with narrower account scopes
+  has no calendar tools, and `account_whoami` names the scopes that it does not hold.
+
+Example: an agent adds a one-hour review on the clock of New York.
+
+```json
+{
+  "name": "calendar_create_event",
+  "arguments": {
+    "title": "Design review",
+    "when": {
+      "kind": "timed",
+      "start": "2026-12-01T14:00:00-05:00",
+      "end": "2026-12-01T15:00:00-05:00",
+      "time_zone": "America/New_York"
+    },
+    "idempotency_key": "design-review-2026-12-01"
+  }
+}
+```
+
 ## Chat
 
 An agent is a member of rooms, as a person is. The `chat_*` tools are the operations that the web
@@ -1200,3 +1248,6 @@ mailbox, a key belongs to its caller: the key of one member does not affect a di
 `drive_create_folder`, `drive_upload_file`, `drive_create_upload`, `drive_copy_item`, `docs_create`
 and `sheets_create` take `idempotency_key` in the same way: a retry returns the first item, or the first
 upload, and creates nothing.
+
+`calendar_create_event` takes `idempotency_key` in the same way: a retry returns the first event and adds
+nothing.

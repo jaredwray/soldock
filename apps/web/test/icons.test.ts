@@ -71,6 +71,7 @@ const FILES: Record<IconName, string> = {
 	check: "check",
 	chevronRight: "nav-arrow-right",
 	chevronLeft: "nav-arrow-left",
+	calendar: "calendar",
 	eye: "eye",
 	codeBlock: "code-brackets-square",
 	bell: "bell",

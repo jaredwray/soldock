@@ -61,7 +61,7 @@ describe("the MCP endpoint", () => {
 		const narrow = instructionsOf((await initialize(bot.key)).body);
 		expect(narrow).toMatch(/chat\.read \(\d+ tools\)/);
 		expect(narrow).not.toContain("mail.send (");
-		expect(narrow).toContain("apply only to your own mailbox, your own drive");
+		expect(narrow).toContain("apply only to your own mailbox, your own drive, your own calendar");
 		expect(narrow).not.toContain("create a key with more scopes");
 		expect(narrow).not.toContain("account.keys");
 		// A key of a person still has its own scopes: it needs a new key.
@@ -95,7 +95,7 @@ describe("the MCP endpoint", () => {
 		const { owner, bot } = await seedOrg();
 		const all = names((await mcp(owner.key, "tools/list")).body);
 		expect(all).toContain("directory_update_agent_policy");
-		expect(all).toHaveLength(220);
+		expect(all).toHaveLength(225);
 		// Only a person decides a member request or a share request, and only an agent or a service account makes one.
 		expect(all).not.toContain("chat_request_member");
 		expect(all).not.toContain("drive_request_share");
@@ -127,6 +127,11 @@ describe("the MCP endpoint", () => {
 		);
 		expect(names((await mcp(bot.key, "tools/list")).body)).toEqual([
 			"account_whoami",
+			"calendar_create_event",
+			"calendar_delete_event",
+			"calendar_get_event",
+			"calendar_list_events",
+			"calendar_update_event",
 			"chat_add_members",
 			"chat_add_reaction",
 			"chat_archive_room",
@@ -328,6 +333,23 @@ describe("the MCP endpoint", () => {
 		const refused = await callTool(ada.key, "drive_trash_items", { item_ids: [itemId] });
 		expect(refused.isError).toBe(true);
 		expect(JSON.parse(refused.content[0]?.text ?? "{}")).toMatchObject({ code: "not_found" });
+	});
+
+	// Parity for Calendar: an agent adds and reads events through tools, and REST gives the same events.
+	it("runs the Calendar operations as tools, with the same result as REST", async () => {
+		const { bot } = await seedOrg();
+		const created = await callTool(bot.key, "calendar_create_event", {
+			title: "Nightly report",
+			when: { kind: "timed", start: "2026-12-01T23:00:00Z", end: "2026-12-01T23:30:00Z", time_zone: "UTC" },
+		});
+		expect(created.isError).toBeUndefined();
+		const { event } = created.structuredContent as { event: { id: string } };
+		const range = { time_min: "2026-12-01T00:00:00Z", time_max: "2026-12-02T00:00:00Z" };
+		const listed = await callTool(bot.key, "calendar_list_events", range);
+		expect(listed.structuredContent).toEqual(await bot.call("calendar.list_events", range));
+		expect((listed.structuredContent as { events: unknown[] }).events).toEqual([
+			(await bot.call("calendar.get_event", { event_id: event.id })).event,
+		]);
 	});
 
 	it("reports invalid arguments as a tool error that the model can read", async () => {

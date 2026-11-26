@@ -31,6 +31,8 @@ export const SCOPES = {
 		"Give and remove access to the items of your drive, and change the members of the shared drives that you manage",
 	"chat.read": "Read your rooms and direct messages, and find the public rooms",
 	"chat.write": "Create and join rooms, change their members, post, change and delete messages, and set what you read",
+	"calendar.read": "Read the events of your calendar",
+	"calendar.write": "Add, change and delete the events of your calendar",
 } as const;
 
 export type Scope = keyof typeof SCOPES;
@@ -63,6 +65,8 @@ export const AGENT_SCOPES: readonly Scope[] = [
 	"drive.webhooks",
 	"chat.read",
 	"chat.write",
+	"calendar.read",
+	"calendar.write",
 ];
 
 /**
@@ -81,6 +85,8 @@ const SERVICE_SCOPE_LIST = [
 	"drive.share",
 	"chat.read",
 	"chat.write",
+	"calendar.read",
+	"calendar.write",
 ] as const satisfies readonly Scope[];
 
 export type ServiceScope = (typeof SERVICE_SCOPE_LIST)[number];
@@ -104,6 +110,8 @@ export const SERVICE_SCOPE_DESCRIPTIONS: Readonly<Record<ServiceScope, string>> 
 	"drive.share": "Give and remove access to the items of its own drive",
 	"chat.read": "Find the public rooms, and read the threads, mentions, saved messages and settings of the account",
 	"chat.write": "Create rooms, open direct messages, and change the sections, reminders and settings of the account",
+	"calendar.read": "Read the events of the own calendar of the service account",
+	"calendar.write": "Add, change and delete the events of the own calendar of the service account",
 };
 
 /** The text of a scope for a caller of this kind: the service text for a service account. */
