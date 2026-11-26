@@ -833,7 +833,19 @@ export function racing(change: string, bind: string, write?: string) {
 					const statement = target.prepare(sql);
 					if (!write || !sql.includes(write)) return statement;
 					return {
-						bind: (...values: unknown[]) => ({ run: async () => (await run(), statement.bind(...values).run()) }),
+						bind: (...values: unknown[]) => {
+							const bound = statement.bind(...values);
+							return {
+								run: async () => {
+									await run();
+									return bound.run();
+								},
+								first: async () => {
+									await run();
+									return bound.first();
+								},
+							};
+						},
 					};
 				};
 			}

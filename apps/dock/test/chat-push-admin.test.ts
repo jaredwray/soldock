@@ -1,8 +1,21 @@
 import { env } from "cloudflare:workers";
 import { Buffer } from "node:buffer";
 import { generateKeyPairSync } from "node:crypto";
+import type { Scope } from "@asterra/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { type Actor, api, callTool, codeOf, createActor, mcp, ORIGIN, PASSWORD, seedOrg, withEnv } from "./helpers.ts";
+import {
+	type Actor,
+	api,
+	callTool,
+	codeOf,
+	createActor,
+	mcp,
+	ORIGIN,
+	PASSWORD,
+	racing,
+	seedOrg,
+	withEnv,
+} from "./helpers.ts";
 
 // Admin › Chat: an owner or an admin turns on Web Push. The Worker makes the VAPID key pair and keeps it in
 // the database. No member, agent or service account reads or changes it. The deprecated Worker secrets
@@ -154,6 +167,28 @@ describe("the Web Push settings", () => {
 		expect((await toolNames(owner.key)).filter((name) => pushTools.includes(name)).sort()).toEqual(pushTools);
 	});
 
+	it("follow the scopes of the key of an admin: directory.read reads, directory.write changes", async () => {
+		const key = async (scopes: Scope[]) =>
+			api(
+				(await admin.call("account.create_api_key", { principal_id: admin.id, label: scopes.join(" "), scopes }))
+					.api_key.secret,
+			);
+		const reader = await key(["directory.read"]);
+		expect(await reader("chat.get_push_settings", {})).toEqual(OFF);
+		expect(await codeOf(reader("chat.update_push_settings", { enabled: true, subject: SUBJECT }))).toBe("forbidden");
+		expect(await codeOf(reader("chat.rotate_push_keys", {}))).toBe("forbidden");
+		// A key for a chat script cannot change the notifications of the organization.
+		const chatScript = await key(["chat.read", "chat.write"]);
+		expect(await codeOf(chatScript("chat.get_push_settings", {}))).toBe("forbidden");
+		expect(await codeOf(chatScript("chat.update_push_settings", { enabled: false }))).toBe("forbidden");
+		expect(await codeOf(chatScript("chat.rotate_push_keys", {}))).toBe("forbidden");
+		const writer = await key(["directory.write"]);
+		expect(await writer("chat.update_push_settings", { enabled: true, subject: SUBJECT })).toMatchObject({
+			enabled: true,
+		});
+		expect((await writer("chat.rotate_push_keys", {})).enabled).toBe(true);
+	});
+
 	it("use the deprecated secrets until the first change, then keep their key pair in the database", async () => {
 		const secrets = secretPair();
 		const audit = auditLines();
@@ -189,6 +224,40 @@ describe("the Web Push settings", () => {
 			subject: secrets.VAPID_SUBJECT,
 			public_key: secrets.VAPID_PUBLIC_KEY,
 		});
+	});
+});
+
+describe("a change while the secrets apply", () => {
+	it("keeps the state that a different admin copied from the secrets during the call", async () => {
+		const secrets = secretPair();
+		// A different admin turns push off just before the write of the call, and so copies the secrets.
+		const turnOff = `UPDATE chat_push_settings SET enabled = 0, subject = 'mailto:other@example.com', public_key = ?,
+			private_key = 'copied', keys_created_at = 1 WHERE id = 1`;
+		const call = async (path: string, body: unknown) => {
+			const directory = racing(turnOff, secrets.VAPID_PUBLIC_KEY, "UPDATE chat_push_settings SET");
+			const res = await withEnv({ ...secrets, DIRECTORY: directory }, path, {
+				method: "POST",
+				headers: { authorization: `Bearer ${owner.key}`, origin: ORIGIN, "content-type": "application/json" },
+				body: JSON.stringify(body),
+			});
+			expect(res.status).toBe(200);
+			return (await res.json()) as Record<string, unknown>;
+		};
+
+		// A new contact address goes in. Push stays off.
+		expect(await call("/api/v1/chat/admin/push", { subject: "https://example.com/contact" })).toMatchObject({
+			enabled: false,
+			subject: "https://example.com/contact",
+			public_key: secrets.VAPID_PUBLIC_KEY,
+		});
+
+		await env.DIRECTORY.prepare(
+			"UPDATE chat_push_settings SET enabled = 0, subject = NULL, public_key = NULL, private_key = NULL, keys_created_at = NULL",
+		).run();
+		// A rotation replaces the pair. Push stays off, and the contact address of the other admin stays.
+		const rotated = await call("/api/v1/chat/admin/push/rotate", {});
+		expect(rotated).toMatchObject({ enabled: false, subject: "mailto:other@example.com", key_source: "settings" });
+		expect(rotated.public_key).not.toBe(secrets.VAPID_PUBLIC_KEY);
 	});
 });
 

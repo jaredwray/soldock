@@ -136,12 +136,17 @@ Browser notifications for Chat are off until an owner or an admin turns them on 
 4. Each member turns on notifications for a device in **Settings › Chat notifications**.
 
 - No answer, log or audit line contains the private key. A backup of D1 holds it, so keep a backup of D1
-  as a secret.
+  as a secret. D1 Time Travel also keeps the earlier rows for its retention period, with a replaced key.
 - **Turn off** stops all deliveries at once. The key pair stays, so a later **Turn on notifications** uses the
-  same key and the devices stay subscribed. While push is off, the queue drops each delivery job.
+  same key and the devices stay subscribed. While push is off, the queue drops each delivery job. An open
+  Asterra tab still plays the sound of a new message.
 - **Replace keys** makes a new key pair. The previous pair stops at once. Each browser subscribes again with
-  the new key when Asterra opens next. Until then, that browser gets no notifications.
-- A directory reset deletes the key pair. Turn on notifications again after the reset.
+  the new key when Asterra opens next. Until then, that browser gets no notifications. When a push service
+  refuses the old key (HTTP 401 or 403), the Worker removes that subscription.
+- To read the settings with an API key, the key needs `directory.read`. To change them, it needs
+  `directory.write`.
+- A directory reset deletes the key pair. Turn on notifications again after the reset. If the deprecated
+  secrets are still set, they apply again after the reset, so delete them after you store the pair.
 
 ### Upgrade from the VAPID secrets
 
@@ -156,8 +161,12 @@ The deploy applies it. While the table has no key pair and all three secrets are
    The devices stay subscribed.
 3. Delete the three secrets in **Settings › Variables and Secrets** of the dock Worker.
 
-The first change in Admin › Chat copies the secrets, also **Turn off** or **Replace keys**. After that, the
-Worker does not read the secrets.
+Any first change in Admin › Chat copies the state and the contact address of the secrets. **Store in
+database** and **Turn off** also copy the key pair. **Replace keys** makes a new pair, so each device
+subscribes again. After the first change, the Worker does not read the secrets.
+
+The key pair moves from an encrypted Worker secret to a plaintext column in D1. Keep a backup of D1 as a
+secret.
 
 The deploy creates the queue `soldock-chat-push`. The room sends its recipients in groups of up to ten.
 Each eligible device then gets a separate delivery job.

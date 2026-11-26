@@ -106,6 +106,7 @@ export interface PushSettingsChange {
  * Writes the settings in the change. A setting that the change does not name keeps its value. When the row
  * has no key pair, the write copies the pair of the deprecated secrets, or makes a new pair if push goes on.
  * `adopted` tells which of the two occurred. If two admins write at the same time, the first pair stays.
+ * Migration 0037 makes the one row, and a directory reset makes it again, so each write is an update.
  */
 export async function updatePushSettings(
 	env: Env,
@@ -130,24 +131,32 @@ export async function updatePushSettings(
 			adopted = "generated";
 		}
 	}
-	// While the secrets apply, the row takes their state, so a change of one setting keeps the others.
+	// While the secrets apply, the row takes their state, so a change of one setting keeps the others. The
+	// write takes that state only while the row still has no pair: a different admin can copy it first.
 	const adopting = current.source === "secret";
-	const enabledParam = change.enabled !== undefined || adopting ? (enabled ? 1 : 0) : null;
-	const subjectParam = change.subject ?? (adopting ? subject : null);
-	// SQLite reads the old row in each SET expression, so the three key columns see the same old public_key.
+	const explicitEnabled = change.enabled === undefined ? null : change.enabled ? 1 : 0;
+	// SQLite reads the old row in each SET expression, so each column sees the same old public_key.
 	const written = await env.DIRECTORY.prepare(
-		`INSERT INTO chat_push_settings (id, enabled, subject, public_key, private_key, keys_created_at, updated_at)
-		VALUES (1, COALESCE(?1, 0), ?2, ?3, ?4, ?5, ?6)
-		ON CONFLICT (id) DO UPDATE SET
-			enabled = COALESCE(?1, enabled),
-			subject = COALESCE(?2, subject),
+		`UPDATE chat_push_settings SET
+			enabled = COALESCE(?1, CASE WHEN public_key IS NULL THEN ?7 END, enabled),
+			subject = COALESCE(?2, CASE WHEN public_key IS NULL THEN ?8 END, subject),
 			public_key = CASE WHEN public_key IS NULL THEN ?3 ELSE public_key END,
 			private_key = CASE WHEN public_key IS NULL THEN ?4 ELSE private_key END,
 			keys_created_at = CASE WHEN public_key IS NULL THEN ?5 ELSE keys_created_at END,
 			updated_at = ?6
+		WHERE id = 1
 		RETURNING ${COLUMNS}`,
 	)
-		.bind(enabledParam, subjectParam, keys?.publicKey ?? null, keys?.privateKey ?? null, keys ? now : null, now)
+		.bind(
+			explicitEnabled,
+			change.subject ?? null,
+			keys?.publicKey ?? null,
+			keys?.privateKey ?? null,
+			keys ? now : null,
+			now,
+			adopting ? 1 : null,
+			adopting ? current.subject : null,
+		)
 		.first<PushRow>();
 	const settings = toOutput(effective(written, env));
 	// Another write can supply the pair first. Then this write did not copy or make the pair that applies.
@@ -164,16 +173,16 @@ export async function rotatePushKeys(env: Env, now: number): Promise<ChatPushSet
 	if (!current.keys) throw new OperationError("invalid", "Turn on notifications before you replace the keys.");
 	const keys = await generateVapidKeys();
 	const adopting = current.source === "secret";
+	// The state of the secrets goes in only while the row still has no pair, as in `updatePushSettings`.
 	const written = await env.DIRECTORY.prepare(
-		`INSERT INTO chat_push_settings (id, enabled, subject, public_key, private_key, keys_created_at, updated_at)
-		VALUES (1, COALESCE(?1, 0), ?2, ?3, ?4, ?5, ?5)
-		ON CONFLICT (id) DO UPDATE SET
-			enabled = COALESCE(?1, enabled),
-			subject = COALESCE(?2, subject),
+		`UPDATE chat_push_settings SET
+			enabled = COALESCE(CASE WHEN public_key IS NULL THEN ?1 END, enabled),
+			subject = COALESCE(CASE WHEN public_key IS NULL THEN ?2 END, subject),
 			public_key = ?3,
 			private_key = ?4,
 			keys_created_at = ?5,
 			updated_at = ?5
+		WHERE id = 1
 		RETURNING ${COLUMNS}`,
 	)
 		.bind(adopting ? 1 : null, adopting ? current.subject : null, keys.publicKey, keys.privateKey, now)

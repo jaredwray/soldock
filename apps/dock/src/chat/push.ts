@@ -83,7 +83,9 @@ async function deliverPush(job: ChatPushJob, env: Env, vapid: VapidConfig): Prom
 		signal,
 	});
 	await response.body?.cancel();
-	if (response.status === 404 || response.status === 410) {
+	// 404 and 410: the subscription is gone. 401 and 403: the push service refuses the key, for example after
+	// an admin replaced the keys. A device with the subscription registers again at its next start.
+	if ([401, 403, 404, 410].includes(response.status)) {
 		await principal.expirePushSubscription(job.subscriptionId);
 	} else if (!response.ok) {
 		throw new Error(`Push service status ${response.status}.`);
@@ -91,7 +93,8 @@ async function deliverPush(job: ChatPushJob, env: Env, vapid: VapidConfig): Prom
 }
 
 export async function handleChatPushBatch(batch: MessageBatch<unknown>, env: Env): Promise<void> {
-	// One read of the settings for each batch. While an admin has push off, the jobs go and do not come back.
+	// One read of the settings for each batch. While an admin has push off, the live sounds still go to open
+	// tabs, but no device gets a delivery, and a delivery job goes without a retry.
 	let settings: Promise<VapidConfig | null> | undefined;
 	const vapid = () => {
 		settings ??= activeVapid(env);
@@ -101,7 +104,7 @@ export async function handleChatPushBatch(batch: MessageBatch<unknown>, env: Env
 		const job = message.body;
 		try {
 			if (isChatPushFanout(job)) {
-				if (Date.now() - job.occurredAt < PUSH_LIFETIME_MS && (await vapid())) await fanOutPush(job, env);
+				if (Date.now() - job.occurredAt < PUSH_LIFETIME_MS) await fanOutPush(job, env, (await vapid()) !== null);
 			} else if (isPushJob(job)) {
 				const config = await vapid();
 				if (config) await deliverPush(job, env, config);

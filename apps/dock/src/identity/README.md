@@ -23,7 +23,8 @@ of the directory drops it and replays `0031`, so the default is off again. The s
 `drive_share_requests` (migration `0032`), which belongs to the [`drive`](../drive/README.md#data-inventory)
 module. It also applies to `chat_push_settings` (migration `0037`), which belongs to the
 [`chat`](../chat/README.md#web-push-settings) module. It holds the Web Push settings and the VAPID key pair.
-A fresh start drops it and replays `0037`, so push is off and the key pair is gone.
+A fresh start drops it and replays `0037`, so the key pair is gone. Push is off, unless the deprecated
+Worker secrets `VAPID_*` are still set.
 `mailboxOwnerKind` (`team-mailboxes.ts`) tells the `mail` module who owns a mailbox: a team, a person
 or an agent. The Screener never applies to the mailbox of an agent.
 

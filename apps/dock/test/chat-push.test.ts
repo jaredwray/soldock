@@ -55,7 +55,8 @@ it("delivers an offline mention, retries only the failed device and removes expi
 	if (!publicKey) throw new Error("Web Push has no public key.");
 	expect((await ada.call("chat.get_notification_settings")).vapid_public_key).toBe(publicKey);
 	const active = device("/active");
-	const expired = [device("/404"), device("/410")];
+	// 404 and 410: the subscription is gone. 401 and 403: the push service refuses the key, as after a rotation.
+	const expired = [device("/401"), device("/403"), device("/404"), device("/410")];
 	await ada.call("chat.set_notification_settings", { default_level: "mentions", sound: false });
 	for (const { subscription } of [active, ...expired]) await ada.call("chat.subscribe_push", subscription);
 	const { room } = await owner.call("chat.create_room", { kind: "private", name: "Launch", member_ids: [ada.id] });
@@ -95,7 +96,7 @@ it("delivers an offline mention, retries only the failed device and removes expi
 	}
 	await consume(jobs.splice(0));
 	const deliveries = jobs.splice(0) as ChatPushJob[];
-	expect(deliveries).toHaveLength(3);
+	expect(deliveries).toHaveLength(5);
 	expect(deliveries.every((job) => job.messageId === message.id)).toBe(true);
 
 	const posts: Request[] = [];
@@ -114,12 +115,12 @@ it("delivers an offline mention, retries only the failed device and removes expi
 		return new Response(null, { status: Number(url.pathname.slice(1)) });
 	});
 	const first = await consume(deliveries);
-	expect(first.explicitAcks).toHaveLength(2);
+	expect(first.explicitAcks).toHaveLength(4);
 	expect(first.retryMessages).toHaveLength(1);
 	const retry = deliveries[Number(first.retryMessages[0]?.msgId)];
 	expect(retry).toBeDefined();
 	expect((await consume([retry], 2)).explicitAcks).toEqual(["0"]);
-	expect(posts).toHaveLength(4);
+	expect(posts).toHaveLength(6);
 
 	const last = posts.at(-1);
 	if (!last) throw new Error("The push service did not receive a request.");
@@ -170,22 +171,22 @@ it("delivers an offline mention, retries only the failed device and removes expi
 	}
 	await ada.call("chat.mark_read", { room_id: room.id });
 	await consume([retry], 3);
-	expect(posts).toHaveLength(4);
+	expect(posts).toHaveLength(6);
 	await ada.call("chat.mark_read", { room_id: room.id, seq: 0 });
 	await ada.call("chat.mark_thread_read", { room_id: room.id, message_id: parent.id });
 	expect((await consume([retry], 3)).explicitAcks).toEqual(["0"]);
-	expect(posts).toHaveLength(4);
+	expect(posts).toHaveLength(6);
 	await ada.call("chat.mark_thread_read", { room_id: room.id, message_id: parent.id, seq: 0 });
 
 	// While an admin has push off, a delivery goes and does not come back.
 	await owner.call("chat.update_push_settings", { enabled: false });
 	expect((await consume([retry], 3)).explicitAcks).toEqual(["0"]);
-	expect(posts).toHaveLength(4);
+	expect(posts).toHaveLength(6);
 	await owner.call("chat.update_push_settings", { enabled: true });
 
 	await ada.call("chat.remove_member", { room_id: room.id, principal_id: ada.id });
 	await consume([retry], 3);
-	expect(posts).toHaveLength(4);
+	expect(posts).toHaveLength(6);
 });
 
 it("refuses to change a device when the browser tab still shows the previous account", async () => {

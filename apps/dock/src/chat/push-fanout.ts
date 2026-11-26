@@ -42,7 +42,12 @@ export async function enqueuePushFanout(env: Env, event: ChatPushFanout): Promis
 	await env.CHAT_PUSH.sendBatch(messages);
 }
 
-export async function fanOutPush(job: ChatPushFanout, env: Env): Promise<void> {
+/**
+ * Asks each recipient for its eligible devices. The question also sends the live sound to the open tabs of
+ * the recipient, so it occurs also while push is off. `deliver` is false while push is off: then no device
+ * gets a delivery job.
+ */
+export async function fanOutPush(job: ChatPushFanout, env: Env, deliver: boolean): Promise<void> {
 	const devices = await Promise.all(
 		job.recipients.map(async (member): Promise<ChatPushJob[]> => {
 			const principal = env.PRINCIPAL.get(env.PRINCIPAL.idFromName(member.id));
@@ -62,6 +67,7 @@ export async function fanOutPush(job: ChatPushFanout, env: Env): Promise<void> {
 			}));
 		}),
 	);
+	if (!deliver) return;
 	const messages = devices.flat().map((body) => ({ body }));
 	for (let offset = 0; offset < messages.length; offset += 100) {
 		await env.CHAT_PUSH.sendBatch(messages.slice(offset, offset + 100));

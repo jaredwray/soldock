@@ -813,7 +813,9 @@ A click opens the message in its room or thread.
 
 Push to devices is off until an owner or an admin turns it on in **Admin › Chat**
 (`chat.update_push_settings`). People without the role, agents and service accounts get `forbidden`.
-The operations are only for a person, so an agent does not see their MCP tools.
+The operations are only for a person, so an agent does not see their MCP tools. An API key of an admin
+needs `directory.read` to read the settings and `directory.write` to change them, as for the AI and mail
+settings of the organization.
 
 - To turn on push, the admin enters a contact address: a `mailto:` address or an `https:` URL. The
   Worker makes a VAPID key pair (ECDSA P-256, Web Crypto) and keeps it in the D1 table
@@ -824,18 +826,21 @@ The operations are only for a person, so an agent does not see their MCP tools.
   with it.
 - A turn off keeps the key pair. A later turn on uses the same pair, so the devices stay subscribed.
 - `chat.rotate_push_keys` makes a new pair. The previous pair stops at once. Push services refuse
-  the old subscriptions until each browser subscribes again at its next start. The server does not
-  remove the old subscriptions. A refusal with HTTP 404 or 410 removes each one.
-- The queue consumer reads the row once for each batch. While push is off, it acknowledges each job and
-  sends nothing, so no job comes back.
+  the old subscriptions until each browser subscribes again at its next start.
+- A refusal with HTTP 401 or 403 (the push service refuses the key) removes the subscription, as HTTP 404
+  and 410 do. A device with a removed subscription registers it again at its next start.
+- The queue consumer reads the row once for each batch. While push is off, a recipient group still asks
+  each `PrincipalDO`, so the open tabs get their live sound. But no device gets a delivery job, and a
+  delivery job from before is acknowledged without a send.
 - Audit lines: `on` or `off` for each change, `keys_created` or `keys_copied_from_secret` when the row
   gets its first pair, and `keys_rotated`.
 
 The Worker secrets `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY` and `VAPID_SUBJECT` are deprecated. While the
 row has no key pair and all three secrets are set, the secrets apply and the settings show
 `key_source: "secret"`. The first change copies their pair and their contact address into the row, so the
-devices of an older deployment stay subscribed. After that, the Worker does not read the secrets. See the
-[deployment instructions](../../../../docs/self-hosting.md#web-push).
+devices of an older deployment stay subscribed. A rotation copies only their state and contact address.
+After the first change, the Worker does not read the secrets. If the secrets are still set after a fresh
+start, they apply again. See the [deployment instructions](../../../../docs/self-hosting.md#web-push).
 
 An agent receives a signed callback through a Chat webhook or an MCP Events subscription.
 The target's settings and the subscription filter both apply.
@@ -1038,8 +1043,9 @@ The [shared webhook module](../webhooks/README.md) defines the signature, the re
   storage. No new account is a member of them.
 - A fresh start also drops `chat_member_requests` and makes it again, empty. The requests name the
   principals and the rooms from before.
-- A fresh start drops `chat_push_settings` and makes it again with push off and no key pair. The
-  devices of the old accounts are in the old `PrincipalDO`s, so no new account gets their notifications.
+- A fresh start drops `chat_push_settings` and makes it again with push off and no key pair. If the
+  deprecated secrets `VAPID_*` are still set, they apply again. The devices of the old accounts are in the
+  old `PrincipalDO`s, so no new account gets their notifications.
 - A room object writes a row to the index only while its principal is in the directory: the
   creator for the room row, the member for a member row. So a room from before a fresh start
   cannot come back into the new index. This rule assumes that no operation deletes a principal.
@@ -1384,7 +1390,7 @@ Known limits:
 | Devices and live alerts | `PrincipalDO` tables `chat_push_devices` and `chat_notification_sounds` | Each device has its endpoint, encryption keys and credential reference. Recent sound events suppress duplicates |
 | Notification outbox | `ChatRoomDO` table `chat_notification_outbox` | Created in the message transaction and kept until the push queue accepts its recipients |
 | Push jobs | Queue `soldock-chat-push` | Recipient and message identifiers. The consumer reads the current keys before it sends |
-| Web Push settings | D1 table `chat_push_settings` (migration `0037`) | One row: the state, the contact address, the VAPID key pair and its date. The private key is never in an answer or a log. A backup of D1 holds it: keep a backup of D1 as a secret. A directory reset drops the row and makes it again with push off and no key pair. The deprecated Worker secrets `VAPID_*` are the operator's |
+| Web Push settings | D1 table `chat_push_settings` (migration `0037`) | One row: the state, the contact address, the VAPID key pair and its date. The private key is never in an answer or a log. A backup of D1 holds it, and D1 Time Travel keeps a replaced key for its retention period: keep a backup of D1 as a secret. A directory reset drops the row and makes it again with push off and no key pair (the deprecated secrets apply again while they are set). The deprecated Worker secrets `VAPID_*` are the operator's |
 | Presence and status | D1 `principals` and the open sockets of the principal | Availability expires. Each status has text, an emoji and an optional end time |
 | Live sockets | `ChatRoomDO` hibernatable WebSockets, with the tag `p:<principal id>` | Not in the database. Each socket keeps the reference to its credential, the time of its open and the time of its last check. A socket ends with its connection, and a restart of the object ends it. No backup |
 | `PrincipalDO` tables for Layer 8 personal state | `PrincipalDO` tables `chat_activity`, `chat_sections`, `chat_section_rooms`, `chat_saved_messages`, `chat_drafts`, `chat_scheduled_messages`, `chat_reminders` | Activity items (mentions, replies, reactions, card actions, reminders, the requests of agents to add an agent, and the requests of agents to share a Drive item with an agent: `subject_json` has the account to add or to share with, and null for each other kind; `item_json` has the Drive item of a `share_request`, and null for each other kind), sidebar sections, saved message references, synced drafts, scheduled messages (alarm-delivered with credential verification), and reminders (alarm-fired into `chat_activity`) |
