@@ -95,7 +95,7 @@ describe("signIn", () => {
 		await signIn(fakeContext({ prompt: scripted([true]) }), browser);
 		expect(browser.calls.find((call) => starts(call.args, "login"))).toEqual({
 			args: ["login"],
-			options: { terminal: true },
+			options: { stdio: "terminal" },
 		});
 
 		const ssh = loggedOut();

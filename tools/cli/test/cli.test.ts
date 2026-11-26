@@ -14,10 +14,17 @@ const manifest = JSON.parse(readFileSync(join(packageDir, "package.json"), "utf8
 	bin: Record<string, string>;
 };
 
-function capture(argv: string[]) {
+async function capture(argv: string[]) {
 	let out = "";
 	let err = "";
-	const code = run(argv, { out: (text) => (out += text), err: (text) => (err += text) });
+	const code = await run(argv, {
+		out: (text) => {
+			out += text;
+		},
+		err: (text) => {
+			err += text;
+		},
+	});
 	return { code, out, err };
 }
 
@@ -31,8 +38,10 @@ describe("asterra arguments", () => {
 		{ argv: ["-v"], code: 0, out: `${manifest.version}\n`, err: "" },
 		{ argv: ["--nope"], code: 2, out: "", err: /^asterra: .*'--nope'[\s\S]*Usage: asterra/ },
 		{ argv: ["deploy"], code: 2, out: "", err: /^asterra: unknown command "deploy"[\s\S]*Usage: asterra/ },
-	])("$argv exits with $code", ({ argv, code, out, err }) => {
-		const result = capture(argv);
+		{ argv: ["smoke"], code: 2, out: "", err: /^asterra: smoke needs one URL/ },
+		{ argv: ["smoke", "work.example.com"], code: 2, out: "", err: /^asterra: smoke needs a URL with http/ },
+	])("$argv exits with $code", async ({ argv, code, out, err }) => {
+		const result = await capture(argv);
 		expect(result.code).toBe(code);
 		expect(result.out).toBe(out);
 		if (typeof err === "string") expect(result.err).toBe(err);

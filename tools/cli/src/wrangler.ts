@@ -11,8 +11,12 @@ import { Refusal } from "./errors.ts";
 export interface RunOptions {
 	/** Written to stdin. Secrets go this way, never in an argument. */
 	input?: string;
-	/** The command uses the terminal (a login, a prompt of wrangler). Its output is not captured. */
-	terminal?: boolean;
+	/**
+	 * capture (the default): the CLI reads the output. show: the operator sees the progress of wrangler,
+	 * and stdin is closed, so wrangler asks nothing and creates each resource by its name. terminal: a
+	 * login, which needs the terminal.
+	 */
+	stdio?: "capture" | "show" | "terminal";
 	env?: Record<string, string>;
 }
 
@@ -118,7 +122,12 @@ export function wranglerRunner(command: WranglerCommand, version: string): Wrang
 			new Promise((resolve, reject) => {
 				const child = spawn(command.command, [...command.args, ...args], {
 					shell: command.shell,
-					stdio: options.terminal ? "inherit" : ["pipe", "pipe", "pipe"],
+					stdio:
+						options.stdio === "terminal"
+							? "inherit"
+							: options.stdio === "show"
+								? ["ignore", "inherit", "inherit"]
+								: ["pipe", "pipe", "pipe"],
 					env: { ...process.env, ...options.env },
 				});
 				let stdout = "";

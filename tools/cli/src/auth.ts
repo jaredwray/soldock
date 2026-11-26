@@ -40,7 +40,7 @@ export async function signIn(ctx: Context, wrangler: Wrangler, options: SignInOp
 		if (!(await ctx.prompt.confirm(`You are not signed in to Cloudflare. Sign in now? ${how}`, true))) {
 			throw new Refusal("Sign in with `wrangler login`, then run the command again.");
 		}
-		const login = await wrangler.run(device ? ["login", "--device"] : ["login"], { terminal: true });
+		const login = await wrangler.run(device ? ["login", "--device"] : ["login"], { stdio: "terminal" });
 		if (login.code !== 0) throw new Refusal("The sign-in to Cloudflare did not finish.");
 		who = await whoami(wrangler);
 		if (!who) throw new Refusal("wrangler shows no signed-in user after the login.");
