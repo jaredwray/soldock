@@ -164,6 +164,9 @@ export function wranglerRunner(command: WranglerCommand, version: string): Wrang
 				child.on("error", reject);
 				child.on("close", (code) => resolve({ code: code ?? 1, stdout, stderr }));
 				if (child.stdin) {
+					// wrangler can exit before it reads stdin. The write then fails with EPIPE, and the exit
+					// code of wrangler tells the result.
+					child.stdin.on("error", () => {});
 					child.stdin.end(options.input ?? "");
 				}
 			}),

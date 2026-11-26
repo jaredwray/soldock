@@ -245,7 +245,9 @@ it("sends a live sound once for each eligible post and respects the sound settin
 	const last = await post("Three");
 	// Push to devices is off, so the queue makes no delivery job. The open tabs still get the live sound.
 	const deliveries: unknown[] = [];
-	const batch = createMessageBatch(CHAT_PUSH_QUEUE, [{ id: "0", timestamp: new Date(), attempts: 1, body: last }]);
+	const batch = createMessageBatch(`soldock-${CHAT_PUSH_QUEUE}`, [
+		{ id: "0", timestamp: new Date(), attempts: 1, body: last },
+	]);
 	const context = createExecutionContext();
 	await worker.queue(batch, {
 		...env,
