@@ -1,4 +1,5 @@
 import { RoomId } from "./chat.ts";
+import { prefixedId } from "./common.ts";
 import { SpaceId } from "./drive.ts";
 import { MailboxId } from "./mail.ts";
 import {
@@ -73,6 +74,14 @@ const DriveArguments = z.strictObject({
 	),
 });
 
+const CalendarArguments = z.strictObject({
+	calendar_id: prefixedId("prn")
+		.optional()
+		.describe(
+			"The calendar to monitor: your own principal id. The default and the only allowed value is your own calendar.",
+		),
+});
+
 const Uri = z.string().describe("The MCP resource that changed. Read it with resources/read.");
 
 const MailPayload = z.strictObject({
@@ -126,6 +135,33 @@ const DriveSpacePayload = z.strictObject({
 	uri: Uri,
 });
 
+const CalendarPayload = z.strictObject({
+	calendar_id: z.string().describe("The calendar: the id of its owner."),
+	event_id: z
+		.string()
+		.describe(
+			"Read the event with calendar_get_event. The event has no title, time or answer. After a delete or a cancel, the event is gone.",
+		),
+	uid: z.string().describe("The meeting: the same on the event of the organizer and on each copy."),
+	change_id: z
+		.string()
+		.describe("The stable id of the change, as in calendar_list_changes. A retry has the same id: skip a known id."),
+	occurrence_id: z.string().nullable().describe("The occurrence of a recurring event. Null for the whole event."),
+	revision: z
+		.number()
+		.int()
+		.describe(
+			"The revision of the event after the change. An answer of a different attendee does not change it, so deduplicate by change_id.",
+		),
+	actor_id: z
+		.string()
+		.nullable()
+		.describe("The principal that caused the change. Skip your own changes to prevent a loop."),
+	cursor: z
+		.string()
+		.describe("The position after this change. Give it to calendar_list_changes to read the changes that follow."),
+});
+
 const DESCRIPTIONS: Record<WebhookEvent, string> = {
 	"mail.inbox.updated":
 		"New mail arrived in the inbox of the mailbox. Spam, a label and an archive send nothing. Mail in a short time gives one event. Read the inbox with mail_list_threads.",
@@ -145,6 +181,15 @@ const DESCRIPTIONS: Record<WebhookEvent, string> = {
 	"drive.item.unshared": "A person or an agent lost access to an item of the drive.",
 	"drive.members.changed": "The members of the shared drive changed. Only a shared drive sends this event.",
 	"drive.deleted": "The shared drive was deleted. Only a shared drive sends this event.",
+	"calendar.event.created": "You added an event to your calendar.",
+	"calendar.event.updated": "You changed the fields or the attendees of your own event.",
+	"calendar.event.deleted": "You deleted your own event. For a meeting, this cancels it for each attendee.",
+	"calendar.invitation.received": "A different principal invited you: a copy of the meeting is on your calendar.",
+	"calendar.invitation.updated": "The organizer changed the meeting of a copy on your calendar.",
+	"calendar.invitation.cancelled":
+		"A copy of a meeting left your calendar: the organizer cancelled the meeting or removed you.",
+	"calendar.rsvp.changed":
+		"An answer changed: your own answer to an invitation, the answer of an attendee to your meeting, or the answer of a different attendee on a copy.",
 };
 
 function define(name: WebhookEvent): McpEventDefinition {
@@ -152,6 +197,7 @@ function define(name: WebhookEvent): McpEventDefinition {
 	const description = DESCRIPTIONS[name];
 	if (domain === "mail") return { name, domain, description, input: MailArguments, payload: MailPayload };
 	if (domain === "chat") return { name, domain, description, input: ChatArguments, payload: ChatPayload };
+	if (domain === "calendar") return { name, domain, description, input: CalendarArguments, payload: CalendarPayload };
 	const payload = name.startsWith("drive.item.") ? DriveItemPayload : DriveSpacePayload;
 	return { name, domain, description, input: DriveArguments, payload };
 }

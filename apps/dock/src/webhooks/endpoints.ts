@@ -20,6 +20,7 @@ function heldDomains(call: CallContext): WebhookDomain[] {
 	if (call.caller.scopes.has("mail.webhooks")) domains.push("mail");
 	if (call.caller.scopes.has("chat.webhooks")) domains.push("chat");
 	if (call.caller.scopes.has("drive.webhooks")) domains.push("drive");
+	if (call.caller.scopes.has("calendar.webhooks")) domains.push("calendar");
 	return domains;
 }
 

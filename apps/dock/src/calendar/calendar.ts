@@ -1,6 +1,7 @@
 import { DurableObject } from "cloudflare:workers";
-import { CALENDAR_LIMITS } from "@asterra/contracts";
-import { log, newId } from "../platform/index.ts";
+import { CALENDAR_LIMITS, type CalendarWebhookEvent, DAY_MS } from "@asterra/contracts";
+import { decodeCursor, encodeCursor, log, newId } from "../platform/index.ts";
+import type { CalendarWebhookEventJob } from "../webhooks/index.ts";
 
 // Each person, agent and service account has one CalendarDO. Its name is the principal id. It holds the
 // events of the calendar of that principal in its SQLite database.
@@ -9,6 +10,10 @@ import { log, newId } from "../platform/index.ts";
 // with the same `uid`. The organizer sends a full snapshot of the meeting to each attendee, and each attendee
 // sends its answer to the organizer, through the outbox of this object and its alarm. Each message is safe to
 // apply two times and in each order: see `applyMeeting` and `applyReply`.
+//
+// Each committed change writes one row of `changes` in its own transaction (`noteChange`). That row is the one
+// record of the change for each consumer: `calendar.list_changes` reads it, the events socket gets a hint, and
+// MCP Events get a queue job with the id of the row. The alarm publishes the rows in order (`publishChanges`).
 
 type Row = Record<string, SqlStorageValue>;
 
@@ -149,6 +154,29 @@ export interface ReplyMessage {
 	sequence: number;
 }
 
+/** A row of the change feed. `at` is UTC ms. `cursor` is the position after the change. */
+export interface ChangeRecord {
+	id: string;
+	type: CalendarWebhookEvent;
+	calendar_id: string;
+	event_id: string;
+	uid: string;
+	occurrence_id: string | null;
+	revision: number;
+	actor_id: string | null;
+	at: number;
+	cursor: string;
+}
+
+export interface ChangePage {
+	changes: ChangeRecord[];
+	/** The position after the last change of the page, or the head when the page is empty. */
+	cursor: string;
+	has_more: boolean;
+	/** True when the cursor is older than the feed. The page then has no changes and the cursor of the head. */
+	expired: boolean;
+}
+
 export type ApplyResult =
 	| { applied: true }
 	| { applied: false; reason: "stale" | "not_organizer" | "not_attendee" | "unknown" | "full" | "wrong_calendar" };
@@ -160,6 +188,10 @@ const TOMBSTONE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 /** About 14 hours of attempts with `backoff`. Then the message is dropped. */
 const OUTBOX_MAX_ATTEMPTS = 20;
 const OUTBOX_BATCH = 50;
+/** The rows of the change feed that one round of `publishChanges` sends. */
+const PUBLISH_BATCH = 50;
+/** The oldest rows that one prune reads. The prune deletes only a prefix of the feed. */
+const PRUNE_BATCH = 500;
 
 /** 1 minute, doubled for each failure, at most 1 hour. */
 function backoff(attempts: number): number {
@@ -240,6 +272,22 @@ const MIGRATIONS: readonly (readonly string[])[] = [
 		)`,
 		"CREATE INDEX outbox_due ON outbox (next_attempt_at)",
 	],
+	// The change feed: one row for each committed change, in order. `change_feed` is the random id of this feed,
+	// so a cursor of a different feed expires. The statements can run again on a calendar that has them.
+	[
+		`CREATE TABLE IF NOT EXISTS changes (
+			seq INTEGER PRIMARY KEY AUTOINCREMENT,
+			id TEXT NOT NULL UNIQUE,
+			type TEXT NOT NULL,
+			event_id TEXT NOT NULL,
+			uid TEXT NOT NULL,
+			occurrence_id TEXT,
+			revision INTEGER NOT NULL,
+			actor_id TEXT,
+			at INTEGER NOT NULL
+		)`,
+		"INSERT OR IGNORE INTO meta (key, value) VALUES ('change_feed', lower(hex(randomblob(8))))",
+	],
 ];
 
 const COLUMNS = [
@@ -309,6 +357,31 @@ const FIELD_KEYS = [
 	"time_zone",
 ] as const satisfies readonly (keyof EventFields)[];
 
+/**
+ * What a snapshot of the organizer changes on an existing copy. `fields`: a field or the set of attendees.
+ * `answers`: the answer of a different attendee. The answer of the owner of the copy comes back in each
+ * snapshot after the owner answers. The copy shows `my_response` for the owner, so that echo is no change.
+ */
+function copyChanges(
+	record: EventRecord,
+	message: MeetingMessage,
+	ownerId: string,
+): { fields: boolean; answers: boolean; answerActor: string | null } {
+	const fields = message.fields as EventFields;
+	const before = new Map(record.attendees.map((attendee) => [attendee.key, attendee]));
+	const setChanged =
+		before.size !== message.attendees.length || message.attendees.some((attendee) => !before.has(attendee.key));
+	const answered = message.attendees.filter((attendee) => {
+		const earlier = before.get(attendee.key);
+		return attendee.key !== ownerId && earlier !== undefined && earlier.response !== attendee.response;
+	});
+	return {
+		fields: setChanged || FIELD_KEYS.some((key) => record[key] !== fields[key]),
+		answers: answered.length > 0,
+		answerActor: answered.length === 1 ? (answered[0]?.principal_id ?? null) : null,
+	};
+}
+
 export class CalendarDO extends DurableObject<Env> {
 	private readonly sql: SqlStorage;
 	/** The drain of the outbox that runs now. One drain at a time. */
@@ -320,8 +393,10 @@ export class CalendarDO extends DurableObject<Env> {
 		ctx.blockConcurrencyWhile(async () => {
 			this.migrate();
 			// A change sets the alarm after its transaction commits. If the object stopped between the two, the
-			// outbox has rows and no alarm: set one now.
-			if (this.outboxSize() > 0 && (await ctx.storage.getAlarm()) === null) await ctx.storage.setAlarm(Date.now());
+			// outbox or the change feed has work and no alarm: set one now.
+			if ((this.outboxSize() > 0 || this.publishDue() !== null) && (await ctx.storage.getAlarm()) === null) {
+				await ctx.storage.setAlarm(Date.now());
+			}
 		});
 	}
 
@@ -351,6 +426,188 @@ export class CalendarDO extends DurableObject<Env> {
 
 	private outboxSize(): number {
 		return this.sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM outbox").one().n;
+	}
+
+	private metaNumber(key: string): number {
+		return Number(this.meta(key) ?? 0);
+	}
+
+	/**
+	 * Records one committed change in the change feed. Call this inside the transaction of the change, so a
+	 * change that fails records nothing and a change that commits has its row. The alarm publishes the row.
+	 */
+	private noteChange(
+		type: CalendarWebhookEvent,
+		event: Pick<EventRecord, "id" | "uid" | "revision">,
+		actorId: string | null,
+		occurrenceId: string | null = null,
+	): void {
+		const now = Date.now();
+		const { seq } = this.sql
+			.exec<{ seq: number }>(
+				`INSERT INTO changes (id, type, event_id, uid, occurrence_id, revision, actor_id, at)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING seq`,
+				newId("chg", now),
+				type,
+				event.id,
+				event.uid,
+				occurrenceId,
+				event.revision,
+				actorId,
+				now,
+			)
+			.one();
+		this.setMeta("change_head", String(seq));
+	}
+
+	/**
+	 * Deletes the oldest published changes: the changes after the age or the count of `CALENDAR_LIMITS`. It
+	 * deletes only a prefix of the feed and never a change to publish, and `change_floor` keeps the last seq
+	 * that it deleted. A cursor before the floor has expired.
+	 */
+	private pruneChanges(now: number): void {
+		const published = this.metaNumber("change_published");
+		const byCount = this.metaNumber("change_head") - CALENDAR_LIMITS.changes;
+		const cutoff = now - CALENDAR_LIMITS.changeDays * DAY_MS;
+		let last = Math.min(published, Math.max(byCount, 0));
+		const rows = this.sql
+			.exec<{ seq: number; at: number }>(
+				"SELECT seq, at FROM changes WHERE seq > ? AND seq <= ? ORDER BY seq LIMIT ?",
+				last,
+				published,
+				PRUNE_BATCH,
+			)
+			.toArray();
+		for (const row of rows) {
+			if (row.at >= cutoff) break;
+			last = row.seq;
+		}
+		if (last <= this.metaNumber("change_floor")) return;
+		this.ctx.storage.transactionSync(() => {
+			this.sql.exec("DELETE FROM changes WHERE seq <= ?", last);
+			this.setMeta("change_floor", String(last));
+		});
+	}
+
+	/** The time of the next round of `publishChanges`, or null when each change is published. */
+	private publishDue(): number | null {
+		if (this.metaNumber("change_head") <= this.metaNumber("change_published")) return null;
+		return Math.max(this.metaNumber("publish_at"), Date.now());
+	}
+
+	private changeCursor(seq: number): string {
+		return encodeCursor([this.meta("change_feed") ?? "", seq]);
+	}
+
+	private toChange(row: Row, calendarId: string): ChangeRecord {
+		return {
+			id: row.id as string,
+			type: row.type as CalendarWebhookEvent,
+			calendar_id: calendarId,
+			event_id: row.event_id as string,
+			uid: row.uid as string,
+			occurrence_id: (row.occurrence_id as string | null) ?? null,
+			revision: row.revision as number,
+			actor_id: (row.actor_id as string | null) ?? null,
+			at: row.at as number,
+			cursor: this.changeCursor(row.seq as number),
+		};
+	}
+
+	/**
+	 * Publishes the committed changes in order: a hint to the events sockets of the owner, then one queue job
+	 * for each change when a subscription of MCP Events or a webhook exists. `change_published` moves only after
+	 * the sends of a change succeed, so a stop of the Worker sends a change again, never loses one. A job sent
+	 * again has the same `eventId`, so the receiver gets the same `webhook-id`. A failure tries again later,
+	 * with `backoff`, and never drops a change.
+	 */
+	private async publishChanges(): Promise<void> {
+		const calendarId = this.meta("owner_id");
+		if (calendarId === null || this.publishDue() === null || this.metaNumber("publish_at") > Date.now()) return;
+		try {
+			for (;;) {
+				const rows = this.sql
+					.exec<Row>(
+						"SELECT seq, id, type, event_id, uid, occurrence_id, revision, actor_id, at FROM changes WHERE seq > ? ORDER BY seq LIMIT ?",
+						this.metaNumber("change_published"),
+						PUBLISH_BATCH,
+					)
+					.toArray();
+				if (rows.length === 0) break;
+				await this.env.PRINCIPAL.get(this.env.PRINCIPAL.idFromName(calendarId)).calendarChanged(calendarId);
+				for (const row of rows) {
+					if (this.meta("webhook_events") === "1") {
+						const change = this.toChange(row, calendarId);
+						const job: CalendarWebhookEventJob = {
+							v: 1,
+							kind: "calendar_event",
+							calendarId,
+							eventType: change.type,
+							eventId: change.id,
+							occurredAt: change.at,
+							calendarEventId: change.event_id,
+							uid: change.uid,
+							occurrenceId: change.occurrence_id,
+							revision: change.revision,
+							actorId: change.actor_id,
+							cursor: change.cursor,
+						};
+						await this.env.WEBHOOKS.send(job);
+					}
+					this.setMeta("change_published", String(row.seq));
+				}
+				if (rows.length < PUBLISH_BATCH) break;
+			}
+			if (this.meta("publish_attempts") !== null) {
+				this.sql.exec("DELETE FROM meta WHERE key IN ('publish_attempts', 'publish_at')");
+			}
+			this.pruneChanges(Date.now());
+		} catch (error) {
+			const attempts = this.metaNumber("publish_attempts") + 1;
+			this.setMeta("publish_attempts", String(attempts));
+			this.setMeta("publish_at", String(Date.now() + backoff(attempts)));
+			log("warn", "calendar change publish failed", {
+				attempts,
+				error: error instanceof Error ? error.message : String(error),
+			});
+		}
+	}
+
+	/**
+	 * The changes after a cursor, oldest first. Without a cursor: no changes and the cursor of the head. A
+	 * cursor of a different feed, or before the floor, or after the head, has expired.
+	 */
+	listChanges(call: CalendarCall, cursor: string | null, limit: number): ChangePage | Refusal {
+		const refused = this.enter(call);
+		if (refused) return refused;
+		const head = this.metaNumber("change_head");
+		const atHead: ChangePage = { changes: [], cursor: this.changeCursor(head), has_more: false, expired: false };
+		if (cursor === null) return atHead;
+		const decoded = decodeCursor<[string, number]>(cursor, ["string", "number"]);
+		if (!decoded || !Number.isSafeInteger(decoded[1]) || decoded[1] < 0) {
+			return refuse("invalid", "The cursor is not a cursor of calendar.list_changes.");
+		}
+		const [feed, after] = decoded;
+		if (feed !== this.meta("change_feed") || after > head || after < this.metaNumber("change_floor")) {
+			return { ...atHead, expired: true };
+		}
+		const rows = this.sql
+			.exec<Row>(
+				"SELECT seq, id, type, event_id, uid, occurrence_id, revision, actor_id, at FROM changes WHERE seq > ? ORDER BY seq LIMIT ?",
+				after,
+				limit + 1,
+			)
+			.toArray();
+		const page = rows.slice(0, limit).map((row) => this.toChange(row, call.ownerId));
+		const last = page[page.length - 1];
+		return { changes: page, cursor: last ? last.cursor : cursor, has_more: rows.length > limit, expired: false };
+	}
+
+	/** Turns queue jobs of the change feed on. The Worker calls this before it stores a subscription. */
+	enableChangeEvents(calendarId: string): boolean {
+		if (!this.claim(calendarId)) return false;
+		if (this.meta("webhook_events") !== "1") this.setMeta("webhook_events", "1");
+		return true;
 	}
 
 	private eventCount(): number {
@@ -496,9 +753,11 @@ export class CalendarDO extends DurableObject<Env> {
 		this.enqueue("meeting", attendee.principal_id, uid, message);
 	}
 
-	/** Sets the alarm for the first message of the outbox that is due. */
+	/** Sets the alarm for the first message of the outbox, or the first change to publish, that is due. */
 	private async schedule(): Promise<void> {
-		const next = this.sql.exec<{ at: number | null }>("SELECT MIN(next_attempt_at) AS at FROM outbox").one().at;
+		const outbox = this.sql.exec<{ at: number | null }>("SELECT MIN(next_attempt_at) AS at FROM outbox").one().at;
+		const publish = this.publishDue();
+		const next = outbox === null ? publish : publish === null ? outbox : Math.min(outbox, publish);
 		if (next === null) return;
 		const at = Math.max(next, Date.now());
 		const set = await this.ctx.storage.getAlarm();
@@ -601,6 +860,7 @@ export class CalendarDO extends DurableObject<Env> {
 			}
 			const event = this.row(input.id) as EventRecord;
 			this.sendSnapshots(event);
+			this.noteChange("calendar.event.created", event, call.actorId);
 		});
 		await this.schedule();
 		return this.row(input.id) as EventRecord;
@@ -685,7 +945,9 @@ export class CalendarDO extends DurableObject<Env> {
 				this.sendEnd(event.uid, sequence, "removed", attendee);
 			}
 			for (const attendee of added) this.insertAttendee(eventId, attendee, sequence, now);
-			this.sendSnapshots(this.row(eventId) as EventRecord);
+			const updated = this.row(eventId) as EventRecord;
+			this.sendSnapshots(updated);
+			this.noteChange("calendar.event.updated", updated, call.actorId);
 		});
 		await this.schedule();
 		return { event: this.row(eventId) as EventRecord, changed: true };
@@ -719,6 +981,7 @@ export class CalendarDO extends DurableObject<Env> {
 		}
 		if (dryRun) return event;
 		this.ctx.storage.transactionSync(() => {
+			this.noteChange("calendar.event.deleted", event, call.actorId);
 			for (const attendee of event.attendees) this.sendEnd(event.uid, event.sequence + 1, "cancelled", attendee);
 			this.sql.exec("DELETE FROM attendees WHERE event_id = ?", eventId);
 			this.sql.exec("DELETE FROM events WHERE id = ?", eventId);
@@ -762,6 +1025,7 @@ export class CalendarDO extends DurableObject<Env> {
 				sequence: record.sequence,
 			};
 			this.enqueue("reply", organizerId, record.uid, reply);
+			this.noteChange("calendar.rsvp.changed", { ...record, revision: record.revision + 1 }, call.actorId);
 		});
 		await this.schedule();
 		return { event: this.row(eventId) as EventRecord, changed: true };
@@ -772,11 +1036,13 @@ export class CalendarDO extends DurableObject<Env> {
 	 * and only a larger sequence applies. A cancelled or removed copy leaves a tombstone, so an old invitation
 	 * cannot bring it back. Handlers never call this method: only the outbox of a calendar does.
 	 */
-	applyMeeting(targetId: string, message: MeetingMessage): ApplyResult {
+	async applyMeeting(targetId: string, message: MeetingMessage): Promise<ApplyResult> {
 		let result: ApplyResult = { applied: true };
 		this.ctx.storage.transactionSync(() => {
 			result = this.applyMeetingNow(targetId, message);
 		});
+		// A copy that changed has a row in the change feed to publish.
+		if (result.applied) await this.schedule();
 		return result;
 	}
 
@@ -802,6 +1068,7 @@ export class CalendarDO extends DurableObject<Env> {
 
 		if (message.state !== "invited" || !message.fields) {
 			if (stored) {
+				this.noteChange("calendar.invitation.cancelled", stored.record, organizerId);
 				this.sql.exec("DELETE FROM events WHERE id = ?", stored.record.id);
 				this.addToCount(-1);
 			}
@@ -822,6 +1089,7 @@ export class CalendarDO extends DurableObject<Env> {
 		const fields = message.fields;
 		const attendeesJson = JSON.stringify(message.attendees);
 		if (stored) {
+			const changes = copyChanges(stored.record, message, targetId);
 			this.sql.exec(
 				`UPDATE events SET title = ?, description = ?, location = ?, all_day = ?, start_at = ?, end_at = ?,
 					start_date = ?, end_date = ?, time_zone = ?, organizer_email = ?, organizer_name = ?, sequence = ?,
@@ -843,15 +1111,19 @@ export class CalendarDO extends DurableObject<Env> {
 				now,
 				stored.record.id,
 			);
+			const copy = { ...stored.record, revision: stored.record.revision + 1 };
+			if (changes.fields) this.noteChange("calendar.invitation.updated", copy, organizerId);
+			if (changes.answers) this.noteChange("calendar.rsvp.changed", copy, changes.answerActor);
 			return { applied: true };
 		}
 		if (this.eventCount() >= CALENDAR_LIMITS.events) return { applied: false, reason: "full" };
+		const copyId = newId("evt");
 		this.sql.exec(
 			`INSERT INTO events (id, title, description, location, all_day, start_at, end_at, start_date, end_date,
 				time_zone, revision, created_at, updated_at, uid, role, sequence, organizer_id, organizer_email,
 				organizer_name, my_response, my_reply_stamp, attendees_json)
 			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, 'attendee', ?, ?, ?, ?, 'pending', 0, ?)`,
-			newId("evt"),
+			copyId,
 			fields.title,
 			fields.description,
 			fields.location,
@@ -872,6 +1144,7 @@ export class CalendarDO extends DurableObject<Env> {
 		);
 		this.addToCount(1);
 		this.sql.exec("DELETE FROM meeting_tombstones WHERE uid = ?", message.uid);
+		this.noteChange("calendar.invitation.received", { id: copyId, uid: message.uid, revision: 1 }, organizerId);
 		return { applied: true };
 	}
 
@@ -918,6 +1191,7 @@ export class CalendarDO extends DurableObject<Env> {
 			// The answer does not change the revision, so an answer never makes an edit of the organizer fail.
 			this.sql.exec("UPDATE events SET sequence = sequence + 1 WHERE id = ?", stored.record.id);
 			this.sendSnapshots(this.row(stored.record.id) as EventRecord);
+			this.noteChange("calendar.rsvp.changed", stored.record, reply.attendee_id);
 		});
 		if (result.applied) await this.schedule();
 		return result;
@@ -941,6 +1215,7 @@ export class CalendarDO extends DurableObject<Env> {
 	 * the call ran.
 	 */
 	private async drain(): Promise<void> {
+		await this.publishChanges();
 		const rows = this.sql
 			.exec<{ id: number; kind: string; target: string; payload: string; gen: number; attempts: number }>(
 				"SELECT id, kind, target, payload, gen, attempts FROM outbox WHERE next_attempt_at <= ? ORDER BY next_attempt_at, id LIMIT ?",

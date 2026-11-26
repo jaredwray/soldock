@@ -80,16 +80,38 @@ export const DRIVE_WEBHOOK_EVENTS = [
 	"drive.deleted",
 ] as const;
 
-export const WEBHOOK_EVENTS = [...MAIL_WEBHOOK_EVENTS, ...CHAT_WEBHOOK_EVENTS, ...DRIVE_WEBHOOK_EVENTS] as const;
+/**
+ * A committed change of one calendar. The POST has no title, time, attendee or answer: the receiver reads the
+ * event with `calendar.get_event`. Each event here is a row of the change feed of the calendar
+ * (`calendar.list_changes`), so MCP Events and the replay give the same changes with the same ids.
+ */
+export const CALENDAR_WEBHOOK_EVENTS = [
+	"calendar.event.created",
+	"calendar.event.updated",
+	"calendar.event.deleted",
+	"calendar.invitation.received",
+	"calendar.invitation.updated",
+	"calendar.invitation.cancelled",
+	"calendar.rsvp.changed",
+] as const;
+
+export const WEBHOOK_EVENTS = [
+	...MAIL_WEBHOOK_EVENTS,
+	...CHAT_WEBHOOK_EVENTS,
+	...DRIVE_WEBHOOK_EVENTS,
+	...CALENDAR_WEBHOOK_EVENTS,
+] as const;
 export type WebhookEvent = (typeof WEBHOOK_EVENTS)[number];
 export type ChatWebhookEvent = (typeof CHAT_WEBHOOK_EVENTS)[number];
 export type DriveWebhookEvent = (typeof DRIVE_WEBHOOK_EVENTS)[number];
-export type WebhookDomain = "mail" | "chat" | "drive";
+export type CalendarWebhookEvent = (typeof CALENDAR_WEBHOOK_EVENTS)[number];
+export type WebhookDomain = "mail" | "chat" | "drive" | "calendar";
 
 /** The product that owns an event. */
 export function webhookDomain(event: WebhookEvent): WebhookDomain {
 	if (event.startsWith("mail.")) return "mail";
 	if (event.startsWith("chat.")) return "chat";
+	if (event.startsWith("calendar.")) return "calendar";
 	return "drive";
 }
 
@@ -97,11 +119,12 @@ export function webhookDomain(event: WebhookEvent): WebhookDomain {
 export function webhookScope(domain: WebhookDomain): Scope {
 	if (domain === "mail") return "mail.webhooks";
 	if (domain === "chat") return "chat.webhooks";
+	if (domain === "calendar") return "calendar.webhooks";
 	return "drive.webhooks";
 }
 
 const READ = { readOnly: true, destructive: false, idempotent: true, openWorld: false } as const;
-const ENDPOINT_SCOPES = ["mail.webhooks", "chat.webhooks", "drive.webhooks"] as const;
+const ENDPOINT_SCOPES = ["mail.webhooks", "chat.webhooks", "drive.webhooks", "calendar.webhooks"] as const;
 
 /**
  * Header names that a webhook cannot set: Asterra sets them itself, the HTTP layer owns them, they

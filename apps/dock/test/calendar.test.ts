@@ -367,6 +367,7 @@ describe("who reaches a calendar", () => {
 		expect(missing_scopes.find((entry) => entry.scope === "calendar.read")?.operations).toEqual([
 			"calendar.list_events",
 			"calendar.get_event",
+			"calendar.list_changes",
 		]);
 	});
 

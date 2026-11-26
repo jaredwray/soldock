@@ -112,6 +112,8 @@ export async function creatableTarget(
 ): Promise<string> {
 	const { caller } = call;
 	if (targetId === undefined || targetId === caller.id) return caller.id;
+	// A calendar is for its owner only. The sponsor of an agent gets no access to its calendar.
+	if (domain === "calendar") throw new OperationError("forbidden", "You can subscribe only for your own calendar.");
 	if (domain === "drive" && targetId.startsWith("drv_")) {
 		const space = call.env.DRIVE_SPACE.get(call.env.DRIVE_SPACE.idFromName(targetId));
 		if (!(await space.hasMember(caller.id))) {

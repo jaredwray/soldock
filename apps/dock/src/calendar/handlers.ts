@@ -292,4 +292,17 @@ export const calendarHandlers: Pick<HandlerMap<CallContext>, CalendarOperation> 
 		if (result.changed) auditOk(call, "calendar.respond_to_invitation", input.event_id);
 		return { event: toEvent(result.event, call) };
 	},
+
+	async "calendar.list_changes"(call, input) {
+		const { stub, ctx } = openCalendar(call);
+		const page = accept(
+			await stub.listChanges(ctx, input.cursor ?? null, input.limit ?? CALENDAR_LIMITS.changesPageSize),
+		);
+		return {
+			changes: page.changes.map((change) => ({ ...change, at: iso(change.at) })),
+			cursor: page.cursor,
+			has_more: page.has_more,
+			expired: page.expired,
+		};
+	},
 };

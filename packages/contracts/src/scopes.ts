@@ -33,6 +33,7 @@ export const SCOPES = {
 	"chat.write": "Create and join rooms, change their members, post, change and delete messages, and set what you read",
 	"calendar.read": "Read the events of your calendar",
 	"calendar.write": "Add, change and delete the events of your calendar, invite people, and answer invitations",
+	"calendar.webhooks": "Subscribe to the changes of your calendar through MCP Events and webhooks",
 } as const;
 
 export type Scope = keyof typeof SCOPES;
@@ -67,6 +68,7 @@ export const AGENT_SCOPES: readonly Scope[] = [
 	"chat.write",
 	"calendar.read",
 	"calendar.write",
+	"calendar.webhooks",
 ];
 
 /**

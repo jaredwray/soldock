@@ -24,6 +24,7 @@ export {
 export {
 	addDays,
 	CALENDAR_LIMITS,
+	CalendarChange,
 	CalendarEvent,
 	canonicalTimeZone,
 	checkWhen,
@@ -335,6 +336,8 @@ export {
 } from "./team-mailboxes.ts";
 export {
 	authorizationConflict,
+	CALENDAR_WEBHOOK_EVENTS,
+	type CalendarWebhookEvent,
 	CHAT_ADDRESSED_REASONS,
 	CHAT_EVENT_REASONS,
 	CHAT_WEBHOOK_EVENTS,

@@ -1,5 +1,6 @@
 import { EmailAddress, prefixedId, Timestamp } from "./common.ts";
 import { defineOperation } from "./operation.ts";
+import { CALENDAR_WEBHOOK_EVENTS } from "./webhooks.ts";
 import { z } from "./zod.ts";
 
 // The calendar of a principal. Each person, agent and service account has one calendar. A call reaches
@@ -24,6 +25,12 @@ export const CALENDAR_LIMITS = {
 	firstDate: "1970-01-01",
 	/** The last day that an event can use. */
 	lastDate: "2100-12-31",
+	/** The changes of one page of calendar.list_changes, without `limit`, and the most. */
+	changesPageSize: 200,
+	/** A published change stays in the change feed for this many days. Then a cursor before it expires. */
+	changeDays: 30,
+	/** The most published changes that one calendar keeps. Older ones go first. */
+	changes: 10_000,
 } as const;
 
 export const DAY_MS = 86_400_000;
@@ -546,6 +553,66 @@ export const respondToInvitation = defineOperation({
 	errors: ["not_found"],
 });
 
+/**
+ * One committed change of a calendar. It has ids only: read the event with calendar.get_event. The change
+ * feed, the events socket hint and MCP Events use the same record, with the same `id`.
+ */
+export const CalendarChange = z.object({
+	id: z.string().describe("The stable id of the change. A retry of a delivery has the same id."),
+	type: z.enum(CALENDAR_WEBHOOK_EVENTS),
+	calendar_id: z.string().describe("The calendar: the id of its owner."),
+	event_id: z.string(),
+	uid: z.string().describe("The meeting: the same on the event of the organizer and on each copy."),
+	occurrence_id: z
+		.string()
+		.nullable()
+		.describe("The occurrence of a recurring event that changed. Null for a change of the whole event."),
+	revision: z
+		.number()
+		.int()
+		.describe(
+			"The revision of the event after the change. An answer of a different attendee does not change it, so deduplicate by id.",
+		),
+	actor_id: z.string().nullable().describe("The principal that caused the change, or null."),
+	at: Timestamp,
+	cursor: z.string().describe("The position after this change. Give it to calendar.list_changes to continue."),
+});
+export type CalendarChange = z.infer<typeof CalendarChange>;
+
+export const listChanges = defineOperation({
+	name: "calendar.list_changes",
+	summary: "List the changes of your calendar after a cursor",
+	description: [
+		"Returns the changes of your calendar after cursor, oldest first. Each change has ids only: read the event with calendar.get_event.",
+		"Without cursor, the result has no changes and the cursor of now: keep it, then read your events.",
+		"When has_more is true, call again with the cursor of the result.",
+		`When expired is true, the cursor is older than the feed (${CALENDAR_LIMITS.changeDays} days or ${CALENDAR_LIMITS.changes} changes): read your events again with calendar.list_events, and continue from the cursor of the result.`,
+		"A change can come two times. Skip a change with an id that you know.",
+		OWN_NOTE,
+	].join(" "),
+	http: { method: "GET", path: "/api/v1/calendar/changes" },
+	scopes: ["calendar.read"],
+	callers: ["human", "agent", "service"],
+	annotations: READ,
+	input: z.strictObject({
+		cursor: z.string().max(200).optional().describe("The cursor of a previous result or of a change."),
+		limit: z.coerce
+			.number()
+			.int()
+			.min(1)
+			.max(CALENDAR_LIMITS.changesPageSize)
+			.optional()
+			.describe(`The most changes on one page. The default is ${CALENDAR_LIMITS.changesPageSize}.`),
+	}),
+	output: z.object({
+		changes: z.array(CalendarChange),
+		cursor: z.string(),
+		has_more: z.boolean(),
+		expired: z.boolean(),
+	}),
+	errors: [],
+});
+
 export const calendarOperations = {
 	"calendar.list_events": listEvents,
 	"calendar.get_event": getEvent,
@@ -553,4 +620,5 @@ export const calendarOperations = {
 	"calendar.update_event": updateEvent,
 	"calendar.delete_event": deleteEvent,
 	"calendar.respond_to_invitation": respondToInvitation,
+	"calendar.list_changes": listChanges,
 } as const;
