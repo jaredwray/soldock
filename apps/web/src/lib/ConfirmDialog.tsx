@@ -6,6 +6,8 @@ interface ConfirmDialogProps {
 	title: string;
 	children: ReactNode;
 	confirmLabel: string;
+	/** The label of the button that closes the dialog with no action. The default is "Cancel". */
+	cancelLabel?: string;
 	danger?: boolean;
 	/** True while the action cannot run, for example before the person selects something. */
 	confirmDisabled?: boolean;
@@ -18,6 +20,7 @@ export function ConfirmDialog({
 	title,
 	children,
 	confirmLabel,
+	cancelLabel = "Cancel",
 	danger,
 	confirmDisabled,
 	onConfirm,
@@ -55,7 +58,7 @@ export function ConfirmDialog({
 					disabled={busy}
 					data-autofocus={danger ? true : undefined}
 				>
-					Cancel
+					{cancelLabel}
 				</button>
 				<button
 					type="button"

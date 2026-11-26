@@ -11,9 +11,9 @@ import {
 	zonedDate,
 	zonedDayStart,
 } from "@asterra/contracts";
-import { auditOk, type CallContext } from "../identity/index.ts";
+import { auditOk, type CallContext, getPrincipals, normalizeAddress, resolveAddress } from "../identity/index.ts";
 import { decodeCursor, encodeCursor, type HandlerMap, newId, OperationError, sha256Hex } from "../platform/index.ts";
-import type { CalendarCall, EventFields, EventRecord, EventTime, Refusal } from "./calendar.ts";
+import type { AttendeeRef, CalendarCall, EventFields, EventRecord, EventTime, Refusal } from "./calendar.ts";
 
 type CalendarOperation = Extract<OperationName, `calendar.${string}`>;
 
@@ -37,10 +37,65 @@ function calendarStub(env: Pick<Env, "CALENDAR">, principalId: string) {
 	return env.CALENDAR.get(env.CALENDAR.idFromName(principalId));
 }
 
-/** The calendar of the caller. Each call reaches only the own calendar of its caller in this layer. */
+/** The calendar of the caller. Each call reaches only the own calendar of its caller. */
 function openCalendar(call: CallContext): { stub: ReturnType<typeof calendarStub>; ctx: CalendarCall } {
-	const id = call.caller.principal.id;
-	return { stub: calendarStub(call.env, id), ctx: { ownerId: id, actorId: id } };
+	const { principal } = call.caller;
+	return {
+		stub: calendarStub(call.env, principal.id),
+		ctx: {
+			ownerId: principal.id,
+			actorId: principal.id,
+			ownerEmail: principal.address,
+			ownerName: principal.display_name,
+		},
+	};
+}
+
+type AttendeeInput = { principal_id?: string | undefined; email?: string | undefined };
+
+/**
+ * The attendees of an input, as principals of the organization. The caller and a second entry of the same
+ * principal are left out. An unknown or archived principal is refused.
+ */
+async function resolveAttendees(call: CallContext, inputs: readonly AttendeeInput[]): Promise<AttendeeRef[]> {
+	const db = call.env.DIRECTORY;
+	const ids = inputs.flatMap((input) => (input.principal_id ? [input.principal_id] : []));
+	const byId = new Map((await getPrincipals(db, ids)).map((principal) => [principal.id, principal]));
+	const result = new Map<string, AttendeeRef>();
+	for (const input of inputs) {
+		let principal = input.principal_id ? byId.get(input.principal_id) : undefined;
+		if (input.principal_id && !principal) {
+			throw new OperationError(
+				"invalid",
+				`No person, agent or service account of the organization has the id ${input.principal_id}.`,
+			);
+		}
+		if (input.email !== undefined) {
+			const found = await resolveAddress(db, normalizeAddress(input.email));
+			if (!found) {
+				throw new OperationError(
+					"invalid",
+					`No person, agent or service account of the organization has the address ${input.email}. Invitations to addresses outside the organization are not available yet.`,
+				);
+			}
+			principal = found;
+		}
+		if (!principal) continue;
+		if (principal.archived_at !== null) {
+			throw new OperationError(
+				"invalid",
+				`${principal.address} is archived. An archived account cannot attend a meeting.`,
+			);
+		}
+		if (principal.id === call.caller.principal.id || result.has(principal.id)) continue;
+		result.set(principal.id, {
+			key: principal.id,
+			principal_id: principal.id,
+			email: principal.address,
+			name: principal.display_name,
+		});
+	}
+	return [...result.values()];
 }
 
 /** Turns a refusal from the object into an OperationError, and returns any other result. */
@@ -82,9 +137,22 @@ function iso(ms: number): string {
 	return new Date(ms).toISOString();
 }
 
-function toEvent(record: EventRecord): CalendarEvent {
+function toEvent(record: EventRecord, call: CallContext): CalendarEvent {
+	const { principal } = call.caller;
+	const isOrganizer = record.role === "owner";
+	const organizer: CalendarEvent["organizer"] = isOrganizer
+		? record.attendees.length > 0
+			? { principal_id: principal.id, email: principal.address, name: principal.display_name, self: true }
+			: null
+		: {
+				principal_id: record.organizer?.principal_id ?? null,
+				email: record.organizer?.email ?? "",
+				name: record.organizer?.name ?? "",
+				self: false,
+			};
 	return {
 		id: record.id,
+		uid: record.uid,
 		title: record.title,
 		description: record.description,
 		location: record.location,
@@ -98,6 +166,22 @@ function toEvent(record: EventRecord): CalendarEvent {
 						time_zone: record.time_zone ?? "UTC",
 					},
 		revision: record.revision,
+		is_organizer: isOrganizer,
+		organizer,
+		attendees: record.attendees.map((attendee) => {
+			const self = attendee.principal_id === principal.id;
+			// The copy of an attendee shows its own answer, which can be newer than the snapshot of the organizer.
+			const response = self && !isOrganizer && record.my_response ? record.my_response : attendee.response;
+			return {
+				principal_id: attendee.principal_id,
+				email: attendee.email,
+				name: attendee.name,
+				response,
+				responded_at: attendee.responded_at === null ? null : iso(attendee.responded_at),
+				self,
+			};
+		}),
+		my_response: isOrganizer ? null : record.my_response,
 		created_at: iso(record.created_at),
 		updated_at: iso(record.updated_at),
 	};
@@ -138,14 +222,14 @@ export const calendarHandlers: Pick<HandlerMap<CallContext>, CalendarOperation> 
 		);
 		const last = page.events.at(-1);
 		return {
-			events: page.events.map(toEvent),
+			events: page.events.map((record) => toEvent(record, call)),
 			next_cursor: page.more && last ? encodeCursor([last.start_at, last.id]) : null,
 		};
 	},
 
 	async "calendar.get_event"(call, input) {
 		const { stub, ctx } = openCalendar(call);
-		return { event: toEvent(accept(await stub.get(ctx, input.event_id))) };
+		return { event: toEvent(accept(await stub.get(ctx, input.event_id)), call) };
 	},
 
 	async "calendar.create_event"(call, input) {
@@ -163,12 +247,13 @@ export const calendarHandlers: Pick<HandlerMap<CallContext>, CalendarOperation> 
 						key: `${call.caller.principal.id}:${key}`,
 						requestHash: await sha256Hex(JSON.stringify(["calendar.create_event", request])),
 					};
+		const attendees = input.attendees ? await resolveAttendees(call, input.attendees) : [];
 		const id = newId("evt");
 		const { stub, ctx } = openCalendar(call);
-		const record = accept(await stub.create(ctx, { id, fields, idempotency }));
+		const record = accept(await stub.create(ctx, { id, fields, attendees, idempotency }));
 		// A retry with the key returns the first event: only the call that added it audits.
 		if (record.id === id) auditOk(call, "calendar.create_event", id);
-		return { event: toEvent(record) };
+		return { event: toEvent(record, call) };
 	},
 
 	async "calendar.update_event"(call, input) {
@@ -178,16 +263,24 @@ export const calendarHandlers: Pick<HandlerMap<CallContext>, CalendarOperation> 
 			...(input.location !== undefined ? { location: input.location } : {}),
 			...(input.when !== undefined ? timeOf(input.when) : {}),
 		};
+		const attendees = input.attendees ? await resolveAttendees(call, input.attendees) : undefined;
 		const { stub, ctx } = openCalendar(call);
-		const result = accept(await stub.update(ctx, input.event_id, patch, input.base_revision));
+		const result = accept(await stub.update(ctx, input.event_id, patch, attendees, input.base_revision));
 		if (result.changed) auditOk(call, "calendar.update_event", input.event_id);
-		return { event: toEvent(result.event) };
+		return { event: toEvent(result.event, call) };
 	},
 
 	async "calendar.delete_event"(call, input) {
 		const { stub, ctx } = openCalendar(call);
 		const record = accept(await stub.remove(ctx, input.event_id, input.base_revision, input.dry_run));
 		if (!input.dry_run) auditOk(call, "calendar.delete_event", input.event_id);
-		return { event: toEvent(record), dry_run: input.dry_run };
+		return { event: toEvent(record, call), dry_run: input.dry_run };
+	},
+
+	async "calendar.respond_to_invitation"(call, input) {
+		const { stub, ctx } = openCalendar(call);
+		const result = accept(await stub.respond(ctx, input.event_id, input.response));
+		if (result.changed) auditOk(call, "calendar.respond_to_invitation", input.event_id);
+		return { event: toEvent(result.event, call) };
 	},
 };

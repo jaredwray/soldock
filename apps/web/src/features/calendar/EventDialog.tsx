@@ -1,11 +1,25 @@
-import { ApiError, CALENDAR_LIMITS, type CalendarEvent } from "@asterra/contracts";
+import { ApiError, CALENDAR_LIMITS, type CalendarEvent, type EventAnswer } from "@asterra/contracts";
 import { type FormEvent, useId, useRef, useState } from "react";
 import { errorMessage } from "../../lib/api.ts";
 import { ConfirmDialog } from "../../lib/ConfirmDialog.tsx";
 import { Dialog } from "../../lib/Dialog.tsx";
 import { useToast } from "../../lib/toast.tsx";
-import { createEvent, deleteEvent, updateEvent } from "./data.ts";
-import { type EventForm, formOf, formProblem, sameTimeFields, whenOf } from "./model.ts";
+import { useSession } from "../auth/session.tsx";
+import { AttendeePicker } from "./AttendeePicker.tsx";
+import { createEvent, deleteEvent, respondToInvitation, updateEvent } from "./data.ts";
+import {
+	attendeeInputs,
+	type ChosenAttendee,
+	chosenOf,
+	type EventForm,
+	formOf,
+	formProblem,
+	responseLabel,
+	sameAttendees,
+	sameTimeFields,
+	whenOf,
+	whenText,
+} from "./model.ts";
 
 interface EventDialogProps {
 	/** The event to change, or null for a new event. */
@@ -18,9 +32,21 @@ interface EventDialogProps {
 	onClose: () => void;
 }
 
-/** The dialog that adds an event, or changes or deletes one. */
-export function EventDialog({ event, initial, zone, onChanged, onClose }: EventDialogProps) {
+/** The dialog that adds an event, or changes or deletes one. The copy of a meeting opens the invitation view. */
+export function EventDialog(props: EventDialogProps) {
+	if (props.event && !props.event.is_organizer) {
+		return (
+			<InvitationDialog event={props.event} zone={props.zone} onChanged={props.onChanged} onClose={props.onClose} />
+		);
+	}
+	return <OrganizerDialog {...props} />;
+}
+
+function OrganizerDialog({ event, initial, zone, onChanged, onClose }: EventDialogProps) {
 	const toast = useToast();
+	const { whoami } = useSession();
+	const [openedAttendees] = useState<ChosenAttendee[]>(() => chosenOf(event));
+	const [attendees, setAttendees] = useState<ChosenAttendee[]>(openedAttendees);
 	// The form that the dialog opened with. A save sends the time only when a time field is different.
 	const [opened] = useState<EventForm>(() => (event ? formOf(event, zone) : initial));
 	const [form, setForm] = useState<EventForm>(opened);
@@ -60,6 +86,7 @@ export function EventDialog({ event, initial, zone, onChanged, onClose }: EventD
 					location: form.location.trim(),
 					description: form.description,
 					...(sameTimeFields(form, opened) ? {} : { when: whenOf(form, zone) }),
+					...(sameAttendees(attendees, openedAttendees) ? {} : { attendees: attendeeInputs(attendees) }),
 					base_revision: event.revision,
 				});
 				toast({ message: "Event saved." });
@@ -70,12 +97,13 @@ export function EventDialog({ event, initial, zone, onChanged, onClose }: EventD
 					when: whenOf(form, zone),
 					location: form.location.trim(),
 					description: form.description,
+					...(attendees.length > 0 ? { attendees: attendeeInputs(attendees) } : {}),
 				};
 				const text = JSON.stringify(request);
 				const key = keys.current.get(text) ?? crypto.randomUUID();
 				keys.current.set(text, key);
 				const { event: saved } = await createEvent({ ...request, idempotency_key: key });
-				toast({ message: "Event added." });
+				toast({ message: attendees.length > 0 ? "Invitations sent." : "Event added." });
 				onChanged(saved);
 			}
 			onClose();
@@ -91,21 +119,32 @@ export function EventDialog({ event, initial, zone, onChanged, onClose }: EventD
 	}
 
 	if (confirmDelete && event) {
+		const meeting = event.attendees.length > 0;
 		return (
 			<ConfirmDialog
-				title="Delete this event?"
-				confirmLabel="Delete"
+				title={meeting ? "Cancel this meeting?" : "Delete this event?"}
+				confirmLabel={meeting ? "Cancel meeting" : "Delete"}
+				{...(meeting ? { cancelLabel: "Keep meeting" } : {})}
 				danger
 				onConfirm={async () => {
 					await deleteEvent(event.id, event.revision);
 					deleted.current = true;
-					toast({ message: "Event deleted." });
+					toast({ message: meeting ? "Meeting cancelled." : "Event deleted." });
 					onChanged(event);
 				}}
 				onClose={() => (deleted.current ? onClose() : setConfirmDelete(false))}
 			>
 				<p>
-					<strong>{event.title}</strong> goes away from your calendar. This cannot be undone.
+					{meeting ? (
+						<>
+							<strong>{event.title}</strong> goes away from your calendar and from the calendar of each attendee. This
+							cannot be undone.
+						</>
+					) : (
+						<>
+							<strong>{event.title}</strong> goes away from your calendar. This cannot be undone.
+						</>
+					)}
 				</p>
 			</ConfirmDialog>
 		);
@@ -201,6 +240,13 @@ export function EventDialog({ event, initial, zone, onChanged, onClose }: EventD
 						onChange={(change) => set("description", change.target.value)}
 					/>
 				</div>
+				<AttendeePicker
+					chosen={attendees}
+					onChange={setAttendees}
+					saved={event?.attendees ?? []}
+					selfId={whoami.principal.id}
+					disabled={busy}
+				/>
 				{error && (
 					<p className="form-error" role="alert">
 						{error}
@@ -214,7 +260,7 @@ export function EventDialog({ event, initial, zone, onChanged, onClose }: EventD
 							disabled={busy}
 							onClick={() => setConfirmDelete(true)}
 						>
-							Delete
+							{event.attendees.length > 0 ? "Cancel meeting" : "Delete"}
 						</button>
 					)}
 					<span className="toolbar-spacer" />
@@ -228,6 +274,111 @@ export function EventDialog({ event, initial, zone, onChanged, onClose }: EventD
 					)}
 				</div>
 			</form>
+		</Dialog>
+	);
+}
+
+const ANSWERS: { response: EventAnswer; label: string }[] = [
+	{ response: "accepted", label: "Yes" },
+	{ response: "tentative", label: "Maybe" },
+	{ response: "declined", label: "No" },
+];
+
+/**
+ * The copy of a meeting that a different principal organizes. The fields are read-only: only the organizer
+ * changes them. The attendee answers Yes, Maybe or No.
+ */
+function InvitationDialog({
+	event,
+	zone,
+	onChanged,
+	onClose,
+}: {
+	event: CalendarEvent;
+	zone: string;
+	onChanged: (event: CalendarEvent) => void;
+	onClose: () => void;
+}) {
+	const toast = useToast();
+	const [busy, setBusy] = useState(false);
+	const [error, setError] = useState<string | null>(null);
+	const [gone, setGone] = useState(false);
+	const pending = event.my_response === "pending";
+
+	async function answer(response: EventAnswer) {
+		setBusy(true);
+		setError(null);
+		try {
+			const { event: saved } = await respondToInvitation(event.id, response);
+			toast({ message: "Answer sent." });
+			onChanged(saved);
+			onClose();
+		} catch (caught) {
+			setBusy(false);
+			if (caught instanceof ApiError && caught.code === "not_found") {
+				setGone(true);
+				setError("The organizer cancelled this meeting or removed you from it.");
+				return;
+			}
+			setError(errorMessage(caught));
+		}
+	}
+
+	return (
+		<Dialog title={pending ? "Invitation" : "Meeting"} onClose={() => !busy && onClose()} className="cal-dialog">
+			<div className="dialog-body cal-form cal-invitation">
+				<h3 className="cal-invitation-title">{event.title}</h3>
+				<p className="cal-invitation-when">{whenText(event, zone)}</p>
+				{event.location && <p className="cal-invitation-location">{event.location}</p>}
+				{event.organizer && (
+					<p className="cal-invitation-organizer">
+						Organizer: {event.organizer.name} ({event.organizer.email})
+					</p>
+				)}
+				{event.description && <p className="cal-invitation-description">{event.description}</p>}
+				<ul className="cal-list cal-attendee-list" aria-label="Attendees">
+					{event.attendees.map((attendee) => (
+						<li key={attendee.email} className="cal-attendee">
+							<span className="cal-person">
+								<span className="cal-person-name">
+									{attendee.name}
+									{attendee.self && " (you)"}
+								</span>
+								<span className="cal-person-address">{attendee.email}</span>
+							</span>
+							<span className="cal-attendee-response">{responseLabel(attendee.response)}</span>
+						</li>
+					))}
+				</ul>
+				{error && (
+					<p className="form-error" role="alert">
+						{error}
+					</p>
+				)}
+				<div className="dialog-actions cal-actions">
+					{!gone && (
+						<fieldset className="cal-answer" aria-label="Your answer">
+							<span className="field-label">Going?</span>
+							{ANSWERS.map(({ response, label }) => (
+								<button
+									key={response}
+									type="button"
+									className={`button${event.my_response === response ? " cal-view-active" : ""}`}
+									aria-pressed={event.my_response === response}
+									disabled={busy}
+									onClick={() => void answer(response)}
+								>
+									{label}
+								</button>
+							))}
+						</fieldset>
+					)}
+					<span className="toolbar-spacer" />
+					<button type="button" className="button" disabled={busy} onClick={onClose} data-autofocus>
+						Close
+					</button>
+				</div>
+			</div>
 		</Dialog>
 	);
 }

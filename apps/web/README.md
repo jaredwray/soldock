@@ -1202,12 +1202,28 @@ MCP clients. The app has no UI-only path.
   - At 600px and below, both views become a list of the days of the period that have events, and the
     dialog fills the screen.
   - **New event** and a click on an event open the event dialog: the title, **All day**, the start
-    and the end, the location and the description. An all-day event shows its last day, and the page
+    and the end, the location, the description and **Attendees**. An all-day event shows its last day, and the page
     sends the day after it (`end_date`). The dialog checks the time with `checkWhen` from the
     contracts, so it shows the text of the server. A new event has one idempotency key for the
     dialog, so a second click on **Save** adds one event. A change sends `base_revision`, and sends
     `when` only when the time changed. On `conflict`, the dialog says that the event changed in a
     different place. **Delete** asks first, and **Cancel** goes back to the form.
+  - **Attendees** (`AttendeePicker.tsx`) is a combobox. It finds the people, agents and service accounts
+    of the organization by name or address with `directory.list_principals` (`order: "match"`), 150 ms
+    after the last key, and leaves out the person and the chosen attendees. The arrow keys, Enter and
+    Escape work as in a list box. The list of attendees shows each name, address and answer (**Yes**,
+    **Maybe**, **No**, **No answer yet**, or **Invitation when you save**), with **Remove**. A save sends
+    `attendees` only when the set changed. For a meeting, **Delete** is **Cancel meeting**, and the
+    question says that the meeting goes away from the calendar of each attendee.
+  - The copy of a meeting that a different person organizes opens the invitation dialog: "Invitation"
+    while it has no answer, else "Meeting". It shows the title, the time, the place, the organizer, the
+    description and each attendee with the answer, as text. **Yes**, **Maybe** and **No** in the group
+    "Your answer" call `calendar.respond_to_invitation` (`aria-pressed` on the current answer). It has no
+    **Save** and no **Delete**. When the meeting is gone, it says that the organizer cancelled it or
+    removed the person.
+  - A pending invitation has a dashed border and no fill. **Maybe** has stripes. **No** is faded, with a
+    line through the title. An accepted meeting looks like an own event. The name of the event ends with
+    "invitation, not answered", "maybe" or "declined", so the state is not only a look.
   - The page gets the events of the period with `calendar.list_events` and each page of it. It gets
     them again every 30 seconds while the tab is visible, on window focus, and after each change. A
     failed load shows the error with **Try again**. A screen reader hears "Loading events…" and "No
@@ -2152,7 +2168,7 @@ Sent `in:sent`, Spam `in:spam`, Trash `in:trash`, All mail an empty string, and 
 | [`src/features/drive/`](src/features/drive/) | Drive: the sidebar, the item list, the menus and dialogs (new folder, rename, move, share, versions, preview), the data hooks, the pure rules in `model.ts`, the upload queue in `uploadQueue.ts`, and the document header that the editors share |
 | [`src/features/docs/`](src/features/docs/) | Docs: the schema, the commands, the autosave, the paste of Markdown (`markdownPaste.ts`), the editor and the page. For images: the store of the images of a doc (`images.ts`), the geometry (`imageModel.ts`), the commands (`imageCommands.ts`), the view of an image (`imageView.ts`), the plugin for a drop and a paste (`imagePlugin.ts`), the toolbar and the dialogs |
 | [`src/features/sheets/`](src/features/sheets/) | Sheets: the store with the tabs and the save queue, the toolbar, the grid, the formula bar, the tab bar, and the pure modules for cell names, the selection, clipboard text, the cells of the grid, the formats of cells and the formulas of the Σ menu |
-| [`src/features/calendar/`](src/features/calendar/) | Calendar: the page and its toolbar (`CalendarApp.tsx`), the week, month and agenda views (`views.tsx`), the event dialog (`EventDialog.tsx`), the load of a period with its poll (`data.ts`), and the pure rules for the days of a period, the parts of an event on each day, the columns of overlaps and the form of an event (`model.ts`) |
+| [`src/features/calendar/`](src/features/calendar/) | Calendar: the page and its toolbar (`CalendarApp.tsx`), the week, month and agenda views (`views.tsx`), the event dialog and the invitation dialog (`EventDialog.tsx`), the attendee field (`AttendeePicker.tsx`), the load of a period with its poll (`data.ts`), and the pure rules for the days of a period, the parts of an event on each day, the columns of overlaps and the form of an event (`model.ts`) |
 | [`src/features/chat/`](src/features/chat/) | Chat: the sidebar, the room view, the dialogs (new room, public rooms, new direct message, members, name and topic), the message box with its toolbar, Markdown shortcuts and suggestions of a mention (`ChatComposer.tsx`, `composerSchema.ts`, `composerCommands.ts`), the files of a new message (`attachments.ts`, `ComposerFiles.tsx`, the drop in `fileDrop.ts`), the files and the link previews of a message (`MessageFiles.tsx`), the focus after the X of a chip (`focusAfterRemove.ts`), the data hooks, the pure rules in `model.ts`, the rules of mentions in `mentions.ts`, the part of the history that the page keeps in `history.ts`, the page reads in `pager.ts`, the last list of each room in `roomCache.ts`, the drafts in `drafts.ts`, the sends whose message the room has in `settle.ts`, the sync of the open room in `sync.ts`, and the texts and the buttons of a member request and of a share request (`memberRequests.ts`, `shareRequests.ts`, `RequestActions.tsx`) |
 | [`src/features/people/`](src/features/people/) | The profile page of a person or an agent |
 | [`src/features/settings/`](src/features/settings/) | Settings, its side navigation, the password and two-step verification cards, the TOTP setup panel, the API key manager with the lifetime of a key (`ttl.ts`), the event check boxes, the webhook list of one target, and the one-time secret dialog |

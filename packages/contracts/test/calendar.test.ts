@@ -112,3 +112,27 @@ describe("the time of an event", () => {
 		expect(range("2026-01-01T00:00:00Z", "2027-01-03T00:00:00Z")).toBe(false);
 	});
 });
+
+describe("the attendees of an event", () => {
+	const create = operations["calendar.create_event"].input;
+	const base = {
+		title: "Review",
+		when: { kind: "all_day", start_date: "2026-12-01", end_date: "2026-12-02" },
+	};
+
+	it("takes one principal_id or one email for each attendee", () => {
+		const id = "prn_01ARZ3NDEKTSV4RRFFQ69G5FAV";
+		expect(create.safeParse({ ...base, attendees: [{ principal_id: id }] }).success).toBe(true);
+		expect(create.safeParse({ ...base, attendees: [{ email: "ada@example.com" }] }).success).toBe(true);
+		expect(create.safeParse({ ...base, attendees: [{}] }).success).toBe(false);
+		expect(create.safeParse({ ...base, attendees: [{ principal_id: id, email: "ada@example.com" }] }).success).toBe(
+			false,
+		);
+	});
+
+	// The idempotency hash is the JSON of the parsed input. A default value would change the hash of a retry of a
+	// request from before attendees, and the retry would get conflict.
+	it("parses an input without attendees to an input without the key", () => {
+		expect(Object.keys(create.parse(base))).not.toContain("attendees");
+	});
+});
