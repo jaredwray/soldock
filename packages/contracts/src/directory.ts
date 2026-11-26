@@ -153,7 +153,7 @@ export const whoami = defineOperation({
 	description: [
 		"Returns who you are (a human, an agent or a service account), your address, and the scopes that the current credential holds.",
 		"missing_scopes lists the scopes that the credential does not hold, with the operations that need each one.",
-		"An API key and an OAuth connection of an agent or a service account only prove its identity. Its scopes are the account scopes: they apply to its own mailbox, its own drive and the actions that have no mailbox, room or drive.",
+		"An API key and an OAuth connection of an agent or a service account only prove its identity. Its scopes are the account scopes: they apply to its own mailbox, its own drive, its own calendar and the actions that have no mailbox, room or drive.",
 		"In a team mailbox, a room and a shared drive, the membership decides what an agent can do, and it needs no scope on its account. An item that a person shares with it works in the same way.",
 		"The scopes of an API key of a person do not change: get a new key.",
 	].join(" "),
@@ -311,8 +311,8 @@ export const createPrincipal = defineOperation({
 		"For a human, send a first password, or leave it out to get an invite link (invite) instead. Give the password or the link to the person, who signs in with the address and the password. An agent has no password.",
 		...INVITE_RULES,
 		"A human gets no API key. The person can create keys in Settings after the sign-in.",
-		"An agent gets a sponsor (the caller by default), the internal-only outbound policy, and each agent scope for its own mailbox, its own drive and the actions that have no mailbox, room or drive.",
-		"A new agent reaches its own mailbox and its own drive. It reaches a team mailbox, a shared drive and a room when it is a member, as a person does. Its membership says what it can do there. Change a membership in the settings of that mailbox, drive or room. An API key and an OAuth connection of the agent only prove its identity.",
+		"An agent gets a sponsor (the caller by default), the internal-only outbound policy, and each agent scope for its own mailbox, its own drive, its own calendar and the actions that have no mailbox, room or drive.",
+		"A new agent reaches its own mailbox, its own drive and its own calendar. It reaches a team mailbox, a shared drive and a room when it is a member, as a person does. Its membership says what it can do there. Change a membership in the settings of that mailbox, drive or room. An API key and an OAuth connection of the agent only prove its identity.",
 		"The result of an agent holds a first API key. Its secret is shown only once.",
 	].join(" "),
 	http: { method: "POST", path: "/api/v1/directory/principals" },
@@ -725,9 +725,9 @@ export const createServiceAccount = defineOperation({
 	description: [
 		SERVICE_ACCOUNT_RULES,
 		"Creates a service account with an address on one of the mail domains of the deployment, so it has a mailbox, a drive and chat, as an agent has.",
-		"It gets a sponsor (the caller by default), the internal-only outbound policy, each service account scope for its own mailbox, its own drive and the actions that have no mailbox, room or drive, and no token.",
+		"It gets a sponsor (the caller by default), the internal-only outbound policy, each service account scope for its own mailbox, its own drive, its own calendar and the actions that have no mailbox, room or drive, and no token.",
 		"Create its tokens with account.create_api_key and its principal_id. A token only proves the identity of the account.",
-		"A new account reaches its own mailbox and its own drive. It reaches a team mailbox, a shared drive and a room when it is a member, as a person does. Its membership says what it can do there. Change a membership in the settings of that mailbox, drive or room.",
+		"A new account reaches its own mailbox, its own drive and its own calendar. It reaches a team mailbox, a shared drive and a room when it is a member, as a person does. Its membership says what it can do there. Change a membership in the settings of that mailbox, drive or room.",
 	].join(" "),
 	http: { method: "POST", path: "/api/v1/directory/service-accounts" },
 	scopes: ["directory.write"],
@@ -817,7 +817,7 @@ const MemberAccess = z.object({
 	 */
 	tokens: z.array(z.object({ key_id: z.string(), label: z.string(), expires_at: Timestamp.nullable() })),
 	/**
-	 * The account scopes of an agent or a service account: for its own mailbox, its own drive and the actions that
+	 * The account scopes of an agent or a service account: for its own mailbox, its own drive, its own calendar and the actions that
 	 * have no mailbox, room or drive. They never change after the account is created. Empty for a person: a
 	 * person can do each thing in the own mailbox and the own drive of the person.
 	 */

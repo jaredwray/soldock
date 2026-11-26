@@ -122,6 +122,7 @@
 	// One ChatRoomDO for each room and each direct message of Chat (the members and the messages).
 	// One ChatSearchDO for the organization: the search index of Chat (the plain text and the filter values of
 	// each message). Its name has a shard key, so a later change can add more.
+	// One CalendarDO for each principal: the events of its calendar. Its name is the principal id.
 	"durable_objects": {
 		"bindings": [
 			{ "name": "MAILBOX", "class_name": "MailboxDO" },
@@ -129,7 +130,8 @@
 			{ "name": "DOCUMENT", "class_name": "DocumentDO" },
 			{ "name": "CHAT_ROOM", "class_name": "ChatRoomDO" },
 			{ "name": "CHAT_SEARCH", "class_name": "ChatSearchDO" },
-			{ "name": "PRINCIPAL", "class_name": "PrincipalDO" }
+			{ "name": "PRINCIPAL", "class_name": "PrincipalDO" },
+			{ "name": "CALENDAR", "class_name": "CalendarDO" }
 		]
 	},
 	"migrations": [
@@ -137,7 +139,8 @@
 		{ "tag": "v2", "new_sqlite_classes": ["DriveSpaceDO", "DocumentDO"] },
 		{ "tag": "v3", "new_sqlite_classes": ["ChatRoomDO"] },
 		{ "tag": "v4", "new_sqlite_classes": ["PrincipalDO"] },
-		{ "tag": "v5", "new_sqlite_classes": ["ChatSearchDO"] }
+		{ "tag": "v5", "new_sqlite_classes": ["ChatSearchDO"] },
+		{ "tag": "v6", "new_sqlite_classes": ["CalendarDO"] }
 	],
 	"vars": {
 		// The mail domains of this deployment. Addresses on them are local. Comma-separated.
@@ -214,7 +217,8 @@
 					{ "name": "DOCUMENT", "class_name": "DocumentDO" },
 					{ "name": "CHAT_ROOM", "class_name": "ChatRoomDO" },
 					{ "name": "CHAT_SEARCH", "class_name": "ChatSearchDO" },
-					{ "name": "PRINCIPAL", "class_name": "PrincipalDO" }
+					{ "name": "PRINCIPAL", "class_name": "PrincipalDO" },
+					{ "name": "CALENDAR", "class_name": "CalendarDO" }
 				]
 			},
 			"vars": {

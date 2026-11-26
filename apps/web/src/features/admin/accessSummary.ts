@@ -175,6 +175,15 @@ const ACCOUNT_PARTS: readonly AccountPart[] = [
 		text: can,
 	},
 	{
+		key: "calendar",
+		name: "Calendar",
+		words: [
+			["calendar.read", "read"],
+			["calendar.write", "change"],
+		],
+		text: can,
+	},
+	{
 		key: "webhooks",
 		name: "Webhooks",
 		words: [
@@ -202,7 +211,7 @@ export interface AccountScopes {
 /**
  * The account scopes of an agent or a service account, as one short row for each product. A new account holds
  * each scope of its kind. An account from before can hold fewer: nothing changes them, and they apply only to
- * its own mailbox, its own drive and the actions that have no mailbox, room or drive. The row of the mailbox
+ * its own mailbox, its own drive, its own calendar and the actions that have no mailbox, room or drive. The row of the mailbox
  * shows the address of the account.
  */
 export function accountScopes(access: Access, kind: "agent" | "service", address: string): AccountScopes {

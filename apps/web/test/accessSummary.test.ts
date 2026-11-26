@@ -107,6 +107,7 @@ describe("the Access part of an agent or a service account", () => {
 			["Mailbox (dot@dock.test)", "Can read, change and send", null],
 			["Drive", "Can read, change and share", null],
 			["Chat", "Can find public rooms, create rooms and open direct messages", null],
+			["Calendar", "Can read and change", null],
 			["Webhooks", "Can create for mail, drive and chat events", null],
 			["Directory", "Can read", null],
 			["Account", "Can read", null],
@@ -118,6 +119,7 @@ describe("the Access part of an agent or a service account", () => {
 			"Mailbox (ci@dock.test)",
 			"Drive",
 			"Chat",
+			"Calendar",
 			"Directory",
 			"Account",
 		]);
@@ -133,6 +135,7 @@ describe("the Access part of an agent or a service account", () => {
 			"Can read",
 			"Can do nothing",
 			"Can create rooms and open direct messages",
+			"Can do nothing",
 			"Can do nothing",
 			"Can do nothing",
 			"Can read",
