@@ -70,6 +70,8 @@ export interface AttendeeRecord extends AttendeeRef {
 	response: Response;
 	/** UTC ms of the last answer, or null. */
 	responded_at: number | null;
+	/** The sequence of the meeting when the organizer invited this attendee. A new invitation has a larger one. */
+	invited_sequence: number;
 }
 
 export interface OrganizerRef {
@@ -95,6 +97,8 @@ export interface EventRecord extends EventFields {
 	attendees: AttendeeRecord[];
 	/** The answer of the owner, on a copy. Null on an event of the owner. */
 	my_response: Response | null;
+	/** UTC ms of the answer of the owner, on a copy. Null on an event of the owner and before the first answer. */
+	my_responded_at: number | null;
 }
 
 /** The range of a list. The handler computes the dates and the lower bound from the time zone of the call. */
@@ -389,7 +393,7 @@ export class CalendarDO extends DurableObject<Env> {
 	private attendeesOf(eventId: string): AttendeeRecord[] {
 		return this.sql
 			.exec<Row>(
-				`SELECT attendee_key, principal_id, email, name, response, responded_at FROM attendees
+				`SELECT attendee_key, principal_id, email, name, response, responded_at, invited_sequence FROM attendees
 				WHERE event_id = ? ORDER BY position`,
 				eventId,
 			)
@@ -401,11 +405,14 @@ export class CalendarDO extends DurableObject<Env> {
 				name: row.name as string,
 				response: row.response as Response,
 				responded_at: (row.responded_at as number | null) ?? null,
+				invited_sequence: row.invited_sequence as number,
 			}));
 	}
 
 	private toStored(row: Row): StoredRow {
 		const role = row.role === "attendee" ? "attendee" : "owner";
+		const myResponse = role === "attendee" ? ((row.my_response as Response | null) ?? "pending") : null;
+		const myReplyStamp = (row.my_reply_stamp as number | null) ?? 0;
 		const record: EventRecord = {
 			id: row.id as string,
 			uid: (row.uid as string | null) ?? (row.id as string),
@@ -424,12 +431,14 @@ export class CalendarDO extends DurableObject<Env> {
 						}
 					: null,
 			attendees: role === "attendee" ? parseAttendees(row.attendees_json) : this.attendeesOf(row.id as string),
-			my_response: role === "attendee" ? ((row.my_response as Response | null) ?? "pending") : null,
+			my_response: myResponse,
+			// The stamp of an answer is its time. After a new invitation the stamp stays, and the answer is `pending`.
+			my_responded_at: myResponse !== null && myResponse !== "pending" && myReplyStamp > 0 ? myReplyStamp : null,
 		};
 		return {
 			record,
 			organizerId: (row.organizer_id as string | null) ?? null,
-			myReplyStamp: (row.my_reply_stamp as number | null) ?? 0,
+			myReplyStamp,
 		};
 	}
 
@@ -537,6 +546,31 @@ export class CalendarDO extends DurableObject<Env> {
 		return this.row(eventId) ?? refuse("not_found", NOT_FOUND);
 	}
 
+	/** The result of the call that used an idempotency key in the last 24 hours, or null when no call did. */
+	private earlier(idempotency: { key: string; requestHash: string }, now: number): EventRecord | Refusal | null {
+		const earlier = this.sql
+			.exec<{ request_hash: string; event_id: string }>(
+				"SELECT request_hash, event_id FROM idempotency WHERE key = ? AND created_at > ?",
+				idempotency.key,
+				now - IDEMPOTENCY_TTL_MS,
+			)
+			.toArray()[0];
+		if (!earlier) return null;
+		if (earlier.request_hash !== idempotency.requestHash) {
+			return refuse("conflict", "The idempotency key was used with a different request.");
+		}
+		return this.row(earlier.event_id) ?? refuse("conflict", "The event of this idempotency key does not exist now.");
+	}
+
+	/**
+	 * The result of an earlier `create` with this idempotency key, or null. The handler asks before it reads the
+	 * directory, so a retry returns the first event also when an attendee is archived now. `create` does the
+	 * check again with its write.
+	 */
+	replay(call: CalendarCall, idempotency: { key: string; requestHash: string }): EventRecord | Refusal | null {
+		return this.enter(call) ?? this.earlier(idempotency, Date.now());
+	}
+
 	/**
 	 * Adds an event. With an idempotency key that a call with the same request used, it returns that event and
 	 * adds nothing. The check and the write run with no await between them, so two calls with one key add one
@@ -547,21 +581,8 @@ export class CalendarDO extends DurableObject<Env> {
 		if (refused) return refused;
 		const now = Date.now();
 		if (input.idempotency) {
-			const earlier = this.sql
-				.exec<{ request_hash: string; event_id: string }>(
-					"SELECT request_hash, event_id FROM idempotency WHERE key = ? AND created_at > ?",
-					input.idempotency.key,
-					now - IDEMPOTENCY_TTL_MS,
-				)
-				.toArray()[0];
-			if (earlier) {
-				if (earlier.request_hash !== input.idempotency.requestHash) {
-					return refuse("conflict", "The idempotency key was used with a different request.");
-				}
-				return (
-					this.row(earlier.event_id) ?? refuse("conflict", "The event of this idempotency key does not exist now.")
-				);
-			}
+			const earlier = this.earlier(input.idempotency, now);
+			if (earlier) return earlier;
 		}
 		const count = this.eventCount();
 		if (count >= CALENDAR_LIMITS.events) {
@@ -822,6 +843,14 @@ export class CalendarDO extends DurableObject<Env> {
 		const fields = message.fields;
 		const attendeesJson = JSON.stringify(message.attendees);
 		if (stored) {
+			// The organizer removed the owner and invited the owner again, and the `removed` message did not arrive
+			// before the new invitation replaced it in the outbox. The organizer has no answer for the new
+			// invitation, so the copy starts again with `pending`. An answer that waits is from the old invitation.
+			const invitedAt = message.attendees.find((attendee) => attendee.principal_id === targetId)?.invited_sequence;
+			if (typeof invitedAt === "number" && invitedAt > stored.record.sequence) {
+				this.sql.exec("UPDATE events SET my_response = 'pending' WHERE id = ?", stored.record.id);
+				this.sql.exec("DELETE FROM outbox WHERE kind = 'reply' AND uid = ?", message.uid);
+			}
 			this.sql.exec(
 				`UPDATE events SET title = ?, description = ?, location = ?, all_day = ?, start_at = ?, end_at = ?,
 					start_date = ?, end_date = ?, time_zone = ?, organizer_email = ?, organizer_name = ?, sequence = ?,
@@ -938,17 +967,25 @@ export class CalendarDO extends DurableObject<Env> {
 	 * Delivers the due messages. Each message is independent: a target that fails does not stop the others. A
 	 * result of the target, also `applied: false`, is a delivery. A thrown error tries again later, with
 	 * `backoff`, `OUTBOX_MAX_ATTEMPTS` times. The `gen` check keeps a newer payload that a change wrote while
-	 * the call ran.
+	 * the call ran. Each message is read again immediately before its call, so a payload that a change replaced
+	 * while an earlier call ran is not sent, and a deleted message is not sent.
 	 */
 	private async drain(): Promise<void> {
-		const rows = this.sql
-			.exec<{ id: number; kind: string; target: string; payload: string; gen: number; attempts: number }>(
-				"SELECT id, kind, target, payload, gen, attempts FROM outbox WHERE next_attempt_at <= ? ORDER BY next_attempt_at, id LIMIT ?",
+		const due = this.sql
+			.exec<{ id: number }>(
+				"SELECT id FROM outbox WHERE next_attempt_at <= ? ORDER BY next_attempt_at, id LIMIT ?",
 				Date.now(),
 				OUTBOX_BATCH,
 			)
 			.toArray();
-		for (const row of rows) {
+		for (const { id } of due) {
+			const row = this.sql
+				.exec<{ id: number; kind: string; target: string; payload: string; gen: number; attempts: number }>(
+					"SELECT id, kind, target, payload, gen, attempts FROM outbox WHERE id = ?",
+					id,
+				)
+				.toArray()[0];
+			if (!row) continue;
 			try {
 				const stub = this.env.CALENDAR.get(this.env.CALENDAR.idFromName(row.target));
 				const result =

@@ -1057,6 +1057,8 @@ export async function settleCalendars(...principalIds: string[]): Promise<void> 
 export interface BrokenCalendarDelivery {
 	/** When set, each delivery from the calendar to a different calendar fails with this error. */
 	fail: Error | null;
+	/** When set, each delivery waits for this promise first, so a test can change the calendar while a call runs. */
+	hold?: Promise<void> | null;
 }
 
 /**
@@ -1073,10 +1075,16 @@ export async function breakCalendarDelivery(principalId: string): Promise<Broken
 			get: (id: DurableObjectId) => {
 				const stub = real.get(id);
 				return {
-					applyMeeting: (...args: Parameters<typeof stub.applyMeeting>) =>
-						broken.fail ? Promise.reject(broken.fail) : stub.applyMeeting(...args),
-					applyReply: (...args: Parameters<typeof stub.applyReply>) =>
-						broken.fail ? Promise.reject(broken.fail) : stub.applyReply(...args),
+					applyMeeting: async (...args: Parameters<typeof stub.applyMeeting>) => {
+						await broken.hold;
+						if (broken.fail) throw broken.fail;
+						return stub.applyMeeting(...args);
+					},
+					applyReply: async (...args: Parameters<typeof stub.applyReply>) => {
+						await broken.hold;
+						if (broken.fail) throw broken.fail;
+						return stub.applyReply(...args);
+					},
 				};
 			},
 		} as unknown as Env["CALENDAR"];

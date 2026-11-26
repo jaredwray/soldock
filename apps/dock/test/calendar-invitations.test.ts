@@ -116,7 +116,10 @@ describe("invitations between principals", () => {
 			response: "accepted",
 		});
 		expect(answered.event.my_response).toBe("accepted");
-		expect(answered.event.attendees.find((attendee) => attendee.self)?.response).toBe("accepted");
+		// The output has the answer and its time at once, before the next snapshot of the organizer comes back.
+		const own = answered.event.attendees.find((attendee) => attendee.self);
+		expect(own?.response).toBe("accepted");
+		expect(own?.responded_at).not.toBeNull();
 		await settleCalendars(owner.id, ada.id, bot.id);
 
 		const { event: seen } = await ada.call("calendar.get_event", { event_id: event.id });
@@ -487,6 +490,80 @@ describe("delivery between calendars", () => {
 		});
 	});
 
+	it("starts a new invitation with no answer when the removal did not arrive before it", async () => {
+		const { event } = await ada.call("calendar.create_event", meeting([{ principal_id: owner.id }]));
+		await settleCalendars(ada.id, owner.id);
+		const copy = (await copyOf(owner, event.uid)) as CalendarEvent;
+		await owner.call("calendar.respond_to_invitation", { event_id: copy.id, response: "accepted" });
+		await settleCalendars(owner.id, ada.id);
+
+		// The removal waits in the outbox, and the new invitation replaces it. The copy never sees the removal.
+		const broken = await breakCalendarDelivery(ada.id);
+		await ada.call("calendar.update_event", { event_id: event.id, attendees: [] });
+		await ada.call("calendar.update_event", { event_id: event.id, attendees: [{ principal_id: owner.id }] });
+		expect((await calendarOutbox(ada.id)).map((row) => (row.payload as MeetingMessage).state)).toEqual(["invited"]);
+		broken.fail = null;
+		await settleCalendars(ada.id, owner.id);
+
+		// The two calendars agree: the organizer has no answer for the new invitation, and the copy shows none.
+		expect(await responses(ada, event.id)).toEqual({ "owner@dock.test": "pending" });
+		const again = (await copyOf(owner, event.uid)) as CalendarEvent;
+		expect(again).toMatchObject({ id: copy.id, my_response: "pending" });
+		expect(again.attendees.find((attendee) => attendee.self)).toMatchObject({
+			response: "pending",
+			responded_at: null,
+		});
+		// The attendee answers the new invitation, and the organizer sees the answer.
+		await owner.call("calendar.respond_to_invitation", { event_id: again.id, response: "accepted" });
+		await settleCalendars(owner.id, ada.id);
+		expect(await responses(ada, event.id)).toEqual({ "owner@dock.test": "accepted" });
+	});
+
+	it("keeps a change that the organizer makes while a delivery runs", async () => {
+		const broken = await breakCalendarDelivery(ada.id);
+		broken.fail = null;
+		let release = () => {};
+		broken.hold = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		const { event } = await ada.call("calendar.create_event", meeting([{ principal_id: owner.id }]));
+		// The alarm of the organizer waits in the call with the invitation. The organizer cancels now.
+		await ada.call("calendar.delete_event", { event_id: event.id });
+		const [waiting] = await calendarOutbox(ada.id);
+		expect(waiting?.payload).toMatchObject({ state: "cancelled" });
+		broken.hold = null;
+		release();
+		await settleCalendars(ada.id, owner.id);
+		// The cancellation was not lost with the delivery of the invitation: no calendar has the meeting.
+		expect(await eventsOf(owner)).toEqual([]);
+		expect(
+			await runInDurableObject(calendarStub(owner.id), (_instance, state) =>
+				state.storage.sql.exec<{ state: string }>("SELECT state FROM meeting_tombstones").toArray(),
+			),
+		).toEqual([{ state: "cancelled" }]);
+	});
+
+	it("delivers the messages that waited after the calendar starts again with no alarm", async () => {
+		const broken = await breakCalendarDelivery(ada.id);
+		const { event } = await ada.call("calendar.create_event", meeting([{ principal_id: owner.id }]));
+		await vi.waitFor(async () => expect((await calendarOutbox(ada.id))[0]?.attempts).toBe(1));
+		broken.fail = null;
+		// The object stops after the commit of a change and before its alarm is set.
+		await expect(
+			runInDurableObject(calendarStub(ada.id), (_instance, state) =>
+				state.blockConcurrencyWhile(async () => {
+					await state.storage.deleteAlarm();
+					state.storage.sql.exec("UPDATE outbox SET next_attempt_at = 0");
+					await state.storage.sync();
+					state.abort("Restart the calendar.");
+				}),
+			),
+		).rejects.toThrow("Restart the calendar.");
+		// The next call starts the object. Its start sets the alarm, and no helper runs the alarm here.
+		expect(await eventsOf(ada)).toHaveLength(1);
+		await vi.waitFor(async () => expect(await copyOf(owner, event.uid)).toBeDefined(), { timeout: 5000 });
+	});
+
 	it("drops an invitation that a full calendar cannot take", async () => {
 		await runInDurableObject(calendarStub(owner.id), async (_instance, state) => {
 			await owner.call("calendar.list_events", RANGE);
@@ -539,6 +616,20 @@ describe("revisions, idempotency and the stored calendar", () => {
 			await owner.call("calendar.respond_to_invitation", { event_id: copy.id, response: "declined" });
 		});
 		expect(lines.filter((line) => line.op === "calendar.respond_to_invitation")).toHaveLength(1);
+	});
+
+	it("returns the first event for a retry with the key after an attendee was archived", async () => {
+		const input = { ...meeting([{ principal_id: grace.id }]), idempotency_key: "review-2" };
+		const first = await ada.call("calendar.create_event", input);
+		await settleCalendars(ada.id, grace.id);
+		await owner.call("directory.archive_principal", { principal_id: grace.id });
+		const second = await ada.call("calendar.create_event", input);
+		expect(second.event.id).toBe(first.event.id);
+		// The retry sends no second invitation, and adds no second event.
+		expect(await calendarOutbox(ada.id)).toEqual([]);
+		expect(await eventsOf(ada)).toHaveLength(1);
+		// A new request with the archived attendee is refused, as before.
+		expect(await codeOf(ada.call("calendar.create_event", { ...input, idempotency_key: "review-3" }))).toBe("invalid");
 	});
 
 	it("keeps the events of a calendar from before meetings, and invites after the upgrade", async () => {
