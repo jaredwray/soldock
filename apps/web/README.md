@@ -446,7 +446,10 @@ MCP clients. The app has no UI-only path.
   the Screener is off, a notice says so. Each list has loading, empty and error states, and **Load more**.
 - **Admin › Mail** (`/admin/mail`, [`MailSettingsCard.tsx`](src/features/admin/MailSettingsCard.tsx)). An
   owner or an admin turns the default of the Screener on or off for each mailbox of a person and each team
-  mailbox that follows the default (`mail.update_org_settings`).
+  mailbox that follows the default (`mail.update_org_settings`). The second card, **Address format**, turns
+  the fill of the address of a new person on or off (on at the start). When it is on, the admin selects the
+  format: `ada.lovelace`, `ada` or `alovelace` for Ada Lovelace (`first.last`, `first` or `flast`). Each change
+  saves at once, with a toast.
 - **Mailbox settings** (`/mail/settings`, `/mail/team/<tmb_id>/settings`, `/mail/agent/<prn_id>/settings`,
   [`MailboxSettings.tsx`](src/features/mail/MailboxSettings.tsx)). The gear after Refresh in the header of
   Mail is a link to the settings view of the open mailbox. The view replaces the list in the main pane,
@@ -565,6 +568,16 @@ MCP clients. The app has no UI-only path.
       domains of Admin › Email domains (`directory.list_mail_domains`). It starts on the domain of the
       admin, or on the first domain if that domain is not saved (`memberAddress.ts`). The create button
       stays off until the list loads. With no saved domain, a hint tells the admin to add one.
+      When the address format of Admin › Mail is on (`mail.get_org_settings`), the mailbox name of a person
+      follows the display name in that format (`addressLocalPart` in `packages/contracts`). The fill stops when
+      the admin types a different mailbox name. After the admin clears the field, the next change of the display
+      name fills it again. The field does not fill at the moment it becomes empty. The form does
+      not fill the name of an agent or a service account. If the settings do not load, the admin types the name.
+      The form checks the address 300 ms after the last change (`directory.check_address`, `addressToCheck` in
+      `memberAddress.ts`), and ignores a result for an earlier address. A live line under the field shows
+      **Checking…**, then green text that the address is available, or red text with the reason from the
+      server. If the check says that the address is not available, the create shows that message and does not
+      send. The check is advice only: the create can still fail if a different request takes the address first.
       The first API key of a new agent shows once, with a copy button.
       A new person gets no API key. **First sign-in** has two choices. **Invite link** is the default: after
       the create, the link shows once, with a copy button, its end and a warning to send it to the person

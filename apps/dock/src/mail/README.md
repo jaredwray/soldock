@@ -41,7 +41,7 @@ Public surface: `index.ts` only. Other domains must not import files from this f
 | `autolabel/store.ts` | The schema and the SQL helpers of auto labels in `MailboxDO` |
 | `autolabel/consumer.ts` | The consumer of the `soldock-mail-autolabel` queue: one classifier call for each message |
 | `screener/store.ts` | The schema and the SQL helpers of the Screener in `MailboxDO` |
-| `org-settings.ts` | The mail settings of the organization in the D1 table `mail_settings`: the default of the Screener |
+| `org-settings.ts` | The mail settings of the organization in the D1 table `mail_settings`: the default of the Screener and the address format |
 
 ## Mailboxes
 
@@ -233,6 +233,38 @@ in the mailbox.
 | An owner or an admin, in the mailbox of an agent | Yes | `forbidden` |
 | A principal who is not a member, or the id of a different person | `forbidden` | `forbidden` |
 
+### Settings of the organization
+
+`mail.get_org_settings` and `mail.update_org_settings` read and change the mail settings of the
+organization. An owner or an admin changes them in Admin › Mail. The D1 table `mail_settings` holds them
+in one row (migrations `0031` and `0036`). There are two settings:
+
+- `screener.default_enabled`: the default of [the Screener](#the-screener). It is off at the start.
+- `address_format`: `enabled` and `format`. The New member form of the web app fills in the address of a
+  new person from the display name in this format. It is on at the start, with `first.last`.
+
+| `format` | Ada Lovelace | Rule |
+| --- | --- | --- |
+| `first.last` | `ada.lovelace` | The first word, a dot, and the last word |
+| `first` | `ada` | The first word |
+| `flast` | `alovelace` | The first letter of the first word, and the last word |
+
+- `addressLocalPart` in `packages/contracts` makes the mailbox name. It removes accents, changes the
+  letters to lowercase, and keeps only `a` to `z` and `0` to `9` in each word. A name with one word gives
+  that word in each format. A name with no usable letter gives an empty name, and the admin types one.
+  The result has at most 64 characters.
+- The address format is advice for the form only. `directory.create_principal` accepts each valid
+  address, and the admin can change the address before the create. The form applies the format to people
+  only, because agents and service accounts have no first name and last name.
+- `mail.update_org_settings` must name a setting, or it gets `invalid`. A setting that the request does
+  not name keeps its value. `address_format` takes `enabled` and `format` together, so a format that is
+  off keeps its value for the next time.
+- A missing row reads as the defaults. The update writes the row with an upsert that keeps each column
+  that the request does not name.
+- A change writes one audit line `mail.update_org_settings` for each setting in the request. The line of
+  the Screener has `target: "screener"` and the code `on` or `off`. The line of the address format has
+  `target: "address_format"` and the code of the format, or `off`.
+
 ## Inbound
 
 1. Email Routing calls `email()` once for each recipient.
@@ -286,8 +318,8 @@ or out. The sender is never told: the mailbox sends no bounce and no reply.
 ### Settings
 
 - An owner or an admin sets the default of the organization in Admin › Mail
-  (`mail.update_org_settings`). It is off at the start. The D1 table `mail_settings` (migration
-  `0031`) holds it in one row.
+  (`mail.update_org_settings`, see [Settings of the organization](#settings-of-the-organization)). It
+  is off at the start. The D1 table `mail_settings` (migration `0031`) holds it in one row.
 - Each mailbox of a person and each team mailbox has the setting `screener` in
   `mail.update_mailbox_settings`: `inherit` (the default) follows the organization, and `on` or `off`
   is the choice of the mailbox. The members of a team mailbox share it.
@@ -382,7 +414,7 @@ from outside, so each row has `untrusted: true`, and MCP adds its notice before 
 A decision writes the audit line `mail.screen_sender` with the mailbox as `target`, `mailbox` for a team
 mailbox, and the decision as `code`. The line never holds the address of the sender. A send that screens
 a sender in writes the same line with the code `in`, one line for each sender. A change of the
-default writes `mail.update_org_settings` with the code `on` or `off`.
+default writes `mail.update_org_settings` with the target `screener` and the code `on` or `off`.
 
 ### Known limits
 
@@ -930,7 +962,7 @@ A disabled endpoint stays disabled. Delete it and create a new one.
 | Watch sockets | `MailboxDO` hibernatable WebSockets, tag `watch` | Not stored. A socket ends with its `subscriptions/listen` stream, and a restart of the object ends it. No backup |
 | Mail settings of a person | `MailboxDO` table `meta` (`settings`) | JSON. Only in the own mailbox of a person. The sidebar sections that the person collapsed, and the default From address of each mailbox (`default_from`) |
 | Settings of a mailbox | `MailboxDO` table `meta` (`mailbox_settings`) | JSON. In each mailbox: the plain-text signature, at most 2,000 characters, and the Screener mode (`inherit`, `on` or `off`). The members of a team mailbox share it |
-| Mail settings of the organization | D1 table `mail_settings` (migration `0031`) | One row: the default of the Screener. A directory reset drops it |
+| Mail settings of the organization | D1 table `mail_settings` (migrations `0031` and `0036`) | One row: the default of the Screener, and the address format of a new person (`address_format_enabled`, `address_format`). A directory reset drops it and makes it again with the defaults |
 | Screener state of a message | `MailboxDO` table `messages`, column `screen` | `pending` or `out` for held mail. Null for mail in the views |
 | Screener senders | `MailboxDO` table `screener_senders` | One row for each sender that waits and for each decision of a person: the address in lowercase, the newest display name, the status, the times, and who decided. Rows that wait are rebuildable from the held mail. Decisions are not |
 | Raw MIME of each message | R2 `blobs`, key `mail/raw/<mailbox id>/<sha256>` | One owner for each object: each mailbox has its own copy. Inbound: the key comes from the content, so a retry writes the same object. Sends: a duplicate attempt deletes its object. An error after the R2 write and before the mailbox answers can leave an orphan, which blob GC will collect |

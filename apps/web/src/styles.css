@@ -395,6 +395,12 @@ kbd {
 	font-size: 13px;
 }
 
+.field-ok {
+	margin-top: 4px;
+	color: var(--positive);
+	font-size: 13px;
+}
+
 .form-error {
 	margin: 12px 0;
 	padding: 10px 12px;

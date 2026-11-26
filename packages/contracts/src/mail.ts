@@ -1,3 +1,4 @@
+import { AddressFormat } from "./address-format.ts";
 import { Address, EmailAddress, prefixedId, Timestamp } from "./common.ts";
 import { defineOperation } from "./operation.ts";
 import { MAIL_WEBHOOK_EVENTS, MailWebhookSubscription } from "./webhooks.ts";
@@ -733,16 +734,25 @@ export const MailOrgSettings = z.object({
 		/** True when the Screener is on in each mailbox of a person and each team mailbox whose setting is inherit. */
 		default_enabled: z.boolean(),
 	}),
+	address_format: z.object({
+		/** True when the New member form fills in the address of a new person from the display name. */
+		enabled: z.boolean(),
+		/** The format of that address. */
+		format: AddressFormat,
+	}),
 });
 export type MailOrgSettings = z.infer<typeof MailOrgSettings>;
 
 const ORG_SETTINGS_TEXT =
 	"Owners and admins only. The default applies to each mailbox of a person and each team mailbox whose Screener setting is inherit (see mail.update_mailbox_settings). It never applies to the mailbox of an agent or a service account.";
 
+const ADDRESS_FORMAT_TEXT =
+	"The address format tells the New member form of the web app how to fill in the address of a new person from the display name: first.last gives ada.lovelace, first gives ada, and flast gives alovelace. It is on by default, with first.last. It is advice for the form only: directory.create_principal accepts each valid address.";
+
 export const getOrgSettings = defineOperation({
 	name: "mail.get_org_settings",
 	summary: "Get the mail settings of the organization",
-	description: `Returns the mail settings of the organization: for now, the default of the Screener. ${SCREENER_TEXT} ${ORG_SETTINGS_TEXT}`,
+	description: `Returns the mail settings of the organization: the default of the Screener and the address format. ${SCREENER_TEXT} ${ORG_SETTINGS_TEXT} ${ADDRESS_FORMAT_TEXT}`,
 	http: { method: "GET", path: "/api/v1/mail/org-settings" },
 	scopes: ["directory.read"],
 	callers: ["human"],
@@ -756,16 +766,27 @@ export const getOrgSettings = defineOperation({
 export const updateOrgSettings = defineOperation({
 	name: "mail.update_org_settings",
 	summary: "Change the mail settings of the organization",
-	description: `Changes the default of the Screener and returns the mail settings of the organization. ${SCREENER_TEXT} ${ORG_SETTINGS_TEXT} A change applies to the next mail from outside that each mailbox gets. When the default goes off, a mailbox moves the mail that waits in its Screener to the inbox at that time.`,
+	description: `Changes the default of the Screener, the address format, or both, and returns the mail settings of the organization. A setting that the call does not name stays the same. ${SCREENER_TEXT} ${ORG_SETTINGS_TEXT} A change of the Screener applies to the next mail from outside that each mailbox gets. When the default goes off, a mailbox moves the mail that waits in its Screener to the inbox at that time. ${ADDRESS_FORMAT_TEXT}`,
 	http: { method: "POST", path: "/api/v1/mail/org-settings" },
 	scopes: ["directory.write"],
 	callers: ["human"],
 	annotations: { readOnly: false, destructive: false, idempotent: true, openWorld: false },
-	input: z.strictObject({
-		screener: z.strictObject({
-			default_enabled: z.boolean().describe("True turns the Screener on in each mailbox whose setting is inherit."),
-		}),
-	}),
+	input: z
+		.strictObject({
+			screener: z
+				.strictObject({
+					default_enabled: z.boolean().describe("True turns the Screener on in each mailbox whose setting is inherit."),
+				})
+				.optional(),
+			address_format: z
+				.strictObject({
+					enabled: z.boolean().describe("True turns on the address format in the New member form."),
+					format: AddressFormat.describe("first.last, first or flast."),
+				})
+				.optional(),
+		})
+		// Without a setting to change, the call would only read the settings. Use mail.get_org_settings to read them.
+		.refine((input) => input.screener !== undefined || input.address_format !== undefined, "name a setting to change"),
 	output: MailOrgSettings,
 	errors: [],
 });

@@ -1,4 +1,5 @@
 // Public surface of @asterra/contracts. Runtime-agnostic: no Workers, DOM or Node APIs.
+export { AddressFormat, addressLocalPart } from "./address-format.ts";
 export {
 	AI_FEATURES,
 	AI_LIMITS,
@@ -129,7 +130,7 @@ export {
 	type DocMark,
 	Href,
 } from "./docs.ts";
-export { MailDomain } from "./domains.ts";
+export { AddressAvailability, MailDomain } from "./domains.ts";
 export {
 	Actor,
 	DownloadVariant,
