@@ -165,3 +165,6 @@ test-results/
 # This repo also shares its skills and reviewer agents, so keep those tracked too.
 !.claude/skills/
 !.claude/agents/
+
+# The release bundle of the operator CLI (pnpm release:build)
+tools/cli/release/

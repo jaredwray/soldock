@@ -28,6 +28,8 @@
 		"seed": "node tools/seed/seed.ts",
 		"e2e": "pnpm --filter @asterra/e2e test",
 		"deploy:check": "pnpm --filter @asterra/dock run deploy:check",
+		"release:build": "node tools/cli/scripts/build-release.ts",
+		"release:check": "node tools/cli/scripts/check-release.ts",
 		"spikes:build": "pnpm --filter \"./spikes/**\" --if-present build",
 		"verify": "pnpm lint && pnpm types:check && pnpm typecheck && pnpm build && pnpm test && pnpm budgets:check && pnpm run deploy:check && pnpm spikes:build && pnpm licenses:check"
 	},
