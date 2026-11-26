@@ -9,9 +9,11 @@ import {
 } from "@asterra/contracts";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../../lib/api.ts";
+import { onPrincipalConnection, onPrincipalEvent, principalSocketLive } from "../../lib/principalSocket.ts";
+import { catchUp } from "./sync.ts";
 
-/** The page polls while it is visible, so a change from a different tab or an agent shows. */
-const POLL_MS = 30_000;
+/** While the events socket is down, the page reads the change feed at this interval when it is visible. */
+const FALLBACK_MS = 30_000;
 /** The most pages of one range: the pages of a full calendar. The loop stops there if a cursor never ends. */
 const MAX_PAGES = Math.ceil(CALENDAR_LIMITS.events / CALENDAR_LIMITS.pageSize);
 
@@ -39,13 +41,27 @@ async function loadRange(timeMin: string, timeMax: string, zone: string): Promis
 	throw new Error("The calendar has more events than the page can load.");
 }
 
+/** The cursor of now in the change feed of the calendar of the caller. */
+async function headCursor(): Promise<string> {
+	return (await api.call("calendar.list_changes", {})).cursor;
+}
+
 /**
- * The events of a range. A new range shows the loading state with no events of the range before. A poll and
- * `reload` keep the events on screen while they load. Only the newest load shows its answer.
+ * The events of a range, kept current from the change feed. A new range shows the loading state with no events
+ * of the range before. A catch-up and `reload` keep the events on screen while they load. Only the newest load
+ * shows its answer.
+ *
+ * The handoff between the first read and the live changes: the hook gets the cursor of now first, then reads
+ * the range. A change after that cursor makes a catch-up read it, and the range loads again. So no change that
+ * commits during the first read is lost. The events socket sends `calendar.changed`, and `hello` after each
+ * connect, so a page that was offline catches up when it connects again. An expired cursor loads the range
+ * again with a new cursor. While the socket is down, the page reads the feed each `FALLBACK_MS`.
  */
 export function useEvents(timeMin: string, timeMax: string, zone: string) {
 	const [state, setState] = useState<EventsState>({ status: "loading", events: [] });
 	const generation = useRef(0);
+	/** The position of the page in the change feed. It stays when the range changes. */
+	const cursor = useRef<string | null>(null);
 
 	const load = useCallback(
 		async (fresh: boolean) => {
@@ -66,17 +82,67 @@ export function useEvents(timeMin: string, timeMax: string, zone: string) {
 	);
 
 	useEffect(() => {
-		void load(true);
-		const pollIfVisible = () => {
-			if (document.visibilityState === "visible") void load(false);
+		let stopped = false;
+		/** One catch-up at a time. A request during a catch-up runs one more after it. */
+		let running = false;
+		let again = false;
+		const sync = async () => {
+			if (running) {
+				again = true;
+				return;
+			}
+			running = true;
+			try {
+				do {
+					again = false;
+					// A catch-up of a range that the page left keeps the cursor as it was: the load of the new range
+					// started before its changes, so the next catch-up must read them again.
+					if (cursor.current === null) {
+						// The first read: the cursor of now, then the range.
+						const head = await headCursor();
+						if (stopped) return;
+						cursor.current = head;
+						await load(true);
+						continue;
+					}
+					const result = await catchUp(cursor.current, (after) => api.call("calendar.list_changes", { cursor: after }));
+					if (stopped) return;
+					cursor.current = result.cursor;
+					if (result.reload) await load(false);
+				} while (again && !stopped);
+			} catch {
+				// The next hint, connect or fallback tries again. A first read that failed shows its error.
+				if (cursor.current === null && !stopped) await load(true);
+			} finally {
+				running = false;
+			}
 		};
-		const timer = window.setInterval(pollIfVisible, POLL_MS);
-		window.addEventListener("focus", pollIfVisible);
-		document.addEventListener("visibilitychange", pollIfVisible);
+		// A range change keeps the cursor: the range loads now, and the changes after the cursor still come.
+		if (cursor.current === null) void sync();
+		else void load(true);
+		const syncIfVisible = () => {
+			if (document.visibilityState === "visible") void sync();
+		};
+		const unsubscribe = onPrincipalEvent((event) => {
+			if (event.type === "hello" || event.type === "calendar.changed") void sync();
+		});
+		const disconnect = onPrincipalConnection((live) => {
+			if (!live) syncIfVisible();
+		});
+		const timer = window.setInterval(() => {
+			if (!principalSocketLive()) syncIfVisible();
+		}, FALLBACK_MS);
+		window.addEventListener("focus", syncIfVisible);
+		window.addEventListener("online", syncIfVisible);
+		document.addEventListener("visibilitychange", syncIfVisible);
 		return () => {
+			stopped = true;
+			unsubscribe();
+			disconnect();
 			window.clearInterval(timer);
-			window.removeEventListener("focus", pollIfVisible);
-			document.removeEventListener("visibilitychange", pollIfVisible);
+			window.removeEventListener("focus", syncIfVisible);
+			window.removeEventListener("online", syncIfVisible);
+			document.removeEventListener("visibilitychange", syncIfVisible);
 			generation.current++;
 		};
 	}, [load]);

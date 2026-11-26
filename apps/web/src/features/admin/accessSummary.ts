@@ -190,6 +190,7 @@ const ACCOUNT_PARTS: readonly AccountPart[] = [
 			["mail.webhooks", "mail"],
 			["drive.webhooks", "drive"],
 			["chat.webhooks", "chat"],
+			["calendar.webhooks", "calendar"],
 		],
 		text: (words) => `Can create for ${words} events`,
 	},

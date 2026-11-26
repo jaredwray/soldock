@@ -88,7 +88,14 @@ describe("the operation registry", () => {
 	// its callers name it.
 	it("lists service accounts as callers only where an agent can call and a service account can hold every scope", () => {
 		expect(AGENT_SCOPES).toEqual(expect.arrayContaining([...SERVICE_SCOPES]));
-		for (const scope of ["account.keys", "directory.write", "mail.webhooks", "chat.webhooks", "drive.webhooks"]) {
+		for (const scope of [
+			"account.keys",
+			"directory.write",
+			"mail.webhooks",
+			"chat.webhooks",
+			"drive.webhooks",
+			"calendar.webhooks",
+		]) {
 			expect(SERVICE_SCOPES).not.toContain(scope);
 		}
 		const serviceOps = operationList.filter((op) => op.callers.includes("service"));

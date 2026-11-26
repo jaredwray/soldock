@@ -1054,6 +1054,51 @@ export async function settleCalendars(...principalIds: string[]): Promise<void> 
 	);
 }
 
+/** A meta value of the calendar object of a principal, or null. */
+export const calendarMeta = (principalId: string, key: string) =>
+	runInDurableObject(
+		calendarStub(principalId),
+		(_instance, state) =>
+			state.storage.sql.exec<{ value: string }>("SELECT value FROM meta WHERE key = ?", key).toArray()[0]?.value ??
+			null,
+	);
+
+/**
+ * Publishes the change feed of each calendar: makes a round that waits for its backoff due, and runs the alarm
+ * until `change_published` is `change_head`. The runtime also fires the alarm by itself.
+ */
+export async function publishCalendarChanges(...principalIds: string[]): Promise<void> {
+	await vi.waitFor(
+		async () => {
+			for (const id of principalIds) {
+				const stub = calendarStub(id);
+				await runInDurableObject(stub, async (_instance, state) => {
+					state.storage.sql.exec("DELETE FROM meta WHERE key = 'publish_at'");
+					await state.storage.setAlarm(Date.now());
+				});
+				await runDurableObjectAlarm(stub);
+				const published = Number((await calendarMeta(id, "change_published")) ?? 0);
+				const head = Number((await calendarMeta(id, "change_head")) ?? 0);
+				if (published !== head) throw new Error(`calendar ${id} published ${published} of ${head} changes`);
+			}
+		},
+		{ timeout: 5000, interval: 20 },
+	);
+}
+
+/** Replaces the webhook queue of one calendar object with a recorder, and returns the jobs that it sends. */
+export async function captureCalendarJobs(principalId: string): Promise<unknown[]> {
+	const jobs: unknown[] = [];
+	await runInDurableObject(calendarStub(principalId), (instance) => {
+		const target = instance as unknown as { env: Env };
+		target.env = {
+			...target.env,
+			WEBHOOKS: { send: async (body: unknown) => void jobs.push(body) } as unknown as Queue,
+		};
+	});
+	return jobs;
+}
+
 export interface BrokenCalendarDelivery {
 	/** When set, each delivery from the calendar to a different calendar fails with this error. */
 	fail: Error | null;
