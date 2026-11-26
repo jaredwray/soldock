@@ -24,6 +24,7 @@ beforeEach(async () => {
 		env.DIRECTORY.prepare("DELETE FROM shared_drive_members"),
 		env.DIRECTORY.prepare("DELETE FROM shared_drives"),
 		env.DIRECTORY.prepare("DELETE FROM mailbox_delegates"),
+		env.DIRECTORY.prepare("DELETE FROM team_mailbox_aliases"),
 		env.DIRECTORY.prepare("DELETE FROM team_mailbox_members"),
 		env.DIRECTORY.prepare("DELETE FROM team_mailboxes"),
 		env.DIRECTORY.prepare("DELETE FROM invites"),
@@ -37,6 +38,10 @@ beforeEach(async () => {
 		// The mail settings are for the organization, so each test starts with the defaults.
 		env.DIRECTORY.prepare(
 			"UPDATE mail_settings SET screener_default = 0, address_format_enabled = 1, address_format = 'first.last'",
+		),
+		// The Web Push settings are for the organization, so each test starts with push off and no key pair.
+		env.DIRECTORY.prepare(
+			"UPDATE chat_push_settings SET enabled = 0, subject = NULL, public_key = NULL, private_key = NULL, keys_created_at = NULL",
 		),
 	]);
 });

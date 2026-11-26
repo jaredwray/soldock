@@ -7,11 +7,11 @@ import {
 } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import { Buffer } from "node:buffer";
-import { createDecipheriv, createECDH, generateKeyPairSync, hkdfSync, randomBytes, verify } from "node:crypto";
+import { createDecipheriv, createECDH, createPublicKey, hkdfSync, randomBytes, verify } from "node:crypto";
 import { afterEach, expect, it, vi } from "vitest";
 import { CHAT_PUSH_QUEUE, type ChatPushJob } from "../src/chat/push.ts";
 import worker from "../src/index.ts";
-import { api, seedOrg } from "./helpers.ts";
+import { api, SEALED, seedOrg } from "./helpers.ts";
 
 const origin = "https://push.example.com";
 afterEach(() => vi.restoreAllMocks());
@@ -48,8 +48,19 @@ function device(path: string) {
 
 it("delivers an offline mention, retries only the failed device and removes expired subscriptions", async () => {
 	const { ada, owner } = await seedOrg();
+	// An admin turns on Web Push. The Worker makes the key pair and keeps it in the database.
+	const subject = "mailto:admin@example.com";
+	const push = await owner.call("chat.update_push_settings", { enabled: true, subject });
+	const publicKey = push.public_key;
+	if (!publicKey) throw new Error("Web Push has no public key.");
+	// The tests have ENCRYPTION_KEY, so the private key that signs each delivery is sealed in the database.
+	expect(
+		await env.DIRECTORY.prepare("SELECT private_key FROM chat_push_settings WHERE id = 1").first("private_key"),
+	).toMatch(SEALED);
+	expect((await ada.call("chat.get_notification_settings")).vapid_public_key).toBe(publicKey);
 	const active = device("/active");
-	const expired = [device("/404"), device("/410")];
+	// 404 and 410: the subscription is gone. 401 and 403: the push service refuses the key, as after a rotation.
+	const expired = [device("/401"), device("/403"), device("/404"), device("/410")];
 	await ada.call("chat.set_notification_settings", { default_level: "mentions", sound: false });
 	for (const { subscription } of [active, ...expired]) await ada.call("chat.subscribe_push", subscription);
 	const { room } = await owner.call("chat.create_room", { kind: "private", name: "Launch", member_ids: [ada.id] });
@@ -77,33 +88,19 @@ it("delivers an offline mention, retries only the failed device and removes expi
 		expect(jobs).toContainEqual(expect.objectContaining({ messageId: message.id }));
 	});
 
-	const vapid = generateKeyPairSync("ec", { namedCurve: "prime256v1" });
-	const { x, y, d } = vapid.privateKey.export({ format: "jwk" });
-	if (!x || !y || !d) throw new Error("The test requires an EC key pair.");
-	const publicKey = Buffer.concat([
-		Buffer.from([4]),
-		Buffer.from(x, "base64url"),
-		Buffer.from(y, "base64url"),
-	]).toString("base64url");
-	const testEnv = {
-		...env,
-		VAPID_PUBLIC_KEY: publicKey,
-		VAPID_PRIVATE_KEY: d,
-		VAPID_SUBJECT: "mailto:admin@example.com",
-		CHAT_PUSH: queue,
-	} as Env;
-	async function consume(bodies: unknown[], attempts = 1) {
+	const testEnv = { ...env, CHAT_PUSH: queue } as Env;
+	async function consume(bodies: unknown[], attempts = 1, queueEnv = testEnv) {
 		const batch = createMessageBatch(
 			`asterra-rivus-${CHAT_PUSH_QUEUE}`,
 			bodies.map((body, index) => ({ id: String(index), timestamp: new Date(), attempts, body })),
 		);
 		const context = createExecutionContext();
-		await worker.queue(batch, testEnv);
+		await worker.queue(batch, queueEnv);
 		return getQueueResult(batch, context);
 	}
 	await consume(jobs.splice(0));
 	const deliveries = jobs.splice(0) as ChatPushJob[];
-	expect(deliveries).toHaveLength(3);
+	expect(deliveries).toHaveLength(5);
 	expect(deliveries.every((job) => job.messageId === message.id)).toBe(true);
 
 	const posts: Request[] = [];
@@ -122,12 +119,12 @@ it("delivers an offline mention, retries only the failed device and removes expi
 		return new Response(null, { status: Number(url.pathname.slice(1)) });
 	});
 	const first = await consume(deliveries);
-	expect(first.explicitAcks).toHaveLength(2);
+	expect(first.explicitAcks).toHaveLength(4);
 	expect(first.retryMessages).toHaveLength(1);
 	const retry = deliveries[Number(first.retryMessages[0]?.msgId)];
 	expect(retry).toBeDefined();
 	expect((await consume([retry], 2)).explicitAcks).toEqual(["0"]);
-	expect(posts).toHaveLength(4);
+	expect(posts).toHaveLength(6);
 
 	const last = posts.at(-1);
 	if (!last) throw new Error("The push service did not receive a request.");
@@ -139,16 +136,27 @@ it("delivers an offline mention, retries only the failed device and removes expi
 	const [, header, payload, signature, key] = auth ?? [];
 	if (!header || !payload || !signature) throw new Error("The VAPID header has no signed token.");
 	expect(key).toBe(publicKey);
+	// The stored private key signs the token, so the public key of the settings verifies it.
+	const point = Buffer.from(publicKey, "base64url");
+	const verifier = createPublicKey({
+		format: "jwk",
+		key: {
+			kty: "EC",
+			crv: "P-256",
+			x: point.subarray(1, 33).toString("base64url"),
+			y: point.subarray(33).toString("base64url"),
+		},
+	});
 	expect(
 		verify(
 			"sha256",
 			Buffer.from(`${header}.${payload}`),
-			{ key: vapid.publicKey.export({ type: "spki", format: "pem" }), dsaEncoding: "ieee-p1363" },
+			{ key: verifier.export({ type: "spki", format: "pem" }), dsaEncoding: "ieee-p1363" },
 			Buffer.from(signature, "base64url"),
 		),
 	).toBe(true);
 	const claims = JSON.parse(Buffer.from(payload, "base64url").toString());
-	expect(claims).toMatchObject({ aud: origin, sub: testEnv.VAPID_SUBJECT });
+	expect(claims).toMatchObject({ aud: origin, sub: subject });
 	expect(claims.exp).toBeGreaterThan(Date.now() / 1000);
 	expect(claims.exp).toBeLessThanOrEqual(Date.now() / 1000 + 86_400);
 	expect(active.open(Buffer.from(await last.arrayBuffer()))).toEqual({
@@ -167,15 +175,27 @@ it("delivers an offline mention, retries only the failed device and removes expi
 	}
 	await ada.call("chat.mark_read", { room_id: room.id });
 	await consume([retry], 3);
-	expect(posts).toHaveLength(4);
+	expect(posts).toHaveLength(6);
 	await ada.call("chat.mark_read", { room_id: room.id, seq: 0 });
 	await ada.call("chat.mark_thread_read", { room_id: room.id, message_id: parent.id });
 	expect((await consume([retry], 3)).explicitAcks).toEqual(["0"]);
-	expect(posts).toHaveLength(4);
+	expect(posts).toHaveLength(6);
 	await ada.call("chat.mark_thread_read", { room_id: room.id, message_id: parent.id, seq: 0 });
+
+	// Without the ENCRYPTION_KEY that sealed the private key, push is off: a delivery goes and does not come back.
+	const lostKey = { ...testEnv, ENCRYPTION_KEY: "a-different-encryption-key-0123456789" } as Env;
+	expect((await consume([retry], 3, lostKey)).explicitAcks).toEqual(["0"]);
+	expect(posts).toHaveLength(6);
+
+	// While an admin has push off, a delivery goes and does not come back.
+	await owner.call("chat.update_push_settings", { enabled: false });
+	expect((await consume([retry], 3)).explicitAcks).toEqual(["0"]);
+	expect(posts).toHaveLength(6);
+	await owner.call("chat.update_push_settings", { enabled: true });
+
 	await ada.call("chat.remove_member", { room_id: room.id, principal_id: ada.id });
 	await consume([retry], 3);
-	expect(posts).toHaveLength(4);
+	expect(posts).toHaveLength(6);
 });
 
 it("refuses to change a device when the browser tab still shows the previous account", async () => {

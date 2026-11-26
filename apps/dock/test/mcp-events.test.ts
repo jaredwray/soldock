@@ -15,8 +15,10 @@ import {
 	inject,
 	mcp,
 	modern,
+	openStored,
 	rawMessage,
 	receiveWebhooks,
+	SEALED,
 	seedOrg,
 	type WebhookPost,
 } from "./helpers.ts";
@@ -469,6 +471,12 @@ describe("events/subscribe", () => {
 			.bind(new Date(Date.now() + 1000).toISOString(), first.id)
 			.run();
 
+		// ENCRYPTION_KEY seals the stored secret. Then make the row as a Worker without the key wrote it.
+		expect((await rows())[0]?.secret).toMatch(SEALED);
+		await env.DIRECTORY.prepare("UPDATE webhook_endpoints SET secret = ? WHERE protocol = 'mcp_events'")
+			.bind(SECRET)
+			.run();
+
 		// The same arguments name the same subscription.
 		const second = resultOf(await subscribe(ada.key, "chat.message.created", { arguments: { room_id: room.id } }));
 		expect(second.id).toBe(first.id);
@@ -476,6 +484,14 @@ describe("events/subscribe", () => {
 		// The receiver passed a short time ago, so it gets no second challenge.
 		expect(verifications()).toHaveLength(1);
 		expect(await rows()).toHaveLength(1);
+		// The refresh sealed the plaintext secret.
+		expect((await rows())[0]?.secret).toMatch(SEALED);
+
+		// A row from before ENCRYPTION_KEY can also get a new secret in one refresh. The old secret goes to
+		// previous_secret sealed, not as plaintext.
+		await env.DIRECTORY.prepare("UPDATE webhook_endpoints SET secret = ? WHERE protocol = 'mcp_events'")
+			.bind(SECRET)
+			.run();
 
 		// A new secret must be proven at the receiver.
 		const third = resultOf(
@@ -486,7 +502,16 @@ describe("events/subscribe", () => {
 		expect(verifications()[1]?.headers.get("webhook-signature")).toBe(
 			await signatureOf(OTHER_SECRET, verifications()[1] as WebhookPost),
 		);
-		expect(await rows()).toEqual([{ id: first.id, expires_at: third.refreshBefore, secret: OTHER_SECRET }]);
+		const [stored] = await rows();
+		expect(stored).toMatchObject({ id: first.id, expires_at: third.refreshBefore });
+		expect(stored?.secret).toMatch(SEALED);
+		expect(await openStored("webhook_endpoints.secret", stored?.secret)).toBe(OTHER_SECRET);
+		// The secret before the change stays sealed for the overlap.
+		const previous = await env.DIRECTORY.prepare(
+			"SELECT previous_secret FROM webhook_endpoints WHERE protocol = 'mcp_events'",
+		).first<string>("previous_secret");
+		expect(previous).toMatch(SEALED);
+		expect(await openStored("webhook_endpoints.secret", previous)).toBe(SECRET);
 
 		const queue = await roomQueue(room.id);
 		await bot.call("chat.post_message", { room_id: room.id, text: "During the change of the secret" });

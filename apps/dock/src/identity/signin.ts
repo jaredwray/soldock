@@ -1,6 +1,7 @@
 import { SIGN_IN_LOCK_MINUTES, SIGN_IN_MAX_FAILURES } from "@asterra/contracts";
+import { openSecret } from "../platform/index.ts";
 import { verifyPassword } from "./password.ts";
-import { createSessionIf, type PrincipalRecord, resolveAddress } from "./store.ts";
+import { createSessionIf, type PrincipalRecord, resolvePrimaryAddress, TOTP_SECRET_PURPOSE } from "./store.ts";
 import { matchTotp } from "./totp.ts";
 
 export type SignInOutcome =
@@ -16,6 +17,7 @@ export type SignInOutcome =
 
 interface Attempt {
 	password_hash: string | null;
+	/** The TOTP secret as the directory stores it: sealed with ENCRYPTION_KEY, or plaintext. */
 	totp_secret: string | null;
 	totp_last_step: number | null;
 }
@@ -80,18 +82,20 @@ function finishSignIn(db: D1Database, principalId: string, attempt: Attempt, ste
 /**
  * Checks an address, a password and, when the person turned it on, a TOTP code.
  *
- * - An unknown address, an agent, an archived person, a person without a password, a wrong password,
+ * - An unknown address, an alias, an agent, an archived person, a person without a password, a wrong password,
  *   a wrong or used code and a lock all give `refused`. Each of them runs one password derivation.
  * - A correct password without a code, for a person with two-step verification, gives
  *   `totp_required` and no session.
  * - A success clears the failure count. A TOTP code works one time.
+ * - A sealed TOTP secret that does not open gives `refused`. The person never signs in without the code.
  */
 export async function signInWithPassword(
-	db: D1Database,
+	env: Env,
 	input: { address: string; password: string; totp_code?: string | undefined },
 	nowMs = Date.now(),
 ): Promise<SignInOutcome> {
-	const principal = await resolveAddress(db, input.address);
+	const db = env.DIRECTORY;
+	const principal = await resolvePrimaryAddress(db, input.address);
 	if (principal?.kind !== "human") {
 		await verifyPassword(input.password, null);
 		return { result: "refused", principalId: null, reason: "unknown address" };
@@ -115,7 +119,9 @@ export async function signInWithPassword(
 	let step: number | null = null;
 	if (attempt.totp_secret) {
 		if (input.totp_code === undefined) return { result: "totp_required", principal };
-		step = await matchTotp(attempt.totp_secret, input.totp_code, attempt.totp_last_step, nowMs);
+		const secret = await openSecret(env, TOTP_SECRET_PURPOSE, attempt.totp_secret);
+		if (!secret.ok) return { result: "refused", principalId: principal.id, reason: "totp secret unreadable" };
+		step = await matchTotp(secret.value, input.totp_code, attempt.totp_last_step, nowMs);
 		if (step === null) return { result: "refused", principalId: principal.id, reason: "wrong code" };
 	}
 	const sessionToken = await finishSignIn(db, principal.id, attempt, step);

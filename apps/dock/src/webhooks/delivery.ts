@@ -20,12 +20,13 @@ import {
 	type PrincipalRecord,
 	teamMailboxMemberScopes,
 } from "../identity/index.ts";
-import { base64ToBytes, bytesToBase64, hmacSha256, log } from "../platform/index.ts";
+import { base64ToBytes, bytesToBase64, hmacSha256, log, openSecret, openSecretOrNull } from "../platform/index.ts";
 import { adoptLegacyWebhooks, unmigratedCount } from "./legacy.ts";
 import {
 	activeSubscriptions,
 	disableEndpoint,
 	disableSubscription,
+	ENDPOINT_SEAL,
 	type EndpointDisabledReason,
 	type EndpointRow,
 	getDelivery,
@@ -41,6 +42,9 @@ import { outboundHostAllowed } from "./url.ts";
 
 /** The queue that carries webhook events, and one POST for each subscription. A suffix: see `queues.ts`. */
 export const WEBHOOK_QUEUE = "webhooks";
+
+/** The result of a delivery when a sealed value of the endpoint does not open. No POST goes out. */
+const SECRET_UNREADABLE = "secret_unreadable";
 
 /** New mail in the inbox of a mailbox. The `MailboxDO` sends it from its event outbox. Version 1. */
 export interface WebhookEventJob {
@@ -500,7 +504,7 @@ async function deliver(env: Env, job: DeliveryJob): Promise<void> {
 		const eventType = job.eventType ?? "chat.message.created";
 		if (!(await room.canNotifyWebhook(target, messageId, job.membershipId, eventType))) return;
 	}
-	const result = await post(pair.endpoint, pair.subscription, job);
+	const result = await post(env, pair.endpoint, pair.subscription, job);
 	if (result === "ok") {
 		await recordDelivery(db, pair.subscription);
 		return;
@@ -510,8 +514,9 @@ async function deliver(env: Env, job: DeliveryJob): Promise<void> {
 		return;
 	}
 	const delay = RETRY_DELAYS_S[attempt - 1];
-	// MCP Events: a receiver that answers 413 refuses this event for good, so a retry has no use.
-	const refused = pair.endpoint.protocol === "mcp_events" && result === "http_413";
+	// MCP Events: a receiver that answers 413 refuses this event for good, so a retry has no use. A retry
+	// also cannot open a sealed secret that did not open.
+	const refused = (pair.endpoint.protocol === "mcp_events" && result === "http_413") || result === SECRET_UNREADABLE;
 	if (!refused && attempt < WEBHOOK_LIMITS.attempts && delay !== undefined) {
 		await env.WEBHOOKS.send({ ...job, attempt: attempt + 1 } satisfies DeliveryJob, { delaySeconds: delay });
 		await recordFailedAttempt(
@@ -634,6 +639,35 @@ export async function webhookSignature(secret: string, id: string, timestamp: st
 	return `v1,${bytesToBase64(await hmacSha256(key, `${id}.${timestamp}.${body}`))}`;
 }
 
+/** The plaintext of the sealed values of an endpoint. */
+interface EndpointSecrets {
+	secret: string;
+	/** The secret that a refresh replaced, only while its signature is still necessary. */
+	previousSecret: string | null;
+	authKey: string | null;
+	headerValue: string | null;
+}
+
+/**
+ * Opens the values that a POST needs. Null when the secret, the auth key or the header value does not open:
+ * a POST without one of them is not the POST that the receiver expects. A previous secret that does not
+ * open only loses its signature.
+ */
+async function openEndpointSecrets(env: Env, endpoint: EndpointRow): Promise<EndpointSecrets | null> {
+	const secret = await openSecret(env, ENDPOINT_SEAL.secret, endpoint.secret);
+	if (!secret.ok) return null;
+	const authKey = await openSecretOrNull(env, ENDPOINT_SEAL.authKey, endpoint.auth_key);
+	if (endpoint.auth_key !== null && authKey === null) return null;
+	const headerValue = await openSecretOrNull(env, ENDPOINT_SEAL.headerValue, endpoint.header_value);
+	if (endpoint.header_value !== null && headerValue === null) return null;
+	const overlap =
+		endpoint.previous_secret !== null &&
+		endpoint.previous_secret_until !== null &&
+		Date.parse(endpoint.previous_secret_until) > Date.now();
+	const previousSecret = overlap ? await openSecretOrNull(env, ENDPOINT_SEAL.secret, endpoint.previous_secret) : null;
+	return { secret: secret.value, previousSecret, authKey, headerValue };
+}
+
 /**
  * The headers of a POST. The custom header and the auth key come first, so the headers that Asterra sets
  * always win. A POST of MCP Events names its subscription. After a refresh with a new secret, it has the
@@ -641,27 +675,24 @@ export async function webhookSignature(secret: string, id: string, timestamp: st
  */
 async function postHeaders(
 	endpoint: EndpointRow,
+	secrets: EndpointSecrets,
 	subscription: SubscriptionRow,
 	id: string,
 	timestamp: string,
 	body: string,
 ): Promise<Headers> {
 	const headers = new Headers();
-	if (endpoint.header_name !== null && endpoint.header_value !== null) {
-		headers.set(endpoint.header_name, endpoint.header_value);
+	if (endpoint.header_name !== null && secrets.headerValue !== null) {
+		headers.set(endpoint.header_name, secrets.headerValue);
 	}
-	if (endpoint.auth_key !== null) headers.set("authorization", `Bearer ${endpoint.auth_key}`);
+	if (secrets.authKey !== null) headers.set("authorization", `Bearer ${secrets.authKey}`);
 	headers.set("content-type", "application/json");
 	headers.set("user-agent", "Asterra-Webhooks/1");
 	headers.set("webhook-id", id);
 	headers.set("webhook-timestamp", timestamp);
-	const signatures = [await webhookSignature(endpoint.secret, id, timestamp, body)];
-	if (
-		endpoint.previous_secret !== null &&
-		endpoint.previous_secret_until !== null &&
-		Date.parse(endpoint.previous_secret_until) > Date.now()
-	) {
-		signatures.push(await webhookSignature(endpoint.previous_secret, id, timestamp, body));
+	const signatures = [await webhookSignature(secrets.secret, id, timestamp, body)];
+	if (secrets.previousSecret !== null) {
+		signatures.push(await webhookSignature(secrets.previousSecret, id, timestamp, body));
 	}
 	headers.set("webhook-signature", signatures.join(" "));
 	if (endpoint.protocol === "mcp_events") headers.set("x-mcp-subscription-id", subscription.id);
@@ -670,9 +701,11 @@ async function postHeaders(
 
 /**
  * Sends the signed POST. `ok` for a 2xx answer, `gone` for 410, and otherwise the code of the failure. The
- * POST never follows a redirect, and the response body is never read.
+ * POST never follows a redirect, and the response body is never read. `secret_unreadable`: a sealed value of
+ * the endpoint did not open, and no POST went out.
  */
 async function post(
+	env: Env,
 	endpoint: EndpointRow,
 	subscription: SubscriptionRow,
 	job: DeliveryJob,
@@ -680,11 +713,13 @@ async function post(
 	const id = `${job.eventId}_${subscription.id}`;
 	const body = bodyOf(endpoint, subscription, job, id);
 	const timestamp = String(Math.floor(Date.now() / 1000));
+	const secrets = await openEndpointSecrets(env, endpoint);
+	if (!secrets) return SECRET_UNREADABLE;
 	let response: Response;
 	try {
 		response = await fetch(endpoint.url, {
 			method: "POST",
-			headers: await postHeaders(endpoint, subscription, id, timestamp, body),
+			headers: await postHeaders(endpoint, secrets, subscription, id, timestamp, body),
 			body,
 			redirect: "manual",
 			signal: AbortSignal.timeout(WEBHOOK_LIMITS.timeoutMs),

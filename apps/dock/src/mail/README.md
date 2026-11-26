@@ -97,6 +97,10 @@ bytes, and the mailbox drops it as a copy.
 
 - A team mailbox has its own address. Inbound mail and local mail for that address go to the team
   mailbox, and not to the own mailbox of a member.
+- A mailbox can have [aliases](../identity/README.md#mailbox-aliases): extra addresses that an owner or
+  an admin adds. Inbound mail and local mail for an alias go to the mailbox of the alias, with the same
+  rules as mail to its primary address. A `+tag` on an alias applies the label of the tag. Mail from the
+  mailbox always uses the primary address.
 - The members share one state: threads, labels, the read state, stars and the Sent view. A change by
   one member shows for each member.
 - A send from a team mailbox has the name and the address of the team mailbox in `From`. The sent
@@ -1097,9 +1101,9 @@ Backups: not built yet. mbox/EML export comes with Takeout.
   sent), the addresses of the directory that the mailbox never wrote to, and a way to remove a
   suggestion
 - Filters, vacation responder and forwarding
-- Aliases, groups and send-as with a different address. A person has one address for the own mailbox, one
-  for each team mailbox and one for each delegated mailbox with `mail.send`, so the From of the web composer
-  chooses a mailbox
+- Groups, and send-as with a different address or with an alias. A mailbox sends from its primary
+  address only. A person has one address for the own mailbox, one for each team mailbox and one for each
+  delegated mailbox with `mail.send`, so the From of the web composer chooses a mailbox
 - For delegated mailboxes: a webhook of a delegate, a notice to the owner and to the delegate for each new
   grant, a way for a delegate to remove the own grant, a grant with an end date, an audit line for each read
   by a delegate, a setting of the organization that turns the feature off, and a `Sender` header or a mark
@@ -1108,8 +1112,8 @@ Backups: not built yet. mbox/EML export comes with Takeout.
 - For signatures: a signature for each member of a team mailbox, a signature with formatting or
   pictures, and a signature that `mail.send` adds
 - For team mailboxes: a read state for each member, assignment of a thread to a member, unread
-  counts for each mailbox in `mail.list_mailboxes`, and a change of address (with an alias for the
-  old address) or removal of a team mailbox
+  counts for each mailbox in `mail.list_mailboxes`, and a change of address (the old address can stay
+  as an alias) or removal of a team mailbox
 - Email Service lifecycle events (bounces, complaints) and inbound DSN parsing
 - Permanent delete, retention and blob GC
 - Live updates through `/ws/events`. The web app polls `mail.get_profile` and compares `version`.
@@ -1117,7 +1121,8 @@ Backups: not built yet. mbox/EML export comes with Takeout.
   compares `version`.
 - For webhooks: a test POST, a new secret without a new webhook, a restart of a disabled webhook, a
   delivery log, a notice to the owner when a webhook stops, a check that the receiver owns the URL,
-  encryption of the secrets at rest, a limit for each organization, and more event types.
+  a limit for each organization, and more event types. The Worker secret `ENCRYPTION_KEY` seals the
+  secrets of a webhook in D1 (see [`webhooks`](../webhooks/README.md#secrets-at-rest)).
 - Notifications for other mail changes (labels, reads, sends), and for a single label
 - A remote image proxy, `cid:` image display, and a spam classifier
 - Counters for label counts. They are counted on each call now.

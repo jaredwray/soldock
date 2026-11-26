@@ -21,6 +21,7 @@ import {
 import { expect, vi } from "vitest";
 import { totpCode, totpStep } from "../src/identity/totp.ts";
 import worker from "../src/index.ts";
+import { openSecretOrNull } from "../src/platform/index.ts";
 
 export const ORIGIN = "https://dock.test";
 /** The SETUP_TOKEN binding of vitest.config.ts. */
@@ -708,9 +709,13 @@ export async function drainWebhookEvents(mailboxId: string): Promise<void> {
 /**
  * Runs the webhook queue consumer on the given job bodies, as delivery number `attempts`. The queue
  * producer is a fake: `sent` holds the jobs that the consumer puts on the queue. With `failQueue`, each
- * send to the queue fails.
+ * send to the queue fails. `env` replaces bindings of the consumer, such as ENCRYPTION_KEY.
  */
-export async function consumeWebhooks(jobs: unknown[], attempts = 1, options: { failQueue?: boolean } = {}) {
+export async function consumeWebhooks(
+	jobs: unknown[],
+	attempts = 1,
+	options: { failQueue?: boolean; env?: { ENCRYPTION_KEY?: string | undefined } } = {},
+) {
 	const sent: unknown[] = [];
 	const refuse = () => {
 		if (options.failQueue) throw new Error("the queue is unavailable");
@@ -730,7 +735,7 @@ export async function consumeWebhooks(jobs: unknown[], attempts = 1, options: { 
 		jobs.map((body, i) => ({ id: `webhook-job-${++counter}-${i}`, timestamp: new Date(), attempts, body })),
 	);
 	const ctx = createExecutionContext();
-	await handlers.queue(batch, { ...env, WEBHOOKS: queue } as Env, ctx);
+	await handlers.queue(batch, { ...env, ...options.env, WEBHOOKS: queue } as Env, ctx);
 	return { sent, result: await getQueueResult(batch, ctx) };
 }
 
@@ -808,11 +813,23 @@ export async function connectRoomSocket(roomId: string, headers: Record<string, 
 	return { ...reader, version: hello.version };
 }
 
+/** The start of a secret that the Worker sealed with ENCRYPTION_KEY. */
+export const SEALED = /^enc:v1:[A-Za-z0-9_-]{16}\.[A-Za-z0-9_-]+$/;
+
+/** The plaintext of a stored secret, opened as the Worker opens it with the ENCRYPTION_KEY of the tests. */
+export async function openStored(purpose: string, stored: string | null | undefined): Promise<string | null> {
+	return await openSecretOrNull(env as Env, purpose, stored ?? null);
+}
+
 /** Sends a request to the Worker with these bindings in place of the ones in vitest.config.ts. */
 export function withEnv(
 	overrides: {
 		SETUP_TOKEN?: string | undefined;
 		AI_GATEWAY_TOKEN?: string | undefined;
+		ENCRYPTION_KEY?: string | undefined;
+		VAPID_PUBLIC_KEY?: string | undefined;
+		VAPID_PRIVATE_KEY?: string | undefined;
+		VAPID_SUBJECT?: string | undefined;
 		DIRECTORY?: D1Database;
 		DRIVE_SPACE?: Env["DRIVE_SPACE"];
 	},
@@ -845,7 +862,19 @@ export function racing(change: string, bind: string, write?: string) {
 					const statement = target.prepare(sql);
 					if (!write || !sql.includes(write)) return statement;
 					return {
-						bind: (...values: unknown[]) => ({ run: async () => (await run(), statement.bind(...values).run()) }),
+						bind: (...values: unknown[]) => {
+							const bound = statement.bind(...values);
+							return {
+								run: async () => {
+									await run();
+									return bound.run();
+								},
+								first: async () => {
+									await run();
+									return bound.first();
+								},
+							};
+						},
 					};
 				};
 			}

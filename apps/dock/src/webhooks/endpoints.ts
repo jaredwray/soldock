@@ -1,10 +1,11 @@
 import { WEBHOOK_LIMITS, type WebhookDomain, webhookHeaderNameProblem, webhookScope } from "@asterra/contracts";
 import { type CallContext, credentialBinding } from "../identity/index.ts";
-import { audit, type HandlerMap, newId, OperationError } from "../platform/index.ts";
+import { audit, type HandlerMap, newId, OperationError, sealOptionalSecret, sealSecret } from "../platform/index.ts";
 import { adoptLegacyWebhooks } from "./legacy.ts";
 import {
 	deleteLegacyRow,
 	ENDPOINT_COLUMNS,
+	ENDPOINT_SEAL,
 	type EndpointRow,
 	endpointDomains,
 	getEndpoint,
@@ -77,6 +78,7 @@ export const endpointHandlers: Pick<
 			);
 		}
 		const binding = credentialBinding(call.caller);
+		// `row` has the plaintext for the answer. The directory gets the sealed values.
 		const row: EndpointRow = {
 			id: newId("whe"),
 			created_by: principal.id,
@@ -115,12 +117,12 @@ export const endpointHandlers: Pick<
 				row.credential_id,
 				row.url,
 				row.label,
-				row.secret,
+				await sealSecret(call.env, ENDPOINT_SEAL.secret, row.secret),
 				row.created_at,
 				WEBHOOK_LIMITS.endpointsPerCreator,
-				row.auth_key,
+				await sealOptionalSecret(call.env, ENDPOINT_SEAL.authKey, row.auth_key),
 				row.header_name,
-				row.header_value,
+				await sealOptionalSecret(call.env, ENDPOINT_SEAL.headerValue, row.header_value),
 			)
 			.first<{ id: string }>();
 		if (!inserted) {
@@ -189,10 +191,10 @@ export const endpointHandlers: Pick<
 			.bind(
 				label,
 				setKey ? 1 : 0,
-				input.auth_key ?? null,
+				await sealOptionalSecret(call.env, ENDPOINT_SEAL.authKey, input.auth_key ?? null),
 				setHeader ? 1 : 0,
 				input.header?.name ?? null,
-				input.header?.value ?? null,
+				await sealOptionalSecret(call.env, ENDPOINT_SEAL.headerValue, input.header?.value ?? null),
 				row.id,
 				call.caller.id,
 			)

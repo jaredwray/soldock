@@ -10,7 +10,7 @@ export function newSetupToken(): string {
 	return randomBytes(32).toString("hex");
 }
 
-/** The key for the secrets that the Worker keeps in D1 (#227). 256 bits in base64url. It stays. */
+/** The key for the secrets that the Worker keeps in D1. 256 bits in base64url (43 characters). It stays. */
 export function newEncryptionKey(): string {
 	return randomBytes(32).toString("base64url");
 }

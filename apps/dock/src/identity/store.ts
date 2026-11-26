@@ -1,5 +1,5 @@
 import { AGENT_SCOPES, ALL_SCOPES, nameAliasParts, type Scope, SERVICE_SCOPES, searchFold } from "@asterra/contracts";
-import { log, newId, OperationError, randomToken, sha256Hex } from "../platform/index.ts";
+import { log, newId, OperationError, openSecretOrNull, randomToken, sealSecret, sha256Hex } from "../platform/index.ts";
 
 /** The kind that the directory stores. A service account is an agent row with `service`. */
 export type PrincipalKind = "human" | "agent";
@@ -199,14 +199,15 @@ export async function removeMailDomain(db: D1Database, domain: string): Promise<
 }
 
 /**
- * True when a principal or a team mailbox has the address. An archived principal keeps its addresses. The
- * deletion of a principal removes its addresses, so a deleted principal has none.
+ * True when a principal, a team mailbox or an alias has the address. An archived principal keeps its
+ * addresses and aliases. The deletion of a principal removes them, so a deleted principal has none.
  */
 export async function addressTaken(db: D1Database, address: string): Promise<boolean> {
 	const row = await db
 		.prepare(
 			`SELECT 1 FROM addresses WHERE address = ?1
-			UNION ALL SELECT 1 FROM team_mailboxes WHERE address = ?1 LIMIT 1`,
+			UNION ALL SELECT 1 FROM team_mailboxes WHERE address = ?1
+			UNION ALL SELECT 1 FROM team_mailbox_aliases WHERE address = ?1 LIMIT 1`,
 		)
 		.bind(normalizeAddress(address))
 		.first();
@@ -515,15 +516,18 @@ export async function listPrincipalPage(
 	};
 }
 
-/** The principal that receives mail for an address, or null when the address is unknown. */
-export async function resolveAddress(db: D1Database, address: string): Promise<PrincipalRecord | null> {
+/**
+ * The principal that signs in with an address, or null when no principal has it as the primary address.
+ * An alias is not a sign-in name: a wrong password for an alias must not count against its holder.
+ * Mail delivery uses `resolveMailboxAddress`, which reads aliases too.
+ */
+export async function resolvePrimaryAddress(db: D1Database, address: string): Promise<PrincipalRecord | null> {
 	const row = await db
 		.prepare(
-			`SELECT ${PRINCIPAL_COLUMNS}, primary_address.address
-			FROM addresses target
-			JOIN principals p ON p.id = target.principal_id
-			JOIN addresses primary_address ON primary_address.principal_id = p.id AND primary_address.is_primary = 1
-			WHERE target.address = ?`,
+			`SELECT ${PRINCIPAL_COLUMNS}, a.address
+			FROM addresses a
+			JOIN principals p ON p.id = a.principal_id
+			WHERE a.address = ? AND a.is_primary = 1`,
 		)
 		.bind(normalizeAddress(address))
 		.first<PrincipalRow>();
@@ -563,7 +567,11 @@ export function conflictOf(error: unknown): OperationError | null {
 	if (text.includes("UNIQUE constraint failed: addresses.address")) {
 		return new OperationError("conflict", "That address belongs to another principal.");
 	}
-	if (text.includes("address_in_use") || text.includes("UNIQUE constraint failed: team_mailboxes.address")) {
+	if (
+		text.includes("address_in_use") ||
+		text.includes("UNIQUE constraint failed: team_mailboxes.address") ||
+		text.includes("UNIQUE constraint failed: team_mailbox_aliases.address")
+	) {
 		return new OperationError("conflict", "That address belongs to another principal or team mailbox.");
 	}
 	return null;
@@ -979,20 +987,35 @@ export async function setPassword(
 	return updated?.meta.changes === 1;
 }
 
-/** Keeps a new TOTP secret that waits for a code. It replaces an older waiting secret. Sign-in does not change. */
-export async function setPendingTotpSecret(db: D1Database, principalId: string, secret: string): Promise<void> {
-	await db
-		.prepare("UPDATE principals SET totp_pending_secret = ? WHERE id = ? AND kind = 'human'")
-		.bind(secret, principalId)
+/**
+ * The purpose of the seal of `principals.totp_pending_secret` and `principals.totp_secret`. The two columns
+ * have one purpose, because `enableTotp` moves the stored value from the first column to the second in SQL.
+ */
+export const TOTP_SECRET_PURPOSE = "principals.totp_secret";
+
+/**
+ * Keeps a new TOTP secret that waits for a code. It replaces an older waiting secret. Sign-in does not change.
+ * With ENCRYPTION_KEY, the stored secret is sealed.
+ */
+export async function setPendingTotpSecret(env: Env, principalId: string, secret: string): Promise<void> {
+	await env.DIRECTORY.prepare("UPDATE principals SET totp_pending_secret = ? WHERE id = ? AND kind = 'human'")
+		.bind(await sealSecret(env, TOTP_SECRET_PURPOSE, secret), principalId)
 		.run();
 }
 
-/** The TOTP secret that waits for a code, or null. */
-export async function pendingTotpSecret(db: D1Database, principalId: string): Promise<string | null> {
-	return await db
-		.prepare("SELECT totp_pending_secret FROM principals WHERE id = ?")
+/**
+ * The TOTP secret that waits for a code, or null. `stored` is the column as it is, for the compare in
+ * `enableTotp`. `secret` is null when the stored secret is sealed and does not open.
+ */
+export async function pendingTotpSecret(
+	env: Env,
+	principalId: string,
+): Promise<{ stored: string; secret: string | null } | null> {
+	const stored = await env.DIRECTORY.prepare("SELECT totp_pending_secret FROM principals WHERE id = ?")
 		.bind(principalId)
 		.first<string | null>("totp_pending_secret");
+	if (!stored) return null;
+	return { stored, secret: await openSecretOrNull(env, TOTP_SECRET_PURPOSE, stored) };
 }
 
 /**
@@ -1000,12 +1023,12 @@ export async function pendingTotpSecret(db: D1Database, principalId: string): Pr
  * except `keepSessionHash`. A session that somebody else holds must not stay after the change. The code
  * of `step` cannot sign in again. Returns false, and changes nothing, when the waiting secret changed
  * after the check (for example in a parallel request), or when `liveSessionHash` names a session that
- * ended.
+ * ended. `storedSecret` is the waiting secret as `pendingTotpSecret` read it from the column.
  */
 export async function enableTotp(
 	db: D1Database,
 	principalId: string,
-	secret: string,
+	storedSecret: string,
 	step: number,
 	keepSessionHash: string | null,
 	liveSessionHash: string | null,
@@ -1017,7 +1040,7 @@ export async function enableTotp(
 				`UPDATE principals SET totp_secret = totp_pending_secret, totp_pending_secret = NULL, totp_last_step = ?1
 				WHERE id = ?2 AND totp_pending_secret = ?3 AND ${liveSession(4)}`,
 			)
-			.bind(step, principalId, secret, liveSessionHash),
+			.bind(step, principalId, storedSecret, liveSessionHash),
 		db
 			.prepare("DELETE FROM sessions WHERE principal_id = ? AND token_hash IS NOT ? AND changes() = 1")
 			.bind(principalId, keepSessionHash),

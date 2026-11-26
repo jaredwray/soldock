@@ -9,6 +9,7 @@ import { docsOperations } from "./docs.ts";
 import { domainOperations } from "./domains.ts";
 import { driveOperations } from "./drive.ts";
 import { mailOperations } from "./mail.ts";
+import { mailboxAliasOperations } from "./mailbox-aliases.ts";
 import { mailboxDelegateOperations } from "./mailbox-delegates.ts";
 import { oauthOperations } from "./oauth.ts";
 import type { Operation } from "./operation.ts";
@@ -23,6 +24,7 @@ export const operations = {
 	...directoryOperations,
 	...domainOperations,
 	...teamMailboxOperations,
+	...mailboxAliasOperations,
 	...driveOperations,
 	...docsOperations,
 	...sheetsOperations,

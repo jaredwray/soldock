@@ -14,9 +14,11 @@ import {
 	log,
 	newId,
 	OperationError,
+	openSecretOrNull,
 	randomToken,
 	readBodyText,
 	sameSecret,
+	sealSecret,
 	sha256Hex,
 } from "../platform/index.ts";
 
@@ -28,10 +30,14 @@ import {
 const REPLAY_WINDOW_SECONDS = 300;
 const MAX_HOOK_BYTES = 64 * 1024;
 
+/** The purpose of the seal of `chat_incoming_webhooks.signing_secret`. */
+const SIGNING_SECRET_PURPOSE = "chat_incoming_webhooks.signing_secret";
+
 interface WebhookRow {
 	id: string;
 	room_id: string;
 	name: string;
+	/** The signing secret as the directory stores it: sealed with ENCRYPTION_KEY, or plaintext. */
 	signing_secret: string;
 	created_by: string;
 	created_at: number;
@@ -82,7 +88,14 @@ export async function createIncomingWebhook(
 		`INSERT INTO chat_incoming_webhooks (id, room_id, name, signing_secret, created_by, created_at)
 		VALUES (?, ?, ?, ?, ?, ?)`,
 	)
-		.bind(id, input.room_id, input.name, signingSecret, call.caller.id, now)
+		.bind(
+			id,
+			input.room_id,
+			input.name,
+			await sealSecret(call.env, SIGNING_SECRET_PURPOSE, signingSecret),
+			call.caller.id,
+			now,
+		)
 		.run();
 	audit({
 		op: "chat.create_incoming_webhook",
@@ -322,8 +335,9 @@ export function mountChatIncomingWebhooks(app: Hono<ApiEnv>): void {
 			return new OperationError("unauthenticated", "Invalid webhook or signature.").toResponse({ instance, requestId });
 		}
 
-		const expected = await slackSignature(hook.signing_secret, tsHeader, rawBody);
-		if (!sameSecret(sigHeader, expected)) {
+		// A sealed secret that does not open cannot check a signature, so the request gets the same refusal.
+		const signingSecret = await openSecretOrNull(c.env, SIGNING_SECRET_PURPOSE, hook.signing_secret);
+		if (signingSecret === null || !sameSecret(sigHeader, await slackSignature(signingSecret, tsHeader, rawBody))) {
 			return new OperationError("unauthenticated", "Invalid webhook or signature.").toResponse({ instance, requestId });
 		}
 

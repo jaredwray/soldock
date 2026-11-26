@@ -1,10 +1,18 @@
-import { runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
+import {
+	createExecutionContext,
+	createMessageBatch,
+	getQueueResult,
+	runDurableObjectAlarm,
+	runInDurableObject,
+} from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import { createECDH, randomBytes } from "node:crypto";
 import { CHAT_PRESENCE_LIMITS, EVENTS_SOCKET_PATH } from "@asterra/contracts";
 import { afterEach, expect, it, vi } from "vitest";
+import { CHAT_PUSH_QUEUE } from "../src/chat/push.ts";
 import { type ChatPushFanout, fanOutPush } from "../src/chat/push-fanout.ts";
 import { MEMBER_DELAY_MS } from "../src/chat/room.ts";
+import worker from "../src/index.ts";
 import { api, bearer, codeOf, readSocket, request, seedOrg } from "./helpers.ts";
 
 afterEach(() => vi.useRealTimers());
@@ -55,7 +63,7 @@ it("applies quiet hours in the selected time zone and keeps the room count and r
 	};
 	vi.setSystemTime(Date.now() + MEMBER_DELAY_MS);
 	await runDurableObjectAlarm(env.CHAT_ROOM.get(env.CHAT_ROOM.idFromName(room.id)));
-	await fanOutPush(fanout, queued);
+	await fanOutPush(fanout, queued, true);
 	expect(await ada.call("chat.get_notification_settings")).toMatchObject({
 		unread_count: 1,
 		settings: { default_level: "none", room_levels: { [room.id]: "all" } },
@@ -63,13 +71,13 @@ it("applies quiet hours in the selected time zone and keeps the room count and r
 	expect(jobs).toHaveLength(0);
 	// A delayed event from the quiet hours still stays quiet, even when delivery is now allowed.
 	vi.setSystemTime(new Date("2030-01-10T15:00:00Z"));
-	await fanOutPush(fanout, queued);
+	await fanOutPush(fanout, queued, true);
 	expect(jobs).toHaveLength(0);
 	const morning = { ...fanout, occurredAt: Date.now() };
-	await fanOutPush(morning, queued);
+	await fanOutPush(morning, queued, true);
 	expect(jobs.splice(0)).toHaveLength(1);
 	await ada.call("chat.set_room_notification_level", { room_id: room.id, level: null });
-	await fanOutPush(morning, queued);
+	await fanOutPush(morning, queued, true);
 	expect(jobs).toHaveLength(0);
 	await ada.call("chat.mark_read", { room_id: room.id, seq: message.seq });
 	expect(await ada.call("chat.get_notification_settings")).toMatchObject({
@@ -118,12 +126,12 @@ it("suppresses push only while a device is active in the room and discards jobs 
 			},
 		} as unknown as Queue,
 	};
-	await fanOutPush(fanout, bindings);
+	await fanOutPush(fanout, bindings, true);
 	expect(devices).toHaveLength(0);
 	// The focused desktop keeps the room open after the person walks away.
 	reader.socket.send(JSON.stringify({ type: "chat.activity", active: false, room_id: room.id }));
 	await vi.waitFor(async () => {
-		await fanOutPush(fanout, bindings);
+		await fanOutPush(fanout, bindings, true);
 		expect(devices).toHaveLength(1);
 	});
 	const id = devices[0] as string;
@@ -200,14 +208,18 @@ it("sends a live sound once for each eligible post and respects the sound settin
 	}
 	const first = await post("One");
 	const deviceIds: string[] = [];
-	await fanOutPush(first, {
-		...env,
-		CHAT_PUSH: {
-			sendBatch: async (jobs: { body: { subscriptionId: string } }[]) => {
-				deviceIds.push(...jobs.map(({ body }) => body.subscriptionId));
-			},
-		} as unknown as Queue,
-	});
+	await fanOutPush(
+		first,
+		{
+			...env,
+			CHAT_PUSH: {
+				sendBatch: async (jobs: { body: { subscriptionId: string } }[]) => {
+					deviceIds.push(...jobs.map(({ body }) => body.subscriptionId));
+				},
+			} as unknown as Queue,
+		},
+		true,
+	);
 	expect(await nextSound()).toBe(first.messageId);
 	const principal = env.PRINCIPAL.get(env.PRINCIPAL.idFromName(ada.id));
 	const membershipId = await membership(room.id, ada.id);
@@ -225,13 +237,22 @@ it("sends a live sound once for each eligible post and respects the sound settin
 			expect.objectContaining({ endpoint: "https://push.example.com/phone", foreground_sound: false }),
 		]),
 	);
-	await fanOutPush(first, env);
+	await fanOutPush(first, env, true);
 	await ada.call("chat.set_notification_settings", { sound: false });
-	await fanOutPush(await post("Muted"), env);
+	await fanOutPush(await post("Muted"), env, true);
 	await ada.call("chat.set_notification_settings", { sound: true });
 	idle.socket.send(JSON.stringify({ type: "chat.activity", active: true, room_id: null }));
 	const last = await post("Three");
-	await fanOutPush(last, env);
+	// Push to devices is off, so the queue makes no delivery job. The open tabs still get the live sound.
+	const deliveries: unknown[] = [];
+	const batch = createMessageBatch(CHAT_PUSH_QUEUE, [{ id: "0", timestamp: new Date(), attempts: 1, body: last }]);
+	const context = createExecutionContext();
+	await worker.queue(batch, {
+		...env,
+		CHAT_PUSH: { sendBatch: async (jobs: unknown[]) => void deliveries.push(...jobs) } as unknown as Queue,
+	});
+	expect((await getQueueResult(batch, context)).explicitAcks).toEqual(["0"]);
+	expect(deliveries).toEqual([]);
 	expect(await nextSound()).toBe(last.messageId);
 	expect(await nextSound(idle)).toBe(last.messageId);
 	// A later retry for the earlier message must still let the phone play its system sound.
