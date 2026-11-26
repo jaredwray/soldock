@@ -1141,7 +1141,7 @@ describe("calendar events", () => {
 	});
 
 	// Revocation while a delivery waits: the check before each POST sees the access of now, not of the subscribe.
-	it("sends nothing after the agent loses calendar.read or unsubscribes while the delivery waits", async () => {
+	it("sends nothing after the agent loses calendar.read while the delivery waits", async () => {
 		const { events } = receiver();
 		await subscribe(bot.key, "calendar.rsvp.changed");
 		const { jobs } = await acceptedMeeting();
@@ -1154,8 +1154,17 @@ describe("calendar events", () => {
 			"SELECT status, disabled_reason FROM webhook_subscriptions WHERE domain = 'calendar'",
 		).first();
 		expect(status).toEqual({ status: "disabled", disabled_reason: "access_lost" });
+	});
 
-		await unsubscribe(bot.key, "calendar.rsvp.changed");
+	// The subscription is active when its delivery job goes on the queue. An unsubscribe before the POST must
+	// stop that job: the agent said that it wants no more events.
+	it("sends nothing after the agent unsubscribes while the delivery waits", async () => {
+		const { events } = receiver();
+		await subscribe(bot.key, "calendar.rsvp.changed");
+		const { jobs } = await acceptedMeeting();
+		const { sent } = await consumeWebhooks(jobs);
+		expect(sent).toHaveLength(1);
+		expect(resultOf(await unsubscribe(bot.key, "calendar.rsvp.changed"))).toBeTruthy();
 		await consumeWebhooks(sent);
 		expect(events()).toEqual([]);
 	});
@@ -1169,9 +1178,12 @@ describe("calendar events", () => {
 	});
 
 	// A subscription starts from now: a change from before it is in calendar.list_changes, not in a POST.
+	// A different subscription of the agent starts the queue jobs, so the change has a real job.
 	it("sends no change from before the subscription", async () => {
 		const { events } = receiver();
+		await subscribe(bot.key, "calendar.event.created");
 		const { jobs } = await acceptedMeeting();
+		expect(jobs.map((job) => (job as { eventType: string }).eventType)).toContain("calendar.rsvp.changed");
 		await subscribe(bot.key, "calendar.rsvp.changed");
 		await deliver(jobs);
 		expect(events()).toEqual([]);
