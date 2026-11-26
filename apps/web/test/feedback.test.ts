@@ -10,6 +10,7 @@ import {
 	previewIssue,
 	scaledSize,
 	submitInput,
+	withAttachment,
 } from "../src/features/feedback/model.ts";
 import { itemPath, parseRoute } from "../src/routes.ts";
 
@@ -68,6 +69,22 @@ describe("submitInput", () => {
 		expect(input.include).toEqual({ name: true, email: true });
 		expect(input.context).toEqual({ app_version: "0.0.0", page: "mail" });
 		expect(input.idempotency_key).toBe("key-1");
+	});
+});
+
+describe("withAttachment", () => {
+	it("stops at the limit when one drop has many files, and clears the confirmation", () => {
+		// The widget adds each file of a drop to the result of the file before, with no render between them.
+		let current = draft();
+		const refused: string[] = [];
+		for (const id of ["fba_1", "fba_2", "fba_3", "fba_4"]) {
+			const next = withAttachment(current, stored(id), 3);
+			if (next) current = next;
+			else refused.push(id);
+		}
+		expect(current.attachments.map((item) => item.key)).toEqual(["fba_1", "fba_2", "fba_3"]);
+		expect(refused).toEqual(["fba_4"]);
+		expect(current.confirmed).toBe(false);
 	});
 });
 

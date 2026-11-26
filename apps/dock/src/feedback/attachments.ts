@@ -102,29 +102,30 @@ export async function storeAttachment(
 		width = info.width;
 		height = info.height;
 	}
-	const pending = await env.DIRECTORY.prepare(
-		"SELECT COUNT(*) AS n FROM feedback_attachments WHERE principal_id = ? AND report_id IS NULL AND created_at > ?",
+	const id = newId("fba", now);
+	const token = randomToken(32);
+	// The limit is a condition of the statement that writes the row. Thus two uploads at the same time cannot
+	// both pass it. The row is first, so the limit applies before the bytes go to R2.
+	const inserted = await env.DIRECTORY.prepare(
+		`INSERT INTO feedback_attachments (id, principal_id, report_id, token_hash, mime_type, kind, size, width, height, created_at)
+		SELECT ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?
+		WHERE (SELECT COUNT(*) FROM feedback_attachments WHERE principal_id = ? AND report_id IS NULL AND created_at > ?) < ?`,
 	)
-		.bind(input.principalId, now - FEEDBACK_LIMITS.pendingHours * HOUR_MS)
-		.first<number>("n");
-	if ((pending ?? 0) >= FEEDBACK_LIMITS.pendingAttachments) {
+		.bind(
+			...[id, input.principalId, await sha256Hex(token), mimeType, kind, bytes.byteLength, width, height, now],
+			...[input.principalId, now - FEEDBACK_LIMITS.pendingHours * HOUR_MS, FEEDBACK_LIMITS.pendingAttachments],
+		)
+		.run();
+	if ((inserted.meta.changes ?? 0) === 0) {
 		throw new OperationError(
 			"rate_limited",
 			`You have ${FEEDBACK_LIMITS.pendingAttachments} attachments that no report holds. Send the report, or remove an attachment.`,
 		);
 	}
-	const id = newId("fba", now);
-	const token = randomToken(32);
-	await env.BLOBS.put(blobKey(id), bytes, { httpMetadata: { contentType: mimeType } });
 	try {
-		await env.DIRECTORY.prepare(
-			`INSERT INTO feedback_attachments (id, principal_id, report_id, token_hash, mime_type, kind, size, width, height, created_at)
-			VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?, ?)`,
-		)
-			.bind(id, input.principalId, await sha256Hex(token), mimeType, kind, bytes.byteLength, width, height, now)
-			.run();
+		await env.BLOBS.put(blobKey(id), bytes, { httpMetadata: { contentType: mimeType } });
 	} catch (error) {
-		await env.BLOBS.delete(blobKey(id));
+		await env.DIRECTORY.prepare("DELETE FROM feedback_attachments WHERE id = ?").bind(id).run();
 		throw error;
 	}
 	return {
@@ -169,16 +170,6 @@ export async function pendingAttachments(
 	return rows;
 }
 
-/** Puts the attachments in a sent report. */
-export async function attachToReport(env: Env, reportId: string, ids: readonly string[]): Promise<void> {
-	if (ids.length === 0) return;
-	await env.DIRECTORY.batch(
-		ids.map((id) =>
-			env.DIRECTORY.prepare("UPDATE feedback_attachments SET report_id = ? WHERE id = ?").bind(reportId, id),
-		),
-	);
-}
-
 /**
  * Removes one attachment from R2 and D1. The owner of the attachment can remove it, and an owner or an admin can
  * remove each one. Returns false when the attachment does not exist or the caller cannot remove it, so the answer
@@ -209,27 +200,25 @@ const PRUNE_BATCH = 500;
 export async function pruneFeedback(env: Env, now: number): Promise<number> {
 	const pendingBefore = now - FEEDBACK_LIMITS.pendingHours * HOUR_MS;
 	const sentBefore = now - FEEDBACK_LIMITS.attachmentDays * DAY_MS;
+	// One statement finds and removes the rows, so the age and the report of each row are correct at the removal.
 	const { results } = await env.DIRECTORY.prepare(
-		`SELECT id FROM feedback_attachments
-		WHERE (report_id IS NULL AND created_at < ?) OR (report_id IS NOT NULL AND created_at < ?)
-		LIMIT ?`,
+		`DELETE FROM feedback_attachments WHERE id IN (
+			SELECT id FROM feedback_attachments
+			WHERE (report_id IS NULL AND created_at < ?) OR (report_id IS NOT NULL AND created_at < ?)
+			LIMIT ?
+		) RETURNING id`,
 	)
 		.bind(pendingBefore, sentBefore, PRUNE_BATCH)
 		.all<{ id: string }>();
 	const ids = results.map((row) => row.id);
-	if (ids.length > 0) {
-		await env.BLOBS.delete(ids.map(blobKey));
-		await env.DIRECTORY.batch(
-			ids.map((id) => env.DIRECTORY.prepare("DELETE FROM feedback_attachments WHERE id = ?").bind(id)),
-		);
-	}
+	if (ids.length > 0) await env.BLOBS.delete(ids.map(blobKey));
 	await env.DIRECTORY.prepare("DELETE FROM feedback_reports WHERE created_at < ?").bind(sentBefore).run();
 	return ids.length;
 }
 
 /**
- * `GET|HEAD /dl/feedback/:attachment_id/:token`: the public address of an attachment. A wrong id and a wrong
- * token get the same `404`.
+ * `GET|HEAD /dl/feedback/:attachment_id/:token`: the public address of an attachment. A wrong id, a wrong token
+ * and a row with no bytes in R2 get the same `404`.
  */
 export function mountFeedbackFiles(app: Hono<ApiEnv>): void {
 	app.on(["GET", "HEAD"], "/dl/feedback/:attachment_id/:token", async (c) => {
@@ -241,6 +230,8 @@ export function mountFeedbackFiles(app: Hono<ApiEnv>): void {
 		}
 		const row = await rowWithToken(c.env, id, token);
 		if (!row) throw missing;
+		// `downloadResponse` does not read the bytes for `HEAD`.
+		if (c.req.method === "HEAD" && (await c.env.BLOBS.head(blobKey(row.id))) === null) throw missing;
 		const name = `${row.kind === "image" ? "screenshot" : "recording"}.${EXTENSIONS[row.mime_type]}`;
 		return downloadResponse(c.req.raw, {
 			name,
@@ -249,7 +240,9 @@ export function mountFeedbackFiles(app: Hono<ApiEnv>): void {
 			inlineType: row.mime_type,
 			async read(range) {
 				const object = await c.env.BLOBS.get(blobKey(row.id), { range });
-				return object?.body ?? null;
+				// The row is there before the bytes during an upload, and R2 can lose an object.
+				if (!object) throw missing;
+				return object.body;
 			},
 		});
 	});

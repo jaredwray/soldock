@@ -24,7 +24,8 @@ export function isCancelled(error: unknown): boolean {
 	return error instanceof DOMException && (error.name === "NotAllowedError" || error.name === "AbortError");
 }
 
-function stopStream(stream: MediaStream): void {
+/** Stops each track, so the browser stops the share. */
+export function stopStream(stream: MediaStream): void {
 	for (const track of stream.getTracks()) track.stop();
 }
 
@@ -86,34 +87,42 @@ export function startRecording(stream: MediaStream): Recording {
 		stopStream(stream);
 		throw new Error("The browser cannot record the screen.");
 	}
-	const recorder = new MediaRecorder(stream, { mimeType, videoBitsPerSecond: 1_000_000 });
-	const chunks: Blob[] = [];
-	let size = 0;
-	const stop = () => {
-		if (recorder.state !== "inactive") recorder.stop();
-	};
-	const done = new Promise<Blob>((resolve, reject) => {
-		recorder.addEventListener("dataavailable", (event) => {
-			if (event.data.size === 0) return;
-			chunks.push(event.data);
-			size += event.data.size;
-			if (size >= RECORDING_MAX_BYTES) stop();
+	let timer: number | undefined;
+	// An error after the person allowed the share must stop the tracks. If not, the browser continues to share.
+	try {
+		const recorder = new MediaRecorder(stream, { mimeType, videoBitsPerSecond: 1_000_000 });
+		const chunks: Blob[] = [];
+		let size = 0;
+		const stop = () => {
+			if (recorder.state !== "inactive") recorder.stop();
+		};
+		const done = new Promise<Blob>((resolve, reject) => {
+			recorder.addEventListener("dataavailable", (event) => {
+				if (event.data.size === 0) return;
+				chunks.push(event.data);
+				size += event.data.size;
+				if (size >= RECORDING_MAX_BYTES) stop();
+			});
+			recorder.addEventListener("stop", () => {
+				window.clearTimeout(timer);
+				stopStream(stream);
+				if (size === 0) reject(new Error("The recording is empty."));
+				else resolve(new Blob(chunks, { type: mimeType.split(";")[0] ?? mimeType }));
+			});
+			recorder.addEventListener("error", () => {
+				window.clearTimeout(timer);
+				stopStream(stream);
+				reject(new Error("The recording failed."));
+			});
 		});
-		recorder.addEventListener("stop", () => {
-			window.clearTimeout(timer);
-			stopStream(stream);
-			if (size === 0) reject(new Error("The recording is empty."));
-			else resolve(new Blob(chunks, { type: mimeType.split(";")[0] ?? mimeType }));
-		});
-		recorder.addEventListener("error", () => {
-			window.clearTimeout(timer);
-			stopStream(stream);
-			reject(new Error("The recording failed."));
-		});
-	});
-	// The "Stop sharing" button of the browser ends the track.
-	for (const track of stream.getVideoTracks()) track.addEventListener("ended", stop);
-	const timer = window.setTimeout(stop, FEEDBACK_LIMITS.recordingSeconds * 1000);
-	recorder.start(1000);
-	return { stop, done };
+		// The "Stop sharing" button of the browser ends the track.
+		for (const track of stream.getVideoTracks()) track.addEventListener("ended", stop);
+		timer = window.setTimeout(stop, FEEDBACK_LIMITS.recordingSeconds * 1000);
+		recorder.start(1000);
+		return { stop, done };
+	} catch (error) {
+		window.clearTimeout(timer);
+		stopStream(stream);
+		throw error;
+	}
 }

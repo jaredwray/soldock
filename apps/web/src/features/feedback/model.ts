@@ -55,6 +55,15 @@ export function emptyDraft(idempotencyKey: string): FeedbackDraft {
 	};
 }
 
+/**
+ * The draft with one more attachment, or null when the draft is full. The confirmation applies to the
+ * attachments that the person examined, so a new one clears it.
+ */
+export function withAttachment(draft: FeedbackDraft, item: DraftAttachment, limit: number): FeedbackDraft | null {
+	if (draft.attachments.length >= limit) return null;
+	return { ...draft, attachments: [...draft.attachments, item], confirmed: false };
+}
+
 /** The kind of the page for the report: never an id, an address or a query string. */
 export function pageOf(route: Route): string | undefined {
 	const page =

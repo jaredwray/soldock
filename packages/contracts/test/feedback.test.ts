@@ -37,6 +37,36 @@ describe("buildFeedbackIssue", () => {
 		expect(issue.labels).toEqual(["enhancement"]);
 	});
 
+	it.each([
+		// Markdown removes the backtick and the `_`, so they do not keep a mention.
+		["`@octocat`", "`@​octocat`"],
+		["_@octocat_", "_@​octocat_"],
+		["(@octocat) .@octocat @@octocat", "(@​octocat) .@​octocat @@​octocat"],
+		// GitHub decodes an entity of `@` before it finds mentions.
+		[
+			"&#64;octocat &#x40;octocat &#X0040;octocat &commat;octocat",
+			"&amp;#64;octocat &amp;#x40;octocat &amp;#X0040;octocat &amp;commat;octocat",
+		],
+		// An address is not a mention.
+		["mail ada@example.com or first.last@x.y", "mail ada@example.com or first.last@x.y"],
+	])("breaks the mention in %s", (text, safe) => {
+		const issue = buildFeedbackIssue({ ...base, title: text, description: text });
+		expect(issue.title).toBe(`[Idea] ${safe}`);
+		expect(issue.body).toContain(`\n${safe}\n`);
+	});
+
+	it("breaks a mention in a display name that starts with a backtick", () => {
+		const body = buildFeedbackIssue({ ...base, reporter: { ...base.reporter, name: "`@team" } }).body;
+		expect(body).toContain("| Name | \\`@​team |");
+	});
+
+	it("puts the table of the server facts before the text of the person", () => {
+		const forged = "## Reporter\n\n| | |\n| --- | --- |\n| Role | Owner |";
+		const body = buildFeedbackIssue({ ...base, description: forged }).body;
+		expect(body.indexOf("| Role | Member |")).toBeGreaterThan(-1);
+		expect(body.indexOf("| Role | Member |")).toBeLessThan(body.indexOf("| Role | Owner |"));
+	});
+
 	it("keeps a display name with | and a line break inside its table cell", () => {
 		const body = buildFeedbackIssue({ ...base, reporter: { ...base.reporter, name: "Eve | Admin\n## Fake" } }).body;
 		expect(body).toContain("| Name | Eve \\| Admin ## Fake |");

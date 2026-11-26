@@ -2261,17 +2261,23 @@ idea. Each report becomes a public GitHub issue ([`feedback`](../dock/src/feedba
   or a JPEG when the PNG is over 10 MiB.
 - **Record screen** records with `MediaRecorder` (WebM, or MP4 in Safari, 1 Mbit/s, no audio). The dialog closes,
   and a small indicator at the bottom right shows the time and a **Stop** button. The recording stops at 60
-  seconds, before 9 MiB, at **Stop**, or when the person stops the share in the browser.
-- **Add a file**, a paste and a drop add PNG, JPEG and WebP images, and WebM and MP4 videos.
+  seconds, before 9 MiB, at **Stop**, or when the person stops the share in the browser. A screen reader gets one
+  status text that does not change, not the clock.
+- When the widget goes (a sign-out, or an admin turns feedback off), the recording and the share of the screen
+  stop. An error at the start of a recording also stops the share.
+- **Add a file**, a paste and a drop add PNG, JPEG and WebP images, and WebM and MP4 videos. The draft gets each
+  file before its upload starts, so many files in one drop stop at the limit of 5 (`withAttachment`).
 - A browser without `getDisplayMedia`, such as most phones, shows no capture buttons. A file and a paste still
   work. A cancelled share picker shows no error.
 - Each attachment uploads at once (`feedback.upload_attachment`). **Remove** deletes it on the server
-  (`feedback.delete_attachment`), so its public address stops.
+  (`feedback.delete_attachment`), so its public address stops. If the person removes an attachment or discards the
+  draft during an upload, the dialog deletes the file when the upload ends.
 - The issue shows the name of the person by default, and the address only when the person selects it. The
   browser line is on by default. The role, the host and the page kind are always in the issue.
 - The preview uses `buildFeedbackIssue` of `packages/contracts`, the function of the server, so it is the exact
   text. **Send** stays off until the person confirms that the report shows no private data. A new attachment
-  clears the confirmation.
+  clears the confirmation. While **Send** is off, a line above the buttons gives the reason, and the button names
+  that line with `aria-describedby`.
 - One idempotency key for each draft makes one issue after a second click or a retry. After the send, the
   dialog shows a link to the issue.
 - [`model.ts`](src/features/feedback/model.ts) has the pure parts, which `test/feedback.test.ts` checks.

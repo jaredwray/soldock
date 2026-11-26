@@ -92,6 +92,18 @@ const report = {
 	context: { app_version: "0.0.0", page: "mail", user_agent: "Test Browser" },
 };
 
+/** "ok" for a call that works, else the code of its error. For calls that run at the same time. */
+const outcome = (call: Promise<unknown>) =>
+	call.then(
+		() => "ok",
+		(caught: unknown) => (caught as { code?: string }).code ?? String(caught),
+	);
+
+const countOf = (list: string[], value: string) => list.filter((item) => item === value).length;
+
+const reportCount = async () =>
+	(await env.DIRECTORY.prepare("SELECT COUNT(*) AS n FROM feedback_reports").first<number>("n")) ?? 0;
+
 const reportRow = async (id: string) =>
 	await env.DIRECTORY.prepare("SELECT status, issue_number FROM feedback_reports WHERE id = ?")
 		.bind(id)
@@ -307,6 +319,53 @@ describe("a report", () => {
 		// The limit is for each person.
 		expect((await admin.call("feedback.submit", report)).issue_number).toBe(106);
 	});
+
+	it("stops at the limit when the reports come at the same time", async () => {
+		await turnOn();
+		const github = fakeGitHub();
+		const results = await Promise.all(Array.from({ length: 8 }, () => outcome(ada.call("feedback.submit", report))));
+		expect(countOf(results, "ok")).toBe(5);
+		expect(countOf(results, "rate_limited")).toBe(3);
+		expect(github.calls).toHaveLength(5);
+	});
+
+	it("counts a failed report in the limit, and counts it again when the same key tries later", async () => {
+		await turnOn();
+		let status = 500;
+		const github = fakeGitHub(() =>
+			status === 201
+				? Response.json({ number: 9, html_url: "https://github.com/jaredwray/soldock/issues/9" }, { status: 201 })
+				: new Response("{}", { status }),
+		);
+		const old = { ...report, idempotency_key: "old-1" };
+		expect(await codeOf(ada.call("feedback.submit", old))).toBe("unavailable");
+		// The failed report is now two hours old, so it is not in the current hour.
+		await env.DIRECTORY.prepare("UPDATE feedback_reports SET created_at = ? WHERE idempotency_key = 'old-1'")
+			.bind(Date.now() - 2 * 60 * 60 * 1000)
+			.run();
+		for (let i = 0; i < 4; i++) expect(await codeOf(ada.call("feedback.submit", report))).toBe("unavailable");
+		// The same key tries again. Its row is the fifth report of this hour.
+		status = 201;
+		expect((await ada.call("feedback.submit", old)).issue_number).toBe(9);
+		expect(await codeOf(ada.call("feedback.submit", report))).toBe("rate_limited");
+		expect(github.calls).toHaveLength(6);
+	});
+
+	it("gives conflict for a key whose report did not complete, and sends nothing", async () => {
+		await turnOn();
+		const github = fakeGitHub();
+		// A Worker that stopped after the request to GitHub leaves a row in the state pending.
+		const before = Date.now() - 10 * 60 * 1000;
+		await env.DIRECTORY.prepare(
+			`INSERT INTO feedback_reports (id, principal_id, kind, status, idempotency_key, created_at, updated_at)
+			VALUES ('fbr_01JD3V0Y9XG8Q2W4E6R8T0Y2U4', ?, 'bug', 'pending', 'lost-1', ?, ?)`,
+		)
+			.bind(ada.id, before, before)
+			.run();
+		expect(await codeOf(ada.call("feedback.submit", { ...report, idempotency_key: "lost-1" }))).toBe("conflict");
+		expect(github.calls).toEqual([]);
+		expect((await reportRow("fbr_01JD3V0Y9XG8Q2W4E6R8T0Y2U4"))?.status).toBe("pending");
+	});
 });
 
 describe("an attachment", () => {
@@ -338,6 +397,11 @@ describe("an attachment", () => {
 		const unknownId = await request(`/dl/feedback/fba_01JD3V0Y9XG8Q2W4E6R8T0Y2U4/${image.token}`);
 		expect([wrongToken.status, unknownId.status]).toEqual([404, 404]);
 		expect(await wrongToken.json()).toMatchObject({ code: "not_found", detail: "No attachment has that address." });
+		// A row with no bytes in R2 gets the same answer.
+		await env.BLOBS.delete(`feedback/${image.id}`);
+		const noBytes = await request(`/dl/feedback/${image.id}/${image.token}`);
+		const noBytesHead = await request(`/dl/feedback/${image.id}/${image.token}`, { method: "HEAD" });
+		expect([noBytes.status, noBytesHead.status]).toEqual([404, 404]);
 	});
 
 	it("of a different person cannot go in a report", async () => {
@@ -347,6 +411,8 @@ describe("an attachment", () => {
 		expect(
 			await codeOf(ada.call("feedback.submit", { ...report, attachments: [{ id: image.id, token: image.token }] })),
 		).toBe("not_found");
+		// The refused report makes no row, so it does not count in a limit.
+		expect(await reportCount()).toBe(0);
 	});
 
 	it("goes away at once when its owner or an admin removes it", async () => {
@@ -372,6 +438,17 @@ describe("an attachment", () => {
 		await turnOn();
 		for (let i = 0; i < 10; i++) await ada.call("feedback.upload_attachment", { content_base64: png() });
 		expect(await codeOf(ada.call("feedback.upload_attachment", { content_base64: png() }))).toBe("rate_limited");
+	});
+
+	it("stops at the same limit when the uploads come at the same time", async () => {
+		await turnOn();
+		const results = await Promise.all(
+			Array.from({ length: 12 }, () => outcome(ada.call("feedback.upload_attachment", { content_base64: png() }))),
+		);
+		expect(countOf(results, "ok")).toBe(10);
+		expect(countOf(results, "rate_limited")).toBe(2);
+		const rows = await env.DIRECTORY.prepare("SELECT COUNT(*) AS n FROM feedback_attachments").first<number>("n");
+		expect(rows).toBe(10);
 	});
 
 	it("goes away after its time: 24 hours without a report, 180 days in a report", async () => {

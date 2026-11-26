@@ -906,6 +906,18 @@ caller. The calendar of each principal is a new Durable Object class, `CalendarD
   events stay in the objects for the next upgrade.
 - [Agents](agents.md#calendar) has the rules for an agent.
 
+### Feedback scope
+
+Feedback adds the scope `feedback.write`. No migration changes the scopes of a key.
+
+- A browser session has the scope.
+- An API key of a person from before the upgrade does not have it. Create a new key with the scope to send
+  feedback with a key.
+- Some operations need a credential that holds each scope of a person. Examples are a change of how a person
+  signs in (a password, two-step verification, a new key for an account) and `chat.delete_room`.
+- An old key that held each scope before the upgrade does not hold `feedback.write`. It now gets `forbidden` for
+  these operations. Create the key again. A browser session is not affected.
+
 ### Recover a sign-in
 
 - A person whose invite link expired asks an owner or an admin for a new link: **New invite link** under

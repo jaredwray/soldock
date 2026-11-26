@@ -1,8 +1,8 @@
 import { buildFeedbackIssue, FEEDBACK_LIMITS } from "@asterra/contracts";
 import { auditOk, type CallContext, isAdmin } from "../identity/index.ts";
-import { type HandlerMap, newId, OperationError } from "../platform/index.ts";
-import { attachmentUrl, attachToReport, deleteAttachment, pendingAttachments, storeAttachment } from "./attachments.ts";
-import { createIssue } from "./github.ts";
+import { type HandlerMap, log, newId, OperationError } from "../platform/index.ts";
+import { attachmentUrl, deleteAttachment, pendingAttachments, storeAttachment } from "./attachments.ts";
+import { type CreatedIssue, createIssue } from "./github.ts";
 import { type FeedbackConfig, readFeedbackConfig, toSettingsOutput, updateFeedbackConfig } from "./settings.ts";
 
 type FeedbackOperation =
@@ -15,9 +15,6 @@ type FeedbackOperation =
 
 const HOUR_MS = 60 * 60 * 1000;
 const DAY_MS = 24 * HOUR_MS;
-
-/** A report that waits for GitHub longer than this is stale: the same idempotency key can try it again. */
-const PENDING_MS = 60_000;
 
 /** Only an owner or an admin reads or changes the feedback settings. Never an agent or a service account. */
 function requireAdmin(call: CallContext, action: string): void {
@@ -42,82 +39,130 @@ interface ReportRow {
 	updated_at: number;
 }
 
-async function countSince(env: Env, principalId: string | null, since: number, exceptId: string | null) {
-	const owner = principalId === null ? "" : "principal_id = ? AND ";
-	const values: unknown[] = principalId === null ? [] : [principalId];
-	return (
-		(await env.DIRECTORY.prepare(
-			`SELECT COUNT(*) AS n FROM feedback_reports
-			WHERE ${owner}status IN ('pending', 'sent') AND created_at > ? AND id != ?`,
-		)
-			.bind(...values, since, exceptId ?? "")
-			.first<number>("n")) ?? 0
-	);
+type SentIssue = { issue_number: number; issue_url: string };
+
+/** The row of an idempotency key of the person, or null. */
+async function reportOfKey(env: Env, principalId: string, idempotencyKey: string | undefined) {
+	if (idempotencyKey === undefined) return null;
+	return await env.DIRECTORY.prepare(
+		"SELECT id, status, issue_number, issue_url, updated_at FROM feedback_reports WHERE principal_id = ? AND idempotency_key = ?",
+	)
+		.bind(principalId, idempotencyKey)
+		.first<ReportRow>();
 }
 
-/** Throws `rate_limited` when the person or the organization sent too many reports. */
-async function checkLimits(env: Env, principalId: string, now: number, exceptId: string | null): Promise<void> {
-	if ((await countSince(env, principalId, now - HOUR_MS, exceptId)) >= FEEDBACK_LIMITS.reportsPerHour) {
-		throw new OperationError("rate_limited", `You can send ${FEEDBACK_LIMITS.reportsPerHour} reports in one hour.`);
-	}
-	if ((await countSince(env, principalId, now - DAY_MS, exceptId)) >= FEEDBACK_LIMITS.reportsPerDay) {
-		throw new OperationError("rate_limited", `You can send ${FEEDBACK_LIMITS.reportsPerDay} reports in one day.`);
-	}
-	if ((await countSince(env, null, now - DAY_MS, exceptId)) >= FEEDBACK_LIMITS.orgReportsPerDay) {
-		throw new OperationError("rate_limited", "The organization sent too many reports today. Try again tomorrow.");
-	}
+function sentIssue(row: ReportRow | null): SentIssue | null {
+	if (row?.status !== "sent" || row.issue_number === null || row.issue_url === null) return null;
+	return { issue_number: row.issue_number, issue_url: row.issue_url };
+}
+
+// The limits count each report row: pending, sent and failed. A failed report also used a request to GitHub, so
+// it must not give a free try. The conditions are part of the statement that writes the row. Thus two requests at
+// the same time cannot both pass a limit.
+const COUNT_PERSON = "(SELECT COUNT(*) FROM feedback_reports WHERE principal_id = ? AND created_at > ? AND id != ?)";
+const COUNT_ORG = "(SELECT COUNT(*) FROM feedback_reports WHERE created_at > ? AND id != ?)";
+const UNDER_LIMITS = `${COUNT_PERSON} < ? AND ${COUNT_PERSON} < ? AND ${COUNT_ORG} < ?`;
+
+/** The values of `UNDER_LIMITS`. The counts do not include the row `exceptId`. */
+function limitValues(principalId: string, now: number, exceptId: string): unknown[] {
+	return [
+		...[principalId, now - HOUR_MS, exceptId, FEEDBACK_LIMITS.reportsPerHour],
+		...[principalId, now - DAY_MS, exceptId, FEEDBACK_LIMITS.reportsPerDay],
+		...[now - DAY_MS, exceptId, FEEDBACK_LIMITS.orgReportsPerDay],
+	];
 }
 
 /**
- * The report row of this call: a new row, or the failed or stale row of the same idempotency key. Returns the
- * stored result when the same key already made an issue.
+ * The error of a claim that wrote no row: `rate_limited` when a limit stopped it, else `conflict`. The counts
+ * here only select the error. The statement of the claim applied the limits.
+ */
+async function claimError(env: Env, principalId: string, now: number, exceptId: string): Promise<OperationError> {
+	const count = async (sql: string, ...values: unknown[]) =>
+		(await env.DIRECTORY.prepare(`SELECT ${sql} AS n`)
+			.bind(...values)
+			.first<number>("n")) ?? 0;
+	if ((await count(COUNT_PERSON, principalId, now - HOUR_MS, exceptId)) >= FEEDBACK_LIMITS.reportsPerHour) {
+		return new OperationError("rate_limited", `You can send ${FEEDBACK_LIMITS.reportsPerHour} reports in one hour.`);
+	}
+	if ((await count(COUNT_PERSON, principalId, now - DAY_MS, exceptId)) >= FEEDBACK_LIMITS.reportsPerDay) {
+		return new OperationError("rate_limited", `You can send ${FEEDBACK_LIMITS.reportsPerDay} reports in one day.`);
+	}
+	if ((await count(COUNT_ORG, now - DAY_MS, exceptId)) >= FEEDBACK_LIMITS.orgReportsPerDay) {
+		return new OperationError("rate_limited", "The organization sent too many reports today. Try again tomorrow.");
+	}
+	return new OperationError(
+		"conflict",
+		"A report with the same key did not complete. It is possibly on GitHub. Examine the issues of the repository, or discard the draft.",
+	);
+}
+
+/**
+ * The id of the report row of this call, in the state `pending`: a new row, or the failed row of the same
+ * idempotency key. A `pending` row is never used again, because its issue is possibly on GitHub. Throws
+ * `rate_limited` or `conflict` when it writes no row.
  */
 async function claimReport(
 	env: Env,
 	input: { principalId: string; kind: string; idempotencyKey: string | undefined },
+	existing: ReportRow | null,
 	now: number,
-): Promise<{ id: string; sent: { issue_number: number; issue_url: string } | null }> {
+): Promise<string> {
 	const db = env.DIRECTORY;
-	if (input.idempotencyKey !== undefined) {
-		const row = await db
+	if (existing) {
+		// A failed row that starts again gets the time of this try, so it counts in the current hour and day.
+		const claimed = await db
 			.prepare(
-				"SELECT id, status, issue_number, issue_url, updated_at FROM feedback_reports WHERE principal_id = ? AND idempotency_key = ?",
+				`UPDATE feedback_reports SET status = 'pending', kind = ?, created_at = ?, updated_at = ?
+				WHERE id = ? AND status = 'failed' AND updated_at = ? AND ${UNDER_LIMITS}`,
 			)
-			.bind(input.principalId, input.idempotencyKey)
-			.first<ReportRow>();
-		if (row) {
-			if (row.status === "sent" && row.issue_number !== null && row.issue_url !== null) {
-				return { id: row.id, sent: { issue_number: row.issue_number, issue_url: row.issue_url } };
-			}
-			if (row.status === "pending" && row.updated_at > now - PENDING_MS) {
-				throw new OperationError("conflict", "The same report is on its way to GitHub. Wait, then try again.");
-			}
-			await checkLimits(env, input.principalId, now, row.id);
-			const claimed = await db
-				.prepare(
-					"UPDATE feedback_reports SET status = 'pending', kind = ?, updated_at = ? WHERE id = ? AND updated_at = ?",
-				)
-				.bind(input.kind, now, row.id, row.updated_at)
-				.run();
-			if ((claimed.meta.changes ?? 0) === 0) {
-				throw new OperationError("conflict", "The same report is on its way to GitHub. Wait, then try again.");
-			}
-			return { id: row.id, sent: null };
-		}
+			.bind(input.kind, now, now, existing.id, existing.updated_at, ...limitValues(input.principalId, now, existing.id))
+			.run();
+		if ((claimed.meta.changes ?? 0) === 0) throw await claimError(env, input.principalId, now, existing.id);
+		return existing.id;
 	}
-	await checkLimits(env, input.principalId, now, null);
 	const id = newId("fbr", now);
 	const inserted = await db
 		.prepare(
 			`INSERT INTO feedback_reports (id, principal_id, kind, status, idempotency_key, created_at, updated_at)
-			VALUES (?, ?, ?, 'pending', ?, ?, ?) ON CONFLICT DO NOTHING`,
+			SELECT ?, ?, ?, 'pending', ?, ?, ? WHERE ${UNDER_LIMITS} ON CONFLICT DO NOTHING`,
 		)
-		.bind(id, input.principalId, input.kind, input.idempotencyKey ?? null, now, now)
+		.bind(
+			id,
+			input.principalId,
+			input.kind,
+			input.idempotencyKey ?? null,
+			now,
+			now,
+			...limitValues(input.principalId, now, ""),
+		)
 		.run();
-	if ((inserted.meta.changes ?? 0) === 0) {
-		throw new OperationError("conflict", "The same report is on its way to GitHub. Wait, then try again.");
+	if ((inserted.meta.changes ?? 0) === 0) throw await claimError(env, input.principalId, now, "");
+	return id;
+}
+
+/**
+ * Writes the issue of a report and puts its attachments in the report, in one batch. GitHub has the issue at this
+ * time, so the row must not become `failed`: a second try would make a second issue. The batch runs one more time
+ * after an error. If it fails again, the row stays `pending`, and the same key gets `conflict`.
+ */
+async function finishReport(env: Env, reportId: string, issue: CreatedIssue, attachmentIds: readonly string[]) {
+	const db = env.DIRECTORY;
+	const statements = () => [
+		db
+			.prepare(
+				"UPDATE feedback_reports SET status = 'sent', issue_number = ?, issue_url = ?, updated_at = ? WHERE id = ?",
+			)
+			.bind(issue.number, issue.url, Date.now(), reportId),
+		...attachmentIds.map((id) =>
+			db.prepare("UPDATE feedback_attachments SET report_id = ? WHERE id = ? AND report_id IS NULL").bind(reportId, id),
+		),
+	];
+	try {
+		await db.batch(statements());
+	} catch {
+		log("warn", "feedback: the report did not save after GitHub made the issue", { report: reportId });
+		await db.batch(statements());
 	}
-	return { id, sent: null };
 }
 
 export const feedbackHandlers: Pick<HandlerMap<CallContext>, FeedbackOperation> = {
@@ -177,17 +222,20 @@ export const feedbackHandlers: Pick<HandlerMap<CallContext>, FeedbackOperation> 
 	async "feedback.submit"(call, input) {
 		const config = await readyConfig(call.env);
 		const { principal } = call.caller;
-		const report = await claimReport(
+		const now = Date.now();
+		const existing = await reportOfKey(call.env, principal.id, input.idempotency_key);
+		const sent = sentIssue(existing);
+		if (existing && sent) return { report_id: existing.id, delivery: "issue" as const, ...sent };
+		// The check of the attachments is before the claim, so a bad attachment makes no report row.
+		const attachments = await pendingAttachments(call.env, principal.id, input.attachments);
+		const reportId = await claimReport(
 			call.env,
 			{ principalId: principal.id, kind: input.kind, idempotencyKey: input.idempotency_key },
-			Date.now(),
+			existing,
+			now,
 		);
-		if (report.sent) return { report_id: report.id, delivery: "issue" as const, ...report.sent };
-		let created: { number: number; url: string };
-		let attachmentIds: string[];
+		let created: CreatedIssue;
 		try {
-			const attachments = await pendingAttachments(call.env, principal.id, input.attachments);
-			attachmentIds = attachments.map((row) => row.id);
 			const issue = buildFeedbackIssue({
 				kind: input.kind,
 				title: input.title,
@@ -200,7 +248,7 @@ export const feedbackHandlers: Pick<HandlerMap<CallContext>, FeedbackOperation> 
 					kind: call.caller.kind,
 				},
 				host: new URL(call.origin).host,
-				report_id: report.id,
+				report_id: reportId,
 				context: input.context,
 				attachments: input.attachments.map((ref, i) => ({
 					kind: attachments[i]?.kind ?? "image",
@@ -209,18 +257,23 @@ export const feedbackHandlers: Pick<HandlerMap<CallContext>, FeedbackOperation> 
 			});
 			created = await createIssue({ owner: config.repoOwner, name: config.repoName, token: config.token }, issue);
 		} catch (error) {
-			await call.env.DIRECTORY.prepare("UPDATE feedback_reports SET status = 'failed', updated_at = ? WHERE id = ?")
-				.bind(Date.now(), report.id)
-				.run();
+			// GitHub made no issue, so the same key can try again. An error of this write must not hide `error`.
+			try {
+				await call.env.DIRECTORY.prepare("UPDATE feedback_reports SET status = 'failed', updated_at = ? WHERE id = ?")
+					.bind(Date.now(), reportId)
+					.run();
+			} catch {
+				log("warn", "feedback: the failed report did not save", { report: reportId });
+			}
 			throw error;
 		}
-		await call.env.DIRECTORY.prepare(
-			"UPDATE feedback_reports SET status = 'sent', issue_number = ?, issue_url = ?, updated_at = ? WHERE id = ?",
-		)
-			.bind(created.number, created.url, Date.now(), report.id)
-			.run();
-		await attachToReport(call.env, report.id, attachmentIds);
-		auditOk(call, "feedback.submit", report.id);
-		return { report_id: report.id, delivery: "issue" as const, issue_number: created.number, issue_url: created.url };
+		await finishReport(
+			call.env,
+			reportId,
+			created,
+			attachments.map((row) => row.id),
+		);
+		auditOk(call, "feedback.submit", reportId);
+		return { report_id: reportId, delivery: "issue" as const, issue_number: created.number, issue_url: created.url };
 	},
 };

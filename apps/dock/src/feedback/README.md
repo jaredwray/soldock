@@ -61,15 +61,23 @@ The golden rules allow no external runtime services. Feedback does not break tha
 and the context of the page. The server builds the issue with `buildFeedbackIssue` of `packages/contracts`. The web
 app uses the same function for its preview, so the person sees the exact text before they send it.
 
+The table has the parts in the order of the issue. The **Reporter** table of the server facts is before the text
+of the person, so the text cannot put a false table above the real one.
+
 | Part of the issue | Source |
 | --- | --- |
 | Title | `[Bug]` or `[Idea]`, then the title. The label is `bug` or `enhancement` |
-| Text | The description. Each `@name` gets a zero-width space, so a report cannot notify a GitHub user |
-| Attachments | An image shows in the issue. A recording is a link, because GitHub does not show a video from a different host |
 | Name | The display name, only when `include.name` is true |
 | Email | The address, only when `include.email` is true. The web app sets it off by default |
 | Role, account kind, instance host, report id | Always. The server takes them from the caller and the origin, never from the input |
+| Text | The description, with each mention broken (see below) |
+| Attachments | An image shows in the issue. A recording is a link, because GitHub does not show a video from a different host |
 | Asterra version, page kind, browser | From the web app. The page is a kind such as `mail` or `admin/general`, never an id or a query string |
+
+`breakMentions` puts a zero-width space after each `@` that a letter or a digit follows, so a report cannot notify
+a GitHub user or a team. Only a letter or a digit before the `@` keeps it, as in `ada@example.com`. A backtick or
+a `_` before the `@` does not keep it. An HTML entity of `@` (`&#64;`, `&#x40;`, `&commat;`) becomes plain text.
+The title, the text and each table cell go through the function.
 
 The issue never holds the principal id. The report id (`fbr_…`) lets an admin find the person in
 `feedback_reports`.
@@ -78,11 +86,18 @@ The issue never holds the principal id. The report id (`fbr_…`) lets an admin 
   `feedback.write`). An agent reads untrusted mail, and a public issue would let a prompt injection publish data.
   A key of a person without `feedback.write` cannot send.
 - **Limits.** One person can send 5 reports in one hour and 20 in one day. The organization can send 200 in one
-  day. A failed report does not count. Over a limit, the answer is `rate_limited`.
+  day. Each report row counts: `pending`, `sent` and `failed`. A failed report also made a request to GitHub, so
+  it gives no free try. Over a limit, the answer is `rate_limited`. The limits are conditions of the one statement
+  that writes the row, so requests at the same time cannot pass them. A report with a bad attachment makes no row.
 - **Idempotency.** The server writes the report row as `pending` before the call to GitHub, then `sent` or
-  `failed`. The same `idempotency_key` returns the stored issue after `sent`, and tries again after `failed`. A
-  report that waits more than 60 seconds can also try again. The issue body has the marker
-  `<!-- asterra-feedback: fbr_… -->`, so a person can find a duplicate after a timeout where GitHub made the issue.
+  `failed`. The same `idempotency_key` returns the stored issue after `sent`, and tries again after `failed`. The
+  new try gets the current time, so it counts in the current hour and day.
+  - The row becomes `failed` only when GitHub made no issue.
+  - After GitHub made the issue, one D1 batch writes `sent` and puts the attachments in the report. The batch
+    runs one more time after an error.
+  - A `pending` row never tries again, because its issue is possibly on GitHub. The same key gets `conflict`. The
+    text tells the person to examine the issues of the repository, or to discard the draft.
+  - The issue body has the marker `<!-- asterra-feedback: fbr_… -->`, so a person can find the issue of a report.
 - **GitHub errors.** The timeout is 10 seconds, and redirects are not followed. Each failure gives `unavailable`
   with a short text. No log line holds the answer of GitHub, the token or the text of the report.
 
@@ -96,14 +111,16 @@ Each attachment has a public address: `GET|HEAD /dl/feedback/<attachment id>/<to
 
 - The address works with no sign-in, because each reader of the public issue must open it.
 - The token is 32 random bytes in base64url. D1 keeps only its SHA-256, and the check is in constant time.
-- A wrong id and a wrong token get the same `404`.
+- A wrong id, a wrong token and a row with no bytes in R2 get the same `404`.
 - The answer comes from `downloadResponse`: the type that the server found, `nosniff`, the sandbox policy of each
   download, and `private, no-store`. A removal applies at once. GitHub can keep a copy of an image in its cache
   for some time.
 - The address names the host of the instance. An instance behind Cloudflare Access gives links that the
   maintainers cannot open.
 
-A person can have at most 10 attachments that no report holds. One report has at most 5 attachments, and each one
+A person can have at most 10 attachments that no report holds. The upload writes the D1 row first, with the
+limit as a condition of the statement, and then puts the bytes in R2. Thus uploads at the same time cannot pass
+the limit. If R2 fails, the upload removes the row. One report has at most 5 attachments, and each one
 must belong to the person and be in no report yet. The person removes an attachment with
 `feedback.delete_attachment`. An owner or an admin can remove each attachment. The answer is `deleted: false` for
 an attachment that does not exist or that the caller cannot remove.
@@ -115,7 +132,7 @@ The hourly cron (`runScheduled`) calls `pruneFeedback`:
 - An attachment that no report holds goes after 24 hours.
 - An attachment of a sent report goes after 180 days.
 - A report row goes after 180 days.
-- One run removes at most 500 attachments.
+- One run removes at most 500 attachments. One statement finds and removes the rows, then the bytes go from R2.
 
 A directory reset drops the three tables. The bytes of the old attachments stay in R2 with no row, so their
 addresses stop at once.

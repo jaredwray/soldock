@@ -13,6 +13,7 @@ import {
 	type Recording,
 	requestScreen,
 	startRecording,
+	stopStream,
 	supportsCapture,
 	supportsRecording,
 } from "./capture.ts";
@@ -28,6 +29,7 @@ import {
 	pageOf,
 	previewIssue,
 	submitInput,
+	withAttachment,
 } from "./model.ts";
 
 interface FeedbackWidgetProps {
@@ -50,16 +52,24 @@ export function FeedbackWidget({ status, route, open, onOpenChange }: FeedbackWi
 	const [busy, setBusy] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 	const [sent, setSent] = useState<{ number: number; url: string } | null>(null);
+	// `draftRef` has the draft at this moment, also before React renders it. A decision between two renders reads
+	// it: the limit of attachments for each file of one drop, and the removal of an attachment during its upload.
 	const draftRef = useRef(draft);
-	draftRef.current = draft;
+	const alive = useRef(true);
+	const activeRecording = useRef<Recording | null>(null);
+	const activeStream = useRef<MediaStream | null>(null);
 
-	// The local previews of the attachments go when the widget goes.
-	useEffect(
-		() => () => {
+	// The widget goes at a sign-out, and when an admin turns feedback off. The share of the screen stops then, and
+	// the local previews of the attachments go.
+	useEffect(() => {
+		alive.current = true;
+		return () => {
+			alive.current = false;
+			activeRecording.current?.stop();
+			if (activeStream.current) stopStream(activeStream.current);
 			for (const item of draftRef.current.attachments) URL.revokeObjectURL(item.previewUrl);
-		},
-		[],
-	);
+		};
+	}, []);
 
 	useEffect(() => {
 		if (!recording) return;
@@ -70,15 +80,30 @@ export function FeedbackWidget({ status, route, open, onOpenChange }: FeedbackWi
 	const facts: ClientFacts = { appVersion: ASTERRA_VERSION, page: pageOf(route), userAgent: navigator.userAgent };
 	const full = draft.attachments.length >= status.limits.attachments;
 
+	function updateDraft(update: (current: FeedbackDraft) => FeedbackDraft) {
+		draftRef.current = update(draftRef.current);
+		setDraft(update);
+	}
+
+	function replaceDraft(next: FeedbackDraft) {
+		draftRef.current = next;
+		setDraft(next);
+	}
+
 	function change(patch: Partial<FeedbackDraft>) {
-		setDraft((current) => ({ ...current, ...patch }));
+		updateDraft((current) => ({ ...current, ...patch }));
 	}
 
 	function patchAttachment(key: string, patch: Partial<DraftAttachment>) {
-		setDraft((current) => ({
+		updateDraft((current) => ({
 			...current,
 			attachments: current.attachments.map((item) => (item.key === key ? { ...item, ...patch } : item)),
 		}));
+	}
+
+	/** Removes a stored file at once, so its public address stops. */
+	function deleteStored(id: string) {
+		void api.call("feedback.delete_attachment", { attachment_id: id }).catch(() => {});
 	}
 
 	/** Adds a file to the draft and uploads it. The server reads the type from the bytes again. */
@@ -93,10 +118,7 @@ export function FeedbackWidget({ status, route, open, onOpenChange }: FeedbackWi
 			setError("An attachment has at most 10 MiB.");
 			return;
 		}
-		if (draftRef.current.attachments.length >= status.limits.attachments) {
-			setError(`A report has at most ${status.limits.attachments} attachments.`);
-			return;
-		}
+		const limit = status.limits.attachments;
 		const key = crypto.randomUUID();
 		const item: DraftAttachment = {
 			key,
@@ -106,79 +128,107 @@ export function FeedbackWidget({ status, route, open, onOpenChange }: FeedbackWi
 			stored: null,
 			error: null,
 		};
-		// The confirmation applies to the attachments that the person examined, so a new one clears it.
-		setDraft((current) => ({ ...current, attachments: [...current.attachments, item], confirmed: false }));
+		// The draft gets the attachment before the upload starts, so the files of one drop cannot pass the limit.
+		const next = withAttachment(draftRef.current, item, limit);
+		if (next === null) {
+			URL.revokeObjectURL(item.previewUrl);
+			setError(`A report has at most ${limit} attachments.`);
+			return;
+		}
+		updateDraft((current) => withAttachment(current, item, limit) ?? current);
+		const inDraft = () => alive.current && draftRef.current.attachments.some((other) => other.key === key);
 		try {
 			const stored = await api.call("feedback.upload_attachment", {
 				name: name.slice(0, 255),
 				content_base64: await fileToBase64(file),
 			});
-			patchAttachment(key, { state: "ready", stored });
+			// The person removed the attachment during the upload, or the widget went. The file must not stay public.
+			if (inDraft()) patchAttachment(key, { state: "ready", stored });
+			else deleteStored(stored.id);
 		} catch (caught) {
-			patchAttachment(key, { state: "failed", error: errorMessage(caught) });
+			if (inDraft()) patchAttachment(key, { state: "failed", error: errorMessage(caught) });
 		}
 	}
 
 	function removeAttachment(item: DraftAttachment) {
 		URL.revokeObjectURL(item.previewUrl);
-		setDraft((current) => ({ ...current, attachments: current.attachments.filter((other) => other.key !== item.key) }));
-		// The stored file goes at once, so its public address stops.
-		if (item.stored) void api.call("feedback.delete_attachment", { attachment_id: item.stored.id }).catch(() => {});
+		updateDraft((current) => ({
+			...current,
+			attachments: current.attachments.filter((other) => other.key !== item.key),
+		}));
+		if (item.stored) deleteStored(item.stored.id);
 	}
 
-	async function takeScreenshot() {
+	/** Asks for the screen. Returns null when the person cancelled, on an error, or when the widget went. */
+	async function askScreen(): Promise<MediaStream | null> {
 		setError(null);
 		let stream: MediaStream;
 		try {
 			stream = await requestScreen();
 		} catch (caught) {
-			if (!isCancelled(caught)) setError(errorMessage(caught));
-			return;
+			if (alive.current && !isCancelled(caught)) setError(errorMessage(caught));
+			return null;
 		}
+		if (!alive.current) {
+			stopStream(stream);
+			return null;
+		}
+		activeStream.current = stream;
+		return stream;
+	}
+
+	async function takeScreenshot() {
+		const stream = await askScreen();
+		if (!stream) return;
 		try {
 			// The dialog closes, so it is not in the screenshot.
 			const image = await captureFrame(stream, () => onOpenChange(false));
-			await addFile(image, image.type === "image/png" ? "screenshot.png" : "screenshot.jpg");
+			if (alive.current) await addFile(image, image.type === "image/png" ? "screenshot.png" : "screenshot.jpg");
 		} catch (caught) {
-			setError(errorMessage(caught));
+			if (alive.current) setError(errorMessage(caught));
 		} finally {
-			onOpenChange(true);
+			activeStream.current = null;
+			if (alive.current) onOpenChange(true);
 		}
 	}
 
 	async function record() {
-		setError(null);
-		let stream: MediaStream;
-		try {
-			stream = await requestScreen();
-		} catch (caught) {
-			if (!isCancelled(caught)) setError(errorMessage(caught));
-			return;
-		}
+		const stream = await askScreen();
+		if (!stream) return;
 		let active: Recording;
 		try {
 			active = startRecording(stream);
 		} catch (caught) {
+			activeStream.current = null;
 			setError(errorMessage(caught));
 			return;
 		}
+		activeRecording.current = active;
 		setElapsed(0);
 		setRecording({ recording: active, started: Date.now() });
 		onOpenChange(false);
 		try {
 			const video = await active.done;
-			await addFile(video, video.type === "video/mp4" ? "recording.mp4" : "recording.webm");
+			if (alive.current) await addFile(video, video.type === "video/mp4" ? "recording.mp4" : "recording.webm");
 		} catch (caught) {
-			setError(errorMessage(caught));
+			if (alive.current) setError(errorMessage(caught));
 		} finally {
-			setRecording(null);
-			onOpenChange(true);
+			activeRecording.current = null;
+			activeStream.current = null;
+			if (alive.current) {
+				setRecording(null);
+				onOpenChange(true);
+			}
 		}
 	}
 
 	function discard() {
-		for (const item of draft.attachments) removeAttachment(item);
-		setDraft(emptyDraft(crypto.randomUUID()));
+		// An attachment that uploads now is not in the new draft, so `addFile` removes its file when the upload ends.
+		for (const item of draftRef.current.attachments) {
+			URL.revokeObjectURL(item.previewUrl);
+			if (item.stored) deleteStored(item.stored.id);
+		}
+		replaceDraft(emptyDraft(crypto.randomUUID()));
 		setError(null);
 		setSent(null);
 		onOpenChange(false);
@@ -193,7 +243,7 @@ export function FeedbackWidget({ status, route, open, onOpenChange }: FeedbackWi
 			const result = await api.call("feedback.submit", submitInput(draft, facts));
 			for (const item of draft.attachments) URL.revokeObjectURL(item.previewUrl);
 			setSent({ number: result.issue_number, url: result.issue_url });
-			setDraft(emptyDraft(crypto.randomUUID()));
+			replaceDraft(emptyDraft(crypto.randomUUID()));
 		} catch (caught) {
 			setError(errorMessage(caught));
 		} finally {
@@ -210,9 +260,13 @@ export function FeedbackWidget({ status, route, open, onOpenChange }: FeedbackWi
 	return (
 		<>
 			{recording && (
-				<div className="feedback-recording" role="status">
+				<div className="feedback-recording">
 					<span className="feedback-recording-dot" aria-hidden="true" />
-					<span>Recording {clock(elapsed)}</span>
+					{/* A screen reader gets one text that does not change. The clock would speak each second. */}
+					<span className="visually-hidden" role="status">
+						Asterra records the screen.
+					</span>
+					<span aria-hidden="true">Recording {clock(elapsed)}</span>
 					<button type="button" className="button button-small" onClick={() => recording.recording.stop()}>
 						Stop
 					</button>
@@ -299,7 +353,7 @@ function FeedbackForm({
 	onDiscard,
 	onSubmit,
 }: FeedbackFormProps) {
-	const ids = { kind: useId(), title: useId(), description: useId(), files: useId() };
+	const ids = { kind: useId(), title: useId(), description: useId(), files: useId(), blocked: useId() };
 	const fileInput = useRef<HTMLInputElement>(null);
 	const [dragging, setDragging] = useState(false);
 	const issue = previewIssue(draft, reporter, location.host, facts);
@@ -330,7 +384,11 @@ function FeedbackForm({
 				event.preventDefault();
 				setDragging(true);
 			}}
-			onDragLeave={() => setDragging(false)}
+			onDragLeave={(event) => {
+				// A move to a child of the form is not a leave. Without this check, the highlight flickers.
+				if (event.relatedTarget instanceof Node && event.currentTarget.contains(event.relatedTarget)) return;
+				setDragging(false);
+			}}
 			onDrop={onDrop}
 			className={dragging ? "feedback-form feedback-form-drop" : "feedback-form"}
 			noValidate
@@ -516,6 +574,11 @@ function FeedbackForm({
 						{error}
 					</p>
 				)}
+				{blocked !== null && !busy && (
+					<p id={ids.blocked} className="field-hint">
+						{blocked}
+					</p>
+				)}
 			</div>
 			<div className="dialog-actions">
 				<button type="button" className="button link-remove" onClick={onDiscard} disabled={busy}>
@@ -525,7 +588,7 @@ function FeedbackForm({
 					type="submit"
 					className="button button-primary"
 					disabled={busy || blocked !== null}
-					title={blocked ?? undefined}
+					aria-describedby={blocked !== null && !busy ? ids.blocked : undefined}
 				>
 					{busy ? "Sending…" : "Send"}
 				</button>

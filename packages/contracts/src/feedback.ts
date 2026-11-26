@@ -158,9 +158,15 @@ export interface FeedbackIssue {
 
 const ZERO_WIDTH_SPACE = "​";
 
-/** Text with each `@name` broken, so a report cannot notify a GitHub user or a team. */
+/**
+ * Text with each `@name` broken, so a report cannot notify a GitHub user or a team. Only a letter or a digit
+ * before the `@` keeps it, as in an email address. Markdown removes a backtick or a `_` before the `@`, so they
+ * do not keep it. An HTML entity of `@` (`&#64;`, `&#x40;`, `&commat;`) becomes plain text.
+ */
 export function breakMentions(text: string): string {
-	return text.replace(/(^|[^A-Za-z0-9_`])@(?=[A-Za-z0-9])/g, `$1@${ZERO_WIDTH_SPACE}`);
+	return text
+		.replace(/&(?=#0*64;|#[xX]0*40;|commat;)/g, "&amp;")
+		.replace(/(?<![A-Za-z0-9])@(?=[A-Za-z0-9])/g, `@${ZERO_WIDTH_SPACE}`);
 }
 
 /** A value for one cell of a Markdown table: one line, with no `|` and no HTML. */
@@ -187,8 +193,18 @@ const KIND_TEXT: Record<string, string> = { human: "Person", agent: "Agent", ser
 export function buildFeedbackIssue(input: FeedbackIssueInput): FeedbackIssue {
 	const kind = KIND_TITLES[input.kind];
 	const title = `${kind.prefix} ${breakMentions(input.title.replace(/\s+/g, " ").trim())}`;
-	const lines: string[] = [`<!-- asterra-feedback: ${input.report_id} -->`, `## ${kind.heading}`, ""];
-	lines.push(breakMentions(input.description.trim()), "");
+	const { reporter, context } = input;
+	// The table of the server facts is before the text of the person. Thus the text cannot put a false table
+	// above the real one.
+	const lines: string[] = [`<!-- asterra-feedback: ${input.report_id} -->`];
+	lines.push("## Reporter", "", "| | |", "| --- | --- |");
+	lines.push(`| Name | ${reporter.name === null ? "Not shared" : cell(reporter.name)} |`);
+	if (reporter.email !== null) lines.push(`| Email | ${cell(reporter.email)} |`);
+	lines.push(`| Role | ${reporter.role === null ? "None" : (ROLE_TEXT[reporter.role] ?? "None")} |`);
+	lines.push(`| Account | ${KIND_TEXT[reporter.kind] ?? "Person"} |`);
+	lines.push(`| Instance | ${cell(input.host)} |`);
+	lines.push(`| Report | ${input.report_id} |`, "");
+	lines.push(`## ${kind.heading}`, "", breakMentions(input.description.trim()), "");
 	if (input.attachments.length > 0) {
 		lines.push("## Attachments", "");
 		let images = 0;
@@ -203,14 +219,6 @@ export function buildFeedbackIssue(input: FeedbackIssueInput): FeedbackIssue {
 			}
 		}
 	}
-	const { reporter, context } = input;
-	lines.push("## Reporter", "", "| | |", "| --- | --- |");
-	lines.push(`| Name | ${reporter.name === null ? "Not shared" : cell(reporter.name)} |`);
-	if (reporter.email !== null) lines.push(`| Email | ${cell(reporter.email)} |`);
-	lines.push(`| Role | ${reporter.role === null ? "None" : (ROLE_TEXT[reporter.role] ?? "None")} |`);
-	lines.push(`| Account | ${KIND_TEXT[reporter.kind] ?? "Person"} |`);
-	lines.push(`| Instance | ${cell(input.host)} |`);
-	lines.push(`| Report | ${input.report_id} |`, "");
 	const facts: [string, string | undefined][] = [
 		["Asterra version", context.app_version],
 		["Page", context.page],
@@ -305,7 +313,7 @@ const deleteAttachment = defineOperation({
 	annotations: { readOnly: false, destructive: true, idempotent: true, openWorld: false },
 	input: z.strictObject({ attachment_id: FeedbackAttachmentId }),
 	output: z.object({ deleted: z.boolean() }),
-	errors: ["not_found"],
+	errors: [],
 });
 
 const submit = defineOperation({
