@@ -87,9 +87,6 @@ export function shiftTarget(view: CalendarView, date: string, steps: number, fir
 	return periodStart(edge) === periodStart(date) ? null : edge;
 }
 
-/** The length in the grid of a part that ends at or before its start on the wall clock. */
-const BACK_PART_MINUTES = 15;
-
 /** The minutes from 00:00 to an instant on the wall clock of a time zone: 540 for 09:00. */
 export function wallMinutes(ms: number, zone: string): number {
 	const local = new Date(ms + zoneOffsetMs(ms, zone));
@@ -145,8 +142,10 @@ export function eventsByDay(events: readonly CalendarEvent[], days: readonly str
 				event,
 				allDay: false,
 				start: from,
-				// When the clock goes back, an event can end at an earlier time on the wall clock than its start.
-				end: to > from ? to : Math.min(from + BACK_PART_MINUTES, DAY_MINUTES),
+				// When the clock goes back, an event can end at an earlier time on the wall clock than its start. Such a
+				// part keeps its real length in the grid.
+				end:
+					to > from ? to : Math.min(from + (Math.min(end, dayEnd) - Math.max(start, dayStart)) / 60_000, DAY_MINUTES),
 				continued,
 				continues: end > dayEnd,
 			});

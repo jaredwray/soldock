@@ -119,8 +119,8 @@ describe("the events of each day", () => {
 		expect(parts(timed("c", "2026-11-02T04:00:00Z", "2026-11-02T06:00:00Z"), "2026-11-01")).toEqual([
 			[23 * 60, 1440, true],
 		]);
-		// From 01:30 before the change to 01:10 after it: the part keeps a length in the grid.
-		expect(parts(timed("d", "2026-11-01T05:30:00Z", "2026-11-01T06:10:00Z"), "2026-11-01")).toEqual([[90, 105, false]]);
+		// From 01:30 before the change to 01:10 after it: the part keeps its real length of 40 minutes in the grid.
+		expect(parts(timed("d", "2026-11-01T05:30:00Z", "2026-11-01T06:10:00Z"), "2026-11-01")).toEqual([[90, 130, false]]);
 		// A new event from a click on the 9 AM line is at that line.
 		const clicked = whenOf(newEventForm("2026-03-08", 9), NY);
 		expect(parts(event("e", clicked as CalendarEvent["when"]), "2026-03-08")).toEqual([[9 * 60, 10 * 60, false]]);
