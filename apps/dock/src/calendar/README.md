@@ -309,7 +309,7 @@ or `calendar.list_events`, which check its access again. After `calendar.event.d
 
 ### The web app
 
-- The web app gets the cursor of now first, then reads the range. A change after that cursor makes a catch-up
+- For each range (week or month), the web app gets the cursor of now first, then reads the range. A change after that cursor makes a catch-up
   read it, and the range loads again, so no change during the first read is lost.
 - It catches up on `calendar.changed`, on `hello` after each connect of the events socket, and on focus. While
   the socket is down, it catches up each 30 seconds when the page shows.

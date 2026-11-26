@@ -60,7 +60,7 @@ async function headCursor(): Promise<string> {
 export function useEvents(timeMin: string, timeMax: string, zone: string) {
 	const [state, setState] = useState<EventsState>({ status: "loading", events: [] });
 	const generation = useRef(0);
-	/** The position of the page in the change feed. It stays when the range changes. */
+	/** The position of the page in the change feed. Each range sets it again after its first load. */
 	const cursor = useRef<string | null>(null);
 	/** The range whose events are on screen, or null. A load of the range sets it, also a load of Try again. */
 	const shownRange = useRef<string | null>(null);
@@ -101,9 +101,10 @@ export function useEvents(timeMin: string, timeMax: string, zone: string) {
 			shown: () => shownRange.current === rangeKey,
 			stopped: () => stopped,
 		});
-		// A range change keeps the cursor: the range loads now, and the changes after the cursor still come.
-		if (cursor.current === null) void sync();
-		else void load(true);
+		// Each range starts its own handoff: the cursor of now, then the range. A failed first load of the range
+		// leaves no cursor, so the next hint, connect or fallback reads the range again.
+		cursor.current = null;
+		void sync();
 		const syncIfVisible = () => {
 			if (document.visibilityState === "visible") void sync();
 		};
