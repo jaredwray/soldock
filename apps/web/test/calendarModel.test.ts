@@ -1,6 +1,7 @@
 import type { CalendarEvent } from "@asterra/contracts";
 import { describe, expect, it } from "vitest";
 import {
+	clampDay,
 	eventsByDay,
 	formOf,
 	formProblem,
@@ -74,6 +75,12 @@ describe("the days of a period", () => {
 		// The first week has days before 1970, so the step to it opens its first day in the window.
 		expect(shiftTarget("week", "1970-01-05", -1, 0)).toBe("1970-01-01");
 		expect(shiftTarget("week", "2100-12-25", 1, 0)).toBe("2100-12-31");
+		// The first week starts on 1969-12-28. A new event there starts on the first day in the window.
+		expect([clampDay("1969-12-28"), clampDay("2101-01-01"), clampDay("2026-12-01")]).toEqual([
+			"1970-01-01",
+			"2100-12-31",
+			"2026-12-01",
+		]);
 	});
 });
 

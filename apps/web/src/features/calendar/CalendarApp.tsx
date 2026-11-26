@@ -5,11 +5,11 @@ import { errorMessage } from "../../lib/api.ts";
 import { Icon } from "../../lib/icons.tsx";
 import { setPageTitle } from "../../lib/pageTitle.ts";
 import { Link } from "../../lib/router.tsx";
-import { type CalendarView, calendarPath } from "../../routes.ts";
+import { type CalendarView, calendarPath, isCalendarDate } from "../../routes.ts";
 import { PageHeader } from "../../shell/PageHeader.tsx";
 import { useEvents } from "./data.ts";
 import { EventDialog } from "./EventDialog.tsx";
-import { type EventForm, type FirstDay, newEventForm, periodOf, periodTitle, shiftTarget } from "./model.ts";
+import { clampDay, type EventForm, type FirstDay, newEventForm, periodOf, periodTitle, shiftTarget } from "./model.ts";
 import { AgendaList, MonthView, WeekView } from "./views.tsx";
 
 /** The first day of a week in the grid. The dates of the web app use en-US, which starts a week on Sunday. */
@@ -69,17 +69,18 @@ export function CalendarApp({ view, date }: CalendarAppProps) {
 	}, [title]);
 
 	const openEvent = useCallback((event: CalendarEvent) => setDialog({ event, initial: newEventForm(today) }), [today]);
-	const createAt = useCallback(
-		(day: string, hour?: number) => setDialog({ event: null, initial: newEventForm(day, hour) }),
-		[],
-	);
+	// The first and the last week show days before 1970 and after 2100. No event can use them.
+	const createAt = useCallback((day: string, hour?: number) => {
+		if (isCalendarDate(day)) setDialog({ event: null, initial: newEventForm(day, hour) });
+	}, []);
 	// A new event in the period of today starts today. In a different period, it starts on its first day.
-	const newEventDay =
+	const newEventDay = clampDay(
 		period.days.includes(today) && (view === "week" || today.slice(0, 7) === anchor.slice(0, 7))
 			? today
 			: view === "week"
 				? period.start
-				: `${anchor.slice(0, 7)}-01`;
+				: `${anchor.slice(0, 7)}-01`,
+	);
 
 	const month = anchor.slice(0, 7);
 	const agendaDays = view === "month" ? period.days.filter((day) => day.slice(0, 7) === month) : period.days;

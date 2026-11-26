@@ -87,6 +87,12 @@ export function shiftTarget(view: CalendarView, date: string, steps: number, fir
 	return periodStart(edge) === periodStart(date) ? null : edge;
 }
 
+/** The day in the window of the days that an event can use that is nearest to a day. */
+export function clampDay(day: string): string {
+	if (day < CALENDAR_LIMITS.firstDate) return CALENDAR_LIMITS.firstDate;
+	return day > CALENDAR_LIMITS.lastDate ? CALENDAR_LIMITS.lastDate : day;
+}
+
 /** The minutes from 00:00 to an instant on the wall clock of a time zone: 540 for 09:00. */
 export function wallMinutes(ms: number, zone: string): number {
 	const local = new Date(ms + zoneOffsetMs(ms, zone));

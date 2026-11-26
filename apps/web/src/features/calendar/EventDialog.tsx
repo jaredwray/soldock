@@ -28,22 +28,15 @@ export function EventDialog({ event, initial, zone, onChanged, onClose }: EventD
 	const [error, setError] = useState<string | null>(null);
 	const [conflict, setConflict] = useState(false);
 	const [confirmDelete, setConfirmDelete] = useState(false);
-	// One key for each form: a second click on Save, or a retry after a lost answer, adds one event.
-	const idempotencyKey = useRef(crypto.randomUUID());
-	// True after a save that failed. The server refuses the key of that save with a different form.
-	const saveFailed = useRef(false);
+	// One key for each request of the dialog. A second click on Save, or a retry after a lost answer, sends the
+	// same request with the same key, so the server adds one event. A different request gets its own key.
+	const keys = useRef(new Map<string, string>());
 	// Cancel in the delete question goes back to the form. After the delete, the whole dialog closes.
 	const deleted = useRef(false);
 	const ids = { title: useId(), allDay: useId(), location: useId(), notes: useId() };
 
-	const set = <K extends keyof EventForm>(key: K, value: EventForm[K]) => {
-		// A changed form after a failed save is a new request, so it gets a new key. A retry keeps the key.
-		if (saveFailed.current) {
-			saveFailed.current = false;
-			idempotencyKey.current = crypto.randomUUID();
-		}
+	const set = <K extends keyof EventForm>(key: K, value: EventForm[K]) =>
 		setForm((current) => ({ ...current, [key]: value }));
-	};
 
 	async function save(submitted: FormEvent) {
 		submitted.preventDefault();
@@ -72,19 +65,21 @@ export function EventDialog({ event, initial, zone, onChanged, onClose }: EventD
 				toast({ message: "Event saved." });
 				onChanged(saved);
 			} else {
-				const { event: saved } = await createEvent({
+				const request = {
 					title,
 					when: whenOf(form, zone),
 					location: form.location.trim(),
 					description: form.description,
-					idempotency_key: idempotencyKey.current,
-				});
+				};
+				const text = JSON.stringify(request);
+				const key = keys.current.get(text) ?? crypto.randomUUID();
+				keys.current.set(text, key);
+				const { event: saved } = await createEvent({ ...request, idempotency_key: key });
 				toast({ message: "Event added." });
 				onChanged(saved);
 			}
 			onClose();
 		} catch (caught) {
-			saveFailed.current = true;
 			setBusy(false);
 			if (caught instanceof ApiError && caught.code === "conflict" && event) {
 				setConflict(true);
