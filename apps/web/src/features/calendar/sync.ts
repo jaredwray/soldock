@@ -56,7 +56,7 @@ export interface SyncParts {
  * - One catch-up runs at a time. A call during a catch-up runs one more catch-up after it.
  * - The first read gets the cursor of now, then reads the range. So a change that commits during the read of
  *   the range is after the cursor, and the next catch-up reads it.
- * - The cursor moves only after the range loaded. A failed read of the range keeps the cursor, so the next
+ * - The cursor is set, and moves, only after the range loaded. A failed read of the range keeps the cursor, so the next
  *   sync reads the same changes and loads the range again.
  * - A sync of a range that the page left does not move the cursor. The read of the new range started before
  *   the changes of that catch-up, so the next catch-up must read them again.
@@ -83,8 +83,10 @@ export function createSync(parts: SyncParts): () => Promise<void> {
 			return;
 		}
 		if (stopped()) return;
-		cursor.current = head;
-		await load(!loaded);
+		// The cursor of now applies only when the range read after it is on screen. After a failed read, the next
+		// sync gets a new cursor and reads the range again.
+		const shown = await load(!loaded);
+		if (shown && !stopped()) cursor.current = head;
 	};
 	const next = async (from: string) => {
 		const result = await catchUp(from, parts.list);

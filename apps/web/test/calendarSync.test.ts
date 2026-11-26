@@ -150,6 +150,19 @@ describe("the sync of one range of the web calendar", () => {
 		expect(cursor.current).toBe("after-a");
 	});
 
+	// The first read of the range failed. If the cursor of now stayed, the next catch-up would read no change,
+	// and the page would keep its error until a different change came.
+	it("keeps no cursor after a failed first load, so the next sync reads the range again", async () => {
+		let fail = true;
+		const { log, cursor, sync } = parts({ load: async () => !fail });
+		await sync();
+		expect(cursor.current).toBeNull();
+		fail = false;
+		await sync();
+		expect(log).toEqual(["head", "load fresh", "head", "load fresh"]);
+		expect(cursor.current).toBe("c0");
+	});
+
 	// While the feed gives no cursor, each sync reads the range. A read after the first must keep the events on
 	// screen: a fresh read each 30 seconds would show an empty calendar again and again.
 	it("keeps the events on screen when the feed fails again after the range loaded", async () => {
