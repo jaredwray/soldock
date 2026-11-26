@@ -106,7 +106,8 @@ A later change drops the old tables. A rollback after this Worker runs is a fix 
 
 The endpoint holds the URL, the label, the signing secret, the auth key and the custom header.
 The subscription holds the event, the target, its own credential and, for Chat, the filter.
-The secrets are plain text in D1, because the POST needs them. A result never shows a stored secret.
+The POST needs the secrets, so D1 keeps them in a form that the Worker can read. A result never shows a
+stored secret. See [Secrets at rest](#secrets-at-rest).
 One creator can have 20 endpoints.
 One creator can have 10 subscriptions of one event.
 One target can have 20 active subscriptions of one event.
@@ -250,11 +251,29 @@ line with `result: "denied"`, as a refused operation does. Each refusal also wri
 the previous Worker can run a queue job. It sends a row of MCP Events in the webhook form, and it does
 not read the end of a subscription.
 
+## Secrets at rest
+
+With the Worker secret `ENCRYPTION_KEY`, each write seals the signing secret, the auth key and the value of
+the custom header (`sealSecret` of [`platform`](../platform/README.md#secrets-at-rest)). Without it, they
+are plaintext.
+
+- The columns are `webhook_endpoints.secret`, `previous_secret`, `auth_key` and `header_value`.
+- Only a delivery opens them. A row from before `ENCRYPTION_KEY` stays plaintext and in use.
+- A change of the auth key or of the header seals that value. A refresh of an MCP Events subscription seals
+  its secret. The signing secret of a webhook endpoint has no later write, so an old one stays plaintext.
+- A sealed secret has a random IV, so SQL cannot compare two secrets. `events/subscribe` opens the stored
+  secret and compares it in the Worker.
+- When a value does not open, no POST goes out. The delivery fails with `secret_unreadable`, without a
+  retry, and it counts as a failed event. `last_error` shows the code.
+- A previous secret of MCP Events that does not open only loses its signature.
+- The old tables `webhooks` and `chat_webhooks` keep their plaintext secrets. The Worker does not write
+  them. The copy into `webhook_endpoints` (`legacy.ts`) is in SQL, so a copied row is plaintext.
+
 ## Data inventory
 
 | State | Where | Notes |
 | --- | --- | --- |
-| Endpoints | D1 `webhook_endpoints` | The creator, the credential, the URL, the label, the secret, the auth key, the header and the failure count. Migration `0013`. Migration `0014` adds the protocol, the secret that a refresh replaced, and the time of the last verification |
+| Endpoints | D1 `webhook_endpoints` | The creator, the credential, the URL, the label, the secret, the auth key, the header and the failure count. `ENCRYPTION_KEY` seals the secret, the auth key and the header value (see [Secrets at rest](#secrets-at-rest)). Migration `0013`. Migration `0014` adds the protocol, the secret that a refresh replaced, and the time of the last verification |
 | Subscriptions | D1 `webhook_subscriptions` | The endpoint, the product, the event, the target, the credential and the mail retry marker. The chat sequence is the row id. Migration `0014` adds the end of a subscription and the room of a chat subscription. Migration `0016` adds the filter of a chat subscription. Migration `0021` records if the creator set the filter. Migration `0023` gives `addressed` to each chat subscription of MCP Events for an agent with `all` and a filter that is not set |
 | Verification counts | D1 `mcp_event_verifications` | For each principal: the start of the current hour and the number of verification POSTs in it. Migration `0014`. `directory.delete_principal` deletes the row |
 | Old mail rows | D1 `webhooks` | Kept for the previous Worker. `migrated` marks a copied row |

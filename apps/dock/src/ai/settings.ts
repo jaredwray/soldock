@@ -8,7 +8,10 @@ import {
 	microToUsd,
 	usdToMicro,
 } from "@asterra/contracts";
-import { OperationError } from "../platform/index.ts";
+import { isSealed, OperationError, openSecretOrNull, sealOptionalSecret } from "../platform/index.ts";
+
+/** The purpose of the seal of `ai_settings.api_token`. */
+const API_TOKEN_PURPOSE = "ai_settings.api_token";
 
 /** The AI settings of the organization, as the Worker uses them. */
 export interface AiConfig {
@@ -19,7 +22,10 @@ export interface AiConfig {
 	allowedModels: AiModelId[];
 	budgetMicroUsd: number;
 	autoLabel: { enabled: boolean; model: AiModelId | null };
-	/** The API token from Admin › AI, or null. Never in an answer or a log. */
+	/**
+	 * The API token from Admin › AI, or null. Never in an answer or a log. Also null when the stored token is
+	 * sealed and does not open: the AI then uses AI_GATEWAY_TOKEN, or it has no token.
+	 */
 	apiToken: string | null;
 }
 
@@ -52,14 +58,17 @@ function parseModels(json: string): AiModelId[] {
 	}
 }
 
-/** The settings with the time of their last write. A missing row has the time null. */
-async function readVersioned(db: D1Database): Promise<{ config: AiConfig; updatedAt: number | null }> {
-	const row = await db
-		.prepare(
-			`SELECT enabled, account_id, gateway_id, allowed_models, monthly_budget_micro_usd, auto_label_enabled,
+/**
+ * The settings with the time of their last write. A missing row has the time null. `storedToken` is the
+ * token column as it is, sealed or plaintext.
+ */
+async function readVersioned(
+	env: Env,
+): Promise<{ config: AiConfig; updatedAt: number | null; storedToken: string | null }> {
+	const row = await env.DIRECTORY.prepare(
+		`SELECT enabled, account_id, gateway_id, allowed_models, monthly_budget_micro_usd, auto_label_enabled,
 				auto_label_model, api_token, updated_at FROM ai_settings WHERE id = 1`,
-		)
-		.first<SettingsRow>();
+	).first<SettingsRow>();
 	if (!row) {
 		return {
 			config: {
@@ -72,8 +81,10 @@ async function readVersioned(db: D1Database): Promise<{ config: AiConfig; update
 				apiToken: null,
 			},
 			updatedAt: null,
+			storedToken: null,
 		};
 	}
+	const storedToken = row.api_token || null;
 	return {
 		config: {
 			enabled: row.enabled === 1,
@@ -82,15 +93,16 @@ async function readVersioned(db: D1Database): Promise<{ config: AiConfig; update
 			allowedModels: parseModels(row.allowed_models),
 			budgetMicroUsd: row.monthly_budget_micro_usd,
 			autoLabel: { enabled: row.auto_label_enabled === 1, model: catalogModel(row.auto_label_model) },
-			apiToken: row.api_token || null,
+			apiToken: await openSecretOrNull(env, API_TOKEN_PURPOSE, storedToken),
 		},
 		updatedAt: row.updated_at,
+		storedToken,
 	};
 }
 
 /** The settings of the organization. Migration 0028 writes the one row, so a missing row means AI is off. */
-export async function readConfig(db: D1Database): Promise<AiConfig> {
-	return (await readVersioned(db)).config;
+export async function readConfig(env: Env): Promise<AiConfig> {
+	return (await readVersioned(env)).config;
 }
 
 /**
@@ -190,14 +202,16 @@ const UPDATE_ATTEMPTS = 5;
  * write came after the read (a compare-and-set on `updated_at`). If one came, the function reads the
  * settings again and applies the patch again, so two changes at the same time both stay. Throws
  * `invalid` as `applyPatch` does, and `conflict` when each attempt lost.
+ *
+ * With ENCRYPTION_KEY, the write seals the API token. A change that does not name the token keeps a sealed
+ * token as it is, also one that does not open now, and seals a plaintext token from before ENCRYPTION_KEY.
  */
-export async function updateConfig(
-	db: D1Database,
-	patch: ConfigPatch,
-): Promise<{ config: AiConfig; previous: AiConfig }> {
+export async function updateConfig(env: Env, patch: ConfigPatch): Promise<{ config: AiConfig; previous: AiConfig }> {
+	const db = env.DIRECTORY;
 	for (let attempt = 0; attempt < UPDATE_ATTEMPTS; attempt++) {
-		const { config, updatedAt } = await readVersioned(db);
+		const { config, updatedAt, storedToken } = await readVersioned(env);
 		const next = applyPatch(config, patch);
+		const keepStored = patch.api_token === undefined && storedToken !== null && isSealed(storedToken);
 		const values = [
 			next.enabled ? 1 : 0,
 			next.accountId,
@@ -206,7 +220,7 @@ export async function updateConfig(
 			next.budgetMicroUsd,
 			next.autoLabel.enabled ? 1 : 0,
 			next.autoLabel.model,
-			next.apiToken,
+			keepStored ? storedToken : await sealOptionalSecret(env, API_TOKEN_PURPOSE, next.apiToken),
 		];
 		// Each write has a later time than the one before, so a write always changes `updated_at`.
 		const now = Math.max(Date.now(), (updatedAt ?? 0) + 1);
@@ -239,13 +253,13 @@ export async function updateConfig(
  * when the gateway cannot take calls. The mailbox decides if its own setting is on.
  */
 export async function autoLabelActive(env: Env): Promise<boolean> {
-	const config = await readConfig(env.DIRECTORY);
+	const config = await readConfig(env);
 	return config.enabled && config.autoLabel.enabled;
 }
 
 /** Why the organization does not let auto labels run, or null when it does. */
 export async function autoLabelUnavailableReason(env: Env): Promise<"ai_off" | "feature_off" | null> {
-	const config = await readConfig(env.DIRECTORY);
+	const config = await readConfig(env);
 	if (!config.enabled) return "ai_off";
 	if (!config.autoLabel.enabled) return "feature_off";
 	return null;

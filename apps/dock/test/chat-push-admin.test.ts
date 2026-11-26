@@ -11,15 +11,18 @@ import {
 	createActor,
 	mcp,
 	ORIGIN,
+	openStored,
 	PASSWORD,
 	racing,
+	SEALED,
 	seedOrg,
 	withEnv,
 } from "./helpers.ts";
 
 // Admin › Chat: an owner or an admin turns on Web Push. The Worker makes the VAPID key pair and keeps it in
 // the database. No member, agent or service account reads or changes it. The deprecated Worker secrets
-// VAPID_* apply until the first change, which copies their key pair.
+// VAPID_* apply until the first change, which copies their key pair. With ENCRYPTION_KEY, which the tests
+// have, the private key in the database is sealed.
 
 let owner: Actor;
 let ada: Actor;
@@ -61,6 +64,9 @@ async function storedPrivateKey(): Promise<string | null> {
 		"private_key",
 	);
 }
+
+/** The private key that the Worker reads from the row with the ENCRYPTION_KEY of the tests. */
+const openPrivateKey = async () => await openStored("chat_push_settings.private_key", await storedPrivateKey());
 
 /** The deprecated secrets of an older deployment: a real P-256 key pair and a contact address. */
 function secretPair() {
@@ -127,8 +133,11 @@ describe("the Web Push settings", () => {
 			subject: "https://example.com/contact",
 		});
 
-		const privateKey = await storedPrivateKey();
+		// The row has the sealed private key. The plaintext is in no answer and in no log line.
+		expect(await storedPrivateKey()).toMatch(SEALED);
+		const privateKey = await openPrivateKey();
 		expect(privateKey).toMatch(/^[A-Za-z0-9_-]{43}$/);
+		expect(await storedPrivateKey()).not.toContain(privateKey);
 		expect(JSON.stringify([saved, viaMcp, await owner.call("chat.get_push_settings")])).not.toContain(privateKey);
 		expect(audit.all().filter((line) => line.includes(privateKey ?? "-"))).toEqual([]);
 		const targets = audit.targets("chat.update_push_settings").map((line) => line.target);
@@ -211,7 +220,8 @@ describe("the Web Push settings", () => {
 			key_source: "settings",
 			keys_created_at: expect.any(String),
 		});
-		expect(await storedPrivateKey()).toBe(secrets.VAPID_PRIVATE_KEY);
+		expect(await storedPrivateKey()).toMatch(SEALED);
+		expect(await openPrivateKey()).toBe(secrets.VAPID_PRIVATE_KEY);
 		expect((await withSecrets(secrets, ada.key, "/api/v1/chat/notifications")).vapid_public_key).toBeNull();
 		expect(audit.targets("chat.update_push_settings").map((line) => line.target)).toEqual([
 			"off",
@@ -290,5 +300,81 @@ describe("the key rotation", () => {
 			key_source: "settings",
 			keys_created_at: expect.any(String),
 		});
+	});
+});
+
+describe("the private key and ENCRYPTION_KEY", () => {
+	const OTHER_KEY = "a-different-encryption-key-0123456789";
+
+	/** A call through the Worker with a different ENCRYPTION_KEY, or without one. `key` is the API key. */
+	async function withKey(encryptionKey: string | undefined, key: string, path: string, body?: unknown) {
+		return await withEnv({ ENCRYPTION_KEY: encryptionKey }, path, {
+			method: body === undefined ? "GET" : "POST",
+			headers: { authorization: `Bearer ${key}`, origin: ORIGIN, "content-type": "application/json" },
+			...(body === undefined ? {} : { body: JSON.stringify(body) }),
+		});
+	}
+	const settings = async (res: Response) => (await res.json()) as Record<string, unknown>;
+
+	it("saves no key pair while ENCRYPTION_KEY is too short", async () => {
+		const res = await withKey("too-short", owner.key, "/api/v1/chat/admin/push", {
+			enabled: true,
+			subject: SUBJECT,
+		});
+		expect(res.status).toBe(503);
+		const problem = await settings(res);
+		expect(problem.code).toBe("unavailable");
+		expect(problem.detail).toContain("ENCRYPTION_KEY");
+		expect(JSON.stringify(problem)).not.toContain("too-short");
+		expect(await storedPrivateKey()).toBeNull();
+		expect(await owner.call("chat.get_push_settings")).toEqual(OFF);
+	});
+
+	it("keeps a plaintext key from before ENCRYPTION_KEY in use, and seals the pair of the next rotation", async () => {
+		// A deployment without ENCRYPTION_KEY keeps the private key as plaintext, as before.
+		const before = await settings(
+			await withKey(undefined, owner.key, "/api/v1/chat/admin/push", { enabled: true, subject: SUBJECT }),
+		);
+		expect(before.enabled).toBe(true);
+		const plaintext = await storedPrivateKey();
+		expect(plaintext).toMatch(/^[A-Za-z0-9_-]{43}$/);
+
+		// The operator sets ENCRYPTION_KEY. The row still applies, and a change of a setting keeps the key pair.
+		expect(await owner.call("chat.get_push_settings")).toEqual(before);
+		expect((await ada.call("chat.get_notification_settings")).vapid_public_key).toBe(before.public_key);
+		await owner.call("chat.update_push_settings", { subject: "https://example.com/contact" });
+		expect(await storedPrivateKey()).toBe(plaintext);
+
+		// The next key pair is sealed.
+		const rotated = await owner.call("chat.rotate_push_keys");
+		expect(rotated.enabled).toBe(true);
+		expect(await storedPrivateKey()).toMatch(SEALED);
+	});
+
+	it("turns push off when the sealed key does not open, and a rotation repairs it", async () => {
+		const saved = await owner.call("chat.update_push_settings", { enabled: true, subject: SUBJECT });
+		const audit = auditLines();
+		for (const encryptionKey of [OTHER_KEY, undefined]) {
+			// The answer keeps its shape. Push is off, and no device gets the public key.
+			expect(await settings(await withKey(encryptionKey, owner.key, "/api/v1/chat/admin/push"))).toEqual({
+				...saved,
+				enabled: false,
+			});
+			const member = await settings(await withKey(encryptionKey, ada.key, "/api/v1/chat/notifications"));
+			expect(member.vapid_public_key).toBeNull();
+		}
+		expect(audit.all().some((line) => line.includes('"purpose":"chat_push_settings.private_key"'))).toBe(true);
+		// A change of a setting does not replace the key that does not open.
+		const sealedBefore = await storedPrivateKey();
+		await withKey(OTHER_KEY, owner.key, "/api/v1/chat/admin/push", { subject: "https://example.com/contact" });
+		expect(await storedPrivateKey()).toBe(sealedBefore);
+
+		// With the new ENCRYPTION_KEY, an admin replaces the key pair. Push is on again with it.
+		const rotated = await settings(await withKey(OTHER_KEY, owner.key, "/api/v1/chat/admin/push/rotate", {}));
+		expect(rotated).toMatchObject({ enabled: true, key_source: "settings" });
+		expect(rotated.public_key).not.toBe(saved.public_key);
+		expect((await settings(await withKey(OTHER_KEY, owner.key, "/api/v1/chat/admin/push"))).enabled).toBe(true);
+		// The ENCRYPTION_KEY of the tests does not open the new private key.
+		expect((await owner.call("chat.get_push_settings")).enabled).toBe(false);
 	});
 });

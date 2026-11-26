@@ -1,7 +1,19 @@
 import { runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { type Actor, api, bearer, callTool, codeOf, createActor, PASSWORD, request, seedOrg } from "./helpers.ts";
+import {
+	type Actor,
+	api,
+	bearer,
+	callTool,
+	codeOf,
+	createActor,
+	PASSWORD,
+	request,
+	SEALED,
+	seedOrg,
+	withEnv,
+} from "./helpers.ts";
 
 let owner: Actor;
 let ada: Actor;
@@ -652,6 +664,39 @@ describe("incoming webhooks, forwarding untrusted content, slash commands, and c
 			source_message_id: posted.message_id,
 			text: "CPU spike on prod-1",
 		});
+
+		// The tests have ENCRYPTION_KEY, so the signing secret that checked the POST is sealed in the directory.
+		const storedSecret = async () =>
+			await env.DIRECTORY.prepare("SELECT signing_secret FROM chat_incoming_webhooks WHERE id = ?")
+				.bind(created.webhook.id)
+				.first<string>("signing_secret");
+		expect(await storedSecret()).toMatch(SEALED);
+		expect(await storedSecret()).not.toContain(created.signing_secret.slice("whsec_".length));
+		const signedPost = async (text: string, bindings?: Parameters<typeof withEnv>[0]) => {
+			const body = JSON.stringify({ text });
+			const init = {
+				method: "POST",
+				headers: {
+					"content-type": "application/json",
+					"x-slack-request-timestamp": String(nowSec),
+					"x-slack-signature": await signSlackWebhook(created.signing_secret, nowSec, body),
+				},
+				body,
+			};
+			return bindings
+				? await withEnv(bindings, created.webhook.url_path, init)
+				: await request(created.webhook.url_path, init);
+		};
+		// Without the ENCRYPTION_KEY of the seal, the Worker cannot check a signature: it refuses the POST.
+		expect((await signedPost("No key", { ENCRYPTION_KEY: undefined })).status).toBe(401);
+		expect((await signedPost("Other key", { ENCRYPTION_KEY: "a-different-encryption-key-0123456789" })).status).toBe(
+			401,
+		);
+		// A row from before ENCRYPTION_KEY has the plaintext secret, and it still checks a signature.
+		await env.DIRECTORY.prepare("UPDATE chat_incoming_webhooks SET signing_secret = ? WHERE id = ?")
+			.bind(created.signing_secret, created.webhook.id)
+			.run();
+		expect((await signedPost("From before the key")).status).toBe(200);
 
 		// Deleting the webhook stops further posts (401 without leaking existence).
 		await ada.call("chat.delete_incoming_webhook", { webhook_id: created.webhook.id });

@@ -15,13 +15,13 @@ function requireAdmin(call: CallContext, action: string): void {
 export const aiHandlers: Pick<HandlerMap<CallContext>, AiOperation> = {
 	async "ai.get_settings"(call) {
 		requireAdmin(call, "read the AI settings");
-		return toSettingsOutput(call.env, await readConfig(call.env.DIRECTORY));
+		return toSettingsOutput(call.env, await readConfig(call.env));
 	},
 
 	async "ai.update_settings"(call, input) {
 		requireAdmin(call, "change the AI settings");
 		// The patch goes on the newest settings, so a change by another admin at the same time stays.
-		const { config: next, previous } = await updateConfig(call.env.DIRECTORY, input);
+		const { config: next, previous } = await updateConfig(call.env, input);
 		auditOk(call, "ai.update_settings", next.enabled ? "on" : "off");
 		// A change of the token gets its own audit line. The line never holds the token.
 		if (next.apiToken !== previous.apiToken) {

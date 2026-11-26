@@ -203,7 +203,7 @@ export function mountAuthRoutes(app: AuthApp): void {
 		if (!isSameOrigin(c.req.raw)) throw new OperationError("forbidden", "Sign in from the Asterra web app.");
 		const parsed = SignInInput.safeParse(await jsonBody(c.req.raw));
 		if (!parsed.success) throw new OperationError("invalid", z.prettifyError(parsed.error));
-		const outcome = await signInWithPassword(c.env.DIRECTORY, parsed.data);
+		const outcome = await signInWithPassword(c.env, parsed.data);
 		if (outcome.result === "refused") {
 			log("info", "sign-in refused", {
 				principalId: outcome.principalId,

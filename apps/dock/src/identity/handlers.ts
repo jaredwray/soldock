@@ -916,7 +916,7 @@ export const identityHandlers: Pick<HandlerMap<CallContext>, IdentityOperation |
 	async "account.create_totp_secret"(call) {
 		assertFullCredential(call.caller);
 		const secret = newTotpSecret();
-		await setPendingTotpSecret(call.env.DIRECTORY, call.caller.principal.id, secret);
+		await setPendingTotpSecret(call.env, call.caller.principal.id, secret);
 		auditOk(call, "account.create_totp_secret", call.caller.principal.id);
 		return { secret, otpauth_uri: otpauthUri(secret, call.caller.principal.address) };
 	},
@@ -925,16 +925,19 @@ export const identityHandlers: Pick<HandlerMap<CallContext>, IdentityOperation |
 		assertFullCredential(call.caller);
 		await confirmCurrentPassword(call, call.caller.principal, input.current_password);
 		const id = call.caller.principal.id;
-		const secret = await pendingTotpSecret(call.env.DIRECTORY, id);
-		if (!secret) throw new OperationError("conflict", "Start with account.create_totp_secret, then send a code.");
-		const step = await matchTotp(secret, input.code, null);
+		const pending = await pendingTotpSecret(call.env, id);
+		// A sealed secret that does not open is as no secret: the person starts again.
+		if (!pending?.secret) {
+			throw new OperationError("conflict", "Start with account.create_totp_secret, then send a code.");
+		}
+		const step = await matchTotp(pending.secret, input.code, null);
 		if (step === null) {
 			throw new OperationError(
 				"invalid",
 				"The code is not correct. Make sure that the clock of the device is correct, then try the newest code.",
 			);
 		}
-		if (!(await enableTotp(call.env.DIRECTORY, id, secret, step, call.caller.sessionHash, liveSession(call)))) {
+		if (!(await enableTotp(call.env.DIRECTORY, id, pending.stored, step, call.caller.sessionHash, liveSession(call)))) {
 			throw new OperationError("conflict", "A newer setup replaced this secret, or this session ended. Start again.");
 		}
 		auditOk(call, "account.enable_totp", id);

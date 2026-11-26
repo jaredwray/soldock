@@ -17,6 +17,7 @@ import {
 	ORIGIN,
 	PASSWORD,
 	request,
+	SEALED,
 	seedOrg,
 	withEnv,
 } from "./helpers.ts";
@@ -48,6 +49,9 @@ beforeEach(async () => {
 afterEach(() => {
 	vi.restoreAllMocks();
 });
+
+const storedToken = async () =>
+	await env.DIRECTORY.prepare("SELECT api_token FROM ai_settings WHERE id = 1").first<string | null>("api_token");
 
 const toolNames = async (key: string) =>
 	(((await mcp(key, "tools/list")).body?.result ?? { tools: [] }) as { tools: { name: string }[] }).tools.map(
@@ -203,6 +207,9 @@ describe("the AI settings", () => {
 		expect(JSON.stringify(viaMcp)).not.toContain(token);
 		expect(JSON.stringify(await owner.call("ai.get_settings"))).not.toContain(token);
 		expect(JSON.stringify(await callTool(owner.key, "ai_get_settings"))).not.toContain(token);
+		// The tests have ENCRYPTION_KEY, so the token is sealed in the database.
+		expect(await storedToken()).toMatch(SEALED);
+		expect(await storedToken()).not.toContain(token);
 		// A later change that does not name the token keeps it.
 		expect(await owner.call("ai.update_settings", { monthly_budget_usd: 20 })).toMatchObject({
 			token_source: "settings",
@@ -242,6 +249,81 @@ describe("the AI settings", () => {
 			.map((line) => (JSON.parse(line) as { target?: string }).target);
 		expect(targets.filter((target) => target === "api_token_set")).toHaveLength(1);
 		expect(targets.filter((target) => target === "api_token_removed")).toHaveLength(1);
+	});
+});
+
+describe("the API token and ENCRYPTION_KEY", () => {
+	const TOKEN = "settings-token_0123456789-abcdef";
+	const OTHER_KEY = "a-different-encryption-key-0123456789";
+
+	/** A call through the Worker with these bindings in place of the bindings of the tests. */
+	async function withBindings(bindings: Parameters<typeof withEnv>[0], path: string, body?: unknown) {
+		return await withEnv(bindings, path, {
+			method: body === undefined ? "GET" : "POST",
+			headers: { authorization: `Bearer ${owner.key}`, origin: ORIGIN, "content-type": "application/json" },
+			...(body === undefined ? {} : { body: JSON.stringify(body) }),
+		});
+	}
+
+	it("uses a plaintext token from before ENCRYPTION_KEY, and seals it at the next write", async () => {
+		await enableAi(owner);
+		// A deployment without ENCRYPTION_KEY keeps the token as plaintext, as before.
+		const saved = await withBindings({ ENCRYPTION_KEY: undefined }, "/api/v1/ai/settings", { api_token: TOKEN });
+		expect(await saved.json()).toMatchObject({ token_source: "settings" });
+		expect(await storedToken()).toBe(TOKEN);
+
+		// The operator sets ENCRYPTION_KEY. The token still goes to the gateway, and a read does not change the row.
+		const calls = fakeGateway(() => gatewayAnswer("OK"));
+		await owner.call("ai.test_connection", {});
+		expect(calls[0]?.headers.get("authorization")).toBe(`Bearer ${TOKEN}`);
+		expect(await storedToken()).toBe(TOKEN);
+
+		// The next write of the settings seals it, and the gateway gets the same token.
+		expect(await owner.call("ai.update_settings", { monthly_budget_usd: 20 })).toMatchObject({
+			token_source: "settings",
+		});
+		expect(await storedToken()).toMatch(SEALED);
+		await owner.call("ai.test_connection", {});
+		expect(calls[1]?.headers.get("authorization")).toBe(`Bearer ${TOKEN}`);
+	});
+
+	it("acts as without a token of the settings when the sealed token does not open, and keeps the row", async () => {
+		await enableAi(owner);
+		await owner.call("ai.update_settings", { api_token: TOKEN });
+		const sealed = await storedToken();
+
+		// The answer keeps its shape. The Worker secret applies, or the AI has no token.
+		const fallback = await withBindings({ ENCRYPTION_KEY: OTHER_KEY }, "/api/v1/ai/settings");
+		expect(await fallback.json()).toMatchObject({ token_configured: true, token_source: "secret", ready: true });
+		const none = await withBindings({ ENCRYPTION_KEY: undefined, AI_GATEWAY_TOKEN: undefined }, "/api/v1/ai/settings");
+		expect(await none.json()).toMatchObject({
+			token_configured: false,
+			token_source: null,
+			ready: false,
+			not_ready_reason: "no_token",
+		});
+		// The gateway never gets the sealed text as a token.
+		const calls = fakeGateway(() => gatewayAnswer("OK"));
+		await withBindings({ ENCRYPTION_KEY: OTHER_KEY }, "/api/v1/ai/test", {});
+		expect(calls[0]?.headers.get("authorization")).toBe("Bearer test-ai-gateway-token");
+
+		// A change of a different setting does not remove the token that does not open now.
+		const changed = await withBindings({ ENCRYPTION_KEY: OTHER_KEY }, "/api/v1/ai/settings", {
+			monthly_budget_usd: 20,
+		});
+		expect(changed.status).toBe(200);
+		expect(await storedToken()).toBe(sealed);
+		expect(await owner.call("ai.get_settings")).toMatchObject({ token_source: "settings", monthly_budget_usd: 20 });
+	});
+
+	it("saves no token while ENCRYPTION_KEY is too short", async () => {
+		await enableAi(owner);
+		const res = await withBindings({ ENCRYPTION_KEY: "too-short" }, "/api/v1/ai/settings", { api_token: TOKEN });
+		expect(res.status).toBe(503);
+		const text = await res.text();
+		expect(text).toContain("ENCRYPTION_KEY");
+		expect(text).not.toContain("too-short");
+		expect(await storedToken()).toBeNull();
 	});
 });
 

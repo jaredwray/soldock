@@ -11,7 +11,7 @@ import { createDecipheriv, createECDH, createPublicKey, hkdfSync, randomBytes, v
 import { afterEach, expect, it, vi } from "vitest";
 import { CHAT_PUSH_QUEUE, type ChatPushJob } from "../src/chat/push.ts";
 import worker from "../src/index.ts";
-import { api, seedOrg } from "./helpers.ts";
+import { api, SEALED, seedOrg } from "./helpers.ts";
 
 const origin = "https://push.example.com";
 afterEach(() => vi.restoreAllMocks());
@@ -53,6 +53,10 @@ it("delivers an offline mention, retries only the failed device and removes expi
 	const push = await owner.call("chat.update_push_settings", { enabled: true, subject });
 	const publicKey = push.public_key;
 	if (!publicKey) throw new Error("Web Push has no public key.");
+	// The tests have ENCRYPTION_KEY, so the private key that signs each delivery is sealed in the database.
+	expect(
+		await env.DIRECTORY.prepare("SELECT private_key FROM chat_push_settings WHERE id = 1").first("private_key"),
+	).toMatch(SEALED);
 	expect((await ada.call("chat.get_notification_settings")).vapid_public_key).toBe(publicKey);
 	const active = device("/active");
 	// 404 and 410: the subscription is gone. 401 and 403: the push service refuses the key, as after a rotation.
@@ -85,13 +89,13 @@ it("delivers an offline mention, retries only the failed device and removes expi
 	});
 
 	const testEnv = { ...env, CHAT_PUSH: queue } as Env;
-	async function consume(bodies: unknown[], attempts = 1) {
+	async function consume(bodies: unknown[], attempts = 1, queueEnv = testEnv) {
 		const batch = createMessageBatch(
 			CHAT_PUSH_QUEUE,
 			bodies.map((body, index) => ({ id: String(index), timestamp: new Date(), attempts, body })),
 		);
 		const context = createExecutionContext();
-		await worker.queue(batch, testEnv);
+		await worker.queue(batch, queueEnv);
 		return getQueueResult(batch, context);
 	}
 	await consume(jobs.splice(0));
@@ -177,6 +181,11 @@ it("delivers an offline mention, retries only the failed device and removes expi
 	expect((await consume([retry], 3)).explicitAcks).toEqual(["0"]);
 	expect(posts).toHaveLength(6);
 	await ada.call("chat.mark_thread_read", { room_id: room.id, message_id: parent.id, seq: 0 });
+
+	// Without the ENCRYPTION_KEY that sealed the private key, push is off: a delivery goes and does not come back.
+	const lostKey = { ...testEnv, ENCRYPTION_KEY: "a-different-encryption-key-0123456789" } as Env;
+	expect((await consume([retry], 3, lostKey)).explicitAcks).toEqual(["0"]);
+	expect(posts).toHaveLength(6);
 
 	// While an admin has push off, a delivery goes and does not come back.
 	await owner.call("chat.update_push_settings", { enabled: false });

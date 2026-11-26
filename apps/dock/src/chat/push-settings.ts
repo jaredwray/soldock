@@ -1,5 +1,11 @@
 import type { ChatPushSettings } from "@asterra/contracts";
-import { base64UrlEncode, OperationError } from "../platform/index.ts";
+import {
+	base64UrlEncode,
+	OperationError,
+	openSecretOrNull,
+	sealOptionalSecret,
+	sealSecret,
+} from "../platform/index.ts";
 
 /**
  * The Web Push settings of the organization: one row in the D1 table `chat_push_settings` (migration 0038).
@@ -8,7 +14,14 @@ import { base64UrlEncode, OperationError } from "../platform/index.ts";
  * The Worker secrets VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY and VAPID_SUBJECT are deprecated. They apply only
  * while the row has no key pair. The first change in Admin › Chat copies their key pair into the row, so the
  * devices that subscribed with that key stay subscribed. After that, the row is the only source.
+ *
+ * With the Worker secret ENCRYPTION_KEY, each write seals the private key (`sealSecret`). A private key
+ * from before ENCRYPTION_KEY stays plaintext until the next replacement of the key pair. When a sealed private
+ * key does not open, push is off, and an owner or an admin replaces the key pair.
  */
+
+/** The purpose of the seal of `chat_push_settings.private_key`. */
+const PRIVATE_KEY_PURPOSE = "chat_push_settings.private_key";
 
 /** The key pair and the contact address that sign a delivery. The private key is never in an answer or a log. */
 export interface VapidConfig {
@@ -29,7 +42,8 @@ interface PushRow {
 interface Effective {
 	enabled: boolean;
 	subject: string | null;
-	keys: { publicKey: string; privateKey: string } | null;
+	/** `privateKey` is null when the row has a sealed private key that does not open. */
+	keys: { publicKey: string; privateKey: string | null } | null;
 	source: "settings" | "secret" | null;
 	keysCreatedAt: number | null;
 }
@@ -46,12 +60,15 @@ function secretConfig(env: Env): VapidConfig | null {
 	return publicKey && privateKey && subject ? { publicKey, privateKey, subject } : null;
 }
 
-function effective(row: PushRow | null, env: Env): Effective {
+async function effective(row: PushRow | null, env: Env): Promise<Effective> {
 	if (row?.public_key && row.private_key) {
 		return {
 			enabled: row.enabled === 1,
 			subject: row.subject,
-			keys: { publicKey: row.public_key, privateKey: row.private_key },
+			keys: {
+				publicKey: row.public_key,
+				privateKey: await openSecretOrNull(env, PRIVATE_KEY_PURPOSE, row.private_key),
+			},
 			source: "settings",
 			keysCreatedAt: row.keys_created_at,
 		};
@@ -66,7 +83,7 @@ function effective(row: PushRow | null, env: Env): Effective {
 
 function toOutput(state: Effective): ChatPushSettings {
 	return {
-		enabled: state.enabled && state.keys !== null && state.subject !== null,
+		enabled: state.enabled && Boolean(state.keys?.privateKey) && state.subject !== null,
 		subject: state.subject,
 		public_key: state.keys?.publicKey ?? null,
 		key_source: state.source,
@@ -76,13 +93,13 @@ function toOutput(state: Effective): ChatPushSettings {
 
 /** The key pair and the contact address that sign a delivery now, or null when push is off. */
 export async function activeVapid(env: Env): Promise<VapidConfig | null> {
-	const state = effective(await readRow(env.DIRECTORY), env);
-	if (!state.enabled || !state.keys || !state.subject) return null;
-	return { ...state.keys, subject: state.subject };
+	const state = await effective(await readRow(env.DIRECTORY), env);
+	if (!state.enabled || !state.keys?.privateKey || !state.subject) return null;
+	return { publicKey: state.keys.publicKey, privateKey: state.keys.privateKey, subject: state.subject };
 }
 
 export async function readPushSettings(env: Env): Promise<ChatPushSettings> {
-	return toOutput(effective(await readRow(env.DIRECTORY), env));
+	return toOutput(await effective(await readRow(env.DIRECTORY), env));
 }
 
 /** A new ECDSA P-256 key pair: the uncompressed public point and the private JWK "d", in base64url. */
@@ -114,7 +131,7 @@ export async function updatePushSettings(
 	now: number,
 ): Promise<{ settings: ChatPushSettings; adopted: "secret" | "generated" | null }> {
 	const row = await readRow(env.DIRECTORY);
-	const current = effective(row, env);
+	const current = await effective(row, env);
 	const enabled = change.enabled ?? current.enabled;
 	const subject = change.subject ?? current.subject;
 	if (enabled && !subject) {
@@ -123,8 +140,8 @@ export async function updatePushSettings(
 	let keys: { publicKey: string; privateKey: string } | null = null;
 	let adopted: "secret" | "generated" | null = null;
 	if (current.source !== "settings") {
-		if (current.keys) {
-			keys = current.keys;
+		if (current.keys?.privateKey) {
+			keys = { publicKey: current.keys.publicKey, privateKey: current.keys.privateKey };
 			adopted = "secret";
 		} else if (enabled) {
 			keys = await generateVapidKeys();
@@ -151,14 +168,14 @@ export async function updatePushSettings(
 			explicitEnabled,
 			change.subject ?? null,
 			keys?.publicKey ?? null,
-			keys?.privateKey ?? null,
+			await sealOptionalSecret(env, PRIVATE_KEY_PURPOSE, keys?.privateKey ?? null),
 			keys ? now : null,
 			now,
 			adopting ? 1 : null,
 			adopting ? current.subject : null,
 		)
 		.first<PushRow>();
-	const settings = toOutput(effective(written, env));
+	const settings = toOutput(await effective(written, env));
 	// Another write can supply the pair first. Then this write did not copy or make the pair that applies.
 	if (adopted && settings.public_key !== keys?.publicKey) adopted = null;
 	return { settings, adopted };
@@ -166,10 +183,11 @@ export async function updatePushSettings(
 
 /**
  * Replaces the key pair with a new pair. The row keeps its state and contact address. While the secrets
- * apply, the row takes their state. A rotation needs a key pair, from the row or from the secrets.
+ * apply, the row takes their state. A rotation needs a key pair, from the row or from the secrets. A pair
+ * with a sealed private key that does not open is sufficient, so a rotation repairs it.
  */
 export async function rotatePushKeys(env: Env, now: number): Promise<ChatPushSettings> {
-	const current = effective(await readRow(env.DIRECTORY), env);
+	const current = await effective(await readRow(env.DIRECTORY), env);
 	if (!current.keys) throw new OperationError("invalid", "Turn on notifications before you replace the keys.");
 	const keys = await generateVapidKeys();
 	const adopting = current.source === "secret";
@@ -185,7 +203,13 @@ export async function rotatePushKeys(env: Env, now: number): Promise<ChatPushSet
 		WHERE id = 1
 		RETURNING ${COLUMNS}`,
 	)
-		.bind(adopting ? 1 : null, adopting ? current.subject : null, keys.publicKey, keys.privateKey, now)
+		.bind(
+			adopting ? 1 : null,
+			adopting ? current.subject : null,
+			keys.publicKey,
+			await sealSecret(env, PRIVATE_KEY_PURPOSE, keys.privateKey),
+			now,
+		)
 		.first<PushRow>();
-	return toOutput(effective(written, env));
+	return toOutput(await effective(written, env));
 }

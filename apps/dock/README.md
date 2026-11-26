@@ -78,7 +78,7 @@ The entire backend as one deployable Worker (modular monolith): `fetch`, `email`
 | Binding | Type | Use |
 | --- | --- | --- |
 | `ASSETS` | Static assets | The SPA (`../web/dist`) |
-| `DIRECTORY` | D1 `soldock-directory` | Principals (with password hashes and TOTP secrets), addresses, API keys, sessions, OAuth clients, requests and grants, mail domains, the room index of Chat, the index of the shared drives of Drive, the webhooks of Mail and Chat, the Web Push settings of Chat (with the VAPID key pair), and the AI settings and usage ledger |
+| `DIRECTORY` | D1 `soldock-directory` | Principals (with password hashes and TOTP secrets, which `ENCRYPTION_KEY` seals), addresses, API keys, sessions, OAuth clients, requests and grants, mail domains, the room index of Chat, the index of the shared drives of Drive, the webhooks of Mail and Chat, the Web Push settings of Chat (with the VAPID key pair), and the AI settings and usage ledger |
 | `BLOBS` | R2 `soldock-blobs` | Raw MIME of each message, the bytes and the small picture of each version of each Drive file, the parts of an upload in progress, the images of docs, and the pictures of link previews of Chat |
 | `MAIL_INBOUND`, `MAIL_INBOUND_DLQ` | Queue producers | Inbound jobs and their dead letters. The Worker consumes `soldock-mail-inbound` |
 | `WEBHOOKS`, `WEBHOOKS_DLQ` | Queue producers | Webhook events of mailboxes and chat rooms, one POST job for each webhook, and their dead letters. The Worker consumes `soldock-webhooks` |
@@ -86,6 +86,7 @@ The entire backend as one deployable Worker (modular monolith): `fetch`, `email`
 | `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`, `VAPID_SUBJECT` | Worker secrets (deprecated) | The VAPID key pair and contact address of an older deployment. They apply only until the first change in Admin › Chat, which copies them to D1. See [Web Push setup](../../docs/self-hosting.md#upgrade-from-the-vapid-secrets) |
 | `CHAT_PREVIEWS` | Queue producer | The jobs of link previews of Chat: a room id and a message id. The Worker consumes `soldock-chat-previews`. The room sends a job again without a result, so the queue has no dead letter queue |
 | `MAIL_AUTOLABEL` | Queue producer | The jobs of the classifier of auto labels: a mailbox id and a message id. The Worker consumes `soldock-mail-autolabel`. The mailbox sends a job again without a result, so the queue has no dead letter queue. See [auto labels](src/mail/README.md#auto-labels) |
+| `ENCRYPTION_KEY` | Worker secret (optional) | At 32 characters or more, the Worker seals the secrets that it stores in D1 and must read back (AES-256-GCM): the VAPID private key, the API token of AI, the secrets of webhooks and incoming webhooks, and the TOTP secrets. Without it, they are plaintext. Never in an answer or a log. See [Encryption of stored secrets](../../docs/self-hosting.md#encryption-of-stored-secrets) |
 | `AI_GATEWAY_TOKEN` | Worker secret (optional) | The Cloudflare API token for Workers AI through AI Gateway, when it is not saved in Admin › AI. A token of the settings wins. Never in an answer. See [AI setup](../../docs/self-hosting.md#ai) |
 | `EMAIL` | `send_email` | Outbound mail through Email Service |
 | `MAILBOX` | Durable Object `MailboxDO` (SQLite) | One mailbox for each principal and each team mailbox. It also accepts the hibernatable watch sockets of MCP subscriptions |
@@ -132,7 +133,7 @@ with injected inbound mail.
 | Webhooks (URL, signing secret, creator, credential, delivery state) | [`mail`](src/mail/README.md#webhooks) | D1 `DIRECTORY`, table `webhooks` |
 | Webhook events and jobs | [`mail`](src/mail/README.md#webhooks) | `MailboxDO` table `event_outbox`; queues `soldock-webhooks` and `soldock-webhooks-dlq` |
 | Auto labels (marks, header signals, settings, corrections, classifier outbox) | [`mail`](src/mail/README.md#auto-labels) | `MailboxDO` SQLite; queue `soldock-mail-autolabel` |
-| AI settings and usage ledger | [`ai`](src/ai/README.md#data-inventory) | D1 `DIRECTORY`, tables `ai_settings` (with the API token) and `ai_usage`; optional Worker secret `AI_GATEWAY_TOKEN` |
+| AI settings and usage ledger | [`ai`](src/ai/README.md#data-inventory) | D1 `DIRECTORY`, tables `ai_settings` (with the API token, which `ENCRYPTION_KEY` seals) and `ai_usage`; optional Worker secret `AI_GATEWAY_TOKEN` |
 | Drives (items, versions, grants, search index, stars, shared-with-me index, outbox, idempotency keys, and the members of a shared drive) | [`drive`](src/drive/README.md) | `DriveSpaceDO` SQLite |
 | The index of the shared drives (a copy for the lists) | [`drive`](src/drive/README.md#the-index-in-d1) | D1 `DIRECTORY`, tables `shared_drives` and `shared_drive_members` |
 | File bytes | [`drive`](src/drive/README.md) | R2 `BLOBS`, `drive/<space id>/<item id>/<version id>`, and the small picture with `.thumb-<id>` |

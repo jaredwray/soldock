@@ -124,6 +124,57 @@ adds a binding, it adds the permission to this table too.
   scripts/smoke-check.sh http://localhost:8787
   ```
 
+## Encryption of stored secrets
+
+The Worker stores some secrets that it must read back to do its work. With the optional Worker secret
+`ENCRYPTION_KEY`, the Worker encrypts each of these secrets before it writes it to D1. Without
+`ENCRYPTION_KEY`, the Worker stores them as plaintext.
+
+| Secret | D1 column |
+| --- | --- |
+| The VAPID private key of [Web Push](#web-push) | `chat_push_settings.private_key` |
+| The API token of [AI](#ai) from Admin › AI | `ai_settings.api_token` |
+| The signing secret, the auth key and the custom header value of each webhook endpoint | `webhook_endpoints.secret`, `auth_key`, `header_value` |
+| The signing secret of each MCP Events subscription | `webhook_endpoints.secret`, `previous_secret` |
+| The signing secret of each incoming webhook of Chat | `chat_incoming_webhooks.signing_secret` |
+| The TOTP secret of each person with two-step verification | `principals.totp_secret`, `totp_pending_secret` |
+
+To turn on the encryption:
+
+1. Make a random value of 32 characters or more, for example with `openssl rand -base64 48`.
+2. Keep a copy of the value in a safe place, such as a password manager. Do not keep it with a backup of D1.
+3. Set the value as a Worker secret: `wrangler secret put ENCRYPTION_KEY`, and again with `--env development`.
+   Use a different value for each environment.
+
+- The cipher is AES-256-GCM. The Worker derives the AES key from `ENCRYPTION_KEY` with HKDF-SHA-256. Each
+  stored value has its own random IV, and it opens only in its own column. A sealed value starts with
+  `enc:v1:`.
+- `ENCRYPTION_KEY` must have 32 characters or more. With a shorter value, each write of a secret fails with
+  an error that names `ENCRYPTION_KEY`. The Worker then stores no secret.
+- A secret from before `ENCRYPTION_KEY` stays plaintext, and it stays in use. The Worker seals it at the next
+  write of that secret. The table below gives that write. No migration seals all rows at one time.
+- No API answer and no MCP answer changes. An answer never has a stored secret, sealed or not.
+- The Worker does not encrypt hashes (passwords, API keys, sessions, OAuth tokens, invite links), mail, files
+  or messages. It does not encrypt the keys of a push subscription of a device.
+- The old tables `webhooks` and `chat_webhooks` from before migration `0013` keep their plaintext copy of a
+  signing secret. The Worker does not write these tables.
+- Key rotation is not built yet. Do not change the value after you set it.
+
+If you lose or change `ENCRYPTION_KEY`, the Worker cannot read the sealed values. Each read writes the error
+line `sealed secret cannot open` with the name of the column. The same occurs if you delete the secret. Set
+the correct value again, or repair each secret:
+
+| Secret | The next write that seals an old plaintext value | Without the correct `ENCRYPTION_KEY` | The repair |
+| --- | --- | --- | --- |
+| VAPID private key | **Replace keys** in Admin › Chat | Web Push is off | Select **Replace keys** in Admin › Chat. Each browser subscribes again |
+| API token of AI | A save in Admin › AI | AI uses `AI_GATEWAY_TOKEN`. Without that secret, AI makes no calls | Enter the token again in Admin › AI |
+| Webhook endpoint | A change of the auth key or the header seals that value. The signing secret stays as it is | No POST goes out. The endpoint shows the error `secret_unreadable`, and it stops after 5 failed events | Delete the endpoint and create it again. Give the new signing secret to the receiver |
+| MCP Events subscription | The next refresh by the client | No POST goes out, as for a webhook endpoint | The client subscribes again |
+| Incoming webhook of Chat | None | Each POST gets HTTP 401 | Delete the webhook and create it again. Give the new signing secret to the sender |
+| TOTP secret | A new setup of two-step verification | The person cannot sign in. A password without a code never signs in | Turn off two-step verification for the person (see [Recover a sign-in](#recover-a-sign-in)). The person sets it up again |
+
+API keys and sessions from before still work, so an owner or an admin can make these repairs.
+
 ## Web Push
 
 Browser notifications for Chat are off until an owner or an admin turns them on in **Admin › Chat**.
@@ -132,11 +183,13 @@ Browser notifications for Chat are off until an owner or an admin turns them on 
 2. Enter a contact address, such as `mailto:admin@example.org`. The push services of the browsers use it
    to contact you about a problem. An `https:` URL is also correct.
 3. Select **Turn on notifications**. The Worker makes a VAPID key pair (ECDSA P-256) and keeps it in the
-   D1 table `chat_push_settings`.
+   D1 table `chat_push_settings`. With `ENCRYPTION_KEY`, the private key is sealed there (see
+   [Encryption of stored secrets](#encryption-of-stored-secrets)).
 4. Each member turns on notifications for a device in **Settings › Chat notifications**.
 
-- No answer, log or audit line contains the private key. A backup of D1 holds it, so keep a backup of D1
-  as a secret. D1 Time Travel also keeps the earlier rows for its retention period, with a replaced key.
+- No answer, log or audit line contains the private key. A backup of D1 holds it: sealed with
+  `ENCRYPTION_KEY`, and as plaintext without it. Without `ENCRYPTION_KEY`, keep a backup of D1 as a secret.
+  D1 Time Travel also keeps the earlier rows for its retention period, with a replaced key.
 - **Turn off** stops all deliveries at once. The key pair stays, so a later **Turn on notifications** uses the
   same key and the devices stay subscribed. While push is off, the queue drops each delivery job. An open
   Asterra tab still plays the sound of a new message.
@@ -165,8 +218,10 @@ Any first change in Admin › Chat copies the state and the contact address of t
 database** and **Turn off** also copy the key pair. **Replace keys** makes a new pair, so each device
 subscribes again. After the first change, the Worker does not read the secrets.
 
-The key pair moves from an encrypted Worker secret to a plaintext column in D1. Keep a backup of D1 as a
-secret.
+The key pair moves from an encrypted Worker secret to a column in D1. With `ENCRYPTION_KEY`, the Worker
+seals the private key in that column, so set `ENCRYPTION_KEY` before you select **Store in database** (see
+[Encryption of stored secrets](#encryption-of-stored-secrets)). Without it, the column is plaintext: keep a
+backup of D1 as a secret.
 
 The deploy creates the queue `soldock-chat-push`. The room sends its recipients in groups of up to ten.
 Each eligible device then gets a separate delivery job.
@@ -190,8 +245,9 @@ is inbox auto labels. AI is off until an owner or an admin turns it on in **Admi
 7. Each person turns on auto labels for their mailbox in Mail: in the mailbox settings (the gear in the
    header of Mail), or with the spark button next to **Labels**.
 
-- Asterra keeps the token in the AI settings in D1, as it keeps the signing secrets of webhooks. No API
-  answer and no log contains it. Admin › AI shows only that a token is saved, with **Replace** and
+- Asterra keeps the token in the AI settings in D1, as it keeps the signing secrets of webhooks: sealed with
+  `ENCRYPTION_KEY`, and as plaintext without it (see
+  [Encryption of stored secrets](#encryption-of-stored-secrets)). No API answer and no log contains it. Admin › AI shows only that a token is saved, with **Replace** and
   **Remove**. Without a token, AI makes no calls, and auto labels use their rules only.
 - To keep the token out of D1, set it as the Worker secret `AI_GATEWAY_TOKEN` instead
   (`wrangler secret put AI_GATEWAY_TOKEN`, and again with `--env development`). A token saved in

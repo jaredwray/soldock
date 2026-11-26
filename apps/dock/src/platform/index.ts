@@ -10,6 +10,18 @@ export {
 	sha256StreamHex,
 } from "./crypto/crypto.ts";
 export {
+	ENCRYPTION_KEY_MIN_LENGTH,
+	isSealed,
+	type OpenedSecret,
+	type OpenFailure,
+	openSecret,
+	openSecretOrNull,
+	SEALED_PREFIX,
+	type SealEnv,
+	sealOptionalSecret,
+	sealSecret,
+} from "./crypto/seal.ts";
+export {
 	EventCallbackError,
 	type EventCallbackReason,
 	type EventDefinition,
