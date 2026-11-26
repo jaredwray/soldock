@@ -1211,7 +1211,7 @@ MCP clients. The app has no UI-only path.
   - **Attendees** (`AttendeePicker.tsx`) is a combobox. It finds the people, agents and service accounts
     of the organization by name or address with `directory.list_principals` (`order: "match"`), 150 ms
     after the last key, and leaves out the person and the chosen attendees. The arrow keys, Enter and
-    Escape work as in a list box. The list of attendees shows each name, address and answer (**Yes**,
+    Escape work as in a list box. Enter with typed text and no list does not save the form. The list of attendees shows each name, address and answer (**Yes**,
     **Maybe**, **No**, **No answer yet**, or **Invitation when you save**), with **Remove**. A save sends
     `attendees` only when the set changed. For a meeting, **Delete** is **Cancel meeting**, and the
     question says that the meeting goes away from the calendar of each attendee.
@@ -1219,8 +1219,9 @@ MCP clients. The app has no UI-only path.
     while it has no answer, else "Meeting". It shows the title, the time, the place, the organizer, the
     description and each attendee with the answer, as text. **Yes**, **Maybe** and **No** in the group
     "Your answer" call `calendar.respond_to_invitation` (`aria-pressed` on the current answer). It has no
-    **Save** and no **Delete**. When the meeting is gone, it says that the organizer cancelled it or
-    removed the person.
+    **Save** and no **Delete**. The open dialog shows the newest copy of each poll. When a poll does not
+    have the copy, or an answer gets `not_found`, the dialog says that the organizer cancelled the meeting
+    or removed the person, and hides the answers.
   - A pending invitation has a dashed border and no fill. **Maybe** has stripes. **No** is faded, with a
     line through the title. An accepted meeting looks like an own event. The name of the event ends with
     "invitation, not answered", "maybe" or "declined", so the state is not only a look.

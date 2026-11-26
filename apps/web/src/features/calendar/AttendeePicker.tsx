@@ -50,6 +50,9 @@ export function AttendeePicker({ chosen, onChange, saved, selfId, disabled }: At
 	}
 
 	function onKeyDown(event: KeyboardEvent<HTMLInputElement>) {
+		// Enter in a text field saves the form. With a typed name and no list yet, that saves the event without the
+		// person. So Enter does nothing until the list shows.
+		if (!shown && event.key === "Enter" && text.trim() !== "") event.preventDefault();
 		if (!shown) return;
 		if (event.key === "Enter") {
 			event.preventDefault();
