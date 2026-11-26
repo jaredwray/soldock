@@ -36,7 +36,7 @@ Other modules import `index.ts` only.
 | `drive.item.unshared` | That access ends |
 | `drive.members.changed` | The members of a shared drive change |
 | `drive.deleted` | A shared drive is deleted |
-| `calendar.*` | A committed change of a calendar: seven event names ([Calendar](../calendar/README.md#changes)). MCP Events only in this version |
+| `calendar.*` | A committed change of a calendar: seven event names ([Calendar](../calendar/README.md#changes)) |
 
 A star sends nothing. Meet and Slides have no event yet.
 Directory changes have no event. A webhook must not leak the list of the organization.
@@ -125,7 +125,9 @@ Mail subscriptions use `mail.webhooks`. The target is your mailbox, a team mailb
 Chat subscriptions use `chat.webhooks`. The target is you, or an agent that you sponsor.
 Drive subscriptions use `drive.webhooks`. The target is your drive, a shared drive that you belong to, or the drive of an agent that you sponsor.
 A sponsor cannot subscribe to a shared drive only because an agent belongs to it.
-The sponsor, an owner or an admin can list and delete the subscriptions of an agent.
+Calendar subscriptions use `calendar.webhooks`, and the create also needs `calendar.read`. The target is your own calendar only.
+The sponsor, an owner or an admin can list and delete the mail, chat and drive subscriptions of an agent. They cannot list or delete its calendar subscriptions.
+`webhooks.list_endpoints` uses the list of all products (`DOMAINS` in `endpoints.ts`) to find a credential that holds each webhook scope. A credential without `calendar.webhooks` does not see an endpoint that has only calendar subscriptions.
 A [service account](../identity/README.md#service-accounts) has no webhooks: its tokens hold no webhook scope, and its sponsor cannot subscribe for it.
 A delivery to a subscription for a service account stops with `access_lost`.
 An agent holds its scopes, not its key or its OAuth connection ([Access of an agent](../identity/README.md#access-of-an-agent)).
@@ -150,7 +152,7 @@ So the payload schema of MCP Events has the three fields as optional. A later ch
 A job with a reason that this Worker does not know is valid, and sends as a job with no reason (`knownReason`). So a rollback after a new reason sends no job to the dead letters.
 The previous Worker does not read the filter. During a deploy, it can send a message that is not for the target to a subscription with the filter `addressed`.
 Mail jobs stay the same. The mail body has no `endpoint_id`.
-A calendar job (`calendar_event`, then `calendar_delivery`) has the ids of one change of the feed of a `CalendarDO`. Its `eventId` is the id of the change, so a job sent again has the same `webhook-id`. The fan-out sends nothing to a subscription from after the change.
+A calendar job (`calendar_event`, then `calendar_delivery`) has the ids of one change of the feed of a `CalendarDO`. Its `eventId` is the id of the change, so a job sent again has the same `webhook-id`. The fan-out sends nothing to a subscription from after the change. The POSTs of two changes can arrive in a different sequence, so a receiver that needs the sequence uses the `cursor` and `calendar.list_changes`.
 
 Five failed deliveries in a row disable the endpoint. One success sets the count to 0.
 HTTP 410, a revoked endpoint credential, or a refused outbound policy also disables the endpoint.

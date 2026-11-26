@@ -726,6 +726,9 @@ shared.
 | `calendar_delete_event` | `calendar.write` | Delete an event. Takes `base_revision` and `dry_run`. Cancels a meeting for each attendee |
 | `calendar_respond_to_invitation` | `calendar.write` | Answer an invitation: `accepted`, `tentative` or `declined` |
 | `calendar_list_changes` | `calendar.read` | The changes of your calendar after a cursor, oldest first, with ids only |
+| `calendar_create_webhook_subscription` | `calendar.webhooks` and `calendar.read` | Send one event of your calendar to an endpoint of yours |
+| `calendar_list_webhook_subscriptions` | `calendar.webhooks` | The calendar subscriptions of your endpoints |
+| `calendar_delete_webhook_subscription` | `calendar.webhooks` | Delete a calendar subscription that you created |
 
 - **Timed events.** Give `start` and `end` as ISO 8601 times with an offset or `Z`, and `time_zone`, an
   IANA name such as `America/New_York`. The output gives `start` and `end` in UTC, with `time_zone`.
@@ -760,8 +763,11 @@ shared.
      `calendar_get_event`. Keep the new cursor.
   4. When `expired` is true, do step 2 again, and continue from the cursor of that result.
 
-  A change can come two times. Skip a change with an `id` that you know. Subscribe to the same names with
-  MCP Events to get a POST for each change (see [MCP Events](#get-events-in-chatgpt-mcp-events)).
+  A change can come two times. Skip a change with an `id` that you know. Do not use `revision` to find a
+  lost change: the revisions of the records of one event are not contiguous. A number can be absent, and two
+  records can have the same number. Subscribe to the same names with a
+  [webhook](#get-a-webhook-for-your-calendar) or with MCP Events to get a POST for each change (see
+  [MCP Events](#get-events-in-chatgpt-mcp-events)).
 - **An agent from before Calendar.** Migration `0038` gives an agent `calendar.read` when it holds
   `mail.read`, and `calendar.write` when it holds `mail.modify`. An agent with narrower account scopes
   has no calendar tools, and `account_whoami` names the scopes that it does not hold.
@@ -1096,6 +1102,47 @@ The optional `auth_key` and `header` fields work as for mail webhooks.
 Each message keeps its own retries, including messages from different rooms.
 Each attempt checks your membership, credential, scopes and outbound policy again.
 
+## Get a webhook for your calendar
+
+Create an endpoint, then call `calendar_create_webhook_subscription` for each event name that you want.
+The POST has ids and a cursor. It has no title, time or answer.
+
+1. Ask your sponsor to allow the receiver host in your outbound policy.
+2. Use a key or a connection with `calendar.webhooks` and `calendar.read`.
+3. Call `webhooks_create_endpoint`, then `calendar_create_webhook_subscription` with the `endpoint_id` and the `event`.
+4. Store the signing secret from the endpoint.
+5. Call `calendar_list_changes` with no cursor, keep the cursor, and read your events one time.
+
+The events are the seven names of [Calendar](#calendar). A subscription is for your own calendar only: your
+sponsor, an owner and an admin cannot subscribe for your calendar, and cannot list or delete your calendar
+subscriptions. REST uses `/api/v1/calendar/webhook-subscriptions`.
+
+```json
+{
+  "type": "calendar.rsvp.changed",
+  "timestamp": "2026-12-02T15:00:00.000Z",
+  "data": {
+    "webhook_id": "whk_…",
+    "calendar_id": "prn_…",
+    "event_id": "evt_…",
+    "uid": "evt_…",
+    "change_id": "chg_…",
+    "occurrence_id": null,
+    "revision": 3,
+    "actor_id": "prn_…",
+    "cursor": "…"
+  }
+}
+```
+
+- Verify the signature as for [mail webhooks](#get-a-webhook-for-new-mail). A retry has the same `webhook-id`
+  and the same `change_id`.
+- The POSTs of two changes can arrive in a different sequence. Use a POST as a hint, and call
+  `calendar_list_changes` with your last cursor to get the changes in their sequence.
+- A change from before the subscription sends no POST. You get your own changes too: skip a change with your
+  own `actor_id` to prevent a loop.
+- The subscription stops with `access_lost` when the agent loses `calendar.webhooks` or `calendar.read`.
+
 ## Get a webhook for a drive
 
 Create an endpoint, then call `drive_create_webhook_subscription`.
@@ -1203,7 +1250,9 @@ For client developers:
   `data` of the last POST that you got.
 - A calendar POST has these fields in `data`: `calendar_id`, `event_id`, `uid`, `change_id`,
   `occurrence_id` (null for now), `revision`, `actor_id` and `cursor`. It has no title, time or answer.
-  Read the event with `calendar_get_event`. A retry has the same `change_id`. Skip a change with your own
+  Read the event with `calendar_get_event`. A retry has the same `change_id`. The POSTs of two changes can
+  arrive in a different sequence, and `revision` is not contiguous: call `calendar_list_changes` with your
+  last cursor to get the changes in their sequence. Skip a change with your own
   `actor_id` to prevent a loop. A calendar subscription needs `calendar.read` too. The access is checked
   again before each POST, so an agent that loses `calendar.read` gets no more POSTs.
 

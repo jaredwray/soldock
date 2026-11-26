@@ -12,7 +12,7 @@
 | **Owns** | `CalendarDO`, one for each principal. |
 | **Depends on** | `platform`, `identity`, `webhooks` (the type of the queue job only). |
 | **Operations** | `calendar.list_events`, `calendar.get_event`, `calendar.create_event`, `calendar.update_event`, `calendar.delete_event`, `calendar.respond_to_invitation`, `calendar.list_changes` |
-| **Data inventory** | `CalendarDO` tables `events` (with the copies of meetings), `attendees`, `meeting_tombstones`, `outbox`, `changes`, `idempotency` and `meta` (with `owner_id`, `owner_email`, `owner_name`, `event_count`, `schema_version`, and for the change feed `change_feed`, `change_head`, `change_published`, `change_floor`, `publish_attempts`, `publish_at` and `webhook_events`). No R2 object. D1: the subscriptions of MCP Events are rows of `webhook_endpoints` and `webhook_subscriptions` (domain `calendar`). D1 migration 0038 changes `principals.agent_scopes` only. D1 migration 0041 builds `webhook_subscriptions` again with the domain `calendar`, and gives `calendar.webhooks` to agents. Backups: not built yet. |
+| **Data inventory** | `CalendarDO` tables `events` (with the copies of meetings), `attendees`, `meeting_tombstones`, `outbox`, `changes`, `idempotency` and `meta` (with `owner_id`, `owner_email`, `owner_name`, `event_count`, `schema_version`, and for the change feed `change_feed`, `change_head`, `change_published`, `change_floor`, `publish_attempts`, `publish_at` and `webhook_events`). No R2 object. D1: the subscriptions of webhooks and of MCP Events are rows of `webhook_endpoints` and `webhook_subscriptions` (domain `calendar`). D1 migration 0038 changes `principals.agent_scopes` only. D1 migration 0041 builds `webhook_subscriptions` again with the domain `calendar`, and gives `calendar.webhooks` to agents. Backups: not built yet. |
 
 Public surface: `index.ts` only. Other domains must not import files from this folder directly.
 
@@ -22,7 +22,7 @@ Public surface: `index.ts` only. Other domains must not import files from this f
 | --- | --- |
 | `calendar.ts` | `CalendarDO`: the SQLite tables of one calendar, the range query, the idempotency keys, the count of events, the meetings, and the outbox with its alarm |
 | `handlers.ts` | The operation handlers. They check the time of an event, change it to the stored form and back, find the attendees in the directory, and open the object of the caller |
-| `webhooks.ts` | `enableCalendarEvents`: the step of MCP Events before a subscription of Calendar, which turns on the queue jobs of the change feed |
+| `webhooks.ts` | `enableCalendarEvents`: the step before a subscription of Calendar, which turns on the queue jobs of the change feed. The handlers of the three webhook subscription operations |
 
 ## A calendar
 
@@ -168,7 +168,7 @@ Each committed change of a calendar writes one row of the `changes` table, in th
 
 - `calendar.list_changes` reads the rows after a cursor.
 - The events socket of the owner gets the hint `calendar.changed`.
-- MCP Events get one queue job for each row, with the id of the row as the event id.
+- Webhooks and MCP Events get one queue job for each row, with the id of the row as the event id.
 
 So a change that fails writes no row, and a change that commits has its row, also when the Worker stops before
 the delivery.
@@ -183,7 +183,7 @@ the delivery.
 | `event_id` | The event on this calendar: the event of the owner, or the copy of a meeting |
 | `uid` | The meeting: the same on the event of the organizer and on each copy |
 | `occurrence_id` | Null in this layer. Recurring events will set it to the occurrence that changed |
-| `revision` | The revision of the event after the change. An answer of an attendee does not change the revision of the event of the organizer, so a client deduplicates by `id`, not by `revision` |
+| `revision` | The revision of the event after the change. The revisions of the records of one event are not contiguous ([below](#revision-and-order)), so a client deduplicates by `id`, not by `revision` |
 | `actor_id` | The principal that caused the change, or null when two attendees answered in one snapshot |
 | `at` | The time of the commit |
 | `cursor` | The position after the change |
@@ -191,6 +191,18 @@ the delivery.
 The record has no title, time, place, attendee or answer. A client reads the event with `calendar.get_event`
 or `calendar.list_events`, which check its access again. After `calendar.event.deleted` and
 `calendar.invitation.cancelled`, the event is gone, and `calendar.get_event` gives `not_found`.
+
+### Revision and order
+
+- A number can be absent. The echo of the answer of the owner changes the `revision` of a copy and gives no
+  record.
+- A number can repeat. An answer of an attendee gives a record and does not change the `revision` of the event
+  of the organizer. A snapshot that changes the fields and an answer gives two records with one `revision`.
+- So a client must not find a lost record from the `revision`. The sequence of the changes is the sequence of
+  `calendar.list_changes`, and `cursor` is the position of each record in it.
+- The POSTs of webhooks and of MCP Events can arrive in a different sequence: each POST is a separate job of
+  the queue, and a retry comes later. A receiver that needs the sequence reads `calendar.list_changes` from
+  its last cursor, and uses a POST only as a hint.
 
 ### Event names
 
@@ -234,8 +246,8 @@ or `calendar.list_events`, which check its access again. After `calendar.event.d
   before the move sends the row again, with the same id: delivery is at least once.
 - A failure tries again after 1 minute, doubled for each failure, at most 1 hour, and never drops a change.
   The object sets an alarm at its start when a change waits.
-- `webhook_events` is set by `enableCalendarEvents`, before MCP Events store a subscription. A calendar that
-  nobody watches sends the hint only.
+- `webhook_events` is set by `enableCalendarEvents`, before a webhook subscription or a subscription of MCP
+  Events is stored. A calendar that never had a subscription sends the hint only.
 - The previous Worker sends a queue job of an unknown kind to the dead-letter queue during a deploy. The change
   stays in `calendar.list_changes`.
 
@@ -254,12 +266,27 @@ or `calendar.list_events`, which check its access again. After `calendar.event.d
 - Retries, the signature and the end of an endpoint are the rules of the webhook queue
   ([webhooks](../webhooks/README.md)). A retry has the same `webhook-id`.
 
+### Webhooks
+
+- `calendar.create_webhook_subscription`, `calendar.list_webhook_subscriptions` and
+  `calendar.delete_webhook_subscription` use the shared endpoints (`webhooks.create_endpoint`) and the shared
+  store, as Mail, Chat and Drive do. REST and MCP have the three operations.
+- A subscription is for one event name and for the own calendar of the caller. `calendar_id` is optional, and
+  its only allowed value is the id of the caller. A different id gives `forbidden`.
+- The create needs `calendar.webhooks` and `calendar.read`. The list and the delete need `calendar.webhooks`.
+- The list shows only the subscriptions of the endpoints of the caller. Only the creator deletes a
+  subscription. A sponsor, an owner and an admin get nothing of the calendar of an agent.
+- The POST is a signed Standard Webhooks POST. Its body has `type`, `timestamp` and `data` with `webhook_id`,
+  `calendar_id`, `event_id`, `uid`, `change_id`, `occurrence_id`, `revision`, `actor_id` and `cursor`.
+- A subscription starts from now, as for MCP Events. The fan-out sends nothing to a subscription from after
+  the change.
+
 ### Access to the changes
 
 - The feed is a part of the calendar: only the owner, with `calendar.read`, reads it. A cursor of a different
   calendar expires.
-- `events/subscribe` refuses a different `calendar_id` with `forbidden`, also the calendar of an agent for its
-  sponsor.
+- `events/subscribe` and `calendar.create_webhook_subscription` refuse a different `calendar_id` with
+  `forbidden`, also the calendar of an agent for its sponsor.
 - Before each POST and each retry, the queue checks the access again: a credential that stopped disables the
   endpoint, an archived creator gets nothing, and an agent without `calendar.webhooks` or `calendar.read`
   disables the subscription (`access_lost`). An unsubscribe deletes the endpoint, so a waiting delivery sends
@@ -277,6 +304,9 @@ or `calendar.list_events`, which check its access again. After `calendar.event.d
   read it, and the range loads again, so no change during the first read is lost.
 - It catches up on `calendar.changed`, on `hello` after each connect of the events socket, and on focus. While
   the socket is down, it catches up each 30 seconds when the page shows.
+- The cursor moves only after the range loaded (`createSync` in `sync.ts`). After a failed read of the range,
+  the next catch-up reads the same changes and loads the range again, and the events stay on screen.
+- One catch-up runs at a time. A hint during a catch-up runs one more catch-up after it.
 - A catch-up with changes, or with an expired cursor, loads the range again. The events on screen are the
   answer of the server, by id, so a change that comes two times never shows an event two times.
 
@@ -367,7 +397,10 @@ or `calendar.list_events`, which check its access again. After `calendar.event.d
 - The `CalendarDO` of a deleted principal stays in storage, as its drive does.
 - A change makes the web app read the whole range again. It does not patch one event.
 - The events socket needs `chat.read`. An agent without it uses MCP Events or reads `calendar.list_changes`.
-- Settings has no Calendar part for webhooks yet: Calendar sends its changes through MCP Events only.
+- The web app has no page that creates a webhook for the own calendar of a person. A person uses REST or
+  MCP, as for the own mailbox and the own drive. The page of an agent does not offer Calendar.
+- `webhook_events` stays set after the last subscription of a calendar ends. That calendar then still sends
+  one queue job for each change, and the fan-out sends no POST.
 - The week grid has one line for each hour of the wall clock. On the day that the clock goes back,
   the hour from 01:00 to 02:00 occurs two times. An event in that hour keeps its real length in the
   grid, so it can share columns with an event that it does not overlap. The data, the dialog, the
@@ -380,8 +413,7 @@ or `calendar.list_events`, which check its access again. After `calendar.event.d
 3. Recurring events (a subset of RRULE, with exceptions).
 4. Reminders (an alarm of the object, Web Push and the Activity of Chat).
 5. A resource of Calendar for `subscriptions/listen`.
-6. The webhook operations of Calendar (`calendar.*_webhook_subscription`) and their part in Settings. The
-   store, the queue jobs and the delivery already carry the domain `calendar`.
+6. A page of the web app that creates a webhook for the own calendar of a person.
 7. Free/busy for the principals of the organization.
 8. Delegates of a calendar, with a `calendar.share` scope, and shared calendars of a team.
 9. The calendar of an agent for its sponsor, or for an owner or an admin.

@@ -894,7 +894,7 @@ caller. The calendar of each principal is a new Durable Object class, `CalendarD
 
 ### Calendar changes
 
-Calendar sends its changes through MCP Events, with the new scope `calendar.webhooks`. The web app gets its
+Calendar sends its changes through webhooks and MCP Events, with the new scope `calendar.webhooks`. The web app gets its
 changes from the events socket and `calendar.list_changes`, and stops its poll of 30 seconds.
 
 - Migration `0041_calendar_webhooks.sql` builds `webhook_subscriptions` again, because SQLite cannot change
