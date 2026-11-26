@@ -5,6 +5,7 @@ import { useToast } from "../../lib/toast.tsx";
 import { TargetWebhooks } from "../settings/TargetWebhooks.tsx";
 import { AdminCard } from "./AdminCard.tsx";
 import { type AccessEditorText, byName, MailboxAccessEditor } from "./MailboxAccessEditor.tsx";
+import { MailboxAliases } from "./MailboxAliases.tsx";
 
 // The UI says "shared mailbox". The operations and the mail paths keep the name "team mailbox".
 
@@ -29,6 +30,7 @@ export function SharedMailboxPanel({ mailbox, principals, onChanged }: SharedMai
 			chips={<span className="chip">{count === 0 ? "No members" : count === 1 ? "1 member" : `${count} members`}</span>}
 		>
 			<NameForm mailbox={mailbox} onChanged={onChanged} />
+			<MailboxAliases mailboxId={mailbox.id} mailboxName={mailbox.display_name} />
 			<MembersPart mailbox={mailbox} principals={principals} onChanged={onChanged} />
 			<TargetWebhooks
 				heading={`Webhooks of ${mailbox.display_name}`}
@@ -49,7 +51,7 @@ interface PartProps {
 	onChanged: (mailbox: TeamMailbox) => void;
 }
 
-/** Changes the name (`directory.update_team_mailbox`). The address cannot change. */
+/** Changes the name (`directory.update_team_mailbox`). The address cannot change, but the mailbox can have aliases. */
 function NameForm({ mailbox, onChanged }: PartProps) {
 	const toast = useToast();
 	const [name, setName] = useState(mailbox.display_name);
@@ -94,6 +96,7 @@ function NameForm({ mailbox, onChanged }: PartProps) {
 				/>
 				<p id={ids.hint} className="field-hint">
 					Each member sees this name in Mail, and mail sent from this mailbox has it in From. The address cannot change.
+					To receive mail at a different address, add an alias.
 				</p>
 			</div>
 			{error && (

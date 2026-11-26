@@ -16,6 +16,7 @@ import serviceAccessMigration from "../migrations/0026_service_access.sql?raw";
 import agentAccessMigration from "../migrations/0027_agent_access.sql?raw";
 import mailboxMemberScopesMigration from "../migrations/0029_mailbox_member_scopes.sql?raw";
 import unusedAccessColumnsMigration from "../migrations/0034_remove_unused_access_columns.sql?raw";
+import mailboxAliasMigration from "../migrations/0040_mailbox_aliases.sql?raw";
 import { matchTotp, totpCode } from "../src/identity/totp.ts";
 import legacyDirectory from "./fixtures/directory-v1.sql?raw";
 import {
@@ -235,6 +236,13 @@ describe("first-run setup", () => {
 		)
 			.bind(ada.id)
 			.run();
+		// The aliases name the old mailboxes. The reset drops them, and the trigger on mail_domains of 0040.
+		const { team_mailbox: support } = await owner.call("directory.create_team_mailbox", {
+			display_name: "Support",
+			address: "support@dock.test",
+		});
+		await owner.call("directory.add_mailbox_alias", { mailbox_id: support.id, address: "help@second.test" });
+		await owner.call("directory.add_mailbox_alias", { mailbox_id: ada.id, address: "countess@second.test" });
 		const cookie = await signIn(owner.address);
 		const res = await setup(
 			SETUP_TOKEN,
@@ -280,6 +288,14 @@ describe("first-run setup", () => {
 			principal: { kind: "service" },
 			scopes: [...SERVICE_SCOPES],
 		});
+		// The fresh directory has the schema of 0040, and the old aliases are free.
+		const { team_mailbox: help } = await fresh("directory.create_team_mailbox", {
+			display_name: "Help",
+			address: "help@second.test",
+		});
+		expect(
+			(await fresh("directory.add_mailbox_alias", { mailbox_id: help.id, address: "countess@second.test" })).aliases,
+		).toMatchObject([{ address: "countess@second.test" }]);
 		await refusal(await submitSignIn(ada.address, PASSWORD));
 		await signIn("owner@new.example");
 		expect((await setup(SETUP_TOKEN, OWNER)).status).toBe(409);
@@ -1120,8 +1136,10 @@ describe("directory upgrade", () => {
 	it("moves a directory with sign-in emails to passwords, and keeps keys, sessions, agents and the old columns", async () => {
 		const db = env.DIRECTORY;
 		const run = (statements: string[]) => db.batch(statements.map((sql) => db.prepare(sql)));
-		// A directory from before 0004 has no team mailbox tables.
+		// A directory from before 0004 has no team mailbox tables and no aliases.
 		await run([
+			"DROP TRIGGER mail_domain_in_use_team_alias",
+			"DROP TABLE team_mailbox_aliases",
 			"DROP TABLE team_mailbox_members",
 			"DROP TABLE team_mailboxes",
 			"DROP TABLE sign_in_codes",
@@ -1314,6 +1332,7 @@ describe("directory upgrade", () => {
 			"prn_ci",
 		]);
 		await run(unusedAccessColumnsMigration.split("--> statement-breakpoint"));
+		await run(mailboxAliasMigration.split("--> statement-breakpoint"));
 		const after = await db.prepare("SELECT * FROM principals ORDER BY id").all<Record<string, unknown>>();
 		expect(after.results).toStrictEqual(
 			before.results.map(({ agent_resources, service_scopes, service_resources, ...kept }) => kept),

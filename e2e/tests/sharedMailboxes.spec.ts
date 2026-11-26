@@ -106,3 +106,35 @@ test("an admin sets what a person and an agent can do in a shared mailbox, and t
 		await nadia.close();
 	}
 });
+
+// An owner or an admin gives a shared mailbox an extra address in the settings of the mailbox. The alias
+// receives mail at once, and a remove frees the address again.
+test("an admin adds an alias to a shared mailbox, and removes it", async ({ browser }) => {
+	const admin = await signIn(browser, "tomasz");
+	const local = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+	const name = unique("Returns");
+	const alias = `refunds-${local}@example.com`;
+	const { team_mailbox: mailbox } = await post<{ team_mailbox: { id: string } }>(
+		admin,
+		"/api/v1/directory/team-mailboxes",
+		{ display_name: name, address: `returns-${local}@example.com` },
+	);
+
+	const page = await admin.newPage();
+	await page.goto("/admin/shared-mailboxes");
+	const card = page.locator("details.admin-card").filter({ hasText: name });
+	await card.locator("summary").click();
+	await expect(card.getByText("This mailbox has no aliases.")).toBeVisible();
+	await card.getByLabel("New alias").fill(alias.toUpperCase());
+	await card.getByRole("button", { name: "Add alias" }).click();
+	await expect(page.getByText(`${alias} now receives mail for ${name}.`)).toBeVisible();
+	await expect(card.getByRole("cell", { name: alias })).toBeVisible();
+	const listed = await admin.request.get(`/api/v1/directory/mailboxes/${mailbox.id}/aliases`);
+	expect(await listed.json()).toMatchObject({ aliases: [{ address: alias }] });
+
+	await card.getByRole("button", { name: `Remove ${alias}` }).click();
+	await page.getByRole("dialog").getByRole("button", { name: "Remove alias" }).click();
+	await expect(card.getByText("This mailbox has no aliases.")).toBeVisible();
+	const after = await admin.request.get(`/api/v1/directory/mailboxes/${mailbox.id}/aliases`);
+	expect(await after.json()).toMatchObject({ aliases: [] });
+});

@@ -852,6 +852,24 @@ and agents use the own mailbox, in the settings of the mailbox in Mail (`mail.se
   of `mailbox_delegates` before you start fresh with it, or the reset fails.
 - [Agents](agents.md#the-mailbox-of-a-person) has the rules for an agent.
 
+### Mailbox aliases
+
+Migration `0040_mailbox_aliases.sql` adds the table `team_mailbox_aliases` and triggers that keep each
+address in one place. An owner or an admin can then add aliases to a mailbox, in Admin › Members and in
+Admin › Shared mailboxes (`directory.add_mailbox_alias`).
+
+- The migration only adds a table, and the table is empty. No address and no access changes at the upgrade.
+- The old Worker keeps working between the migration and the deploy. It has no alias operations.
+- A rollback to a Worker from before this change works, with these limits:
+  - That Worker delivers mail to an alias of the own mailbox of a principal, because it reads each row of
+    `addresses`. It rejects mail to an alias of a team mailbox, because it does not read the new table.
+  - The triggers stay, so that Worker cannot give the address of an alias to a new principal or team
+    mailbox.
+  - That Worker does not know the new table and triggers in [Start fresh from setup](#start-fresh-from-setup).
+    Before you start fresh with it, run these statements on the `directory` database, or the reset fails:
+    `DROP TRIGGER mail_domain_in_use_team_alias; DROP TRIGGER address_not_team_mailbox_alias;
+    DROP TRIGGER team_mailbox_not_alias; DROP TABLE team_mailbox_aliases;`
+
 ### Calendar scopes
 
 Calendar adds the scopes `calendar.read` and `calendar.write`. They apply only to the own calendar of the

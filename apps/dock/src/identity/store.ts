@@ -199,14 +199,15 @@ export async function removeMailDomain(db: D1Database, domain: string): Promise<
 }
 
 /**
- * True when a principal or a team mailbox has the address. An archived principal keeps its addresses. The
- * deletion of a principal removes its addresses, so a deleted principal has none.
+ * True when a principal, a team mailbox or an alias has the address. An archived principal keeps its
+ * addresses and aliases. The deletion of a principal removes them, so a deleted principal has none.
  */
 export async function addressTaken(db: D1Database, address: string): Promise<boolean> {
 	const row = await db
 		.prepare(
 			`SELECT 1 FROM addresses WHERE address = ?1
-			UNION ALL SELECT 1 FROM team_mailboxes WHERE address = ?1 LIMIT 1`,
+			UNION ALL SELECT 1 FROM team_mailboxes WHERE address = ?1
+			UNION ALL SELECT 1 FROM team_mailbox_aliases WHERE address = ?1 LIMIT 1`,
 		)
 		.bind(normalizeAddress(address))
 		.first();
@@ -563,7 +564,11 @@ export function conflictOf(error: unknown): OperationError | null {
 	if (text.includes("UNIQUE constraint failed: addresses.address")) {
 		return new OperationError("conflict", "That address belongs to another principal.");
 	}
-	if (text.includes("address_in_use") || text.includes("UNIQUE constraint failed: team_mailboxes.address")) {
+	if (
+		text.includes("address_in_use") ||
+		text.includes("UNIQUE constraint failed: team_mailboxes.address") ||
+		text.includes("UNIQUE constraint failed: team_mailbox_aliases.address")
+	) {
 		return new OperationError("conflict", "That address belongs to another principal or team mailbox.");
 	}
 	return null;

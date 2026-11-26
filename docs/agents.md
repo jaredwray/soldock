@@ -482,6 +482,16 @@ agent and a service account.
 - An owner or an admin can rename a team mailbox. The `id` and the address do not change. Read the
   name from `mail_list_mailboxes` or `mail_get_profile`.
 
+### Aliases of a mailbox
+
+A mailbox can have aliases: extra addresses that receive mail for it. Only an owner or an admin adds or
+removes an alias, so an agent cannot give itself an address.
+
+- Call `directory_list_mailbox_aliases` with your own id, or with the id of a team mailbox that you are
+  a member of. The result has the primary address of the mailbox and each alias.
+- Mail to an alias arrives in the same mailbox as mail to the primary address. Mail that you send always
+  comes from the primary address.
+
 ## The signature of a mailbox
 
 A mailbox can have a plain-text signature. People set it in the settings of the mailbox in the web app,
