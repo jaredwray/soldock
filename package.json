@@ -1,5 +1,5 @@
 {
-	"name": "asterra",
+	"name": "asterra-monorepo",
 	"version": "0.0.0",
 	"private": true,
 	"description": "Open-source Google Workspace alternative (Mail, Meet, Drive, Docs, Sheets, Slides) that runs entirely on Cloudflare, for humans and AI agents alike.",

@@ -55,7 +55,7 @@ pnpm test               # Vitest (all projects)
 | `packages/ui/`, `packages/sdk/` | Design system and public client |
 | `tools/licenses/`, `tools/budgets/` | License policy check, Worker bundle and startup budgets |
 | `tools/seed/` | `pnpm seed`: sample data for a local Asterra instance (a made-up organization) |
-| `tools/cli/`, `tools/load/` | `asterra` operator CLI (provision, init, backup, restore) and load scenarios |
+| `tools/cli/`, `tools/load/` | `asterra` operator CLI (install and upgrade an instance; later backup and restore) and load scenarios |
 | `fixtures/`, `e2e/` | Test corpora (with license notes) and Playwright end-to-end tests |
 | `spikes/` | Spike harnesses that need live Cloudflare credentials, deleted when the spike is done |
 | `docs/` | User, admin, self-hosting, agent and security docs |
