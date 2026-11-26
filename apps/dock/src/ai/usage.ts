@@ -163,7 +163,7 @@ export async function usageReport(env: Env, month: string, now: number): Promise
 			)
 			.bind(...range, AI_LIMITS.topResources)
 			.all<{ resource_id: string; cost: number; requests: number }>(),
-		readConfig(db),
+		readConfig(env),
 	]);
 	const daily = new Map(byDay.results.map((row) => [row.day, row]));
 	const names = await describeResources(

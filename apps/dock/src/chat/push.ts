@@ -1,6 +1,7 @@
 import { CHAT_EVENT_REASONS, type ChatEventReason } from "@asterra/contracts";
 import { checkPublicHost, log } from "../platform/index.ts";
 import { fanOutPush, isChatPushFanout } from "./push-fanout.ts";
+import { activeVapid, type VapidConfig } from "./push-settings.ts";
 import { encryptPush, pushAuthorization } from "./web-push.ts";
 
 export const CHAT_PUSH_QUEUE = "soldock-chat-push";
@@ -35,7 +36,7 @@ function isPushJob(body: unknown): body is ChatPushJob {
 	);
 }
 
-async function deliverPush(job: ChatPushJob, env: Env): Promise<void> {
+async function deliverPush(job: ChatPushJob, env: Env, vapid: VapidConfig): Promise<void> {
 	const remaining = job.occurredAt + PUSH_LIFETIME_MS - Date.now();
 	if (remaining <= 0) return;
 	const room = env.CHAT_ROOM.get(env.CHAT_ROOM.idFromName(job.roomId));
@@ -72,7 +73,7 @@ async function deliverPush(job: ChatPushJob, env: Env): Promise<void> {
 	const response = await fetch(endpoint.href, {
 		method: "POST",
 		headers: {
-			authorization: await pushAuthorization(env, endpoint.origin),
+			authorization: await pushAuthorization(vapid, endpoint.origin),
 			"content-encoding": "aes128gcm",
 			"content-type": "application/octet-stream",
 			ttl: String(Math.ceil(remaining / 1000)),
@@ -82,7 +83,9 @@ async function deliverPush(job: ChatPushJob, env: Env): Promise<void> {
 		signal,
 	});
 	await response.body?.cancel();
-	if (response.status === 404 || response.status === 410) {
+	// 404 and 410: the subscription is gone. 401 and 403: the push service refuses the key, for example after
+	// an admin replaced the keys. A device with the subscription registers again at its next start.
+	if ([401, 403, 404, 410].includes(response.status)) {
 		await principal.expirePushSubscription(job.subscriptionId);
 	} else if (!response.ok) {
 		throw new Error(`Push service status ${response.status}.`);
@@ -90,13 +93,21 @@ async function deliverPush(job: ChatPushJob, env: Env): Promise<void> {
 }
 
 export async function handleChatPushBatch(batch: MessageBatch<unknown>, env: Env): Promise<void> {
+	// One read of the settings for each batch. While an admin has push off, the live sounds still go to open
+	// tabs, but no device gets a delivery, and a delivery job goes without a retry.
+	let settings: Promise<VapidConfig | null> | undefined;
+	const vapid = () => {
+		settings ??= activeVapid(env);
+		return settings;
+	};
 	for (const message of batch.messages) {
 		const job = message.body;
 		try {
 			if (isChatPushFanout(job)) {
-				if (Date.now() - job.occurredAt < PUSH_LIFETIME_MS) await fanOutPush(job, env);
+				if (Date.now() - job.occurredAt < PUSH_LIFETIME_MS) await fanOutPush(job, env, (await vapid()) !== null);
 			} else if (isPushJob(job)) {
-				await deliverPush(job, env);
+				const config = await vapid();
+				if (config) await deliverPush(job, env, config);
 			} else {
 				log("warn", "invalid chat push job", { jobId: message.id });
 			}

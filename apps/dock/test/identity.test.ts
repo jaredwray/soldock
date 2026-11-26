@@ -20,6 +20,7 @@ import { matchTotp, totpCode } from "../src/identity/totp.ts";
 import legacyDirectory from "./fixtures/directory-v1.sql?raw";
 import {
 	api,
+	bearer,
 	callTool,
 	cookieOf,
 	createActor,
@@ -30,6 +31,7 @@ import {
 	PASSWORD,
 	racing,
 	request,
+	SEALED,
 	SETUP_TOKEN,
 	seedOrg,
 	sendMemberStates,
@@ -496,6 +498,12 @@ describe("sign-in with a password", () => {
 		const owner = await setupOwner();
 		const secret = await turnOnTotp(owner.call);
 		expect((await owner.call("account.whoami")).sign_in).toEqual({ password_set: true, totp_enabled: true });
+		// The tests have ENCRYPTION_KEY, so the secret that checks each code is sealed in the directory.
+		const stored = await env.DIRECTORY.prepare("SELECT totp_secret FROM principals WHERE id = ?")
+			.bind(owner.id)
+			.first<string>("totp_secret");
+		expect(stored).toMatch(SEALED);
+		expect(stored).not.toContain(secret);
 		const first = await submitSignIn(owner.address, PASSWORD);
 		expect(first.status).toBe(200);
 		expect(await first.json()).toEqual({ status: "totp_required" });
@@ -994,11 +1002,69 @@ describe("sessions that end during a change", () => {
 });
 
 describe("two-step verification", () => {
+	const signInWith = async (bindings: Parameters<typeof withEnv>[0], address: string, totpCode?: string) =>
+		await withEnv(bindings, "/auth/session", {
+			method: "POST",
+			headers: { "content-type": "application/json", origin: ORIGIN },
+			body: JSON.stringify({ address, password: PASSWORD, ...(totpCode ? { totp_code: totpCode } : {}) }),
+		});
+
+	it("never signs in without the code when the sealed secret does not open", async () => {
+		const owner = await setupOwner();
+		const secret = await turnOnTotp(owner.call);
+		for (const key of [undefined, "a-different-encryption-key-0123456789"]) {
+			const bindings = { ENCRYPTION_KEY: key };
+			// The person still has two-step verification: a password alone makes no session.
+			const first = await signInWith(bindings, owner.address);
+			expect(await first.json()).toEqual({ status: "totp_required" });
+			expect(first.headers.get("set-cookie")).toBeNull();
+			// The Worker cannot check the code, so also the correct code makes no session.
+			await refusal(await signInWith(bindings, owner.address, await totpNow(secret, 1)));
+		}
+		// With the ENCRYPTION_KEY of the seal, the same code signs in.
+		const signedIn = await submitSignIn(owner.address, PASSWORD, { totpCode: await totpNow(secret, 1) });
+		expect(await signedIn.json()).toEqual({ status: "signed_in" });
+	});
+
+	it("checks a code with a plaintext secret from before ENCRYPTION_KEY", async () => {
+		const owner = await setupOwner();
+		const secret = await turnOnTotp(owner.call);
+		// A Worker without ENCRYPTION_KEY wrote the secret as plaintext.
+		await env.DIRECTORY.prepare("UPDATE principals SET totp_secret = ? WHERE id = ?").bind(secret, owner.id).run();
+		await refusal(await submitSignIn(owner.address, PASSWORD, { totpCode: wrong(await totpNow(secret, 1)) }));
+		const signedIn = await submitSignIn(owner.address, PASSWORD, { totpCode: await totpNow(secret, 1) });
+		expect(await signedIn.json()).toEqual({ status: "signed_in" });
+		// A sign-in is a read of the secret: the row keeps the plaintext until a new setup.
+		expect(
+			await env.DIRECTORY.prepare("SELECT totp_secret FROM principals WHERE id = ?")
+				.bind(owner.id)
+				.first("totp_secret"),
+		).toBe(secret);
+	});
+
 	it("turns on only with a correct code for the newest secret", async () => {
 		const owner = await setupOwner();
 		expect(await denied(owner.call("account.enable_totp", { code: "123456" }))).toBe("conflict");
 		const first = await owner.call("account.create_totp_secret");
 		expect(first.secret).toMatch(/^[A-Z2-7]{32}$/);
+		// The secret that waits for a code is sealed too.
+		const pending = await env.DIRECTORY.prepare("SELECT totp_pending_secret FROM principals WHERE id = ?")
+			.bind(owner.id)
+			.first<string>("totp_pending_secret");
+		expect(pending).toMatch(SEALED);
+		expect(pending).not.toContain(first.secret);
+		// A different ENCRYPTION_KEY does not open it, so the setup starts again. Nothing turns on.
+		const lost = await withEnv(
+			{ ENCRYPTION_KEY: "a-different-encryption-key-0123456789" },
+			"/api/v1/account/totp/enable",
+			{
+				method: "POST",
+				headers: { ...bearer(owner.key), origin: ORIGIN, "content-type": "application/json" },
+				body: JSON.stringify({ code: await totpNow(first.secret), current_password: PASSWORD }),
+			},
+		);
+		expect(lost.status).toBe(409);
+		expect((await owner.call("account.whoami")).sign_in).toEqual({ password_set: true, totp_enabled: false });
 		const uri = new URL(first.otpauth_uri);
 		expect(`${uri.protocol}//${uri.host}${decodeURIComponent(uri.pathname)}`).toBe(
 			"otpauth://totp/Asterra:owner@dock.test",

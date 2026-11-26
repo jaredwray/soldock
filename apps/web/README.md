@@ -90,7 +90,8 @@ MCP clients. The app has no UI-only path.
   - **Turn on device notifications** asks for browser permission on this device.
     A click on a notification opens the message or the reply in its thread.
     The notification keeps message text off the lock screen.
-    When the VAPID key changes, the app renews the subscription on the next start or account change.
+    The button works only after an owner or an admin turns on device notifications in Admin › Chat. Until then, the card says so.
+    When an admin replaces the VAPID key, the app renews the subscription on the next start or account change.
     If the browser refuses renewal, Settings shows the error. Select **Turn on device notifications** to try again.
   - The active tab can play a short tone after the person interacts with the page.
   - The gear opens **Room settings** for each member, including direct messages. **Notifications** sets only that member’s preference.
@@ -445,6 +446,13 @@ MCP clients. The app has no UI-only path.
   screened out or in, with who decided and when, a button for the other decision, and a form that screens
   out an address that did not write yet. Without `mail.modify`, the view has no buttons and says why. When
   the Screener is off, a notice says so. Each list has loading, empty and error states, and **Load more**.
+- **Admin › Chat** (`/admin/chat`, [`ChatPushCard.tsx`](src/features/admin/ChatPushCard.tsx)). The first
+  card, **Device notifications**, turns Web Push on or off for the organization (`chat.update_push_settings`).
+  To turn it on, an owner or an admin enters a contact address (`mailto:` or `https:`) and selects **Turn on
+  notifications**. The server makes the key pair. The card shows the public key and its date, never the
+  private key. **Replace keys** asks for a confirmation, then calls `chat.rotate_push_keys`. While the
+  deprecated Worker secrets `VAPID_*` supply the key pair, a notice says so, and **Store in database**
+  copies the pair to the database. Each change shows a toast. The room tools follow below the card.
 - **Admin › Mail** (`/admin/mail`, [`MailSettingsCard.tsx`](src/features/admin/MailSettingsCard.tsx)). An
   owner or an admin turns the default of the Screener on or off for each mailbox of a person and each team
   mailbox that follows the default (`mail.update_org_settings`). The second card, **Address format**, turns
@@ -2139,7 +2147,7 @@ Sent `in:sent`, Spam `in:spam`, Trash `in:trash`, All mail an empty string, and 
 | [`src/shell/`](src/shell/) | The signed-in frame: the rail, the account menu with the Appearance choice, the search box, the header row of a page, the header of a sidebar, and the sidebar of a page with sections (Admin and Settings) |
 | [`src/features/auth/`](src/features/auth/) | The sign-in page and the `/auth/*` calls |
 | [`src/features/mail/`](src/features/mail/) | Mail: data hooks, sidebar, toolbar, thread list, thread view, composer and shortcuts |
-| [`src/features/admin/`](src/features/admin/) | Admin: the side navigation, the directory, the page of each member, the create form, the MCP endpoint banner, the agent panels with their OAuth connections, the service account panels (details, permissions, access and activity), the sign-in help, the team mailboxes and the email domains |
+| [`src/features/admin/`](src/features/admin/) | Admin: the side navigation, the directory, the page of each member, the create form, the MCP endpoint banner, the agent panels with their OAuth connections, the service account panels (details, permissions, access and activity), the sign-in help, the team mailboxes, the email domains and the Web Push card of Chat |
 | [`src/features/connect/`](src/features/connect/) | The OAuth approval page, and the pure rules of its first values in `connect.ts` |
 | [`src/features/drive/`](src/features/drive/) | Drive: the sidebar, the item list, the menus and dialogs (new folder, rename, move, share, versions, preview), the data hooks, the pure rules in `model.ts`, the upload queue in `uploadQueue.ts`, and the document header that the editors share |
 | [`src/features/docs/`](src/features/docs/) | Docs: the schema, the commands, the autosave, the paste of Markdown (`markdownPaste.ts`), the editor and the page. For images: the store of the images of a doc (`images.ts`), the geometry (`imageModel.ts`), the commands (`imageCommands.ts`), the view of an image (`imageView.ts`), the plugin for a drop and a paste (`imagePlugin.ts`), the toolbar and the dialogs |

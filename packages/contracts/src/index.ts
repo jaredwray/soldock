@@ -112,6 +112,8 @@ export {
 	ChatNotificationLevel,
 	ChatNotificationSettings,
 	ChatPresence,
+	ChatPushSettings,
+	ChatPushSubject,
 	ChatPushSubscription,
 	ChatStatus,
 } from "./chat-notifications.ts";

@@ -14,6 +14,7 @@ const BLOCKED_READ_OPS = new Set<string>([
 	"chat.list_message_edits",
 	"chat.list_incoming_webhooks",
 	"chat.admin_list_rooms",
+	"chat.get_push_settings",
 ]);
 const ALLOWED_WRITE_OPS = new Set<string>(["chat.post_message"]);
 

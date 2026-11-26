@@ -18,6 +18,7 @@ import {
 	rawMessage,
 	receiveWebhooks,
 	request,
+	SEALED,
 	SETUP_TOKEN,
 	seedOrg,
 	setLegacyScopes,
@@ -407,6 +408,10 @@ describe("delivery", () => {
 			await receiverSignature(webhook.secret ?? "", `${id}.${timestamp}.${post.body}`),
 		);
 		expect((await webhookOf(ada, webhook.id))?.last_delivery_at).not.toBeNull();
+		// The secret that signed the POST is sealed in the directory, because the tests have ENCRYPTION_KEY.
+		const stored = await env.DIRECTORY.prepare("SELECT secret FROM webhook_endpoints").first<string>("secret");
+		expect(stored).toMatch(SEALED);
+		expect(stored).not.toContain((webhook.secret ?? "").slice("whsec_".length));
 	});
 
 	it("sends no event for spam, and one event for mail that arrives together", async () => {
@@ -559,6 +564,80 @@ describe("the auth key and the custom header", () => {
 		expect(post.headers.get("authorization")).toBe(`Bearer ${KEY}`);
 		expect(post.headers.get("x-api-key")).toBe(HEADER.value);
 		expect(post.headers.get("webhook-signature")).toMatch(/^v1,/);
+		// The directory has the two values sealed.
+		const stored = await storedSecrets();
+		expect(stored?.auth_key).toMatch(SEALED);
+		expect(stored?.header_value).toMatch(SEALED);
+		expect(JSON.stringify(stored)).not.toContain(KEY);
+		expect(JSON.stringify(stored)).not.toContain(HEADER.value);
+	});
+
+	const storedSecrets = async () =>
+		await env.DIRECTORY.prepare("SELECT secret, auth_key, header_value FROM webhook_endpoints").first<{
+			secret: string;
+			auth_key: string | null;
+			header_value: string | null;
+		}>();
+	const signatureOf = async (secret: string, post: { headers: Headers; body: string }) =>
+		await receiverSignature(
+			secret,
+			`${post.headers.get("webhook-id")}.${post.headers.get("webhook-timestamp")}.${post.body}`,
+		);
+
+	it("sends the same POST for a row from before ENCRYPTION_KEY, and seals a value at its next write", async () => {
+		// A Worker without ENCRYPTION_KEY wrote the three values as plaintext.
+		const { webhook } = await createMail(ada, { url: HOOK, auth_key: KEY, header: HEADER });
+		await env.DIRECTORY.prepare("UPDATE webhook_endpoints SET secret = ?, auth_key = ?, header_value = ?")
+			.bind(webhook.secret ?? "", KEY, HEADER.value)
+			.run();
+		const posts = receiveWebhooks();
+		await consumeWebhooks([deliveryJob(webhook, eventId(1))]);
+		const post = posts[0] as (typeof posts)[number];
+		expect(post.headers.get("authorization")).toBe(`Bearer ${KEY}`);
+		expect(post.headers.get("x-api-key")).toBe(HEADER.value);
+		expect(post.headers.get("webhook-signature")).toBe(await signatureOf(webhook.secret ?? "", post));
+		expect((await webhookOf(ada, webhook.id))?.has_auth_key).toBe(true);
+		// A delivery is a read: it does not change the row.
+		expect((await storedSecrets())?.auth_key).toBe(KEY);
+
+		await updateMail(ada, { webhook_id: webhook.id, auth_key: "tok_new" });
+		expect((await storedSecrets())?.auth_key).toMatch(SEALED);
+		expect((await storedSecrets())?.header_value).toBe(HEADER.value);
+		await consumeWebhooks([deliveryJob(webhook, eventId(2))]);
+		expect(posts[1]?.headers.get("authorization")).toBe("Bearer tok_new");
+		expect(posts[1]?.headers.get("x-api-key")).toBe(HEADER.value);
+	});
+
+	it("sends no POST when a sealed value does not open, and records the failure without a retry", async () => {
+		const { webhook } = await createMail(ada, { url: HOOK, auth_key: KEY });
+		const posts = receiveWebhooks();
+		for (const [n, key] of [undefined, "a-different-encryption-key-0123456789"].entries()) {
+			const attempt = await consumeWebhooks([deliveryJob(webhook, eventId(n + 1))], 1, {
+				env: { ENCRYPTION_KEY: key },
+			});
+			expect(attempt.sent).toEqual([]);
+			expect(attempt.result.retryMessages).toEqual([]);
+		}
+		expect(posts).toEqual([]);
+		// The answer keeps its shape. The owner of the webhook sees why no POST went out.
+		expect(await webhookOf(ada, webhook.id)).toMatchObject({
+			status: "active",
+			consecutive_failures: 2,
+			last_error: "secret_unreadable",
+			has_auth_key: true,
+		});
+
+		// A sealed auth key from a different place does not open as the auth key: no POST without it.
+		const { secret } = (await storedSecrets()) as { secret: string };
+		await env.DIRECTORY.prepare("UPDATE webhook_endpoints SET auth_key = ?").bind(secret).run();
+		await consumeWebhooks([deliveryJob(webhook, eventId(3))]);
+		expect(posts).toEqual([]);
+
+		// With the key again, and the auth key entered again, the POST goes out.
+		await updateMail(ada, { webhook_id: webhook.id, auth_key: KEY });
+		await consumeWebhooks([deliveryJob(webhook, eventId(4))]);
+		expect(posts).toHaveLength(1);
+		expect(posts[0]?.headers.get("authorization")).toBe(`Bearer ${KEY}`);
 	});
 
 	// A custom header must never replace a header that Asterra sets, or split into a second header.

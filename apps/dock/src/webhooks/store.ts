@@ -12,7 +12,21 @@ import { adoptChatBoundary } from "./legacy.ts";
 export type EndpointDisabledReason = NonNullable<WebhookEndpoint["disabled_reason"]>;
 export type SubscriptionDisabledReason = "access_lost" | "credential_revoked";
 
-/** An endpoint as the directory stores it. The secret, the auth key and the header value stay here. */
+/**
+ * The purposes of the seals of `webhook_endpoints`. `previous_secret` has the purpose of `secret`, because a
+ * refresh of MCP Events moves the stored value from `secret` to `previous_secret` in SQL.
+ */
+export const ENDPOINT_SEAL = {
+	secret: "webhook_endpoints.secret",
+	authKey: "webhook_endpoints.auth_key",
+	headerValue: "webhook_endpoints.header_value",
+} as const;
+
+/**
+ * An endpoint as the directory stores it. The secret, the auth key and the header value stay here. With
+ * ENCRYPTION_KEY, a write seals `secret`, `previous_secret`, `auth_key` and `header_value`. A row from
+ * before ENCRYPTION_KEY, and a row that the legacy tables supply, has them as plaintext. Only a delivery opens them.
+ */
 export interface EndpointRow {
 	id: string;
 	created_by: string;

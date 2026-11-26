@@ -34,6 +34,7 @@ import inviteSchema from "../../migrations/0035_invites.sql";
 import addressFormatSchema from "../../migrations/0036_address_format.sql";
 import mailboxDelegatesSchema from "../../migrations/0037_mailbox_delegates.sql";
 import calendarScopesSchema from "../../migrations/0038_calendar_scopes.sql";
+import chatPushSettingsSchema from "../../migrations/0039_chat_push_settings.sql";
 import { log, OperationError, randomToken } from "../platform/index.ts";
 import { allMailboxIds } from "./team-mailboxes.ts";
 
@@ -139,6 +140,8 @@ function freshDirectoryStatements(db: D1Database): D1PreparedStatement[] {
 		"DROP TABLE IF EXISTS ai_settings",
 		// The mail settings belong to the old organization.
 		"DROP TABLE IF EXISTS mail_settings",
+		// The Web Push settings and their key pair belong to the old organization.
+		"DROP TABLE IF EXISTS chat_push_settings",
 		// Remove references from agents before SQLite deletes the principals table.
 		"DELETE FROM principals WHERE kind = 'agent'",
 		"DROP TABLE principals",
@@ -179,6 +182,7 @@ function freshDirectoryStatements(db: D1Database): D1PreparedStatement[] {
 		...addressFormatSchema.split("--> statement-breakpoint"),
 		...mailboxDelegatesSchema.split("--> statement-breakpoint"),
 		...calendarScopesSchema.split("--> statement-breakpoint"),
+		...chatPushSettingsSchema.split("--> statement-breakpoint"),
 		// The directory now has the schema of each bundled migration. Record them in the table that
 		// `wrangler d1 migrations apply` reads, or it runs them again later. A second run of 0004 would
 		// copy the principals without their passwords. The columns are the ones that wrangler creates.
@@ -227,4 +231,5 @@ const BUNDLED_MIGRATIONS = [
 	"0036_address_format.sql",
 	"0037_mailbox_delegates.sql",
 	"0038_calendar_scopes.sql",
+	"0039_chat_push_settings.sql",
 ] as const;

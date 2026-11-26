@@ -23,14 +23,17 @@ import {
 	type EventSubscribeInput,
 	type EventSubscriptionRef,
 	type EventSubscriptions,
+	isSealed,
 	newId,
 	OperationError,
+	openSecret,
 	randomToken,
 	sameSecret,
+	sealSecret,
 	sha256Hex,
 } from "../platform/index.ts";
 import { webhookSignature } from "./delivery.ts";
-import { getDelivery, targetLoadSql } from "./store.ts";
+import { ENDPOINT_SEAL, type EndpointRow, getDelivery, targetLoadSql } from "./store.ts";
 import { creatableTarget } from "./subscriptions.ts";
 import { outboundHostAllowed, webhookUrlProblem } from "./url.ts";
 
@@ -255,6 +258,8 @@ export function createEventSubscriptions(prepare: EventTargetHooks = {}): EventS
 			);
 		}
 		if (webhookUrlProblem(input.url, call.origin)) throw new EventCallbackError("invalid_url");
+		// The form of the secret for the directory. A wrong ENCRYPTION_KEY stops the call here, before a POST.
+		const sealedSecret = await sealSecret(call.env, ENDPOINT_SEAL.secret, input.secret);
 		const url = new URL(input.url).href;
 		const db = call.env.DIRECTORY;
 		const { principal } = call.caller;
@@ -278,13 +283,22 @@ export function createEventSubscriptions(prepare: EventTargetHooks = {}): EventS
 		const nowText = new Date(now).toISOString();
 
 		// A receiver that passed a short time ago, for this principal, URL and secret, needs no new POST.
-		const passed = await db
+		// A stored secret can be sealed, so the compare of the secret is here and not in SQL.
+		const { results: verified } = await db
 			.prepare(
-				`SELECT verified_at FROM webhook_endpoints WHERE created_by = ? AND protocol = 'mcp_events' AND url = ?
-				AND secret = ? AND status = 'active' AND verified_at > ? ORDER BY verified_at DESC LIMIT 1`,
+				`SELECT secret, verified_at FROM webhook_endpoints WHERE created_by = ? AND protocol = 'mcp_events' AND url = ?
+				AND status = 'active' AND verified_at > ? ORDER BY verified_at DESC`,
 			)
-			.bind(principal.id, url, input.secret, new Date(now - MCP_EVENT_LIMITS.verifiedMs).toISOString())
-			.first<{ verified_at: string }>();
+			.bind(principal.id, url, new Date(now - MCP_EVENT_LIMITS.verifiedMs).toISOString())
+			.all<{ secret: string; verified_at: string }>();
+		let passed: { verified_at: string } | null = null;
+		for (const row of verified) {
+			const opened = await openSecret(call.env, ENDPOINT_SEAL.secret, row.secret);
+			if (opened.ok && sameSecret(opened.value, input.secret)) {
+				passed = row;
+				break;
+			}
+		}
 		if (!passed) {
 			await countVerification(db, principal.id, now);
 			await verifyCallback(id, url, input.secret);
@@ -308,8 +322,21 @@ export function createEventSubscriptions(prepare: EventTargetHooks = {}): EventS
 		 * to `addressed`, so an agent does not start a turn for each message of each room.
 		 * The limits count the other subscriptions, so a subscription that expired cannot start again above
 		 * a limit. The endpoint changes only when the subscription changed.
+		 *
+		 * A stored secret can be sealed, so SQL cannot compare it with the new secret. `endpoint` has the stored
+		 * secret of a read before this write. The secret changed when that secret is not the new secret, or when
+		 * a different write replaced it after the read. A stored secret that does not open counts as changed.
 		 */
-		const refresh = async (endpointId: string): Promise<boolean> => {
+		const refresh = async (endpoint: EndpointRow): Promise<boolean> => {
+			const endpointId = endpoint.id;
+			const current = await openSecret(call.env, ENDPOINT_SEAL.secret, endpoint.secret);
+			const changed = !current.ok || !sameSecret(current.value, input.secret);
+			// The current secret becomes the previous secret. A plaintext secret from before ENCRYPTION_KEY is
+			// sealed on the way, so the refresh leaves no plaintext copy.
+			const previous =
+				current.ok && !isSealed(endpoint.secret)
+					? await sealSecret(call.env, ENDPOINT_SEAL.secret, current.value)
+					: endpoint.secret;
 			const results = await db.batch<{ id: string }>([
 				db
 					.prepare(
@@ -340,9 +367,9 @@ export function createEventSubscriptions(prepare: EventTargetHooks = {}): EventS
 				db
 					.prepare(
 						`UPDATE webhook_endpoints SET
-							previous_secret = CASE WHEN secret IS NOT ?1 THEN secret
+							previous_secret = CASE WHEN secret IS NOT ?10 THEN secret WHEN ?9 THEN ?11
 								WHEN previous_secret_until <= ?8 THEN NULL ELSE previous_secret END,
-							previous_secret_until = CASE WHEN secret IS NOT ?1 THEN ?2
+							previous_secret_until = CASE WHEN (?9 OR secret IS NOT ?10) THEN ?2
 								WHEN previous_secret_until <= ?8 THEN NULL ELSE previous_secret_until END,
 							consecutive_failures = CASE WHEN status = 'disabled' THEN 0 ELSE consecutive_failures END,
 							secret = ?1, status = 'active', disabled_reason = NULL, verified_at = ?3
@@ -350,7 +377,7 @@ export function createEventSubscriptions(prepare: EventTargetHooks = {}): EventS
 						AND EXISTS (SELECT 1 FROM webhook_subscriptions WHERE id = ?6 AND endpoint_id = ?4 AND expires_at = ?7)`,
 					)
 					.bind(
-						input.secret,
+						sealedSecret,
 						new Date(now + MCP_EVENT_LIMITS.secretOverlapMs).toISOString(),
 						verifiedAt,
 						endpointId,
@@ -358,13 +385,16 @@ export function createEventSubscriptions(prepare: EventTargetHooks = {}): EventS
 						id,
 						expiresAt,
 						nowText,
+						changed ? 1 : 0,
+						endpoint.secret,
+						previous,
 					),
 			]);
 			return (results[0]?.results.length ?? 0) > 0;
 		};
 
 		const existing = await getDelivery(db, id);
-		let stored = existing !== null && (await refresh(existing.endpoint.id));
+		let stored = existing !== null && (await refresh(existing.endpoint));
 		if (!stored) {
 			const binding = credentialBinding(call.caller);
 			const endpointId = newId("whe");
@@ -396,7 +426,7 @@ export function createEventSubscriptions(prepare: EventTargetHooks = {}): EventS
 						binding.id,
 						url,
 						new URL(url).hostname,
-						input.secret,
+						sealedSecret,
 						nowText,
 						verifiedAt,
 						MCP_EVENT_LIMITS.subscriptionsPerCreator,
@@ -436,7 +466,7 @@ export function createEventSubscriptions(prepare: EventTargetHooks = {}): EventS
 				// A request at the same time stored this subscription first. Refresh that one.
 				await db.prepare("DELETE FROM webhook_endpoints WHERE id = ?").bind(endpointId).run();
 				const winner = await getDelivery(db, id);
-				stored = winner !== null && (await refresh(winner.endpoint.id));
+				stored = winner !== null && (await refresh(winner.endpoint));
 			}
 			if (!stored) {
 				throw new OperationError(

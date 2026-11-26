@@ -169,7 +169,7 @@ function DevicePush({ publicKey }: { publicKey: string | null }) {
 				<p className="field-hint">
 					{publicKey
 						? "This browser does not support Web Push."
-						: "The administrator must configure Web Push for this site."}
+						: "An owner or an admin must turn on device notifications in Admin › Chat."}
 				</p>
 			)}
 			{error && (

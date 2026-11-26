@@ -51,7 +51,14 @@ The API token comes from the settings (`ai_settings.api_token`), else from the W
 `AI_GATEWAY_TOKEN`. A token of the settings wins, because an owner or an admin entered it on purpose. No
 answer and no log contains it: an answer says only whether a token exists (`token_configured`) and where
 it comes from (`token_source`). A change of the token gets its own audit line, without the token. D1 keeps
-the token as it keeps the signing secrets of webhooks: encryption at rest is not built yet.
+the token as it keeps the signing secrets of webhooks. With the Worker secret `ENCRYPTION_KEY`, each write
+seals the token (`sealSecret` of [`platform`](../platform/README.md#secrets-at-rest)). Without it, the token
+is plaintext.
+
+- A token from before `ENCRYPTION_KEY` stays plaintext and in use. The next write of the settings seals it.
+- When a sealed token does not open, the settings act as without a token: `AI_GATEWAY_TOKEN` applies, or
+  `not_ready_reason` is `no_token`. A change that does not name the token keeps the sealed token in the row.
+- With an `ENCRYPTION_KEY` of fewer than 32 characters, a save of a token fails with `unavailable`.
 
 ## The gateway call
 
@@ -112,7 +119,7 @@ A connection test counts for the person who ran it. A deleted mailbox shows as `
 | --- | --- | --- |
 | AI settings | D1 `ai_settings` (migration `0028`) | One row. It holds the API token of the settings (see the API token row). A directory reset makes a new row with AI off |
 | Usage ledger | D1 `ai_usage` (migration `0028`) | One row for each UTC day, feature, model and resource (a mailbox id, or the id of the person who tested). Requests, failures, tokens and the cost in micro-USD. No content. The hourly cron trigger deletes days older than 400 days. A directory reset deletes it |
-| API token | D1 `ai_settings.api_token`, or the Worker secret `AI_GATEWAY_TOKEN` | Entered in Admin › AI, or set with `wrangler secret put`. Never in an answer or a log. A backup of D1 holds the token of the settings: keep a backup of D1 as a secret. A directory reset deletes it |
+| API token | D1 `ai_settings.api_token`, or the Worker secret `AI_GATEWAY_TOKEN` | Entered in Admin › AI, or set with `wrangler secret put`. Never in an answer or a log. With `ENCRYPTION_KEY`, the token of the settings is sealed in D1. Without it, the token is plaintext, and a backup of D1 holds it: keep a backup of D1 as a secret. A directory reset deletes it |
 | Prompts and answers | Not stored | Asterra stores neither, and each request asks AI Gateway to keep no body (`cf-aig-collect-log-payload: false`). The gateway log keeps the metadata only. The header does not change what a Logpush job of the gateway exports: an operator who turns on Logpush must examine that export separately |
 
 ## Safety

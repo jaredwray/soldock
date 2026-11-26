@@ -1,6 +1,7 @@
 // RFC 8291 message encryption and RFC 8292 application server identification.
 // Web Crypto supplies ECDH, HKDF, AES-GCM and the ES256 signature.
 import { base64ToBytes, base64UrlEncode } from "../platform/index.ts";
+import type { VapidConfig } from "./push-settings.ts";
 
 const utf8 = new TextEncoder();
 const p256 = { name: "ECDH", namedCurve: "P-256" };
@@ -48,9 +49,8 @@ export async function encryptPush(keys: { p256dh: string; auth: string }, payloa
 }
 
 /** Signs a VAPID token for exactly the origin that receives this request. */
-export async function pushAuthorization(env: Env, audience: string): Promise<string> {
-	const { VAPID_PUBLIC_KEY: publicKey, VAPID_PRIVATE_KEY: d, VAPID_SUBJECT: sub } = env;
-	if (!publicKey || !d || !sub) throw new Error("Set the VAPID keys and contact address.");
+export async function pushAuthorization(vapid: VapidConfig, audience: string): Promise<string> {
+	const { publicKey, privateKey: d, subject: sub } = vapid;
 	const point = decode(publicKey);
 	const key = await crypto.subtle.importKey(
 		"jwk",

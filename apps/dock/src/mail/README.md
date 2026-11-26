@@ -1117,7 +1117,8 @@ Backups: not built yet. mbox/EML export comes with Takeout.
   compares `version`.
 - For webhooks: a test POST, a new secret without a new webhook, a restart of a disabled webhook, a
   delivery log, a notice to the owner when a webhook stops, a check that the receiver owns the URL,
-  encryption of the secrets at rest, a limit for each organization, and more event types.
+  a limit for each organization, and more event types. The Worker secret `ENCRYPTION_KEY` seals the
+  secrets of a webhook in D1 (see [`webhooks`](../webhooks/README.md#secrets-at-rest)).
 - Notifications for other mail changes (labels, reads, sends), and for a single label
 - A remote image proxy, `cid:` image display, and a spam classifier
 - Counters for label counts. They are counted on each call now.

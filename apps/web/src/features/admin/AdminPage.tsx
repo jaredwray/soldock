@@ -13,6 +13,7 @@ import { InviteLinkDialog, SecretDialog } from "../settings/SecretDialog.tsx";
 import { AdminSidebar, defaultSection, isAdminOnly, sectionIcon, sectionTitle } from "./AdminSidebar.tsx";
 import { AiSection } from "./AiSection.tsx";
 import { ChatAdminSection } from "./ChatAdminSection.tsx";
+import { ChatPushCard } from "./ChatPushCard.tsx";
 import { MailDomainsCard } from "./MailDomainsCard.tsx";
 import { MailSettingsCard } from "./MailSettingsCard.tsx";
 import { memberIcon } from "./MemberIdentity.tsx";
@@ -243,7 +244,12 @@ export function AdminPage({ section: routeSection, memberId: routeMemberId, navO
 			case "shared-drives":
 				return <SharedDrivesSection principals={principals} selfId={me.id} />;
 			case "chat":
-				return <ChatAdminSection principals={principals} />;
+				return (
+					<>
+						<ChatPushCard />
+						<ChatAdminSection principals={principals} />
+					</>
+				);
 			case "mail":
 				return <MailSettingsCard />;
 			case "domains":

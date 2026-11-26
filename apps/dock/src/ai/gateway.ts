@@ -151,7 +151,7 @@ async function post(
  */
 export async function chat(env: Env, request: ChatRequest, options: { test?: boolean } = {}): Promise<ChatResult> {
 	const test = options.test === true;
-	const config = await readConfig(env.DIRECTORY);
+	const config = await readConfig(env);
 	if (!test && (!config.enabled || (request.feature === "mail.auto_label" && !config.autoLabel.enabled))) {
 		return failure("disabled");
 	}

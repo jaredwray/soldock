@@ -38,5 +38,9 @@ beforeEach(async () => {
 		env.DIRECTORY.prepare(
 			"UPDATE mail_settings SET screener_default = 0, address_format_enabled = 1, address_format = 'first.last'",
 		),
+		// The Web Push settings are for the organization, so each test starts with push off and no key pair.
+		env.DIRECTORY.prepare(
+			"UPDATE chat_push_settings SET enabled = 0, subject = NULL, public_key = NULL, private_key = NULL, keys_created_at = NULL",
+		),
 	]);
 });

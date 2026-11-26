@@ -18,6 +18,9 @@ export default defineProject(async () => ({
 					SETUP_TOKEN: "test-setup-token-0123456789abcdef",
 					// Tests replace `fetch`, so this token never leaves the test.
 					AI_GATEWAY_TOKEN: "test-ai-gateway-token",
+					// At least 32 characters. Each test seals its secrets, as a deployment with the secret does.
+					// The tests of the plaintext form remove it with `withEnv` or with an env of their own.
+					ENCRYPTION_KEY: "test-encryption-key-0123456789abcdef",
 				},
 			},
 		}),
