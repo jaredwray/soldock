@@ -300,7 +300,7 @@ describe("the events socket", () => {
 
 	// A tab must learn of a sign-out at once: it does not poll while its socket is live.
 	it("closes the sockets of a session that signs out and of a revoked key at once, and no other socket", async () => {
-		const room = await privateRoom(owner, "Launch", [ada.id]);
+		const room = await roomAfterJoin(owner, "Launch", ada);
 		const cookie = await signIn(ada.address);
 		const { api_key: second } = await ada.call("account.create_api_key", { label: "Second", scopes: ["chat.read"] });
 		const signedOut = await connect({ cookie, origin: ORIGIN });
@@ -314,6 +314,7 @@ describe("the events socket", () => {
 		await ada.call("account.revoke_api_key", { key_id: second.id });
 		expect(await revoked.next()).toEqual({ closed: EVENTS_SOCKET_CLOSE.ended });
 		await owner.call("chat.post_message", { room_id: room.id, text: "Who is here?" });
+		await sendToMembers(room.id);
 		expect(await otherSession.next()).toMatchObject({ type: "chat.room", room: { id: room.id } });
 		expect(await steady.next()).toMatchObject({ type: "chat.room", room: { id: room.id } });
 	});
