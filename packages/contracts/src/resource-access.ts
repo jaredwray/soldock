@@ -4,6 +4,7 @@ import type { Scope } from "./scopes.ts";
 // What decides the access of an agent or a service account. Its API keys and OAuth connections only prove
 // its identity. In a team mailbox, a room and a shared drive, and for an item that somebody shares with it,
 // the membership or the share decides what it can do: the object of the resource checks it on each call.
+// In the mailbox of a person, the grant of that person decides (`mail.set_delegate`).
 // The account scopes of the agent apply to its own mailbox, its own drive and to the actions that have no
 // mailbox, room or drive. An agent gets each scope of its kind when it is created, and nothing changes them
 // after that. An account from before keeps the narrower list that it had.
@@ -131,8 +132,9 @@ function isSharedTarget(domain: ResourceDomain, field: string, value: unknown, c
 	if (typeof value !== "string") return false;
 	switch (domain) {
 		case "mail":
-			// The own mailbox of a principal has the id of the principal. A team mailbox has a `tmb_` id.
-			return value.startsWith("tmb_");
+			// The own mailbox of a principal has the id of the principal. A team mailbox has a `tmb_` id. The mailbox
+			// of a different principal has the id of that principal: only a grant of its owner reaches it.
+			return value.startsWith("tmb_") || (value.startsWith("prn_") && value !== callerId);
 		case "chat":
 			// Each room and each direct message has members.
 			return value.length > 0;

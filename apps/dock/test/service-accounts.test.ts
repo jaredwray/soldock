@@ -1098,6 +1098,7 @@ describe("the access of a service account", () => {
 					scopes: ["mail.read", "mail.modify", "mail.send"],
 				},
 			],
+			delegated_mailboxes: [],
 			shared_drives: [{ id: drive.id, name: "Releases", role: "editor" }],
 			// A direct message names its other member, so an admin can tell two of them apart.
 			chat_rooms: [

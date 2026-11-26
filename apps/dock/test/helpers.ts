@@ -16,6 +16,7 @@ import {
 	type InputOf,
 	type OperationName,
 	type OutputOf,
+	OWN_KEY_SCOPES,
 } from "@asterra/contracts";
 import { expect, vi } from "vitest";
 import { totpCode, totpStep } from "../src/identity/totp.ts";
@@ -155,10 +156,22 @@ export async function setLegacyScopes(principalId: string, scopes: readonly stri
 }
 
 /**
+ * A key with each human scope that a person creates in their own session. Only the person creates a key with
+ * a scope of `OWN_KEY_SCOPES` (`mail.share`), so an admin cannot create this key for the person.
+ */
+async function ownKey(address: string, password: string): Promise<string> {
+	const cookie = await signIn(address, password);
+	const client = createClient({ baseUrl: ORIGIN, fetch: workerFetch, headers: () => ({ cookie, origin: ORIGIN }) });
+	const { api_key } = await client.call("account.create_api_key", { label: "Test key", scopes: [...ALL_SCOPES] });
+	return api_key.secret;
+}
+
+/**
  * Creates a principal as `admin` and returns it with a key. An agent gets its first key and each scope of its
  * kind, as each new agent does. `legacyScopes` then gives it the narrower account scopes of an agent from before
- * migration 0033 (`setLegacyScopes`). A person gets no key at creation, so `admin` then creates a key with every
- * human scope for the person.
+ * migration 0033 (`setLegacyScopes`). A person gets no key at creation. A person with a password signs in and
+ * creates a key with every human scope. For a person without a password, `admin` creates a key with each scope
+ * that an admin can give: each one but `OWN_KEY_SCOPES`.
  */
 export async function createActor(
 	admin: Actor,
@@ -168,13 +181,15 @@ export async function createActor(
 	if (legacyScopes) await setLegacyScopes(principal.id, legacyScopes);
 	const secret =
 		firstKey?.secret ??
-		(
-			await admin.call("account.create_api_key", {
-				principal_id: principal.id,
-				label: "Test key",
-				scopes: [...ALL_SCOPES],
-			})
-		).api_key.secret;
+		(input.kind === "human" && input.password !== undefined
+			? await ownKey(principal.address, input.password)
+			: (
+					await admin.call("account.create_api_key", {
+						principal_id: principal.id,
+						label: "Test key",
+						scopes: ALL_SCOPES.filter((scope) => !OWN_KEY_SCOPES.includes(scope)),
+					})
+				).api_key.secret);
 	return {
 		id: principal.id,
 		address: principal.address,

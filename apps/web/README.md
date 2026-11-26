@@ -208,7 +208,7 @@ MCP clients. The app has no UI-only path.
     sizes its own label, so the text field starts right after the label.
   - The first row is **From:**. In a new message and a forward, it is a list
     ([`Select.tsx`](src/lib/Select.tsx)) of each address that the person can send from: the own
-    address, then each shared mailbox with `mail.send` (`fromOptions` in
+    address, then each shared mailbox and each mailbox of a different person with `mail.send` (`fromOptions` in
     [`mailboxNav.ts`](src/features/mail/mailboxNav.ts)). The list shows also when it has one address.
     `mail.send` gets the `mailbox_id` of the chosen address, so the sent copy goes into that mailbox.
   - A new message and a forward start with the default address of the open mailbox (`defaultFromId`):
@@ -414,7 +414,8 @@ MCP clients. The app has no UI-only path.
     notice of a read-only mailbox, because each conversation that shows is opened, and the audit log records it.
 - **Mailbox tree.** When the person can use more than the own mailbox, the sidebar shows a row for
   each mailbox (`mail.list_mailboxes`, `mailboxNav.ts`). "My mailbox" is first, then the shared
-  (team) mailboxes, then the agent mailboxes. The sidebar has no group headings.
+  (team) mailboxes, then the mailboxes of the people who let the person use them (kind `delegated`), then
+  the agent mailboxes. The sidebar has no group headings.
   - Under an expanded mailbox row, the sidebar shows the folders and the labels of that mailbox.
     The chevron on the right of the row expands or collapses it (`aria-expanded`).
   - Until the person uses a chevron, only the open mailbox is expanded. The shell keeps the state,
@@ -458,7 +459,8 @@ MCP clients. The app has no UI-only path.
   the fill of the address of a new person on or off (on at the start). When it is on, the admin selects the
   format: `ada.lovelace`, `ada` or `alovelace` for Ada Lovelace (`first.last`, `first` or `flast`). Each change
   saves at once, with a toast.
-- **Mailbox settings** (`/mail/settings`, `/mail/team/<tmb_id>/settings`, `/mail/agent/<prn_id>/settings`,
+- **Mailbox settings** (`/mail/settings`, `/mail/team/<tmb_id>/settings`, `/mail/person/<prn_id>/settings`,
+  `/mail/agent/<prn_id>/settings`,
   [`MailboxSettings.tsx`](src/features/mail/MailboxSettings.tsx)). The gear after Refresh in the header of
   Mail is a link to the settings view of the open mailbox. The view replaces the list in the main pane,
   next to the sidebar, so a reload and a deep link stay on it. Its header has a link back to the inbox, the
@@ -475,10 +477,18 @@ MCP clients. The app has no UI-only path.
     it has no Screener. Without `mail.modify`, the list is disabled.
   - **Access.** In a shared mailbox, an owner or an admin changes the members with the member editor of
     Admin › Shared mailboxes (`MembersPart`). A member sees the members and what each one can do. The
-    own mailbox and the mailbox of an agent show text: nobody else can use the own mailbox, and owners
-    and admins can only read the mailbox of an agent. After each change of the members, the shell gets
-    `mail.list_mailboxes` again, so the rights of the person in the open mailbox follow a change of the
-    own membership. A person who can no longer read the mailbox goes to the own inbox.
+    mailbox of an agent shows text: owners and admins can only read it. After each change of the members,
+    the shell gets `mail.list_mailboxes` again, so the rights of the person in the open mailbox follow a
+    change of the own membership. A person who can no longer read the mailbox goes to the own inbox.
+    - In the own mailbox, the person changes the delegates (`mail.list_delegates`, `mail.set_delegate`,
+      `mail.remove_delegate`). At first the part says that only the person can use the mailbox.
+      **Give access to** selects a person or an agent, with **Read**, **Change** and **Send**, and
+      **Give access** adds it. The form selects only **Read** at first. The check boxes of a row change the scopes, and **Remove** asks first.
+    - The member editor and the delegate editor are one component with different words
+      ([`MailboxAccessEditor.tsx`](src/features/admin/MailboxAccessEditor.tsx)).
+    - In the mailbox of a different person, the part tells whose mailbox it is and what the person can do
+      in it. The AI switch, the Screener list and the signature are read only there: only the owner of
+      the mailbox changes them.
   - **Default address.** The address that a new message in this mailbox comes from: a list of the
     addresses that the person can send from (`fromOptions`), and **Save** (`default_from` of
     `mail.update_settings`). It is a setting of the person, so each member of a shared mailbox has their
@@ -513,14 +523,28 @@ MCP clients. The app has no UI-only path.
     the server refuses a call without its scope.
   - A person who is not a member gets the error from the server in the list, for example after an
     admin removed the access.
+- **Mailboxes of people.** A person can let other people use the own mailbox, in its settings view. The
+  sidebar of a delegate then shows a row for that mailbox (`mail.list_mailboxes`, kind `delegated`), with
+  the name of its owner and the icon of a person.
+  - The mailbox has its own paths (`/mail/person/<prn_id>/…`). A person and an agent both have a `prn_`
+    id, so `routes.ts` keeps the ids that name the mailbox of a person (`markPersonMailboxes`). The list
+    of the mailboxes adds them, and so does a `/mail/person/…` path. The list also removes an id that it
+    shows as the mailbox of an agent. `mailboxKindOf` gives the kind of a mailbox id for the paths and the
+    views.
+  - The views follow the scopes of the grant, as for a shared mailbox (`mailboxRights`). The notice above
+    the list says what the person cannot do, and that the owner of the mailbox sets it.
+  - A sent message shows **Sent by** and the person who sent it, as in a shared mailbox.
+  - The sidebar has no button for the auto labels: only the owner of the mailbox changes them.
+  - The From of the composer lists the mailbox when the grant has `mail.send`.
 - **Agent mailboxes.** An owner or an admin can read the mailbox of each agent. The sidebar then
   shows a row for each agent (`mail.list_mailboxes`, kind `agent`).
   - The row of an agent has the agent icon. The row of a service account (`service`) has the settings
     icon, as in Admin › Members.
   - An agent mailbox path with the own id of the person goes to the same view under `/mail/…`
     (`ownMailboxPath`), because the server treats that id as the own mailbox.
-  - The mailbox of an agent has its own paths (`/mail/agent/<prn_id>/…`). The `prn_` prefix tells
-    the app that the mailbox is read only (`isAgentMailbox` in `routes.ts`, `useReadOnlyMailbox`).
+  - The mailbox of an agent has its own paths (`/mail/agent/<prn_id>/…`). A `prn_` id that does not
+    name the mailbox of a person tells the app that the mailbox is read only (`isAgentMailbox` in
+    `routes.ts`, `useReadOnlyMailbox`).
   - A notice above the list says that the mailbox is read only and that the audit log records the lists
     and the conversations that the person opens.
   - The views show no Compose button, no select boxes, no toolbar actions, no star control, no label
@@ -774,7 +798,7 @@ MCP clients. The app has no UI-only path.
     (`shell/SectionSidebar.tsx`).
   - Settings does not list webhooks. A new password
   (`account.set_password`) ends your sessions on other browsers. A new key can hold only the scopes
-  of the session. A new key does not get `account.keys`, `directory.write`, `mail.webhooks`, `chat.webhooks` or `drive.webhooks`
+  of the session. A new key does not get `account.keys`, `directory.write`, `mail.share`, `mail.webhooks`, `chat.webhooks` or `drive.webhooks`
   unless the person selects them. A new key has a label, an optional description and a lifetime: 1, 7,
   30, 90 or 180 days, a custom last day (from tomorrow to 729 days), or Never (`settings/ttl.ts`).
   The list shows the end of each key, and **Expired** or **Revoked**. The secret dialog shows the end.
@@ -2055,6 +2079,7 @@ dock Worker serves `index.html` for each app path, so a deep link works on reloa
 | `/mail/settings` | The settings view of the own mailbox: AI, the Screener, access, the default address and the signature |
 | `/mail/screener`, `/mail/screener/history` | The Screener view of the own mailbox: the senders that wait, and the decisions |
 | `/mail/team/<tmb_id>/…` | The same views, threads, settings and Screener, in a team mailbox. `/mail/team/<tmb_id>` goes to its inbox |
+| `/mail/person/<prn_id>/…` | The same views, threads, settings and Screener, in the mailbox of a person who lets the person use it. `/mail/person/<prn_id>` goes to its inbox |
 | `/mail/agent/<prn_id>/…` | The same views, threads and settings, read only, in the mailbox of an agent, for an owner or an admin. `/mail/agent/<prn_id>` goes to its inbox |
 | `/admin` | Goes to the first section of Admin that the person can use |
 | `/admin/<section>` | One section of Admin: `members`, `shared-mailboxes`, `shared-drives`, `chat`, `mail`, `domains` or `ai` |

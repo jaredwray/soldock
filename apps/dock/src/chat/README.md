@@ -819,7 +819,7 @@ settings of the organization.
 
 - To turn on push, the admin enters a contact address: a `mailto:` address or an `https:` URL. The
   Worker makes a VAPID key pair (ECDSA P-256, Web Crypto) and keeps it in the D1 table
-  `chat_push_settings` (migration `0037`). One row holds the state, the contact address and the pair.
+  `chat_push_settings` (migration `0038`). One row holds the state, the contact address and the pair.
 - No answer, log or audit line contains the private key. `chat.get_push_settings` returns the public
   key, its source and its date.
 - `chat.get_notification_settings` returns the public key only while push is on. Each device subscribes
@@ -1390,7 +1390,7 @@ Known limits:
 | Devices and live alerts | `PrincipalDO` tables `chat_push_devices` and `chat_notification_sounds` | Each device has its endpoint, encryption keys and credential reference. Recent sound events suppress duplicates |
 | Notification outbox | `ChatRoomDO` table `chat_notification_outbox` | Created in the message transaction and kept until the push queue accepts its recipients |
 | Push jobs | Queue `soldock-chat-push` | Recipient and message identifiers. The consumer reads the current keys before it sends |
-| Web Push settings | D1 table `chat_push_settings` (migration `0037`) | One row: the state, the contact address, the VAPID key pair and its date. The private key is never in an answer or a log. A backup of D1 holds it, and D1 Time Travel keeps a replaced key for its retention period: keep a backup of D1 as a secret. A directory reset drops the row and makes it again with push off and no key pair (the deprecated secrets apply again while they are set). The deprecated Worker secrets `VAPID_*` are the operator's |
+| Web Push settings | D1 table `chat_push_settings` (migration `0038`) | One row: the state, the contact address, the VAPID key pair and its date. The private key is never in an answer or a log. A backup of D1 holds it, and D1 Time Travel keeps a replaced key for its retention period: keep a backup of D1 as a secret. A directory reset drops the row and makes it again with push off and no key pair (the deprecated secrets apply again while they are set). The deprecated Worker secrets `VAPID_*` are the operator's |
 | Presence and status | D1 `principals` and the open sockets of the principal | Availability expires. Each status has text, an emoji and an optional end time |
 | Live sockets | `ChatRoomDO` hibernatable WebSockets, with the tag `p:<principal id>` | Not in the database. Each socket keeps the reference to its credential, the time of its open and the time of its last check. A socket ends with its connection, and a restart of the object ends it. No backup |
 | `PrincipalDO` tables for Layer 8 personal state | `PrincipalDO` tables `chat_activity`, `chat_sections`, `chat_section_rooms`, `chat_saved_messages`, `chat_drafts`, `chat_scheduled_messages`, `chat_reminders` | Activity items (mentions, replies, reactions, card actions, reminders, the requests of agents to add an agent, and the requests of agents to share a Drive item with an agent: `subject_json` has the account to add or to share with, and null for each other kind; `item_json` has the Drive item of a `share_request`, and null for each other kind), sidebar sections, saved message references, synced drafts, scheduled messages (alarm-delivered with credential verification), and reminders (alarm-fired into `chat_activity`) |

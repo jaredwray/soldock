@@ -6,6 +6,7 @@ import {
 	type AccessRow,
 	type AccessViewer,
 	accountScopes,
+	delegatedMailboxRows,
 	driveRows,
 	mailboxRows,
 	roomRows,
@@ -84,6 +85,20 @@ export function MemberAccess({ member, access, error, viewer, onRetry }: MemberA
 					<dd>
 						<Rows rows={mailboxRows(access, viewer)} />
 					</dd>
+					{!person && (
+						<>
+							<dt>Mailboxes of people</dt>
+							<dd>
+								<Rows rows={delegatedMailboxRows(access)} />
+								{access.delegated_mailboxes.length > 0 && (
+									<p className="field-hint">
+										Each person lets the {noun} use their mailbox, and only that person changes it, in the settings of
+										the mailbox.
+									</p>
+								)}
+							</dd>
+						</>
+					)}
 					<dt>Shared drives</dt>
 					<dd>
 						<Rows rows={driveRows(access, viewer)} />

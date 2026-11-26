@@ -1,12 +1,13 @@
-import { type CallContext, isTeamMailboxId, teamMailboxesOf } from "../identity/index.ts";
+import { type CallContext, delegatedMailboxesOf, isTeamMailboxId, teamMailboxesOf } from "../identity/index.ts";
 import type { ResourceWatcher, WatcherMap } from "../platform/index.ts";
 import { mailboxStub } from "./delivery.ts";
 import { INBOX_SIGNAL } from "./mailbox.ts";
 
 /**
- * The change feed of the `mail.inbox` resource. A caller can watch its own mailbox and each team
- * mailbox that it is a member of with `mail.read`. One query reads all team mailboxes of the caller. An owner or an
- * admin can read the mailbox of an agent, but cannot watch it: a watch would tell when the agent gets
+ * The change feed of the `mail.inbox` resource. A caller can watch its own mailbox, each team mailbox that
+ * it is a member of with `mail.read`, and each mailbox of a person who lets it read that mailbox. One query
+ * reads all team mailboxes of the caller, and one reads all its delegated mailboxes. An owner or an admin can
+ * read the mailbox of an agent, but cannot watch it: a watch would tell when the agent gets
  * mail, without the audit line of a read. The feed is a watch socket to the `MailboxDO`, which sends a
  * signal for each new message in its inbox and can sleep while the socket waits.
  */
@@ -14,15 +15,17 @@ const inboxWatcher: ResourceWatcher<CallContext> = {
 	async allowed(call, resources) {
 		const ids = resources.map((vars) => vars.mailbox_id);
 		const own = (id: string | undefined) => id === call.caller.id;
-		// A watch tells when mail arrives, so the membership needs mail.read, as a read of the inbox does.
-		const teams = ids.some((id) => id !== undefined && !own(id) && isTeamMailboxId(id))
-			? new Set(
-					(await teamMailboxesOf(call.env.DIRECTORY, call.caller.id))
-						.filter((mailbox) => mailbox.scopes.includes("mail.read"))
-						.map((mailbox) => mailbox.id),
-				)
-			: new Set<string>();
-		return ids.map((id) => id !== undefined && (own(id) || teams.has(id)));
+		// A watch tells when mail arrives, so the membership or the grant needs mail.read, as a read of the inbox
+		// does.
+		const others = ids.filter((id): id is string => id !== undefined && !own(id));
+		const [teams, delegated] = await Promise.all([
+			others.some((id) => isTeamMailboxId(id)) ? teamMailboxesOf(call.env.DIRECTORY, call.caller.id) : [],
+			others.some((id) => !isTeamMailboxId(id)) ? delegatedMailboxesOf(call.env.DIRECTORY, call.caller.id) : [],
+		]);
+		const readable = new Set(
+			[...teams, ...delegated].filter((mailbox) => mailbox.scopes.includes("mail.read")).map((mailbox) => mailbox.id),
+		);
+		return ids.map((id) => id !== undefined && (own(id) || readable.has(id)));
 	},
 
 	async open(call, vars, listener) {

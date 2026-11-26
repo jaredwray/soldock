@@ -45,7 +45,10 @@ export const MAIL_LIMITS = {
 const ThreadId = prefixedId("thr");
 const MessageId = prefixedId("msg");
 
-/** The id of a mailbox: the id of a principal for their own mailbox, or the id of a team mailbox. */
+/**
+ * The id of a mailbox: the id of a principal for their own mailbox, or the id of a team mailbox. The mailbox
+ * that a person lets you use has the id of that person.
+ */
 export const MailboxId = z
 	.string()
 	.regex(/^(?:prn|tmb)_[0-9A-HJKMNP-TV-Z]{26}$/, "must be a mailbox id that starts with prn_ or tmb_");
@@ -57,10 +60,14 @@ const MailboxParam = MailboxId.optional().describe(
 
 /** One sentence for the description of each mail operation that takes `mailbox_id`. */
 const IN_MAILBOX =
-	"Set mailbox_id to use a team mailbox that you are a member of. Your membership must have the scope of this operation: see scopes in mail.list_mailboxes.";
+	"Set mailbox_id to use a team mailbox that you are a member of, or the mailbox of a person who lets you use it. Your membership or your grant must have the scope of this operation: see scopes in mail.list_mailboxes.";
 
 /** The text about `mailbox_id` for an operation that only reads. Owners and admins can read the mailbox of an agent. */
 const IN_MAILBOX_READ = `${IN_MAILBOX} An owner or an admin can also set the id of an agent, to read the mailbox of that agent.`;
+
+/** One sentence for each operation that changes a setting of a mailbox. Only its owner changes them in the mailbox of a person. */
+const OWNER_SETTINGS =
+	"In the mailbox of a person who lets you use it, only that person changes the settings, so this operation fails there with forbidden.";
 
 /** The last sentence of an operation that changes a mailbox or sends from it. */
 const AGENT_READ_ONLY =
@@ -68,15 +75,16 @@ const AGENT_READ_ONLY =
 
 /**
  * The kind of a mailbox, as the caller sees it. `personal`: the own mailbox of the caller. `team`: a
- * shared mailbox that the caller is a member of. `agent`: the own mailbox of an agent, for an owner or
- * an admin. They can read it, but they cannot change it or send from it.
+ * shared mailbox that the caller is a member of. `delegated`: the own mailbox of a person who lets the
+ * caller use it (`mail.set_delegate`). `agent`: the own mailbox of an agent, for an owner or an admin. They
+ * can read it, but they cannot change it or send from it.
  */
-export const MailboxKind = z.enum(["personal", "team", "agent"]);
+export const MailboxKind = z.enum(["personal", "team", "delegated", "agent"]);
 export type MailboxKind = z.infer<typeof MailboxKind>;
 
 /** A mailbox that the caller can use. */
 export const Mailbox = z.object({
-	/** For `personal` and `agent`, the id of the principal. For `team`, the id of the team mailbox. */
+	/** For `personal`, `delegated` and `agent`, the id of the principal. For `team`, the id of the team mailbox. */
 	id: z.string(),
 	kind: MailboxKind,
 	address: z.string(),
@@ -88,8 +96,8 @@ export const Mailbox = z.object({
 	service: z.boolean(),
 	/**
 	 * What you can do in the mailbox: `mail.read`, `mail.modify` and `mail.send`. Your own mailbox has the
-	 * three. A team mailbox has the scopes of your membership. The mailbox of an agent has `mail.read` only.
-	 * The scopes of your credential apply too.
+	 * three. A team mailbox has the scopes of your membership. A `delegated` mailbox has the scopes that its
+	 * owner gave you. The mailbox of an agent has `mail.read` only. The scopes of your credential apply too.
 	 */
 	scopes: z.array(z.string()),
 });
@@ -237,7 +245,7 @@ export const listMailboxes = defineOperation({
 	name: "mail.list_mailboxes",
 	summary: "List the mailboxes that you can use",
 	description:
-		"Returns your own mailbox first, then each team mailbox that you are a member of. A team mailbox is a shared mailbox with its own address. scopes says what you can do in each mailbox: an owner or an admin sets the scopes of each member of a team mailbox. For an owner or an admin, the list then has the mailbox of each agent and each service account (kind agent, and service is true for a service account). They can read the mailbox of an agent, but they cannot change it or send from it. Pass the id of a mailbox as mailbox_id to the other mail operations. Without mailbox_id, they use your own mailbox.",
+		"Returns your own mailbox first, then each team mailbox that you are a member of. A team mailbox is a shared mailbox with its own address. scopes says what you can do in each mailbox: an owner or an admin sets the scopes of each member of a team mailbox. Then the list has the mailbox of each person who lets you use it (kind delegated): that person sets your scopes there with mail.set_delegate. For an owner or an admin, the list then has the mailbox of each agent and each service account (kind agent, and service is true for a service account). They can read the mailbox of an agent, but they cannot change it or send from it. Pass the id of a mailbox as mailbox_id to the other mail operations. Without mailbox_id, they use your own mailbox.",
 	http: { method: "GET", path: "/api/v1/mail/mailboxes" },
 	scopes: ["mail.read"],
 	callers: ["human", "agent", "service"],
@@ -473,14 +481,14 @@ export const send = defineOperation({
 	summary: "Send a message",
 	description: [
 		"Sends a message from the address of the mailbox: your own address by default. Recipients in this deployment get it directly. Other recipients get it through Cloudflare Email Service.",
-		`${IN_MAILBOX} The message then comes from the address and the name of the team mailbox, and the sent copy is in the team mailbox with your name in sent_by.`,
+		`${IN_MAILBOX} The message then comes from the address and the name of that mailbox, and the sent copy is in that mailbox with your name in sent_by.`,
 		AGENT_READ_ONLY,
 		"For formatted mail, also set html. The message then has two parts: text for mail apps without HTML, and html. Make text the plain-text form of html.",
 		"The signature of the mailbox is not added. Read it with mail.get_mailbox_settings, and add it to text and html yourself.",
 		"To reply, set reply_to_message_id: the message joins that thread, and the subject defaults to Re: and the original subject.",
-		"A reply reads the message that it answers. So it also needs mail.read: in your credential, and in your membership of a team mailbox.",
-		"A send by a person to a sender that waits in the Screener screens that sender in, when the credential and the membership of a team mailbox have mail.modify. Without mail.modify, and for an agent, the send decides nothing.",
-		"An agent can send only to the recipients that its policy allows, also from a team mailbox. Otherwise the call fails with policy_denied and nothing is sent.",
+		"A reply reads the message that it answers. So it also needs mail.read: in your credential, and in your membership of a team mailbox or your grant in the mailbox of a person.",
+		"A send by a person to a sender that waits in the Screener screens that sender in, when the credential and the membership or the grant have mail.modify. Without mail.modify, and for an agent, the send decides nothing.",
+		"An agent can send only to the recipients that its policy allows, also from a team mailbox and from the mailbox of a person. Otherwise the call fails with policy_denied and nothing is sent.",
 		"Set idempotency_key to make a retry safe: a second call with the same key and the same message returns the first result and sends nothing. The same key with a different message fails with conflict.",
 	].join(" "),
 	http: { method: "POST", path: "/api/v1/mail/messages" },
@@ -585,9 +593,9 @@ export const MailSettings = z.object({
 	}),
 	/**
 	 * The default From address of a new message, for each mailbox where you write it. A key is the id of
-	 * the mailbox that is open in the web app: your own id, or the id of a team mailbox. Its value is the
-	 * id of the mailbox whose address the message comes from: your own id, or the id of a team mailbox
-	 * that you can send from. A mailbox without a key uses its own address. A membership can end after you
+	 * the mailbox that is open in the web app: your own id, or the id of a team mailbox or a delegated
+	 * mailbox. Its value is the id of the mailbox whose address the message comes from: your own id, or the
+	 * id of a team mailbox or a delegated mailbox that you can send from. A mailbox without a key uses its own address. A membership can end after you
 	 * save a value, so a client ignores a value that mail.list_mailboxes does not show with mail.send.
 	 */
 	default_from: z.record(z.string(), z.string()),
@@ -612,7 +620,7 @@ export const updateSettings = defineOperation({
 	name: "mail.update_settings",
 	summary: "Change your mail settings",
 	description:
-		"Changes the settings that the request names, and keeps the others. Returns all your mail settings. The settings belong to your own mailbox, never to a team mailbox. A change does not change the mailbox version that mail.get_profile returns. default_from changes the default From address of one mailbox, and keeps the others. Its mailbox_id is your own id, or the id of a team mailbox that you are a member of with mail.read. Its from_mailbox_id is your own id, or the id of a team mailbox that you are a member of with mail.send. Null, or the same id as mailbox_id, removes the setting, so the mailbox uses its own address. A removal needs no membership. Nobody writes or sends from the mailbox of an agent, so it cannot be in default_from.",
+		"Changes the settings that the request names, and keeps the others. Returns all your mail settings. The settings belong to your own mailbox, never to a team mailbox. A change does not change the mailbox version that mail.get_profile returns. default_from changes the default From address of one mailbox, and keeps the others. Its mailbox_id is your own id, or the id of a team mailbox or a delegated mailbox where you have mail.read. Its from_mailbox_id is your own id, or the id of a team mailbox or a delegated mailbox where you have mail.send. Null, or the same id as mailbox_id, removes the setting, so the mailbox uses its own address. A removal needs no membership and no grant. Nobody writes or sends from the mailbox of an agent, so it cannot be in default_from.",
 	http: { method: "POST", path: "/api/v1/mail/settings" },
 	scopes: ["mail.modify"],
 	callers: ["human"],
@@ -626,7 +634,9 @@ export const updateSettings = defineOperation({
 			.optional(),
 		default_from: z
 			.strictObject({
-				mailbox_id: MailboxId.describe("The mailbox where you write: your own id, or the id of a team mailbox."),
+				mailbox_id: MailboxId.describe(
+					"The mailbox where you write: your own id, or the id of a team mailbox or a delegated mailbox.",
+				),
 				from_mailbox_id: MailboxId.nullable().describe(
 					"The mailbox whose address a new message comes from. Null, or the same id as mailbox_id, means the address of that mailbox.",
 				),
@@ -706,7 +716,7 @@ export const getMailboxSettings = defineOperation({
 export const updateMailboxSettings = defineOperation({
 	name: "mail.update_mailbox_settings",
 	summary: "Change the settings of a mailbox",
-	description: `Changes the settings that the request names, and keeps the others. Returns all the settings of the mailbox. Name at least one setting: to read the settings, use mail.get_mailbox_settings. signature is plain text of at most ${MAIL_LIMITS.signatureChars} characters. An empty string removes it. screener is inherit (use the default of the organization), on or off. ${SCREENER_TEXT} When the Screener goes off, the mail that waits in it moves to the inbox. The Screener is not for the own mailbox of an agent or a service account: a change of screener there fails with forbidden. ${IN_MAILBOX} The members of a team mailbox share its settings, so only a person changes them there. An agent or a service account can change only the settings of its own mailbox. ${AGENT_READ_ONLY} A change does not change the mailbox version that mail.get_profile returns.`,
+	description: `Changes the settings that the request names, and keeps the others. Returns all the settings of the mailbox. Name at least one setting: to read the settings, use mail.get_mailbox_settings. signature is plain text of at most ${MAIL_LIMITS.signatureChars} characters. An empty string removes it. screener is inherit (use the default of the organization), on or off. ${SCREENER_TEXT} When the Screener goes off, the mail that waits in it moves to the inbox. The Screener is not for the own mailbox of an agent or a service account: a change of screener there fails with forbidden. ${IN_MAILBOX} The members of a team mailbox share its settings, so only a person changes them there. An agent or a service account can change only the settings of its own mailbox. ${OWNER_SETTINGS} ${AGENT_READ_ONLY} A change does not change the mailbox version that mail.get_profile returns.`,
 	http: { method: "POST", path: "/api/v1/mail/mailbox-settings" },
 	scopes: ["mail.modify"],
 	callers: ["human", "agent", "service"],
@@ -1064,7 +1074,7 @@ export const getAutoLabels = defineOperation({
 export const updateAutoLabels = defineOperation({
 	name: "mail.update_auto_labels",
 	summary: "Change the auto-label settings of a mailbox",
-	description: `Turns auto labels on or off in a mailbox, and changes each auto label that the request names: on or off, skip the inbox, and the description of a custom auto label. The first time you turn on auto labels, each built-in label is on. Turning on a label creates its user label, or uses the user label with the same name. People only. ${IN_MAILBOX} The members of a team mailbox share its settings. ${AGENT_READ_ONLY}`,
+	description: `Turns auto labels on or off in a mailbox, and changes each auto label that the request names: on or off, skip the inbox, and the description of a custom auto label. The first time you turn on auto labels, each built-in label is on. Turning on a label creates its user label, or uses the user label with the same name. People only. ${IN_MAILBOX} The members of a team mailbox share its settings. ${OWNER_SETTINGS} ${AGENT_READ_ONLY}`,
 	http: { method: "POST", path: "/api/v1/mail/auto-labels" },
 	scopes: ["mail.modify"],
 	callers: ["human"],
@@ -1091,7 +1101,7 @@ export const updateAutoLabels = defineOperation({
 export const createAutoLabel = defineOperation({
 	name: "mail.create_auto_label",
 	summary: "Create a custom auto label",
-	description: `Creates a custom auto label: a name and a description in plain words of the mail that gets it, for example "Investor updates: monthly reports from the companies that we invested in". The classifier reads the description. The label can skip the inbox. A mailbox can have at most ${AUTO_LABEL_LIMITS.custom} custom auto labels. People only. ${IN_MAILBOX} ${AGENT_READ_ONLY}`,
+	description: `Creates a custom auto label: a name and a description in plain words of the mail that gets it, for example "Investor updates: monthly reports from the companies that we invested in". The classifier reads the description. The label can skip the inbox. A mailbox can have at most ${AUTO_LABEL_LIMITS.custom} custom auto labels. People only. ${IN_MAILBOX} ${OWNER_SETTINGS} ${AGENT_READ_ONLY}`,
 	http: { method: "POST", path: "/api/v1/mail/auto-labels/custom" },
 	scopes: ["mail.modify"],
 	callers: ["human"],
@@ -1109,7 +1119,7 @@ export const createAutoLabel = defineOperation({
 export const deleteAutoLabel = defineOperation({
 	name: "mail.delete_auto_label",
 	summary: "Delete a custom auto label",
-	description: `Deletes a custom auto label. Its user label and the messages with it stay. People only. ${IN_MAILBOX} ${AGENT_READ_ONLY}`,
+	description: `Deletes a custom auto label. Its user label and the messages with it stay. People only. ${IN_MAILBOX} ${OWNER_SETTINGS} ${AGENT_READ_ONLY}`,
 	http: { method: "DELETE", path: "/api/v1/mail/auto-labels/custom/{auto_label_id}" },
 	scopes: ["mail.modify"],
 	callers: ["human"],

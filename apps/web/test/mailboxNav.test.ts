@@ -8,6 +8,7 @@ import {
 	mailboxRights,
 	rightsNotice,
 } from "../src/features/mail/mailboxNav.ts";
+import { markPersonMailboxes } from "../src/routes.ts";
 
 const ALL = ["mail.read", "mail.modify", "mail.send"];
 const own: Mailbox = {
@@ -42,6 +43,16 @@ const bot: Mailbox = {
 	service: false,
 	scopes: ["mail.read"],
 };
+// The mailbox of a person who lets the person use it. The list of the mailboxes names its kind.
+const ada: Mailbox = {
+	id: "prn_01JD000000000000000000ADA0",
+	kind: "delegated",
+	address: "ada@x.test",
+	display_name: "Ada",
+	service: false,
+	scopes: ALL,
+};
+markPersonMailboxes([ada.id]);
 const ci: Mailbox = {
 	...bot,
 	id: "prn_01JD0000000000000000000CI0",
@@ -53,18 +64,19 @@ const ci: Mailbox = {
 const rows = (nav: ReturnType<typeof mailboxNav>) => nav?.map((entry) => [entry.id, entry.name, entry.kind]);
 
 describe("the mailbox rows of the sidebar", () => {
-	it("lists My mailbox, then the shared mailboxes, then the agent mailboxes", () => {
+	it("lists My mailbox, then the shared mailboxes, then the mailboxes of people, then the agent mailboxes", () => {
 		// The agent comes first in the list, but the sidebar shows the shared mailboxes before the agents.
-		const nav = mailboxNav([bot, own, support, sales, ci], null, null);
+		const nav = mailboxNav([bot, own, ada, support, sales, ci], null, null);
 		expect(rows(nav)).toEqual([
 			[null, "My mailbox", "personal"],
 			[support.id, "Support", "team"],
 			[sales.id, "Sales", "team"],
+			[ada.id, "Ada", "delegated"],
 			[bot.id, "Bot", "agent"],
 			[ci.id, "CI", "agent"],
 		]);
 		// A service account is an agent in mail. Its row keeps `service`, so it gets its own icon.
-		expect(nav?.map((entry) => entry.service)).toEqual([false, false, false, false, true]);
+		expect(nav?.map((entry) => entry.service)).toEqual([false, false, false, false, false, true]);
 		// Only the own mailbox: nothing to switch to, so no mailbox rows.
 		expect(mailboxNav([own], null, null)).toBeNull();
 		expect(mailboxNav(null, null, null)).toBeNull();
@@ -90,6 +102,11 @@ describe("the mailbox rows of the sidebar", () => {
 			[null, "My mailbox", "personal"],
 			[bot.id, "Agent mailbox", "agent"],
 		]);
+		// The mailbox of a person after the grant ended: the row does not call it the mailbox of an agent.
+		expect(rows(mailboxNav([own], ada.id, null))).toEqual([
+			[null, "My mailbox", "personal"],
+			[ada.id, "Mailbox", "delegated"],
+		]);
 	});
 
 	it("expands only the open mailbox until the person expands or collapses one", () => {
@@ -112,6 +129,16 @@ describe("the rights of the person in the open mailbox", () => {
 		expect(withScopes(["mail.read", "mail.modify"])).toEqual({ modify: true, send: false });
 	});
 
+	// The mailbox of a person has a `prn_` id, as the mailbox of an agent has. It must not be read only.
+	it("follow the scopes of the grant in the mailbox of a different person", () => {
+		expect(mailboxRights([own, ada], ada.id)).toEqual({ modify: true, send: true });
+		expect(mailboxRights([own, { ...ada, scopes: ["mail.read"] }], ada.id)).toEqual({ modify: false, send: false });
+		expect(mailboxRights([own, { ...ada, scopes: ["mail.read", "mail.send"] }], ada.id)).toEqual({
+			modify: false,
+			send: true,
+		});
+	});
+
 	it("are each right in the own mailbox, and none in the mailbox of an agent", () => {
 		expect(mailboxRights([own, support], null)).toEqual({ modify: true, send: true });
 		expect(mailboxRights([own, bot], bot.id)).toEqual({ modify: false, send: false });
@@ -126,6 +153,9 @@ describe("the rights of the person in the open mailbox", () => {
 		expect(rightsNotice({ modify: true, send: false })).toMatch(/cannot send from it/);
 		expect(rightsNotice({ modify: false, send: true })).toMatch(/send from it\. You cannot change it/);
 		expect(rightsNotice({ modify: false, send: false })).toMatch(/cannot change it or send from it/);
+		// The mailbox of a person is not a shared mailbox, so the notice does not call it one.
+		expect(rightsNotice({ modify: false, send: false })).toMatch(/^You can read this shared mailbox\./);
+		expect(rightsNotice({ modify: false, send: false }, "this mailbox")).toMatch(/^You can read this mailbox\./);
 	});
 });
 
@@ -139,9 +169,11 @@ describe("the From of the composer", () => {
 		address: mailbox.address,
 	});
 
-	it("lists the own address, then each team mailbox with mail.send, and never an agent mailbox", () => {
+	it("lists the own address, then each team mailbox and each mailbox of a person with mail.send, and never an agent mailbox", () => {
 		const readOnly = { ...support, scopes: ["mail.read", "mail.modify"] };
 		expect(fromOptions([own, readOnly, sales, bot], me, null)).toEqual([option(own), option(sales)]);
+		expect(fromOptions([own, ada, bot], me, null)).toEqual([option(own), option(ada)]);
+		expect(fromOptions([own, { ...ada, scopes: ["mail.read"] }], me, null)).toEqual([option(own)]);
 		// Before the list loads, the own address and the open team mailbox.
 		expect(fromOptions(null, me, option(support))).toEqual([{ id: null, ...me }, option(support)]);
 		expect(fromOptions([own, support], me, option(support))).toEqual([option(own), option(support)]);

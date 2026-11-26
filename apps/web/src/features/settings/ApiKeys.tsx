@@ -18,11 +18,13 @@ import { customDateBounds, expiresSoon, expiryLabel, TTL_OPTIONS, type TtlChoice
 
 /**
  * Scopes that a new key does not get unless the person selects them. A webhook sends notices to a URL
- * outside Asterra, so the webhook scopes are among them.
+ * outside Asterra, so the webhook scopes are among them. `mail.share` lets a key give other people and agents
+ * access to the mailbox of the person.
  */
 const PRIVILEGED: readonly Scope[] = [
 	"account.keys",
 	"directory.write",
+	"mail.share",
 	"mail.webhooks",
 	"chat.webhooks",
 	"drive.webhooks",

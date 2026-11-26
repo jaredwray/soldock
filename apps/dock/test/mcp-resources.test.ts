@@ -361,6 +361,37 @@ describe("MCP subscriptions/listen", () => {
 		expect(await stream.next()).toBe("closed");
 	});
 
+	// A notification tells when mail arrives, so a delegate needs mail.read in the grant, as a member does.
+	it("lets a delegate with mail.read subscribe to the inbox of the mailbox of the person", async () => {
+		const { owner, ada, bot } = await seedTeams();
+		await ada.call("mail.set_delegate", { principal_id: bot.id, scopes: ["mail.read"] });
+		await owner.call("mail.set_delegate", { principal_id: bot.id, scopes: ["mail.send"] });
+		const stream = await listen(bot.key, [inbox(ada.id), inbox(owner.id)]);
+		expect(await stream.next()).toMatchObject({
+			params: { notifications: { resourceSubscriptions: [inbox(ada.id)] } },
+		});
+		await inject(rawMessage({ from: "cy@customer.example", to: "ada@dock.test", subject: "For Ada" }), "ada@dock.test");
+		expect(await stream.next()).toEqual(updated(inbox(ada.id)));
+		await stream.cancel();
+	});
+
+	// A grant can end at any time. A stream on the mailbox of a person checks the grant before each
+	// notification, so no notification follows the end, also within RECHECK_MS.
+	it("sends no notification of the mailbox of a person after the person removes the delegate", async () => {
+		const { ada, bot } = await seedTeams();
+		await ada.call("mail.set_delegate", { principal_id: bot.id, scopes: ["mail.read"] });
+		const stream = await listen(bot.key, [inbox(ada.id)]);
+		expect(await stream.next()).toMatchObject({ method: "notifications/subscriptions/acknowledged" });
+		const mail = (subject: string) =>
+			inject(rawMessage({ from: "x@internet.example", to: "ada@dock.test", subject }), "ada@dock.test");
+		await mail("First");
+		expect(await stream.next()).toEqual(updated(inbox(ada.id)));
+		await ada.call("mail.remove_delegate", { principal_id: bot.id });
+		await mail("Second");
+		expect(await stream.next()).toBe("closed");
+		await vi.waitFor(async () => expect(await watchSockets(ada.id)).toBe(0));
+	});
+
 	// An owner reads the mail of an agent with an audit line. A watch would tell when the agent gets mail, without one.
 	it("lets an owner read the inbox of an agent, but not subscribe to it", async () => {
 		const { owner, bot } = await seedTeams();
