@@ -27,7 +27,9 @@ async function selectedPair(page: Page): Promise<{ local: string; remote: string
 		for (const pc of list.filter((item) => item.connectionState === "connected")) {
 			const stats = await pc.getStats();
 			const byId = new Map<string, Record<string, unknown>>();
-			stats.forEach((report: Record<string, unknown>) => byId.set(report.id as string, report));
+			stats.forEach((report: Record<string, unknown>) => {
+				byId.set(report.id as string, report);
+			});
 			for (const report of byId.values()) {
 				if (report.type !== "transport" || typeof report.selectedCandidatePairId !== "string") continue;
 				const pair = byId.get(report.selectedCandidatePairId);
