@@ -98,6 +98,10 @@ export function deleteEvent(eventId: string, baseRevision: number) {
 	return api.call("calendar.delete_event", { event_id: eventId, base_revision: baseRevision });
 }
 
+export function getEvent(eventId: string) {
+	return api.call("calendar.get_event", { event_id: eventId });
+}
+
 export function respondToInvitation(eventId: string, response: EventAnswer) {
 	return api.call("calendar.respond_to_invitation", { event_id: eventId, response });
 }

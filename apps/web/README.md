@@ -1228,9 +1228,11 @@ MCP clients. The app has no UI-only path.
     while it has no answer, else "Meeting". It shows the title, the time, the place, the organizer, the
     description and each attendee with the answer, as text. **Yes**, **Maybe** and **No** in the group
     "Your answer" call `calendar.respond_to_invitation` (`aria-pressed` on the current answer). It has no
-    **Save** and no **Delete**. The open dialog shows the newest copy of each poll. When a poll does not
-    have the copy, or an answer gets `not_found`, the dialog says that the organizer cancelled the meeting
-    or removed the person, and hides the answers.
+    **Save** and no **Delete**. The open dialog shows the newest copy of each poll. A poll has only the
+    events of the open period, so for a copy that it does not have, the page reads the copy by its id
+    (`calendar.get_event`): a meeting that the organizer moved to a different week shows its new time. When
+    that read or an answer gets `not_found`, the dialog says that the organizer cancelled the meeting or
+    removed the person, and hides the answers.
   - A pending invitation has a dashed border and no fill. **Maybe** has stripes. **No** is faded, with a
     line through the title. An accepted meeting looks like an own event. The name of the event ends with
     "invitation, not answered", "maybe" or "declined", so the state is not only a look.
