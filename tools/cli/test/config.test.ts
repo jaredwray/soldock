@@ -66,7 +66,8 @@ describe("the config of an instance", () => {
 		for (const key of ["d1_databases", "r2_buckets", "queues", "durable_objects", "send_email"]) {
 			expect(bindingNames(rivus[key]), key).toEqual(bindingNames(source[key]));
 		}
-		expect(rivus.vars).toEqual(source.vars);
+		// The instance adds its host to the vars of the Worker. `upgrade` reads it back.
+		expect(rivus.vars).toEqual({ ...(source.vars as object), ASTERRA_HOSTNAME: "work.rivus.com" });
 	});
 
 	// One origin: the instance serves only its custom domain. The account comes from the login, never the config.

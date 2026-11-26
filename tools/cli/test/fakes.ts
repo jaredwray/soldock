@@ -86,6 +86,10 @@ export function fakeContext(overrides: Partial<Context> = {}): FakeContext {
 			throw new Error(`no fetch fake for ${String(input)}`);
 		},
 		env: {},
+		resolveHost: async () => [],
+		installWrangler: async (dir) => {
+			throw new Error(`no install fake for ${dir}`);
+		},
 		sleep: async (ms) => {
 			clock += ms;
 		},
@@ -97,7 +101,10 @@ export function fakeContext(overrides: Partial<Context> = {}): FakeContext {
 }
 
 /** A release bundle with the real template and three migrations. */
-export function fixtureBundle(migrations = ["0001_a.sql", "0002_b.sql", "0003_c.sql"]): string {
+export function fixtureBundle(
+	migrations = ["0001_a.sql", "0002_b.sql", "0003_c.sql"],
+	minAppliedMigration: string | null = null,
+): string {
 	const dir = mkdtempSync(join(tmpdir(), "asterra-bundle-"));
 	for (const folder of ["worker", "assets", "migrations"]) mkdirSync(join(dir, folder));
 	writeFileSync(join(dir, "worker", "index.js"), "export default {};\n");
@@ -106,63 +113,165 @@ export function fixtureBundle(migrations = ["0001_a.sql", "0002_b.sql", "0003_c.
 		readFileSync(new URL("../../../apps/dock/wrangler.jsonc", import.meta.url), "utf8"),
 	);
 	writeFileSync(join(dir, "wrangler.template.json"), JSON.stringify(templateFromConfig(source)));
-	const manifest = { version: "0.3.0", commit: "abc", wrangler: "4.149.0", migrations, min_applied_migration: null };
+	const manifest = {
+		version: "0.3.0",
+		commit: "abc",
+		wrangler: "4.149.0",
+		migrations,
+		min_applied_migration: minAppliedMigration,
+	};
 	writeFileSync(join(dir, "manifest.json"), JSON.stringify(manifest));
 	return dir;
 }
 
 export const ACCOUNT = { id: "c".repeat(32), name: "Rivus" };
 
+/** One version of a fake Worker. */
+export interface FakeVersion {
+	id: string;
+	/** The annotation `workers/tag`. A secret change has none here: the fake copies nothing from the deploy. */
+	tag?: string;
+	/** True when `secret bulk` made the version. */
+	secretChange?: boolean;
+	secrets?: string[];
+	/** The var ASTERRA_HOSTNAME of the deploy. */
+	hostname?: string;
+}
+
 export interface CloudState {
 	databases: string[];
-	applied: string[];
-	secrets: string[];
-	/** The live version of each Worker. */
-	versions: Record<string, { id: string; tag?: string }>;
+	/** The migrations of the database. null: the database has no `d1_migrations` table. */
+	applied: string[] | null;
+	/** The versions of each Worker, from the oldest to the newest. */
+	workers: Record<string, FakeVersion[]>;
+	/** The version that serves each Worker. The default is its newest version. */
+	live: Record<string, string>;
 	/** The config of each deploy, and the input of each `secret bulk`. */
 	deployed: Record<string, unknown>[];
 	bulk: Record<string, string | null>[];
+	/** Replaces the answer of a command, for a failure of wrangler. */
+	fail: (args: string[]) => Partial<RunResult> | undefined;
+	/** False: `wrangler deploy` writes no entry to its output file. */
+	deployEntry: boolean;
 }
 
-/** A wrangler on a fake account: whoami, D1, deployments, versions, secrets, deploy and rollback. */
-export function fakeCloud(state: Partial<CloudState> = {}): FakeWrangler & { state: CloudState } {
-	const cloud: CloudState = { databases: [], applied: [], secrets: [], versions: {}, deployed: [], bulk: [], ...state };
+export type FakeCloud = FakeWrangler & {
+	state: CloudState;
+	/** The version that serves the Worker. */
+	liveVersion(workerName: string): FakeVersion | undefined;
+};
+
+/**
+ * A wrangler on a fake account: whoami, D1, deployments, versions, secrets, deploy and rollback. As in
+ * Cloudflare, a secret change makes a new version, and a version holds its secrets.
+ */
+export function fakeCloud(state: Partial<CloudState> = {}): FakeCloud {
+	const cloud: CloudState = {
+		databases: [],
+		applied: [],
+		workers: {},
+		live: {},
+		deployed: [],
+		bulk: [],
+		fail: () => undefined,
+		deployEntry: true,
+		...state,
+	};
 	const flag = (args: string[], name: string) => args[args.indexOf(name) + 1] ?? "";
+	const liveVersion = (workerName: string) => {
+		const versions = cloud.workers[workerName] ?? [];
+		return versions.find((version) => version.id === cloud.live[workerName]) ?? versions.at(-1);
+	};
+	const add = (workerName: string, version: FakeVersion) => {
+		cloud.workers[workerName] = [...(cloud.workers[workerName] ?? []), version];
+		cloud.live[workerName] = version.id;
+	};
+	// The JSON of `wrangler versions view` and of one item of `wrangler versions list`.
+	const json = (version: FakeVersion, index: number) => ({
+		id: version.id,
+		metadata: { created_on: new Date(Date.UTC(2026, 0, 1 + index)).toISOString() },
+		annotations: {
+			"workers/triggered_by": version.secretChange ? "secret" : "upload",
+			...(version.tag ? { "workers/tag": version.tag } : {}),
+		},
+		resources: {
+			bindings: [
+				{ type: "d1", name: "DIRECTORY" },
+				...(version.hostname ? [{ type: "plain_text", name: "ASTERRA_HOSTNAME", text: version.hostname }] : []),
+				...(version.secrets ?? []).map((name) => ({ type: "secret_text", name })),
+			],
+		},
+	});
 	const wrangler = fakeWrangler((args, options) => {
+		const failure = cloud.fail(args);
+		if (failure) return failure;
 		if (starts(args, "whoami")) return { stdout: JSON.stringify({ loggedIn: true, accounts: [ACCOUNT] }) };
 		if (starts(args, "d1", "list")) return { stdout: JSON.stringify(cloud.databases.map((name) => ({ name }))) };
-		if (starts(args, "d1", "execute"))
+		if (starts(args, "d1", "execute")) {
+			if (cloud.applied === null) return { code: 1, stderr: "✘ [ERROR] no such table: d1_migrations: SQLITE_ERROR\n" };
 			return { stdout: JSON.stringify([{ results: cloud.applied.map((name) => ({ name })) }]) };
+		}
+		const workerName = flag(args, "--name");
+		const versions = cloud.workers[workerName] ?? [];
 		if (starts(args, "deployments", "status")) {
-			const live = cloud.versions[flag(args, "--name")];
-			return live ? { stdout: JSON.stringify({ versions: [{ version_id: live.id, percentage: 100 }] }) } : { code: 1 };
+			const live = liveVersion(workerName);
+			if (!live) {
+				return { code: 1, stderr: "✘ [ERROR] This Worker does not exist on your account. [code: 10007]\n" };
+			}
+			return { stdout: JSON.stringify({ versions: [{ version_id: live.id, percentage: 100 }] }) };
 		}
 		if (starts(args, "versions", "view")) {
-			const live = Object.values(cloud.versions).find((version) => version.id === args[2]);
-			return { stdout: JSON.stringify({ annotations: live?.tag ? { "workers/tag": live.tag } : {} }) };
+			const index = versions.findIndex((version) => version.id === args[2]);
+			const version = versions[index];
+			return version ? { stdout: JSON.stringify(json(version, index)) } : { code: 1, stderr: "not found\n" };
+		}
+		if (starts(args, "versions", "list")) {
+			// wrangler shows the 10 newest versions.
+			return { stdout: JSON.stringify(versions.map(json).slice(-10)) };
 		}
 		if (starts(args, "deploy")) {
 			const config = JSON.parse(readFileSync(flag(args, "--config"), "utf8")) as Record<string, unknown>;
 			cloud.deployed.push(config);
 			const id = `version-${cloud.deployed.length}`;
-			cloud.versions[String(config.name)] = { id, tag: flag(args, "--tag") };
+			const name = String(config.name);
+			const host = (config.vars as Record<string, unknown> | undefined)?.ASTERRA_HOSTNAME;
+			add(name, {
+				id,
+				tag: flag(args, "--tag"),
+				secrets: [...(liveVersion(name)?.secrets ?? [])],
+				...(typeof host === "string" ? { hostname: host } : {}),
+			});
 			const output = options.env?.WRANGLER_OUTPUT_FILE_PATH;
-			if (output) writeFileSync(output, `${JSON.stringify({ type: "deploy", version_id: id })}\n`);
+			if (output && cloud.deployEntry) writeFileSync(output, `${JSON.stringify({ type: "deploy", version_id: id })}\n`);
 			return {};
 		}
 		if (starts(args, "secret", "bulk")) {
 			const input = JSON.parse(options.input ?? "{}") as Record<string, string | null>;
 			cloud.bulk.push(input);
+			const live = liveVersion(workerName);
+			let secrets = [...(live?.secrets ?? [])];
 			for (const [name, value] of Object.entries(input)) {
-				cloud.secrets = cloud.secrets.filter((secret) => secret !== name);
-				if (value !== null) cloud.secrets.push(name);
+				secrets = secrets.filter((secret) => secret !== name);
+				if (value !== null) secrets.push(name);
 			}
+			add(workerName, {
+				id: `${live?.id ?? "version-0"}-secrets-${cloud.bulk.length}`,
+				secretChange: true,
+				secrets,
+				...(live?.hostname ? { hostname: live.hostname } : {}),
+			});
 			return {};
 		}
-		if (starts(args, "secret", "list")) return { stdout: JSON.stringify(cloud.secrets.map((name) => ({ name }))) };
+		if (starts(args, "secret", "list")) {
+			return { stdout: JSON.stringify((liveVersion(workerName)?.secrets ?? []).map((name) => ({ name }))) };
+		}
+		if (starts(args, "rollback")) {
+			cloud.live[workerName] = args[1] ?? "";
+			return {};
+		}
 		return {};
 	});
-	return Object.assign(wrangler, { state: cloud });
+	return Object.assign(wrangler, { state: cloud, liveVersion });
 }
 
 /** The answers of a healthy Worker at `origin`, for httpGet. */

@@ -41,6 +41,8 @@ for (const target of targets) {
 			`env.BLOBS (${target.prefix}-blobs)`,
 			`env.MAIL_INBOUND (${target.prefix}-mail-inbound)`,
 			`env.WEBHOOKS_DLQ (${target.prefix}-webhooks-dlq)`,
+			// The instance keeps its host in this var. `upgrade` reads it back.
+			`env.ASTERRA_HOSTNAME ("${target.hostname}")`,
 		];
 		const missing = expected.filter((line) => !output.includes(line));
 		if (!existsSync(join(work, "out", "index.js"))) missing.push("the Worker module index.js");

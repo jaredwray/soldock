@@ -24,24 +24,29 @@ Commands:
   install                      Make a new instance: deploy, migrations, secrets, setup.
   upgrade                      Upgrade an instance to the release of this CLI.
   status                       Show the version, the migrations and the secrets of an instance.
-  rollback                     Send the traffic of an instance back to the version before.
+  rollback                     Send the traffic of an instance back to the release before.
   secrets setup-token          Make a new SETUP_TOKEN (setup, or a directory reset).
   secrets clear-setup-token    Delete SETUP_TOKEN.
   smoke <url>                  Run the smoke check against a host.
 
 Options:
   --name <name>          The instance (resources asterra-<name>-*).
-  --hostname <host>      The host of the instance, for example work.example.com.
+  --hostname <host>      The host of the instance, for example work.example.com. upgrade
+                         reads it from the instance.
+  --change-hostname      upgrade: move the instance to a --hostname that is not its host.
+  --replace-dns          install: use a host that has DNS records. The deploy replaces them.
   --account-id <id>      The Cloudflare account (id or name).
   --yes                  Ask nothing. Give each answer with a flag.
   --secrets-out <file>   Write new secrets to this new file, not to the terminal.
+                         Necessary with --yes for install and secrets setup-token.
   --owner-name <name>    install: create the owner in the terminal, with this name.
   --owner-address <a>    install: the address of the owner. Its domain is the first mail domain.
                          The password comes from ASTERRA_OWNER_PASSWORD, or the CLI asks.
   --no-rollback          upgrade: keep the new version when the smoke check fails.
   --device               Sign in with a code on a different device (for SSH).
-  --worker-name <name>   The Worker name, for an instance from before the CLI.
-  --prefix <prefix>      The resource prefix, for an instance from before the CLI (soldock).
+  --prefix <prefix>      The resource prefix of an instance from before the CLI (soldock).
+                         Give it with --worker-name, and without --name.
+  --worker-name <name>   The Worker name of that instance.
   --bundle <dir>         A different release bundle (for development).
   -h, --help             Show this help.
   -v, --version          Show the version.
@@ -55,6 +60,8 @@ const OPTIONS = {
 	yes: { type: "boolean", short: "y" },
 	name: { type: "string" },
 	hostname: { type: "string" },
+	"change-hostname": { type: "boolean" },
+	"replace-dns": { type: "boolean" },
 	"account-id": { type: "string" },
 	"secrets-out": { type: "string" },
 	"owner-name": { type: "string" },
@@ -80,6 +87,8 @@ export function parse(argv: readonly string[]) {
 		accountId: values["account-id"],
 		name: values.name,
 		hostname: values.hostname,
+		changeHostname: values["change-hostname"],
+		replaceDns: values["replace-dns"],
 		workerName: values["worker-name"],
 		prefix: values.prefix,
 		bundle: values.bundle,

@@ -1,7 +1,7 @@
 // The Worker secrets that the CLI makes. Cloudflare never shows a secret again, so the CLI shows each
 // value one time, or writes it to the file of --secrets-out, and never to a log.
 import { randomBytes } from "node:crypto";
-import { writeFileSync } from "node:fs";
+import { closeSync, fsyncSync, openSync, rmSync, writeSync } from "node:fs";
 import { type Context, say } from "./context.ts";
 import { Refusal } from "./errors.ts";
 
@@ -15,22 +15,55 @@ export function newEncryptionKey(): string {
 	return randomBytes(32).toString("base64url");
 }
 
+/** Where a command gives new secret values to the operator. */
+export interface HandOver {
+	/** Shows the values one time, or adds them to the file of --secrets-out. */
+	give(values: Record<string, string>): void;
+	/** Closes the file. Deletes it when the command gave no value. */
+	done(): void;
+}
+
 /**
- * Gives the operator new secret values: on the terminal, or in the file of --secrets-out. The file must
- * not exist, so a run never replaces a key that the operator saved before.
+ * Opens the place for new secret values: the terminal, or the file of --secrets-out. A command opens it
+ * before it changes anything in Cloudflare, so a path that does not work stops the command first. The
+ * file must not exist, so a run never replaces a key that the operator saved before.
  */
-export function handOver(ctx: Context, values: Record<string, string>, secretsOut: string | undefined): void {
-	if (secretsOut) {
-		const lines = Object.entries(values).map(([name, value]) => `${name}=${value}\n`);
-		try {
-			writeFileSync(secretsOut, lines.join(""), { mode: 0o600, flag: "wx" });
-		} catch (error) {
-			throw new Refusal(`Cannot write the secrets to ${secretsOut}: ${(error as Error).message}`);
-		}
-		say(ctx, `The values of ${Object.keys(values).join(" and ")} are in ${secretsOut} (only you can read it).`);
-		return;
+export function openHandOver(ctx: Context, secretsOut: string | undefined): HandOver {
+	if (!secretsOut) {
+		return {
+			give(values) {
+				say(ctx);
+				for (const [name, value] of Object.entries(values)) say(ctx, `  ${name}=${value}`);
+				say(ctx);
+			},
+			done() {},
+		};
 	}
-	say(ctx);
-	for (const [name, value] of Object.entries(values)) say(ctx, `  ${name}=${value}`);
-	say(ctx);
+	let file: number;
+	try {
+		file = openSync(secretsOut, "wx", 0o600);
+	} catch (error) {
+		throw new Refusal(`Cannot make the file ${secretsOut} for the secrets: ${(error as Error).message}`);
+	}
+	let given = 0;
+	let open = true;
+	return {
+		give(values) {
+			writeSync(
+				file,
+				Object.entries(values)
+					.map(([name, value]) => `${name}=${value}\n`)
+					.join(""),
+			);
+			fsyncSync(file);
+			given += Object.keys(values).length;
+			say(ctx, `The value of ${Object.keys(values).join(" and ")} is in ${secretsOut} (only you can read it).`);
+		},
+		done() {
+			if (!open) return;
+			open = false;
+			closeSync(file);
+			if (given === 0) rmSync(secretsOut, { force: true });
+		},
+	};
 }

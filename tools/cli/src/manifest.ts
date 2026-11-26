@@ -12,8 +12,11 @@ export interface Manifest {
 	/** The D1 migrations of the bundle, in the order that wrangler applies them. */
 	migrations: string[];
 	/**
-	 * The oldest migration that an instance must have to upgrade to this release, or null. A release sets
-	 * it when its Worker cannot run on an older schema in the time between the migrations and the deploy.
+	 * The migration that an instance must have before it upgrades to this release, or null. A release sets
+	 * it when the Worker of an earlier release cannot run on the new migrations. An example is a migration
+	 * that removes a column that an earlier Worker uses. The migrations go in before the deploy, so that
+	 * Worker would run on them for a short time. An instance without this migration must first install
+	 * the release before this one.
 	 */
 	min_applied_migration: string | null;
 }

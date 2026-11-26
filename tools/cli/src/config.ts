@@ -6,6 +6,9 @@ import { LEGACY_PREFIX, resourceName } from "./names.ts";
 
 export type WranglerConfig = Record<string, unknown>;
 
+/** The plain var of an instance config that holds the host of the instance. */
+export const HOSTNAME_VAR = "ASTERRA_HOSTNAME";
+
 /** Where an instance runs. */
 export interface InstanceTarget {
 	workerName: string;
@@ -82,6 +85,12 @@ export function instanceConfig(template: WranglerConfig, target: InstanceTarget,
 	config.workers_dev = false;
 	config.preview_urls = false;
 	config.routes = [{ pattern: target.hostname, custom_domain: true }];
+	// The instance keeps its host in a plain var, so the CLI can read it back from the version that runs.
+	// The Worker does not read this var.
+	config.vars = {
+		...(template.vars === undefined ? {} : record(template.vars, "vars")),
+		[HOSTNAME_VAR]: target.hostname,
+	};
 	config.assets = {
 		...record(template.assets, "assets"),
 		directory: inBundle(record(template.assets, "assets").directory),

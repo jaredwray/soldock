@@ -26,6 +26,13 @@ export function nameError(name: string): string | null {
 	return null;
 }
 
+/** The reason that `name` cannot be the name of a Worker in Cloudflare, or null. */
+export function workerNameError(name: string): string | null {
+	return /^[a-z0-9][a-z0-9_-]{0,62}$/.test(name)
+		? null
+		: "A Worker name has lowercase letters, digits, hyphens and underscores, and 63 characters or fewer.";
+}
+
 /** The reason that `hostname` cannot be the host of an instance, or null. */
 export function hostnameError(hostname: string): string | null {
 	if (hostname.includes("://") || hostname.includes("/"))
