@@ -111,4 +111,22 @@ describe("the time of an event", () => {
 		expect(range("2026-12-08T00:00:00Z", "2026-12-01T00:00:00Z")).toBe(false);
 		expect(range("2026-01-01T00:00:00Z", "2027-01-03T00:00:00Z")).toBe(false);
 	});
+
+	it("takes a find range of 31 days of a time zone with a day of 25 hours, and 20 ids with spaces", () => {
+		const input = operations["calendar.find_times"].input;
+		const parse = (extra: Record<string, unknown>) =>
+			input.safeParse({
+				time_min: "2030-10-15T04:00:00Z",
+				time_max: "2030-11-15T05:00:00Z",
+				duration_minutes: 30,
+				time_zone: "America/New_York",
+				...extra,
+			}).success;
+		// From 00:00 on October 15 to 00:00 on November 15 in New York. The clock goes back on November 3.
+		expect(parse({})).toBe(true);
+		expect(parse({ time_max: "2030-11-16T05:00:00Z" })).toBe(false);
+		const ids = Array.from({ length: 21 }, (_, at) => `prn_01JD00000000000000000000${String(at).padStart(2, "0")}`);
+		expect(parse({ attendee_ids: ids.slice(0, 20).join(", ") })).toBe(true);
+		expect(parse({ attendee_ids: ids.join(", ") })).toBe(false);
+	});
 });

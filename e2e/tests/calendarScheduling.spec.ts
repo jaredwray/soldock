@@ -112,8 +112,16 @@ test("a person finds a time with a teammate, and an agent schedules for the pers
 		await expect(finder.getByRole("listitem").filter({ hasText: /^Chidi/ })).toContainText("Availability unknown");
 		await expect(finder.getByRole("note")).toContainText(/does not know when Chidi/);
 
+		// With an unknown calendar the panel suggests no time, until Rafael asks for the times of the others.
+		const nineOClock = finder.getByRole("button", { name: /9:00 AM – 9:30 AM/ });
+		await expect(finder.getByRole("button", { name: "Suggest times without them" })).toBeVisible();
+		await expect(nineOClock).toHaveCount(0);
+		await expect(finder.getByRole("button", { name: /AM – |PM – / })).toHaveCount(0);
+		await finder.getByRole("button", { name: "Suggest times without them" }).click();
+		await expect(finder.getByRole("note")).toContainText("free only for the other calendars");
+
 		// The first suggestion is 9:00. A click fills the time of the event.
-		await finder.getByRole("button", { name: /9:00 AM – 9:30 AM/ }).click();
+		await nineOClock.click();
 		await expect(dialog.getByLabel("Start time")).toHaveValue("09:00");
 		await expect(dialog.getByLabel("End time")).toHaveValue("09:30");
 		await dialog.getByRole("button", { name: "Save" }).click();

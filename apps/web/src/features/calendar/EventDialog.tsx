@@ -11,6 +11,7 @@ import { useSession } from "../auth/session.tsx";
 import { createEvent, deleteEvent, updateEvent } from "./data.ts";
 import { FindTime } from "./FindTime.tsx";
 import {
+	changedSharing,
 	type EventForm,
 	eventTitle,
 	formOf,
@@ -35,7 +36,8 @@ interface EventDialogProps {
 /** The dialog that adds an event, or changes or deletes one. */
 export function EventDialog({ event, initial, zone, onChanged, onClose }: EventDialogProps) {
 	const toast = useToast();
-	// The form that the dialog opened with. A save sends the time only when a time field is different.
+	// The form that the dialog opened with. A save sends the time, the attendees and the visibility only when
+	// the person changed them.
 	const [opened] = useState<EventForm>(() => (event ? formOf(event, zone) : initial));
 	const [form, setForm] = useState<EventForm>(opened);
 	const [busy, setBusy] = useState(false);
@@ -97,8 +99,7 @@ export function EventDialog({ event, initial, zone, onChanged, onClose }: EventD
 					title,
 					location: form.location.trim(),
 					description: form.description,
-					attendees: form.attendees,
-					visibility: form.visibility,
+					...changedSharing(form, opened),
 					...(sameTimeFields(form, opened) ? {} : { when: whenOf(form, zone) }),
 					base_revision: event.revision,
 				});

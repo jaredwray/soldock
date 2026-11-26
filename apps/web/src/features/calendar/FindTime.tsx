@@ -5,9 +5,10 @@ import {
 	isRealDate,
 	type OutputOf,
 	type Principal,
+	zonedDate,
 	zonedDayStart,
 } from "@asterra/contracts";
-import { useId, useMemo, useState } from "react";
+import { useId, useMemo, useRef, useState } from "react";
 import { errorMessage } from "../../lib/api.ts";
 import { Select, type SelectOption } from "../../lib/Select.tsx";
 import { findTimes } from "./data.ts";
@@ -45,15 +46,28 @@ interface FindTimeProps {
 /**
  * Find a time (`calendar.find_times`): the busy times of the person and of each attendee, and the free times
  * that the server suggests. A calendar that shares no availability shows "Availability unknown". The panel
- * never shows it as free, and it tells the person when a suggestion is free only for the known calendars.
+ * never shows it as free: the first search then has no suggestions. The person can ask for the times of the
+ * other calendars, and the panel tells that a suggestion is free only for them. An answer shows only while the
+ * attendees and the fields are the ones of its search, so a suggestion is never from an earlier search.
  */
 export function FindTime({ attendees, principals, selfId, startDate, zone, onPick }: FindTimeProps) {
-	const [from, setFrom] = useState(startDate);
-	const [to, setTo] = useState(() => addDays(startDate, 6));
+	// The dialog can have no start date. The search then starts today.
+	const [first] = useState(() => (isRealDate(startDate) ? startDate : zonedDate(Date.now(), zone)));
+	const [from, setFrom] = useState(first);
+	const [to, setTo] = useState(() => addDays(first, 6));
 	const [duration, setDuration] = useState("30");
 	const [searchZone, setSearchZone] = useState(zone);
-	const [result, setResult] = useState<{ answer: FindResult; zone: string } | null>(null);
+	const [result, setResult] = useState<{
+		answer: FindResult;
+		zone: string;
+		key: string;
+		ignoreUnknown: boolean;
+	} | null>(null);
 	const [busy, setBusy] = useState(false);
+	// The count of the searches. Only the last search changes the panel.
+	const searches = useRef(0);
+	// The inputs of a search. An answer shows only while they are the same.
+	const key = JSON.stringify([attendees, from, to, duration, searchZone]);
 	const [error, setError] = useState<string | null>(null);
 	const zones = useMemo(() => zoneOptions(zone), [zone]);
 	const ids = { duration: useId(), zone: useId() };
@@ -63,7 +77,7 @@ export function FindTime({ attendees, principals, selfId, startDate, zone, onPic
 	);
 	const nameOf = (id: string) => (id === selfId ? "You" : (names.get(id) ?? id));
 
-	async function search() {
+	async function search(ignoreUnknown: boolean) {
 		if (!isRealDate(from) || !isRealDate(to)) {
 			setError("Give a first and a last day.");
 			return;
@@ -77,6 +91,7 @@ export function FindTime({ attendees, principals, selfId, startDate, zone, onPic
 			setError(`Search at most ${CALENDAR_LIMITS.findRangeDays} days at a time.`);
 			return;
 		}
+		const run = ++searches.current;
 		setBusy(true);
 		setError(null);
 		try {
@@ -86,16 +101,19 @@ export function FindTime({ attendees, principals, selfId, startDate, zone, onPic
 				duration_minutes: Number(duration),
 				time_zone: searchZone,
 				...(attendees.length > 0 ? { attendee_ids: attendees.join(",") } : {}),
+				...(ignoreUnknown ? { ignore_unknown: "true" as const } : {}),
 			});
-			setResult({ answer, zone: searchZone });
+			if (run === searches.current) setResult({ answer, zone: searchZone, key, ignoreUnknown });
 		} catch (caught) {
-			setError(errorMessage(caught));
+			if (run === searches.current) setError(errorMessage(caught));
 		} finally {
-			setBusy(false);
+			if (run === searches.current) setBusy(false);
 		}
 	}
 
-	const unknown = result?.answer.calendars.filter((calendar) => calendar.availability === "unknown") ?? [];
+	const shown = result?.key === key ? result : null;
+	const unknown = shown?.answer.calendars.filter((calendar) => calendar.availability === "unknown") ?? [];
+	const unknownNames = unknown.map((calendar) => nameOf(calendar.principal_id)).join(", ");
 
 	return (
 		<section className="cal-find" aria-label="Find a time">
@@ -123,7 +141,7 @@ export function FindTime({ attendees, principals, selfId, startDate, zone, onPic
 			</div>
 			<p className="field-hint">Asterra suggests times from 9:00 AM to 5:00 PM on each day, in this time zone.</p>
 			<div>
-				<button type="button" className="button" disabled={busy} onClick={() => void search()}>
+				<button type="button" className="button" disabled={busy} onClick={() => void search(false)}>
 					{busy ? "Searching…" : "Find times"}
 				</button>
 			</div>
@@ -132,11 +150,11 @@ export function FindTime({ attendees, principals, selfId, startDate, zone, onPic
 					{error}
 				</p>
 			)}
-			{result && (
+			{shown && (
 				<div className="cal-find-result" aria-live="polite">
 					<h3 className="cal-find-heading">Busy times</h3>
 					<ul className="cal-find-calendars">
-						{result.answer.calendars.map((calendar) => (
+						{shown.answer.calendars.map((calendar) => (
 							<li key={calendar.principal_id} className="cal-find-calendar">
 								<span className="cal-find-name">{nameOf(calendar.principal_id)}</span>
 								{calendar.availability === "unknown" ? (
@@ -147,7 +165,7 @@ export function FindTime({ attendees, principals, selfId, startDate, zone, onPic
 									<ul className="cal-find-busy" aria-label={`Busy times of ${nameOf(calendar.principal_id)}`}>
 										{calendar.busy.map((interval) => (
 											<li key={interval.start}>
-												{intervalText(Date.parse(interval.start), Date.parse(interval.end), result.zone)}
+												{intervalText(Date.parse(interval.start), Date.parse(interval.end), shown.zone)}
 											</li>
 										))}
 									</ul>
@@ -157,27 +175,43 @@ export function FindTime({ attendees, principals, selfId, startDate, zone, onPic
 					</ul>
 					{unknown.length > 0 && (
 						<p className="cal-find-warning" role="note">
-							Asterra does not know when {unknown.map((calendar) => nameOf(calendar.principal_id)).join(", ")}{" "}
-							{unknown.length === 1 ? "is" : "are"} free. The suggestions are free only for the other calendars.
+							Asterra does not know when {unknownNames} {unknown.length === 1 ? "is" : "are"} free.{" "}
+							{shown.ignoreUnknown
+								? "The suggestions are free only for the other calendars."
+								: "So Asterra suggests no time."}
 						</p>
 					)}
-					<h3 className="cal-find-heading">Suggested times</h3>
-					{result.answer.suggestions.length === 0 ? (
-						<p className="field-hint">No free time of this length in these days. Try more days or a shorter meeting.</p>
+					{unknown.length > 0 && !shown.ignoreUnknown ? (
+						<div>
+							<button type="button" className="button" disabled={busy} onClick={() => void search(true)}>
+								Suggest times without them
+							</button>
+						</div>
 					) : (
-						<ul className="cal-find-slots">
-							{result.answer.suggestions.map((slot) => (
-								<li key={slot.start}>
-									<button
-										type="button"
-										className="button button-small"
-										onClick={() => onPick(Date.parse(slot.start), Date.parse(slot.end))}
-									>
-										{intervalText(Date.parse(slot.start), Date.parse(slot.end), result.zone)}
-									</button>
-								</li>
-							))}
-						</ul>
+						<>
+							<h3 className="cal-find-heading">
+								{unknown.length > 0 ? "Suggested times, free only for the other calendars" : "Suggested times"}
+							</h3>
+							{shown.answer.suggestions.length === 0 ? (
+								<p className="field-hint">
+									No free time of this length in these days. Try more days or a shorter meeting.
+								</p>
+							) : (
+								<ul className="cal-find-slots">
+									{shown.answer.suggestions.map((slot) => (
+										<li key={slot.start}>
+											<button
+												type="button"
+												className="button button-small"
+												onClick={() => onPick(Date.parse(slot.start), Date.parse(slot.end))}
+											>
+												{intervalText(Date.parse(slot.start), Date.parse(slot.end), shown.zone)}
+											</button>
+										</li>
+									))}
+								</ul>
+							)}
+						</>
 					)}
 				</div>
 			)}

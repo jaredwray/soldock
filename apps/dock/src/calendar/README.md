@@ -32,7 +32,9 @@ Public surface: `index.ts` only. Other domains must not import files from this f
 - `calendar_id` names the calendar of a different person. Only a person who is not archived gives
   grants, so the handler gives `not_found` for the calendar of an agent, a service account, an
   archived person or an unknown id. The object then checks the grant of the caller (see
-  [Grants](#grants)).
+  [Grants](#grants)): first in `openCalendar`, before the handler reads the directory for the input,
+  and again on the call. So a caller with no grant gets `forbidden`, never a refusal that tells what
+  the directory has.
 - The object keeps the id of its owner on the first call. A call for a different owner gets
   `not_found`, so a handler defect cannot show the events of a different principal.
 - A change of an event with attendees writes rows in the outbox of the calendar. The alarm delivers
@@ -144,7 +146,7 @@ Public surface: `index.ts` only. Other domains must not import files from this f
 | --- | --- | --- | --- |
 | Owner | Each event | Each field | An own event: yes. An invitation: delete only |
 | `schedule` delegate | An event that it added | Each field | Update and delete |
-| `schedule` delegate | A different event that is not private | `id`, `when`, `title`, `visibility`, `organizer_id`, `revision`, times. `description`, `location` and `attendees` are empty. `created_by` is the owner. `redacted` is true | `forbidden` |
+| `schedule` delegate | A different event that is not private | `id`, `when`, `title`, `visibility`, `revision`, times. `description`, `location` and `attendees` are empty. `organizer_id` and `created_by` are the owner, also for an invitation: the delegate does not learn who the owner meets. `redacted` is true | `forbidden` |
 | `schedule` delegate | A different private event | The same, and `title` is empty. The web app shows "Busy" | `forbidden` |
 | `free_busy` grantee | — | `forbidden` from each event operation. Merged busy intervals from `calendar.find_times` | — |
 | Each other caller | — | `forbidden`. `unknown` in `calendar.find_times` | — |
@@ -155,15 +157,21 @@ The object makes this view (`viewFor`), so a handler defect cannot show a hidden
 
 - `calendar.find_times` takes `attendee_ids` (comma-separated, at most 20), `time_min`, `time_max`
   (at most 31 days apart), `duration_minutes`, `time_zone`, and optional `day_start` and `day_end`
-  (default 09:00 and 17:00). A GET input holds only scalars, so the ids are one text.
+  (default 09:00 and 17:00), and optional `ignore_unknown`. A GET input holds only scalars, so the ids
+  are one text. The range check allows one more hour, for 31 days of a zone with a day of 25 hours.
 - The calendar of the call is always the first entry of `calendars`. Each entry has `availability`
   `known` or `unknown`, and `busy`: merged intervals in UTC. The answer has no id, no title and no
   count of events. A private event and an invitation are busy time too.
 - A calendar is `known` to the viewer when the viewer is its owner, or holds a grant of its owner
   (either access). An archived principal, a calendar with more than 2000 events in the range, and a
-  calendar that does not answer are `unknown`. An unknown principal id gives `not_found`.
-- `complete` is false when an entry is `unknown`. The suggestions use only the known calendars, so
-  the web app and the MCP text tell the caller that unknown is not free.
+  calendar that does not answer are `unknown`. An unknown principal id gives `not_found`. The object
+  makes the same check for a range that can hold no event, so such a range shows no calendar as known.
+- **Unknown is never free.** `complete` is false when an entry is `unknown`, and `suggestions` is then
+  empty. With `ignore_unknown` `"true"`, the suggestions use only the known calendars. The web app
+  first calls without it. It then shows the warning and **Suggest times without them**, and tells that
+  the suggestions are free only for the other calendars.
+- The web app shows an answer only while the attendees and the fields of the panel are the ones of its
+  search.
 - **One step for a delegate.** With `calendar_id`, the caller must hold `schedule` on that calendar.
   Each attendee calendar is then asked as the owner of `calendar_id`: the agent of Jared sees the busy
   times that teammates share with Jared. A teammate does not grant each agent. This goes one step
@@ -178,6 +186,9 @@ The object makes this view (`viewFor`), so a handler defect cannot show a hidden
 - `attendees` of `calendar.create_event` and `calendar.update_event` lists principals of the
   organization that are not archived. The handler removes the owner of the calendar and each repeated
   id. An unknown id gives `not_found`.
+- `calendar.update_event` checks only the ids that the event does not have now. So an attendee that
+  was archived after the invitation stays on the event, and each later save works. The web app sends
+  `attendees` and `visibility` only when the person changed them.
 - **Agents.** When the caller is an agent or a service account, an attendee that is an agent or a
   service account gives `forbidden`: a person adds it. This is the safe form of "an agent invites an
   agent, a person approves". The approval flow is not built yet. A person can invite an agent.
@@ -192,8 +203,11 @@ The object makes this view (`viewFor`), so a handler defect cannot show a hidden
   delivery of that revision or an earlier one changes nothing. A row with that id from a different
   organizer stays as it is. An idempotency key makes a retry of the create add no second event.
 - The attendee cannot change a copy (`forbidden`). It can delete it: the organizer keeps the event.
-- A row that fails 8 times is dropped and logged at `error`. The copy of that attendee then stays
-  stale until the next change of the event.
+- A row that adds or changes a copy and fails 8 times is dropped and logged at `error`. The copy of
+  that attendee then stays stale until the next change of the event. A row that removes a copy is never
+  dropped, because no later change can remove that copy: after 8 failures it tries again each hour.
+- A change commits its rows before it sets the alarm. The start of the object sets the alarm again when
+  rows wait with no alarm.
 - **Mail.** An invitation goes only to calendars of the organization. No mail goes out, so each
   outbound mode of an agent allows it, `internal-only` too. Invitations by mail (item 7 of
   [Not built yet](#not-built-yet)) must check the outbound policy of the acting agent
@@ -205,7 +219,8 @@ The object makes this view (`viewFor`), so a handler defect cannot show a hidden
   different person also has `calendar`: the id of the owner. `actor` is the delegate. A line of the
   own calendar has no `calendar` field.
 - The event keeps `created_by`, so the owner sees which delegate added it.
-- The invoker audits each refused change, so a call after a removed grant gets a `denied` line.
+- The invoker audits each refused change, so a call after a removed grant gets a `denied` line. The line
+  has `calendar` when the input names a calendar that is not the calendar of the caller.
 
 ## Access
 
@@ -237,6 +252,7 @@ The object makes this view (`viewFor`), so a handler defect cannot show a hidden
 - An all-day event is busy for a full day in the zone of the query, also when the event was meant for
   a different zone.
 - An unanswered invitation counts as busy time. No answer to an invitation exists yet.
+- A removal of a copy that always fails stays in the outbox and tries again each hour.
 - A copy that its attendee deleted comes back on the next change of the event by the organizer.
 - Suggestions include weekends. No working hours for each person exist yet.
 - A person schedules for a different person through REST and MCP only. The web app shows only the own

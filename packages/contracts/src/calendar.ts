@@ -551,11 +551,12 @@ export const findTimes = defineOperation({
 	name: "calendar.find_times",
 	summary: "Find the busy times of people and suggest free times for a meeting",
 	description: [
-		"Returns the busy intervals of each calendar, and suggested times of duration_minutes when each known calendar is free.",
+		"Returns the busy intervals of each calendar, and suggested times of duration_minutes when each calendar is free.",
 		"The calendar of the call (your own calendar, or calendar_id) is always the first entry of calendars. attendee_ids adds more calendars.",
 		"busy holds only merged intervals of busy time: no title, no detail and no count of events. A private event is busy time too.",
 		"availability is unknown when the owner of a calendar shares no availability with you. Never treat unknown as free.",
-		"When complete is false, a suggestion is free only for the calendars with known availability.",
+		"complete is false when a calendar is unknown. suggestions is then empty.",
+		'With ignore_unknown "true", the suggestions use only the calendars with known availability: a suggestion is then free only for those calendars, so tell the person which calendars are unknown.',
 		"With calendar_id, the call asks each attendee calendar as the owner of calendar_id: you see the busy times that the attendees share with that person. You must hold schedule access to calendar_id.",
 		"Suggestions are between day_start and day_end on each day in time_zone, and never in the past.",
 		`The range can be at most ${CALENDAR_LIMITS.findRangeDays} days long.`,
@@ -568,7 +569,8 @@ export const findTimes = defineOperation({
 		.strictObject({
 			attendee_ids: z
 				.string()
-				.max(CALENDAR_LIMITS.findAttendees * 31)
+				// An id has 30 characters. Each id can have a comma and a space after it.
+				.max(CALENDAR_LIMITS.findAttendees * 32 + 16)
 				.refine(
 					(value) => splitIds(value).every((id) => PRINCIPAL_ID_PATTERN.test(id)),
 					"must be principal ids that start with prn_, separated by commas",
@@ -605,11 +607,20 @@ export const findTimes = defineOperation({
 				.max(CALENDAR_LIMITS.suggestions)
 				.optional()
 				.describe(`The most suggestions. The default is ${CALENDAR_LIMITS.defaultSuggestions}.`),
+			ignore_unknown: z
+				.enum(["true", "false"])
+				.optional()
+				.describe(
+					'"true" gives suggestions when the availability of a calendar is unknown. They are free only for the known calendars. The default is "false": no suggestions when a calendar is unknown.',
+				),
 			calendar_id: CALENDAR_ID,
 		})
 		.refine((input) => Date.parse(input.time_max) > Date.parse(input.time_min), "time_max must be after time_min")
 		.refine(
-			(input) => Date.parse(input.time_max) - Date.parse(input.time_min) <= CALENDAR_LIMITS.findRangeDays * DAY_MS,
+			// One more hour: the days of a time zone can include the day of 25 hours, when the clock goes back.
+			(input) =>
+				Date.parse(input.time_max) - Date.parse(input.time_min) <=
+				CALENDAR_LIMITS.findRangeDays * DAY_MS + 60 * 60 * 1000,
 			`The range can be at most ${CALENDAR_LIMITS.findRangeDays} days long`,
 		)
 		.refine((input) => (input.day_start ?? "09:00") < (input.day_end ?? "17:00"), "day_end must be after day_start"),
@@ -623,6 +634,7 @@ export const findTimes = defineOperation({
 				busy: z.array(BusyInterval),
 			}),
 		),
+		/** Empty when the availability of a calendar is unknown, unless the call has ignore_unknown "true". */
 		suggestions: z.array(BusyInterval),
 		/** False when the availability of a calendar is unknown. */
 		complete: z.boolean(),

@@ -327,6 +327,22 @@ export function sameTimeFields(form: EventForm, opened: EventForm): boolean {
 	);
 }
 
+/**
+ * The attendees and the visibility of a save of an event, only when the person changed them in the dialog. A
+ * save of a different field does not send them, so the server does not check the attendees again.
+ */
+export function changedSharing(
+	form: EventForm,
+	opened: EventForm,
+): Partial<Pick<EventForm, "attendees" | "visibility">> {
+	const sameAttendees =
+		form.attendees.length === opened.attendees.length && form.attendees.every((id, at) => id === opened.attendees[at]);
+	return {
+		...(sameAttendees ? {} : { attendees: form.attendees }),
+		...(form.visibility === opened.visibility ? {} : { visibility: form.visibility }),
+	};
+}
+
 const formats = new Map<string, Intl.DateTimeFormat>();
 
 function format(zone: string, options: Intl.DateTimeFormatOptions): Intl.DateTimeFormat {

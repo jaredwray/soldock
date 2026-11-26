@@ -1,4 +1,4 @@
-import { runInDurableObject } from "cloudflare:test";
+import { runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import type { InputOf } from "@asterra/contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -51,6 +51,32 @@ function entry<T extends { principal_id: string }>(result: { calendars: T[] }, i
 
 const calendarStub = (id: string) => env.CALENDAR.get(env.CALENDAR.idFromName(id));
 
+interface OutboxRow extends Record<string, SqlStorageValue> {
+	event_id: string;
+	target: string;
+	gen: number;
+	attempts: number;
+	next_attempt_at: number;
+	last_error: string | null;
+}
+
+/** The outbox rows of a calendar, and the time of its alarm. */
+const outboxOf = (id: string) =>
+	runInDurableObject(calendarStub(id), async (_instance, state) => ({
+		rows: state.storage.sql.exec<OutboxRow>("SELECT * FROM outbox").toArray(),
+		alarm: await state.storage.getAlarm(),
+	}));
+
+/** Runs one statement in the database of a calendar. */
+const execIn = (id: string, statement: string) =>
+	runInDurableObject(calendarStub(id), (_instance, state) => {
+		state.storage.sql.exec(statement);
+	});
+
+/** Makes each delivery to a calendar fail, or work again: its events table goes away, or comes back. */
+const breakCalendar = (id: string) => execIn(id, "ALTER TABLE events RENAME TO events_off");
+const repairCalendar = (id: string) => execIn(id, "ALTER TABLE events_off RENAME TO events");
+
 describe("busy times", () => {
 	it("shows unknown, never free, for a calendar that shares nothing", async () => {
 		await grace.call("calendar.create_event", meeting("Busy", "2030-03-04T09:00:00Z", "2030-03-04T17:00:00Z"));
@@ -60,7 +86,31 @@ describe("busy times", () => {
 			{ principal_id: ada.id, availability: "known", busy: [] },
 			{ principal_id: grace.id, availability: "unknown", busy: [] },
 		]);
+		// Grace is busy all day, and Ada cannot know it. The answer suggests no time.
+		expect(result.suggestions).toEqual([]);
+		expect((await find(ada, { attendee_ids: grace.id, ignore_unknown: "false" })).suggestions).toEqual([]);
+		// The caller can ask for the times of the known calendars. The answer still tells that it is not complete.
+		const others = await find(ada, { attendee_ids: grace.id, ignore_unknown: "true" });
+		expect(others.complete).toBe(false);
+		expect(others.calendars).toEqual(result.calendars);
+		expect(others.suggestions[0]).toEqual({ start: "2030-03-04T09:00:00.000Z", end: "2030-03-04T09:30:00.000Z" });
 		expect(await codeOf(find(ada, { attendee_ids: "prn_01JD0000000000000000000099" }))).toBe("not_found");
+	});
+
+	it("checks the grant also for a range that can hold no event", async () => {
+		const far = { time_min: "2150-01-01T00:00:00Z", time_max: "2150-01-02T00:00:00Z", attendee_ids: grace.id };
+		const before = await find(ada, far);
+		expect(before.calendars.map((calendar) => calendar.availability)).toEqual(["known", "unknown"]);
+		expect(before.complete).toBe(false);
+		await grace.call("calendar.set_grant", { principal_id: ada.id, access: "free_busy" });
+		expect(await find(ada, far)).toMatchObject({
+			calendars: [
+				{ principal_id: ada.id, availability: "known", busy: [] },
+				{ principal_id: grace.id, availability: "known", busy: [] },
+			],
+			suggestions: [],
+			complete: true,
+		});
 	});
 
 	it("merges overlapping events, and keeps a private event as busy time without a detail", async () => {
@@ -202,6 +252,12 @@ describe("invitations", () => {
 		await drainCalendar(ada.id);
 		copies = (await grace.call("calendar.list_events", DAY)).events;
 		expect(copies.map((copy) => copy.title)).toEqual(["Kickoff v2"]);
+		// A late delivery of the first revision does not put the old title back.
+		const late = await runInDurableObject(calendarStub(grace.id), (instance: CalendarDO) =>
+			instance.applyInvite({ ownerId: grace.id, organizerId: ada.id, event: snapshot }),
+		);
+		expect(late).toEqual({ applied: false });
+		expect((await grace.call("calendar.get_event", { event_id: event.id })).event.title).toBe("Kickoff v2");
 		await grace.call("calendar.delete_event", { event_id: event.id });
 		expect((await ada.call("calendar.get_event", { event_id: event.id })).event.title).toBe("Kickoff v2");
 
@@ -245,6 +301,168 @@ describe("invitations", () => {
 				}),
 			),
 		).toBe("not_found");
+	});
+});
+
+describe("attendees that leave the organization", () => {
+	it("lets a save keep an archived attendee, and refuses a new one", async () => {
+		const linus = await createActor(owner, {
+			kind: "human",
+			display_name: "Linus Torvalds",
+			address: "linus@dock.test",
+			password: PASSWORD,
+		});
+		const { event } = await ada.call("calendar.create_event", {
+			...meeting("Kickoff", "2030-03-04T10:00:00Z", "2030-03-04T11:00:00Z"),
+			attendees: [grace.id],
+		});
+		await owner.call("directory.archive_principal", { principal_id: grace.id });
+		await owner.call("directory.archive_principal", { principal_id: linus.id });
+		const saved = await ada.call("calendar.update_event", {
+			event_id: event.id,
+			title: "Kickoff v2",
+			attendees: [grace.id],
+		});
+		expect(saved.event).toMatchObject({
+			title: "Kickoff v2",
+			attendees: [{ principal_id: grace.id, response: "needs_action" }],
+		});
+		expect(
+			await codeOf(ada.call("calendar.update_event", { event_id: event.id, attendees: [grace.id, linus.id] })),
+		).toBe("not_found");
+		// Ada can remove the archived attendee, and cannot add it again.
+		await ada.call("calendar.update_event", { event_id: event.id, attendees: [] });
+		expect(await codeOf(ada.call("calendar.update_event", { event_id: event.id, attendees: [grace.id] }))).toBe(
+			"not_found",
+		);
+	});
+});
+
+describe("the outbox of invitations", () => {
+	const kickoff = () =>
+		ada.call("calendar.create_event", {
+			...meeting("Kickoff", "2030-03-04T10:00:00Z", "2030-03-04T11:00:00Z"),
+			attendees: [grace.id],
+		});
+	const titlesOf = async (actor: Actor) => (await actor.call("calendar.list_events", DAY)).events.map((e) => e.title);
+
+	it("keeps the delivery of a change that comes while an earlier delivery runs", async () => {
+		const { event } = await kickoff();
+		await drainCalendar(ada.id);
+		const waiting = await runInDurableObject(calendarStub(ada.id), async (instance: CalendarDO, state) => {
+			const sql = state.storage.sql;
+			sql.exec(
+				"INSERT INTO outbox (event_id, target, gen, attempts, next_attempt_at) VALUES (?, ?, 1, 0, 0)",
+				event.id,
+				grace.id,
+			);
+			// The delivery reads the event and waits for the calendar of Grace. The change comes while it waits.
+			const delivery = instance.alarm();
+			const change = instance.update(
+				{ ownerId: ada.id, actorId: ada.id },
+				event.id,
+				{ title: "Kickoff v2" },
+				undefined,
+			);
+			await Promise.all([delivery, change]);
+			return sql.exec<{ gen: number }>("SELECT gen FROM outbox").toArray();
+		});
+		// The earlier delivery had the old title. The row of the change stays for the next delivery.
+		expect(waiting).toEqual([{ gen: 2 }]);
+		await drainCalendar(ada.id);
+		expect(await titlesOf(grace)).toEqual(["Kickoff v2"]);
+	});
+
+	it("tries a failed delivery again later, with an alarm", async () => {
+		await breakCalendar(grace.id);
+		const { event } = await kickoff();
+		const start = Date.now();
+		await vi.waitFor(async () => {
+			await runDurableObjectAlarm(calendarStub(ada.id));
+			expect((await outboxOf(ada.id)).rows[0]?.attempts).toBe(1);
+		});
+		const { rows, alarm } = await outboxOf(ada.id);
+		expect(rows).toEqual([expect.objectContaining({ event_id: event.id, target: grace.id, attempts: 1 })]);
+		expect(rows[0]?.last_error).toEqual(expect.any(String));
+		// The first wait is one minute.
+		expect(rows[0]?.next_attempt_at).toBeGreaterThanOrEqual(start + 60_000);
+		expect(alarm).toBe(rows[0]?.next_attempt_at);
+		// The next attempt delivers the copy.
+		await repairCalendar(grace.id);
+		await execIn(ada.id, "UPDATE outbox SET next_attempt_at = 0");
+		await drainCalendar(ada.id);
+		expect(await titlesOf(grace)).toEqual(["Kickoff"]);
+	});
+
+	it("drops a new copy after 8 failed deliveries, and never the removal of a copy", async () => {
+		const { event } = await kickoff();
+		await drainCalendar(ada.id);
+		await breakCalendar(grace.id);
+		const failEighth = async () => {
+			await vi.waitFor(async () => {
+				expect((await outboxOf(ada.id)).rows).toHaveLength(1);
+			});
+			await vi.waitFor(async () => {
+				// The alarm of the change can run at the same time and write its own count. Set the count again.
+				await execIn(ada.id, "UPDATE outbox SET attempts = 7, next_attempt_at = 0 WHERE attempts < 7");
+				await runDurableObjectAlarm(calendarStub(ada.id));
+				expect((await outboxOf(ada.id)).rows[0]?.attempts ?? 8).toBeGreaterThanOrEqual(8);
+			});
+			return (await outboxOf(ada.id)).rows;
+		};
+		// A change of the copy: the row goes away. The next change of the event delivers it.
+		await ada.call("calendar.update_event", { event_id: event.id, title: "Kickoff v2" });
+		expect(await failEighth()).toEqual([]);
+		// The removal of the copy: no later change can remove it, so the row stays and tries again each hour.
+		const start = Date.now();
+		await ada.call("calendar.delete_event", { event_id: event.id });
+		const rows = await failEighth();
+		expect(rows).toEqual([expect.objectContaining({ event_id: event.id, target: grace.id, attempts: 8 })]);
+		expect(rows[0]?.next_attempt_at).toBeGreaterThanOrEqual(start + 60 * 60 * 1000);
+		await repairCalendar(grace.id);
+		await execIn(ada.id, "UPDATE outbox SET next_attempt_at = 0");
+		await drainCalendar(ada.id);
+		expect(await titlesOf(grace)).toEqual([]);
+	});
+
+	it("removes a copy one time, and only for its organizer", async () => {
+		const { event } = await kickoff();
+		await drainCalendar(ada.id);
+		const remove = (organizerId: string) =>
+			runInDurableObject(calendarStub(grace.id), (instance: CalendarDO, state) => ({
+				...instance.removeInvite({ ownerId: grace.id, organizerId, eventId: event.id }),
+				count: state.storage.sql.exec<{ value: string }>("SELECT value FROM meta WHERE key = 'event_count'").one()
+					.value,
+			}));
+		expect(await remove(owner.id)).toEqual({ removed: false, count: "1" });
+		expect(await remove(ada.id)).toEqual({ removed: true, count: "0" });
+		// A second delivery of the removal changes nothing: the count of events does not go down again.
+		expect(await remove(ada.id)).toEqual({ removed: false, count: "0" });
+		expect(await titlesOf(grace)).toEqual([]);
+	});
+
+	it("sets the alarm again at the start, when rows wait with no alarm", async () => {
+		const { event } = await kickoff();
+		await drainCalendar(ada.id);
+		await grace.call("calendar.delete_event", { event_id: event.id });
+		// The state of an object that stopped after it wrote a row and before it set the alarm.
+		await expect(
+			runInDurableObject(calendarStub(ada.id), (_instance, state) =>
+				state.blockConcurrencyWhile(async () => {
+					state.storage.sql.exec(
+						"INSERT INTO outbox (event_id, target, gen, attempts, next_attempt_at) VALUES (?, ?, 1, 0, 0)",
+						event.id,
+						grace.id,
+					);
+					await state.storage.deleteAlarm();
+					await state.storage.sync();
+					state.abort("Stop the calendar.");
+				}),
+			),
+		).rejects.toThrow("Stop the calendar.");
+		expect((await outboxOf(ada.id)).alarm).not.toBeNull();
+		await drainCalendar(ada.id);
+		expect(await titlesOf(grace)).toEqual(["Kickoff"]);
 	});
 });
 

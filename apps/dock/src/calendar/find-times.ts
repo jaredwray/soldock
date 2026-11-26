@@ -25,6 +25,18 @@ function alignUp(from: number, origin: number, step: number): number {
 	return origin + Math.ceil((from - origin) / step) * step;
 }
 
+/** Merges intervals that overlap or touch. The input is in any order. */
+export function mergeIntervals(intervals: readonly (readonly [number, number])[]): [number, number][] {
+	const sorted = [...intervals].sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+	const merged: [number, number][] = [];
+	for (const [start, end] of sorted) {
+		const last = merged.at(-1);
+		if (last && start <= last[1]) last[1] = Math.max(last[1], end);
+		else merged.push([start, end]);
+	}
+	return merged;
+}
+
 /**
  * The free times of `durationMinutes` in the range, first first. Each one is inside the hours of its day in
  * the time zone and overlaps no busy interval. A suggestion starts on a step of 15 minutes from the start of
@@ -38,7 +50,10 @@ export function suggestTimes(
 	const duration = options.durationMinutes * MINUTE_MS;
 	const step = (options.durationMinutes >= 60 ? 30 : 15) * MINUTE_MS;
 	const advance = Math.ceil(duration / step) * step;
-	const sorted = [...busy].sort((a, b) => a[0] - b[0]);
+	// Merged intervals do not overlap and are in order, and the search only goes forward in time. So one index
+	// goes through the intervals one time.
+	const merged = mergeIntervals(busy);
+	let next = 0;
 	const lower = Math.max(options.min, options.now);
 	const found: [number, number][] = [];
 	if (lower >= options.max) return found;
@@ -52,8 +67,10 @@ export function suggestTimes(
 		let start = alignUp(Math.max(dayOpen, lower), dayOpen, step);
 		while (start + duration <= dayClose && found.length < options.limit) {
 			const end = start + duration;
-			const blocking = sorted.find(([from, to]) => from < end && to > start);
-			if (blocking) {
+			// An interval that ends at `start` or before it blocks no later suggestion.
+			while ((merged[next]?.[1] ?? Number.POSITIVE_INFINITY) <= start) next++;
+			const blocking = merged[next];
+			if (blocking && blocking[0] < end) {
 				start = alignUp(blocking[1], dayOpen, step);
 				continue;
 			}

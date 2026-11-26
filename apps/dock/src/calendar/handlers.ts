@@ -65,7 +65,8 @@ function calendarStub(env: Pick<Env, "CALENDAR">, principalId: string) {
 /**
  * The calendar of a call: the own calendar of the caller, or with `calendarId` the calendar of a different
  * person. Only a person who is not archived gives grants, so only that calendar can be the target. The object
- * then checks the grant of the caller on each call.
+ * checks the grant of the caller here, before the handler reads the directory for the input, so a caller with
+ * no grant learns nothing from a different refusal. The object checks the grant again on each call.
  */
 async function openCalendar(call: CallContext, calendarId: string | undefined) {
 	const actorId = call.caller.principal.id;
@@ -77,7 +78,9 @@ async function openCalendar(call: CallContext, calendarId: string | undefined) {
 		}
 	}
 	const ctx: CalendarCall = { ownerId, actorId };
-	return { stub: calendarStub(call.env, ownerId), ctx };
+	const stub = calendarStub(call.env, ownerId);
+	if (ownerId !== actorId) accept(await stub.authorize(ctx));
+	return { stub, ctx };
 }
 
 /** Turns a refusal from the object into an OperationError, and returns any other result. */
@@ -137,17 +140,24 @@ function timeOf(when: EventWhenValue): EventTime {
 }
 
 /**
- * The attendees of an event: each id once, without the owner of the calendar. Each one must be a principal of
- * the organization that is not archived. An agent or a service account cannot invite an agent or a service
- * account: a person adds it.
+ * The attendees of an event: each id once, without the owner of the calendar. Each new one must be a principal
+ * of the organization that is not archived. An agent or a service account cannot invite an agent or a service
+ * account: a person adds it. `kept` holds the attendees that the event has before an update. They pass with no
+ * check, so an attendee that was archived after the invitation does not stop each later change of the event.
  */
-async function checkAttendees(call: CallContext, ownerId: string, ids: readonly string[]): Promise<string[]> {
+async function checkAttendees(
+	call: CallContext,
+	ownerId: string,
+	ids: readonly string[],
+	kept: readonly string[] = [],
+): Promise<string[]> {
 	const wanted = [...new Set(ids)].filter((id) => id !== ownerId);
-	if (wanted.length === 0) return [];
+	const added = wanted.filter((id) => !kept.includes(id));
+	if (added.length === 0) return wanted;
 	const found = new Map(
-		(await getPrincipals(call.env.DIRECTORY, wanted)).map((principal) => [principal.id, principal] as const),
+		(await getPrincipals(call.env.DIRECTORY, added)).map((principal) => [principal.id, principal] as const),
 	);
-	for (const id of wanted) {
+	for (const id of added) {
 		const principal = found.get(id);
 		if (!principal || principal.archived_at !== null) {
 			throw new OperationError("not_found", `No principal of the organization has the id ${id}.`);
@@ -242,11 +252,8 @@ export const calendarHandlers: Pick<HandlerMap<CallContext>, CalendarOperation> 
 		}
 		const { stub, ctx } = await openCalendar(call, input.calendar_id);
 		const range = rangeOf(input.time_min, input.time_max, zone);
-		if (!range) {
-			// The object still checks the access, so an empty range does not skip the grant.
-			accept(await stub.authorize(ctx));
-			return { events: [], next_cursor: null };
-		}
+		// `openCalendar` checked the access, so an empty range does not skip the grant.
+		if (!range) return { events: [], next_cursor: null };
 		const limit = input.limit ?? CALENDAR_LIMITS.defaultPageSize;
 		const page = accept(await stub.list(ctx, { ...range, after, limit }));
 		const last = page.events.at(-1);
@@ -288,12 +295,19 @@ export const calendarHandlers: Pick<HandlerMap<CallContext>, CalendarOperation> 
 
 	async "calendar.update_event"(call, input) {
 		const { stub, ctx } = await openCalendar(call, input.calendar_id);
+		let attendees: string[] | undefined;
+		if (input.attendees !== undefined) {
+			// The check is only for the ids that the event does not have now. A delegate gets no attendees of an
+			// event that it did not add, and the object then refuses its change.
+			const current = accept(await stub.get(ctx, input.event_id));
+			attendees = await checkAttendees(call, ctx.ownerId, input.attendees, current.attendees);
+		}
 		const patch: Partial<EventFields> = {
 			...(input.title !== undefined ? { title: input.title } : {}),
 			...(input.description !== undefined ? { description: input.description } : {}),
 			...(input.location !== undefined ? { location: input.location } : {}),
 			...(input.visibility !== undefined ? { visibility: input.visibility } : {}),
-			...(input.attendees !== undefined ? { attendees: await checkAttendees(call, ctx.ownerId, input.attendees) } : {}),
+			...(attendees !== undefined ? { attendees } : {}),
 			...(input.when !== undefined ? timeOf(input.when) : {}),
 		};
 		const result = accept(await stub.update(ctx, input.event_id, patch, input.base_revision));
@@ -314,10 +328,7 @@ export const calendarHandlers: Pick<HandlerMap<CallContext>, CalendarOperation> 
 		// The calendar of the call. With calendar_id, the caller must hold schedule access to it, and each attendee
 		// calendar is asked as its owner: the caller sees what the attendees share with that person.
 		const viewer = input.calendar_id ?? call.caller.principal.id;
-		if (viewer !== call.caller.principal.id) {
-			const { stub, ctx } = await openCalendar(call, viewer);
-			accept(await stub.authorize(ctx));
-		}
+		if (viewer !== call.caller.principal.id) await openCalendar(call, viewer);
 		const targets = [...new Set([viewer, ...splitIds(input.attendee_ids)])];
 		const principals = new Map(
 			(await getPrincipals(call.env.DIRECTORY, targets)).map((principal) => [principal.id, principal] as const),
@@ -331,7 +342,6 @@ export const calendarHandlers: Pick<HandlerMap<CallContext>, CalendarOperation> 
 				const unknown = { principal_id: principalId, availability: "unknown" as const, busy: [] };
 				// An archived principal shares nothing now.
 				if (principals.get(principalId)?.archived_at !== null) return { ...unknown, intervals: null };
-				if (!query) return { principal_id: principalId, availability: "known" as const, busy: [], intervals: [] };
 				try {
 					const result = await calendarStub(call.env, principalId).freeBusy(
 						{ ownerId: principalId, actorId: viewer },
@@ -351,24 +361,28 @@ export const calendarHandlers: Pick<HandlerMap<CallContext>, CalendarOperation> 
 				}
 			}),
 		);
+		const complete = calendars.every((calendar) => calendar.availability === "known");
 		const known = calendars.flatMap((calendar) => calendar.intervals ?? []);
-		const suggestions = range
-			? suggestTimes(known, {
-					min: range.min,
-					max: range.max,
-					zone,
-					dayStart: input.day_start ?? "09:00",
-					dayEnd: input.day_end ?? "17:00",
-					durationMinutes: input.duration_minutes,
-					now: Date.now(),
-					limit: input.limit ?? CALENDAR_LIMITS.defaultSuggestions,
-				})
-			: [];
+		// Unknown is never free: with an unknown calendar, the answer has suggestions only when the caller asks
+		// for the times of the known calendars.
+		const suggestions =
+			range && (complete || input.ignore_unknown === "true")
+				? suggestTimes(known, {
+						min: range.min,
+						max: range.max,
+						zone,
+						dayStart: input.day_start ?? "09:00",
+						dayEnd: input.day_end ?? "17:00",
+						durationMinutes: input.duration_minutes,
+						now: Date.now(),
+						limit: input.limit ?? CALENDAR_LIMITS.defaultSuggestions,
+					})
+				: [];
 		return {
 			time_zone: zone,
 			calendars: calendars.map(({ intervals: _intervals, ...calendar }) => calendar),
 			suggestions: suggestions.map(([start, end]) => ({ start: iso(start), end: iso(end) })),
-			complete: calendars.every((calendar) => calendar.availability === "known"),
+			complete,
 		};
 	},
 

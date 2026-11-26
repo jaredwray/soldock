@@ -1,6 +1,7 @@
 import { DurableObject } from "cloudflare:workers";
 import { CALENDAR_LIMITS, type CalendarAccess, type EventVisibility, zonedDayStart } from "@asterra/contracts";
 import { log } from "../platform/index.ts";
+import { mergeIntervals } from "./find-times.ts";
 
 // Each person, agent and service account has one CalendarDO. Its name is the principal id. It holds the
 // events of the calendar of that principal in its SQLite database, the grants that the owner gives, and an
@@ -235,7 +236,7 @@ function sameField(key: (typeof FIELD_KEYS)[number], a: EventFields, b: EventFie
 /**
  * The event as the caller sees it. The owner sees each field. A delegate sees each field of an event that it
  * added. Of a different event it sees the time, and the title when the event is not private: never the
- * description, the location or the attendees.
+ * description, the location, the attendees or the organizer of an invitation.
  */
 function viewFor(role: Role, actorId: string, record: EventRecord): EventView {
 	if (role === "owner" || (record.created_by === actorId && record.organizer_id === null)) {
@@ -247,21 +248,11 @@ function viewFor(role: Role, actorId: string, record: EventRecord): EventView {
 		description: "",
 		location: "",
 		attendees: [],
+		// The organizer of an invitation tells who the owner meets. The view gives the owner as the organizer.
+		organizer_id: null,
 		created_by: null,
 		redacted: true,
 	};
-}
-
-/** Merges intervals that overlap or touch. The input is in any order. */
-function mergeIntervals(intervals: [number, number][]): [number, number][] {
-	const sorted = [...intervals].sort((a, b) => a[0] - b[0] || a[1] - b[1]);
-	const merged: [number, number][] = [];
-	for (const [start, end] of sorted) {
-		const last = merged.at(-1);
-		if (last && start <= last[1]) last[1] = Math.max(last[1], end);
-		else merged.push([start, end]);
-	}
-	return merged;
 }
 
 export class CalendarDO extends DurableObject<Env> {
@@ -272,6 +263,12 @@ export class CalendarDO extends DurableObject<Env> {
 		super(ctx, env);
 		this.sql = ctx.storage.sql;
 		this.migrate();
+		// A change commits its outbox rows before it sets the alarm. If the object stopped between the two, the
+		// rows have no alarm. The start sets it again.
+		ctx.blockConcurrencyWhile(async () => {
+			const waiting = this.sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM outbox").one().n;
+			if (waiting > 0 && (await ctx.storage.getAlarm()) === null) await ctx.storage.setAlarm(Date.now());
+		});
 	}
 
 	private migrate(): void {
@@ -350,7 +347,7 @@ export class CalendarDO extends DurableObject<Env> {
 		);
 	}
 
-	/** Confirms that the caller can schedule in this calendar. `calendar.find_times` uses it for `calendar_id`. */
+	/** Confirms that the caller can schedule in this calendar. The handler asks it first for each `calendar_id`. */
 	authorize(call: CalendarCall): { ok: true } | Refusal {
 		const role = this.enter(call, "schedule");
 		return typeof role === "string" ? { ok: true } : role;
@@ -632,11 +629,13 @@ export class CalendarDO extends DurableObject<Env> {
 	 * The busy intervals of a range, merged, for a viewer. The viewer is the owner, or a principal with a grant
 	 * of the owner (either access). Unknown for each other viewer, and for a range with too many events. The
 	 * result has no id, no title and no count of events. A private event and an invitation are busy time too.
-	 * An all-day event is busy from 00:00 to 00:00 of its days in the zone of the query.
+	 * An all-day event is busy from 00:00 to 00:00 of its days in the zone of the query. A null query is a range
+	 * that can hold no event: the check of the viewer is the same, and the result has no busy time.
 	 */
-	freeBusy(viewer: CalendarCall, query: BusyQuery): { busy: BusySpan[] } | { unknown: true } {
+	freeBusy(viewer: CalendarCall, query: BusyQuery | null): { busy: BusySpan[] } | { unknown: true } {
 		if (!this.ownedBy(viewer.ownerId)) return { unknown: true };
 		if (viewer.actorId !== viewer.ownerId && this.grantOf(viewer.actorId) === null) return { unknown: true };
+		if (query === null) return { busy: [] };
 		const rows = this.sql
 			.exec<{ all_day: number; start_at: number; end_at: number; start_date: string | null; end_date: string | null }>(
 				`SELECT all_day, start_at, end_at, start_date, end_date FROM events
@@ -708,7 +707,7 @@ export class CalendarDO extends DurableObject<Env> {
 		}
 		const count = Number(this.meta("event_count") ?? 0);
 		if (count >= CALENDAR_LIMITS.events) {
-			log("warn", "calendar invitation dropped: the calendar is full", { eventId: event.id });
+			log("warn", "calendar invitation dropped: the calendar is full", { eventId: event.id, ownerId: input.ownerId });
 			return { applied: false };
 		}
 		this.ctx.storage.transactionSync(() => {
@@ -764,8 +763,10 @@ export class CalendarDO extends DurableObject<Env> {
 	/**
 	 * Delivers the outbox. Each row names an event and an attendee. The delivery reads the event now: when the
 	 * attendee is still on it, the attendee gets the current copy, else it loses the copy. So the rows need no
-	 * order, and a row that a later change touched again delivers that change. A row that fails 8 times is
-	 * dropped, and the copy of that attendee stays stale until the next change of the event.
+	 * order, and a row that a later change touched again delivers that change. A row that adds or changes a copy
+	 * and fails 8 times is dropped: the copy of that attendee stays stale until the next change of the event. A
+	 * row that removes a copy is never dropped, because no later change of the event can remove that copy. It
+	 * tries again each hour.
 	 */
 	private async drain(): Promise<void> {
 		const ownerId = this.meta("owner_id");
@@ -795,7 +796,7 @@ export class CalendarDO extends DurableObject<Env> {
 					attempts,
 					error: message,
 				});
-				if (attempts >= OUTBOX_MAX_ATTEMPTS) {
+				if (attempts >= OUTBOX_MAX_ATTEMPTS && this.invites(row.event_id, row.target)) {
 					this.sql.exec(
 						"DELETE FROM outbox WHERE event_id = ? AND target = ? AND gen = ?",
 						row.event_id,
@@ -820,11 +821,17 @@ export class CalendarDO extends DurableObject<Env> {
 		if (next !== null && next !== undefined) await this.ctx.storage.setAlarm(Math.max(next, Date.now()));
 	}
 
+	/** The own event that has this attendee now. Null when the attendee must lose its copy. */
+	private invites(eventId: string, target: string): EventRecord | null {
+		const event = this.row(eventId);
+		return event && event.organizer_id === null && event.attendees.includes(target) ? event : null;
+	}
+
 	/** One delivery to the calendar of an attendee. It is safe to run two times. */
 	private async deliver(ownerId: string, eventId: string, target: string): Promise<void> {
 		const stub = this.env.CALENDAR.get(this.env.CALENDAR.idFromName(target));
-		const event = this.row(eventId);
-		if (event && event.organizer_id === null && event.attendees.includes(target)) {
+		const event = this.invites(eventId, target);
+		if (event) {
 			const { id, revision, title, description, location, visibility, attendees } = event;
 			await stub.applyInvite({
 				ownerId: target,

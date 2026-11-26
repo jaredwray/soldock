@@ -737,8 +737,10 @@ app). An agent never gets these tools, so it cannot change its own access.
 - **Find a time.** Call `calendar_find_times` with `attendee_ids` (comma-separated), a range of at most
   31 days, `duration_minutes` and `time_zone`. With `calendar_id`, you see the busy times that the
   attendees share with that person. `availability: "unknown"` means that the owner shares nothing with
-  you. **Never treat unknown as free.** When `complete` is false, a suggestion is free only for the
-  known calendars.
+  you. **Never treat unknown as free.** When a calendar is unknown, `complete` is false and
+  `suggestions` is empty. Tell the person which calendars are unknown. If the person wants times
+  without them, call again with `ignore_unknown: "true"`: a suggestion is then free only for the known
+  calendars.
 - **Invitations.** Each attendee gets one copy of the event on the own calendar, with the owner of the
   calendar as organizer. An agent or a service account cannot invite an agent or a service account:
   the call returns `forbidden`. No mail goes out: attendees are principals of the organization.

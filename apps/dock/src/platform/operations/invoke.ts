@@ -78,6 +78,7 @@ export async function invokeOperation<
 				actor: call.caller.id,
 				actorKind: call.caller.kind,
 				credential: call.caller.credential,
+				...deniedCalendar(operation, call.caller, rawInput),
 				result: "denied",
 				code: error.code,
 				requestId: call.requestId,
@@ -85,6 +86,17 @@ export async function invokeOperation<
 		}
 		throw error;
 	}
+}
+
+/**
+ * The `calendar` field of the audit line of a refused Calendar call: the calendar that the input names, when it
+ * is not the own calendar of the caller. The input can be refused before the schema reads it, so only a text
+ * with the form of a principal id goes to the log.
+ */
+function deniedCalendar(operation: Operation, caller: Caller, rawInput: unknown): { calendar?: string } {
+	if (!operation.name.startsWith("calendar.") || typeof rawInput !== "object" || rawInput === null) return {};
+	const id = (rawInput as { calendar_id?: unknown }).calendar_id;
+	return typeof id === "string" && id !== caller.id && /^prn_[0-9A-Za-z]{1,40}$/.test(id) ? { calendar: id } : {};
 }
 
 /** Gives the outcome to the recorder of the call. A recorder that throws changes nothing. */

@@ -1,6 +1,7 @@
 import type { CalendarEvent } from "@asterra/contracts";
 import { describe, expect, it } from "vitest";
 import {
+	changedSharing,
 	clampDay,
 	eventsByDay,
 	formOf,
@@ -201,6 +202,17 @@ describe("the form of an event", () => {
 			expect(sameTimeFields({ ...opened, ...change }, opened), JSON.stringify(change)).toBe(false);
 		}
 		expect(newEventForm("2026-12-01", 23)).toMatchObject({ endDate: "2026-12-02", endTime: "00:00" });
+	});
+
+	// The server checks each attendee that a save sends. A save of a different field must not send them.
+	it("sends the attendees and the visibility of a save only when the person changed them", () => {
+		const opened = { ...newEventForm("2026-12-01"), title: "Sync", attendees: ["prn_a", "prn_b"] };
+		expect(changedSharing({ ...opened, title: "New title" }, opened)).toEqual({});
+		expect(changedSharing({ ...opened, attendees: ["prn_a"] }, opened)).toEqual({ attendees: ["prn_a"] });
+		expect(changedSharing({ ...opened, attendees: ["prn_a", "prn_c"] }, opened)).toEqual({
+			attendees: ["prn_a", "prn_c"],
+		});
+		expect(changedSharing({ ...opened, visibility: "private" }, opened)).toEqual({ visibility: "private" });
 	});
 
 	// Find a time can search in a different zone. A suggestion is two instants, so the form must show them on the

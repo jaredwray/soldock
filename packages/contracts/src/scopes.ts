@@ -114,8 +114,10 @@ export const SERVICE_SCOPE_DESCRIPTIONS: Readonly<Record<ServiceScope, string>> 
 	"drive.share": "Give and remove access to the items of its own drive",
 	"chat.read": "Find the public rooms, and read the threads, mentions, saved messages and settings of the account",
 	"chat.write": "Create rooms, open direct messages, and change the sections, reminders and settings of the account",
-	"calendar.read": "Read the events of the own calendar of the service account",
-	"calendar.write": "Add, change and delete the events of the own calendar of the service account",
+	"calendar.read":
+		"Read the events of the own calendar of the service account and of the calendars whose owners let it schedule, and find free times",
+	"calendar.write":
+		"Add, change and delete the events of the own calendar of the service account, and the events that it adds to the calendars whose owners let it schedule",
 };
 
 /** The text of a scope for a caller of this kind: the service text for a service account. */

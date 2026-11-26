@@ -1,6 +1,6 @@
 import { type InputOf, OWN_KEY_SCOPES } from "@asterra/contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { type Actor, api, codeOf, createActor, PASSWORD, seedOrg, setLegacyScopes } from "./helpers.ts";
+import { type Actor, api, codeOf, createActor, drainCalendar, PASSWORD, seedOrg, setLegacyScopes } from "./helpers.ts";
 
 // The grants of a calendar: the owner lets a person, an agent or a service account see the busy times
 // (free_busy) or schedule (schedule). The object of the calendar checks the grant on each call, so a removed
@@ -181,6 +181,18 @@ describe("who schedules in the calendar of a different person", () => {
 		).toBe("forbidden");
 	});
 
+	it("refuses a caller with no grant before it reads the directory for the attendees", async () => {
+		// A different refusal for an unknown attendee tells a caller with no access what the directory has.
+		const ghost = "prn_01JD0000000000000000000099";
+		const input = meeting("Probe", "2030-03-04T10:00:00Z", "2030-03-04T11:00:00Z", {
+			calendar_id: ada.id,
+			attendees: [ghost],
+		});
+		expect(await codeOf(grace.call("calendar.create_event", input))).toBe("forbidden");
+		await ada.call("calendar.set_grant", { principal_id: grace.id, access: "schedule" });
+		expect(await codeOf(grace.call("calendar.create_event", input))).toBe("not_found");
+	});
+
 	it("lets the grant alone decide for an agent, as for a mailbox delegate", async () => {
 		// An agent from before Calendar has no calendar scope: its own calendar is closed to it.
 		await setLegacyScopes(bot.id, ["account.read", "mail.read"]);
@@ -209,6 +221,13 @@ describe("what a delegate sees", () => {
 			location: "Clinic",
 			visibility: "private",
 		});
+		// An invitation on the calendar of Ada: the delegate must not learn who the private event is with.
+		await grace.call("calendar.create_event", {
+			...meeting("Salary talk", "2030-03-04T13:00:00Z", "2030-03-04T14:00:00Z"),
+			attendees: [ada.id],
+			visibility: "private",
+		});
+		await drainCalendar(grace.id);
 		await ada.call("calendar.set_grant", { principal_id: bot.id, access: "schedule" });
 		const { event: own } = await bot.call("calendar.create_event", {
 			...meeting("Planning", "2030-03-04T15:00:00Z", "2030-03-04T16:00:00Z"),
@@ -223,14 +242,19 @@ describe("what a delegate sees", () => {
 		).toEqual([
 			["Board review", "", "", [], true],
 			["", "", "", [], true],
+			["", "", "", [], true],
 			["Planning", "Agenda", "", [], false],
 		]);
+		expect(events.map((event) => event.organizer_id)).toEqual([ada.id, ada.id, ada.id, ada.id]);
 		const text = JSON.stringify(events);
-		for (const secret of ["Numbers for Q1", "Room 1", grace.id, "Doctor", "Second visit", "Clinic"]) {
+		for (const secret of ["Numbers for Q1", "Room 1", grace.id, "Doctor", "Second visit", "Clinic", "Salary talk"]) {
 			expect(text).not.toContain(secret);
 		}
 		// REST gives the same form, and the delegate cannot change an event that it did not add.
-		const [board, doctor] = events;
+		const [board, doctor, invitation] = events;
+		expect(
+			(await bot.call("calendar.get_event", { event_id: invitation?.id ?? "", calendar_id: ada.id })).event,
+		).toEqual(invitation);
 		expect((await bot.call("calendar.get_event", { event_id: doctor?.id ?? "", calendar_id: ada.id })).event).toEqual(
 			doctor,
 		);
@@ -247,8 +271,10 @@ describe("what a delegate sees", () => {
 		expect(mine.events.map((event) => [event.title, event.redacted])).toEqual([
 			["Board review", false],
 			["Doctor", false],
+			["Salary talk", false],
 			["Planning", false],
 		]);
+		expect(mine.events[2]?.organizer_id).toBe(grace.id);
 		expect(mine.events.find((event) => event.id === own.id)?.created_by).toBe(bot.id);
 	});
 });
@@ -271,7 +297,9 @@ describe("the end of a grant", () => {
 				),
 			).toBe("forbidden");
 		});
-		expect(lines).toEqual([expect.objectContaining({ op: "calendar.create_event", actor: bot.id, result: "denied" })]);
+		expect(lines).toEqual([
+			expect.objectContaining({ op: "calendar.create_event", actor: bot.id, result: "denied", calendar: ada.id }),
+		]);
 		expect(
 			await codeOf(bot.call("calendar.update_event", { event_id: event.id, calendar_id: ada.id, title: "x" })),
 		).toBe("forbidden");
@@ -287,15 +315,21 @@ describe("the end of a grant", () => {
 describe("the audit of a delegate", () => {
 	it("names the delegate as the actor and the owner as the calendar", async () => {
 		await ada.call("calendar.set_grant", { principal_id: bot.id, access: "schedule" });
-		const delegated = await auditLines(() =>
-			bot.call(
+		let id = "";
+		const delegated = await auditLines(async () => {
+			const { event } = await bot.call(
 				"calendar.create_event",
 				meeting("Sync", "2030-03-04T10:00:00Z", "2030-03-04T11:00:00Z", { calendar_id: ada.id }),
+			);
+			id = event.id;
+			await bot.call("calendar.update_event", { event_id: id, calendar_id: ada.id, title: "Sync v2" });
+			await bot.call("calendar.delete_event", { event_id: id, calendar_id: ada.id });
+		});
+		expect(delegated).toEqual(
+			["calendar.create_event", "calendar.update_event", "calendar.delete_event"].map((op) =>
+				expect.objectContaining({ op, actor: bot.id, actorKind: "agent", calendar: ada.id, target: id, result: "ok" }),
 			),
 		);
-		expect(delegated).toEqual([
-			expect.objectContaining({ op: "calendar.create_event", actor: bot.id, actorKind: "agent", calendar: ada.id }),
-		]);
 		const own = await auditLines(() =>
 			ada.call("calendar.create_event", meeting("Mine", "2030-03-04T12:00:00Z", "2030-03-04T13:00:00Z")),
 		);
