@@ -254,8 +254,9 @@ message that replaces an older one.
   and at most 500 `ATTENDEE` lines with `CN`, `PARTSTAT` and the `mailto:` address or the `EMAIL` parameter. It
   ignores `VALARM`, `VTIMEZONE`, `X-` properties and each other property.
 - A time in UTC, a `TZID` with an IANA name, and a `TZID` with a Windows name of Outlook from a fixed list
-  give an instant. A floating time, an unknown `TZID`, a time that is not real (month 13, hour 25) and a
-  `DURATION` that the parser cannot read give no time: the invitation is `unsupported`. The parser gives no
+  give an instant. A floating time, an unknown `TZID`, a time that is not real (month 13, hour 25), and a
+  `DTEND` or a `DURATION` that is there but that the parser cannot read give no time: the invitation is
+  `unsupported`. Only a missing end has a default: one day for an all-day event. The parser gives no
   error for bad content, so one bad mail cannot fail its delivery again and again.
 - `RRULE`, `RDATE`, `EXDATE`, `RECURRENCE-ID` and a second `VEVENT` mark a recurring meeting: `unsupported`.
 - The texts lose their control characters (the description keeps tabs and line breaks) and are cut to the
