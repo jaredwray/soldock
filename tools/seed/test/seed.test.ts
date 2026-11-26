@@ -158,6 +158,7 @@ describe("runSeed", () => {
 				"drive.star_items",
 				"docs.create",
 				"sheets.create",
+				"calendar.create_event",
 			]),
 		);
 	});

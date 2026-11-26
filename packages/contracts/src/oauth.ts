@@ -99,8 +99,8 @@ export const approveAuthorization = defineOperation({
 	description: [
 		"Approves an OAuth authorization request of an MCP client, so that its tokens act as an agent.",
 		"Send new_agent to create an agent with a name and an address on a mail domain of the deployment, or agent_id to connect an agent that exists.",
-		"The approver is the sponsor of a new agent, which gets the internal-only outbound policy and each agent scope for its own mailbox, its own drive and the actions that have no mailbox, room or drive.",
-		"A new agent reaches its own mailbox and its own drive, and each team mailbox, shared drive and room that it is a member of. Its membership decides what it can do there.",
+		"The approver is the sponsor of a new agent, which gets the internal-only outbound policy and each agent scope for its own mailbox, its own drive, its own calendar and the actions that have no mailbox, room or drive.",
+		"A new agent reaches its own mailbox, its own drive and its own calendar, and each team mailbox, shared drive and room that it is a member of. Its membership decides what it can do there.",
 		"The connection only proves the identity of the agent. It has no scopes.",
 		MANAGE,
 		"A credential cannot grant a scope that it does not hold: the credential must hold each account scope of the agent.",

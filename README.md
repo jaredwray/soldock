@@ -4,7 +4,7 @@
 
 <p align="center">
   An open-source Google Workspace replacement that runs only on Cloudflare.<br>
-  Mail, Chat, and Drive with Docs and Sheets, from one hostname, for people and for AI agents.
+  Mail, Chat, Calendar, and Drive with Docs and Sheets, from one hostname, for people and for AI agents.
 </p>
 
 <p align="center">
@@ -15,7 +15,7 @@
   <a href="docs/agents.md">Agents</a>
 </p>
 
-> **Status:** early development. Mail, Chat, and Drive with Docs and Sheets each have their first
+> **Status:** early development. Mail, Chat, Calendar, and Drive with Docs and Sheets each have their first
 > end-to-end layer. People use them in the browser, and agents use them through MCP. Meet and Slides
 > do not exist yet. Backups, exports and retention do not exist yet. Do not move an organization to
 > Asterra today. [What it does](#what-it-does) and the README of each module show what exists.
@@ -111,11 +111,23 @@ decimals, bold, italic, colors and alignment. An agent sets the same formats.
 
 ![A sheet with a fee tracker. The formula bar shows the SUM formula of the selected cell](docs/screenshots/sheets.png)
 
+### Calendar
+
+Each person, agent and service account has a calendar. The week view shows the hours of each day, and the
+month view shows six weeks. An event has a title, a time, a location and a description. It can be timed,
+in a time zone, or all day. An all-day event is on the same days in each time zone. On a phone, the views
+become a list of the days that have events.
+
+An agent adds and reads the events of its own calendar with tools such as `calendar_create_event` and
+`calendar_list_events`. Invitations, recurring events and reminders come in later layers.
+
+![The week view of Calendar with the meetings of the studio director](docs/screenshots/calendar.png)
+
 ### Agents
 
 Give an agent one URL: the MCP endpoint of your Asterra instance. The MCP client opens Asterra in a browser,
 and you approve the connection. A client without OAuth can use an API key. A key or a connection only proves
-who the agent is. An agent reaches its own mailbox and its own drive. It reaches a shared mailbox, a shared
+who the agent is. An agent reaches its own mailbox, its own drive and its own calendar. It reaches a shared mailbox, a shared
 drive or a room when it is a member, as a person does. The settings of that mailbox, drive or room decide
 what it can do there. A person can also let an agent, or a different person, use their own mailbox, in the
 settings of that mailbox. Nobody else can use the mailbox of a person until the person gives that access. A change applies at once to each key and connection of the agent. The page of the
@@ -231,7 +243,7 @@ in as one of them. If the setup page shows first, select **Continue with the exi
 
 - **One Worker.** [`apps/dock`](apps/dock/README.md) is the full backend. It also serves the web
   app. Asterra uses no runtime service outside Cloudflare.
-- **State lives with its owner.** Each mailbox, drive, document and chat room is its own
+- **State lives with its owner.** Each mailbox, drive, document, calendar and chat room is its own
   [Durable Object](https://developers.cloudflare.com/durable-objects/) with a SQLite database. D1
   holds the directory. R2 holds the files and the raw mail. A queue carries inbound mail.
 - **One registry of operations.** [`packages/contracts`](packages/contracts/README.md) defines each

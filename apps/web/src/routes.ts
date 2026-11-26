@@ -1,4 +1,5 @@
 // The app routes. Each path is a deep link: the dock Worker serves index.html for it.
+import { CALENDAR_LIMITS, isRealDate } from "@asterra/contracts";
 
 export const SYSTEM_VIEWS = ["inbox", "snoozed", "starred", "sent", "spam", "trash", "all"] as const;
 export type SystemView = (typeof SYSTEM_VIEWS)[number];
@@ -51,6 +52,10 @@ export type ScreenerTab = "waiting" | "history";
 export const CHAT_VIEWS = ["activity", "saved", "drafts"] as const;
 export type ChatView = (typeof CHAT_VIEWS)[number];
 
+/** The views of Calendar. Each has one path under `/calendar`. */
+export const CALENDAR_VIEWS = ["week", "month"] as const;
+export type CalendarView = (typeof CALENDAR_VIEWS)[number];
+
 export type Route =
 	/**
 	 * `mailboxId` is the id of a team mailbox (`tmb_`), the id of an agent (`prn_`) whose mailbox an owner
@@ -85,6 +90,11 @@ export type Route =
 			view?: ChatView;
 			search?: { query: string; roomId: string | null };
 	  }
+	/**
+	 * Calendar. `date` is a day of the period to show, in YYYY-MM-DD form, or null for today. The week view
+	 * shows the week of the day, and the month view the month of the day.
+	 */
+	| { page: "calendar"; view: CalendarView; date: string | null }
 	/** The profile of a person or an agent. It is a page of the workspace, not a part of a product. */
 	| { page: "profile"; principalId: string }
 	/**
@@ -103,6 +113,7 @@ export const INBOX_PATH = "/mail/inbox";
 export const DRIVE_PATH = "/drive";
 export const SHARED_DRIVES_PATH = "/drive/shared-drives";
 export const CHAT_PATH = "/chat";
+export const CALENDAR_PATH = "/calendar";
 export const PEOPLE_PATH = "/people";
 export const ADMIN_PATH = "/admin";
 export const SETTINGS_PATH = "/settings";
@@ -221,6 +232,13 @@ export function parseRoute(location: string): Route {
 			? { page: "chat", roomId: second, seq: Number(third), replySeq: Number(fourth) }
 			: { page: "not-found" };
 	}
+	if (first === "calendar") {
+		if (parts.length === 1) return { page: "calendar", view: "week", date: null };
+		if (isCalendarView(second) && parts.length === 3 && isCalendarDate(third)) {
+			return { page: "calendar", view: second, date: third };
+		}
+		return { page: "not-found" };
+	}
 	if ((first === "docs" || first === "sheets") && parts.length === 3 && isSpaceId(second) && isItemId(third)) {
 		return { page: first === "docs" ? "doc" : "sheet", spaceId: second, itemId: third };
 	}
@@ -287,6 +305,17 @@ function isItemId(value: string | undefined): value is string {
 /** A room has an id that starts with `rm_`. A direct message has an id that starts with `dm_`. */
 function isRoomId(value: string | undefined): value is string {
 	return value?.startsWith("rm_") === true || value?.startsWith("dm_") === true;
+}
+
+function isCalendarView(value: string | undefined): value is CalendarView {
+	return (CALENDAR_VIEWS as readonly string[]).includes(value ?? "");
+}
+
+/** A real date in YYYY-MM-DD form, from 1970 to 2100: the days that an event can use. */
+export function isCalendarDate(value: string | undefined): value is string {
+	return (
+		value !== undefined && isRealDate(value) && value >= CALENDAR_LIMITS.firstDate && value <= CALENDAR_LIMITS.lastDate
+	);
 }
 
 function isAdminSection(value: string | undefined): value is AdminSection {
@@ -372,6 +401,11 @@ export function itemPath(item: {
 		case "file":
 			return null;
 	}
+}
+
+/** The path of a view of Calendar, for the period that holds `date` (YYYY-MM-DD). */
+export function calendarPath(view: CalendarView, date: string): string {
+	return `${CALENDAR_PATH}/${view}/${date}`;
 }
 
 /** The path of a section of the admin page. */

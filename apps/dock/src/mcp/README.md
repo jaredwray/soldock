@@ -102,7 +102,7 @@ SDK. Protocol 2026-07-28 has no sessions, so a hand-written server stays small.
   tools (`missingScopes` of `identity`). For an agent, a tool that a membership can give is not counted.
   They also tell what the scope means (`addScopeHint`):
   - An API key or an OAuth connection of an agent or a service account: the account scopes apply only to
-    its own mailbox, its own drive and the actions without a resource, and they do not change. In a team
+    its own mailbox, its own drive, its own calendar and the actions without a resource, and they do not change. In a team
     mailbox, a room and a shared drive, the membership decides.
   - An API key of a person: its scopes do not change, so the person creates a key with more scopes in
     Settings.

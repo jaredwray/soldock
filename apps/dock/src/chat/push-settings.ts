@@ -8,7 +8,7 @@ import {
 } from "../platform/index.ts";
 
 /**
- * The Web Push settings of the organization: one row in the D1 table `chat_push_settings` (migration 0038).
+ * The Web Push settings of the organization: one row in the D1 table `chat_push_settings` (migration 0039).
  * An owner or an admin changes it in Admin › Chat. The row keeps the VAPID key pair that signs each delivery.
  *
  * The Worker secrets VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY and VAPID_SUBJECT are deprecated. They apply only
@@ -123,7 +123,7 @@ export interface PushSettingsChange {
  * Writes the settings in the change. A setting that the change does not name keeps its value. When the row
  * has no key pair, the write copies the pair of the deprecated secrets, or makes a new pair if push goes on.
  * `adopted` tells which of the two occurred. If two admins write at the same time, the first pair stays.
- * Migration 0038 makes the one row, and a directory reset makes it again, so each write is an update.
+ * Migration 0039 makes the one row, and a directory reset makes it again, so each write is an update.
  */
 export async function updatePushSettings(
 	env: Env,

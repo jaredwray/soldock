@@ -2,6 +2,7 @@
 // MCP Events. The composition root and the tests use these maps.
 import { AGENT_ACCESS_LIMITS, type OutputOf } from "@asterra/contracts";
 import { aiHandlers } from "./ai/index.ts";
+import { calendarHandlers } from "./calendar/index.ts";
 import {
 	chatHandlers,
 	chatWatchers,
@@ -33,6 +34,7 @@ export const handlers: HandlerMap<CallContext> = {
 	...chatHandlers,
 	...endpointHandlers,
 	...aiHandlers,
+	...calendarHandlers,
 	async "chat.invoke_slash_command"(call, input) {
 		return await invokeSlashCommand(call, handlers, {
 			room_id: input.room_id,

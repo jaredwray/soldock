@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
 	ADMIN_SECTIONS,
 	adminPath,
+	calendarPath,
 	chatActivityPath,
 	chatDraftsPath,
 	chatPath,
@@ -308,6 +309,24 @@ describe("routes", () => {
 			"/people/rm_01JD0000000000000000000000",
 			`/people/${principalId}/x`,
 			`/chat/people/${principalId}`,
+		]) {
+			expect(parseRoute(path), path).toEqual({ page: "not-found" });
+		}
+	});
+
+	// Each period of Calendar has its own path, so a reload or a shared link opens the same week or month.
+	it("parses the path of each Calendar view back to its view and day, and a day that is not real to not-found", () => {
+		expect(parseRoute("/calendar")).toEqual({ page: "calendar", view: "week", date: null });
+		for (const view of ["week", "month"] as const) {
+			expect(parseRoute(calendarPath(view, "2026-12-01"))).toEqual({ page: "calendar", view, date: "2026-12-01" });
+		}
+		for (const path of [
+			"/calendar/day/2026-12-01",
+			"/calendar/week",
+			"/calendar/week/2026-02-30",
+			"/calendar/week/2026-12-1",
+			"/calendar/week/1969-12-31",
+			"/calendar/week/2026-12-01/x",
 		]) {
 			expect(parseRoute(path), path).toEqual({ page: "not-found" });
 		}

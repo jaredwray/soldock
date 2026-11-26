@@ -206,7 +206,7 @@ Browser notifications for Chat are off until an owner or an admin turns them on 
 Older deployments set the Worker secrets `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY` and `VAPID_SUBJECT`.
 These secrets are deprecated.
 
-On upgrade, migration `0038_chat_push_settings.sql` adds the table `chat_push_settings` with no key pair.
+On upgrade, migration `0039_chat_push_settings.sql` adds the table `chat_push_settings` with no key pair.
 The deploy applies it. While the table has no key pair and all three secrets are set, the secrets stay in use.
 
 1. Open **Admin › Chat**. The card tells you that the Worker secrets supply the key pair.
@@ -851,6 +851,27 @@ and agents use the own mailbox, in the settings of the mailbox in Mail (`mail.se
 - That Worker does not drop the table in [Start fresh from setup](#start-fresh-from-setup). Delete the rows
   of `mailbox_delegates` before you start fresh with it, or the reset fails.
 - [Agents](agents.md#the-mailbox-of-a-person) has the rules for an agent.
+
+### Calendar scopes
+
+Calendar adds the scopes `calendar.read` and `calendar.write`. They apply only to the own calendar of the
+caller. The calendar of each principal is a new Durable Object class, `CalendarDO` (migration tag `v6` in
+`wrangler.jsonc`).
+
+- Nothing writes the account scopes of an agent or a service account after its creation. So migration
+  `0038_calendar_scopes.sql` gives each account from before the upgrade `calendar.read` when it holds
+  `mail.read`, and `calendar.write` when it holds `mail.modify`. An account with narrower scopes stays
+  narrow. A second run of the migration changes nothing.
+- The old Worker keeps working between the migration and the deploy. It drops the scopes that it does not
+  know.
+- A browser session has both scopes. An API key of a person from before the upgrade does not have them:
+  create a new key with the scopes.
+- A key that creates agents or service accounts, or their keys and tokens, must hold each account scope of
+  the account. After the upgrade, the accounts hold the calendar scopes, so an old key gets `forbidden`.
+  Create the key again with the calendar scopes. A browser session already has them.
+- A rollback to a Worker from before this change works. That Worker has no calendar routes, and the
+  events stay in the objects for the next upgrade.
+- [Agents](agents.md#calendar) has the rules for an agent.
 
 ### Recover a sign-in
 

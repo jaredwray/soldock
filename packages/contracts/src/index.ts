@@ -22,6 +22,27 @@ export {
 	usdToMicro,
 } from "./ai.ts";
 export {
+	addDays,
+	CALENDAR_LIMITS,
+	CalendarEvent,
+	canonicalTimeZone,
+	checkWhen,
+	DAY_MS,
+	dateToUtcMs,
+	daysBetween,
+	EventId,
+	EventWhen,
+	EventWhenInput,
+	type EventWhenValue,
+	isInstant,
+	isRealDate,
+	isTimeZone,
+	zonedDate,
+	zonedDayStart,
+	zonedTime,
+	zoneOffsetMs,
+} from "./calendar.ts";
+export {
 	CardsInput,
 	CHAT_LIMITS,
 	CHAT_SOCKET_CLOSE,

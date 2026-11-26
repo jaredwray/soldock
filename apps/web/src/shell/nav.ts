@@ -33,7 +33,7 @@ export function sidebarId(route: Route): string | null {
 }
 
 /** The products of Asterra. A doc and a sheet are part of Drive. */
-export type Product = "mail" | "drive" | "chat";
+export type Product = "mail" | "drive" | "chat" | "calendar";
 
 /** The product of a page, or null for a page that is not part of a product, for example Settings. */
 export function productOf(route: Route): Product | null {
@@ -48,6 +48,8 @@ export function productOf(route: Route): Product | null {
 			return "drive";
 		case "chat":
 			return "chat";
+		case "calendar":
+			return "calendar";
 		default:
 			return null;
 	}

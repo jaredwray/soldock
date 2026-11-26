@@ -4,7 +4,7 @@ import { useSession } from "../features/auth/session.tsx";
 import { Icon, type IconName } from "../lib/icons.tsx";
 import { Link } from "../lib/router.tsx";
 import { ASTERRA_VERSION } from "../lib/version.ts";
-import { CHAT_PATH, DRIVE_PATH, INBOX_PATH, type Route } from "../routes.ts";
+import { CALENDAR_PATH, CHAT_PATH, DRIVE_PATH, INBOX_PATH, type Route } from "../routes.ts";
 import { AccountMenu } from "./AccountMenu.tsx";
 import { BrandMark } from "./BrandMark.tsx";
 import { MENU_BUTTON_ID, type Product, productOf, RAIL_ID } from "./nav.ts";
@@ -13,6 +13,7 @@ import { MENU_BUTTON_ID, type Product, productOf, RAIL_ID } from "./nav.ts";
 const PRODUCTS: readonly { product: Product; name: string; icon: IconName; home: string }[] = [
 	{ product: "mail", name: "Mail", icon: "mail", home: INBOX_PATH },
 	{ product: "chat", name: "Chat", icon: "chat", home: CHAT_PATH },
+	{ product: "calendar", name: "Calendar", icon: "calendar", home: CALENDAR_PATH },
 	{ product: "drive", name: "Drive", icon: "drive", home: DRIVE_PATH },
 ];
 
