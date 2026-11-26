@@ -1087,7 +1087,8 @@ describe("calendar events", () => {
 
 	// A calendar event tells about an event that the credential reads, so the catalog needs both scopes.
 	it("lists the calendar events only for a credential with calendar.webhooks and calendar.read", async () => {
-		const names = (key: string) => mcp(key, "events/list").then((answer) => eventsOf(answer).map((e) => String(e.name)));
+		const names = (key: string) =>
+			mcp(key, "events/list").then((answer) => eventsOf(answer).map((e) => String(e.name)));
 		expect(await names(bot.key)).toEqual(expect.arrayContaining(["calendar.rsvp.changed"]));
 		await setLegacyScopes(bot.id, ["calendar.webhooks", "calendar.write"]);
 		expect((await names(bot.key)).filter((name) => name.startsWith("calendar."))).toEqual([]);
