@@ -91,6 +91,10 @@ export async function addMailboxAlias(
 		throw conflict ?? error;
 	}
 	if (changes === 1) return "added";
+	// The guards of the insert stopped it. A parallel call can have added this alias as the last one that the
+	// mailbox can have, so read the holder again before the limit.
+	const after = await held();
+	if (after) return after;
 	const aliases = await listMailboxAliases(db, mailboxId);
 	return aliases.length >= MAILBOX_ALIAS_LIMITS.aliases ? "full" : "gone";
 }

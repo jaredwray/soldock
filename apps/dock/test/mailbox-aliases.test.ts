@@ -278,6 +278,14 @@ describe("mailbox aliases in the directory", () => {
 			const other = `other-${address}`;
 			expect(await addMailboxAlias(raced(bot.id, other), mailboxId, other, owner.id)).toBe("taken");
 		}
+
+		// When the winner adds the last alias that the mailbox can have, the insert of the loser changes no row
+		// and fails on nothing. The loser must still give the result of a later call, and not "full".
+		for (let i = (await aliasesOf(ada.id)).length; i < MAILBOX_ALIAS_LIMITS.aliases - 1; i++) {
+			await owner.call("directory.add_mailbox_alias", { mailbox_id: ada.id, address: `fill-${i}@dock.test` });
+		}
+		expect(await addMailboxAlias(raced(ada.id, "last@dock.test"), ada.id, "last@dock.test", owner.id)).toBe("exists");
+		expect(await aliasesOf(ada.id)).toHaveLength(MAILBOX_ALIAS_LIMITS.aliases);
 	});
 
 	it("checks the address, the limit and a second call", async () => {
