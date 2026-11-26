@@ -617,10 +617,16 @@ export const findTimes = defineOperation({
 		})
 		.refine((input) => Date.parse(input.time_max) > Date.parse(input.time_min), "time_max must be after time_min")
 		.refine(
-			// One more hour: the days of a time zone can include the day of 25 hours, when the clock goes back.
-			(input) =>
-				Date.parse(input.time_max) - Date.parse(input.time_min) <=
-				CALENDAR_LIMITS.findRangeDays * DAY_MS + 60 * 60 * 1000,
+			// The length on the wall clock of time_zone: 31 days of a zone can hold a day of 25 hours, when the clock
+			// goes back. A zone that is not valid fails on its own field.
+			(input) => {
+				const min = Date.parse(input.time_min);
+				const max = Date.parse(input.time_max);
+				const wall = isTimeZone(input.time_zone)
+					? max + zoneOffsetMs(max, input.time_zone) - (min + zoneOffsetMs(min, input.time_zone))
+					: max - min;
+				return wall <= CALENDAR_LIMITS.findRangeDays * DAY_MS;
+			},
 			`The range can be at most ${CALENDAR_LIMITS.findRangeDays} days long`,
 		)
 		.refine((input) => (input.day_start ?? "09:00") < (input.day_end ?? "17:00"), "day_end must be after day_start"),

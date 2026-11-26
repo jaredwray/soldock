@@ -125,6 +125,9 @@ describe("the time of an event", () => {
 		// From 00:00 on October 15 to 00:00 on November 15 in New York. The clock goes back on November 3.
 		expect(parse({})).toBe(true);
 		expect(parse({ time_max: "2030-11-16T05:00:00Z" })).toBe(false);
+		// The hour of the change of the clock is not free time: 31 days and one hour in UTC is too long.
+		expect(parse({ time_zone: "UTC", time_min: "2030-03-01T00:00:00Z", time_max: "2030-04-01T00:00:00Z" })).toBe(true);
+		expect(parse({ time_zone: "UTC", time_min: "2030-03-01T00:00:00Z", time_max: "2030-04-01T01:00:00Z" })).toBe(false);
 		const ids = Array.from({ length: 21 }, (_, at) => `prn_01JD00000000000000000000${String(at).padStart(2, "0")}`);
 		expect(parse({ attendee_ids: ids.slice(0, 20).join(", ") })).toBe(true);
 		expect(parse({ attendee_ids: ids.join(", ") })).toBe(false);
