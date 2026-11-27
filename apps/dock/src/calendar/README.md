@@ -279,7 +279,7 @@ the delivery.
 | `calendar_id` | The owner of the calendar |
 | `event_id` | The event or series. The copy of an attendee has the same id as the event of the organizer |
 | `occurrence_id` | For a change of one occurrence of a series: its id, as `calendar.list_events` gives it (`<event id>_<key>`, where the key is the original start of the occurrence). It stays the same when the occurrence moves. Null for a change of the entire event or series |
-| `revision` | The revision of the event after the change. The revisions of the records of one event are not contiguous ([below](#revision-and-order)), so a client deduplicates by `id`, not by `revision` |
+| `revision` | The revision of the event after the change. For `calendar.event.deleted` and `calendar.invitation.cancelled`, it is the last revision before the delete. The revisions of the records of one event are not contiguous ([below](#revision-and-order)), so a client deduplicates by `id`, not by `revision` |
 | `actor_id` | The principal that caused the change, or null when two attendees changed their responses in one state. A response that went back to `needs_action` because of the organizer (a new time, a moved occurrence, or a new invitation) has the organizer |
 | `at` | The time of the commit |
 | `cursor` | The position after the change |
@@ -382,8 +382,10 @@ gives `not_found`.
 - `data` of each POST: `calendar_id`, `event_id`, `change_id`, `occurrence_id`, `revision`, `actor_id`
   and `cursor`. The top-level `cursor` of MCP Events stays null: the replay is `calendar.list_changes` from the
   `cursor` of `data`.
-- A subscription starts from now. A change from before the subscription sends nothing. An agent gets its own
-  changes too: skip a change with your own `actor_id` to prevent a loop.
+- A subscription starts from now. A change from before the subscription sends nothing. The start is
+  approximate: the fan-out compares the time of the change, from the clock of the `CalendarDO`, with the time
+  of the subscription, from the clock of the Worker. A change near the start can be on the wrong side. An
+  agent gets its own changes too: skip a change with your own `actor_id` to prevent a loop.
 - Retries, the signature and the end of an endpoint are the rules of the webhook queue
   ([webhooks](../webhooks/README.md)). A retry has the same `webhook-id`.
 
@@ -399,8 +401,8 @@ gives `not_found`.
   subscription. A sponsor, an owner and an admin get nothing of the calendar of an agent.
 - The POST is a signed Standard Webhooks POST. Its body has `type`, `timestamp` and `data` with `webhook_id`,
   `calendar_id`, `event_id`, `change_id`, `occurrence_id`, `revision`, `actor_id` and `cursor`.
-- A subscription starts from now, as for MCP Events. The fan-out sends nothing to a subscription from after
-  the change.
+- A subscription starts from now, as for MCP Events, and the start is approximate for the same reason. The
+  fan-out sends nothing to a subscription from after the change.
 
 ### Access to the changes
 

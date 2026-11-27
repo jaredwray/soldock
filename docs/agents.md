@@ -763,7 +763,8 @@ principal. The sponsor of an agent, and an owner or an admin, do not read the ca
   1. Call `calendar_list_changes` with no cursor. Keep the cursor.
   2. Read your events with `calendar_list_events`.
   3. Call `calendar_list_changes` with your cursor. Read each event that changed with
-     `calendar_get_event`. Keep the new cursor.
+     `calendar_get_event`. For a change with `occurrence_id`, read the occurrence with
+     `calendar_list_events` over its range. Keep the new cursor.
   4. When `expired` is true, do step 2 again, and continue from the cursor of that result.
 
   A change can come two times. Skip a change with an `id` that you know. Do not use `revision` to find a
@@ -1141,6 +1142,8 @@ subscriptions. REST uses `/api/v1/calendar/webhook-subscriptions`.
 
 - Verify the signature as for [mail webhooks](#get-a-webhook-for-new-mail). A retry has the same `webhook-id`
   and the same `change_id`.
+- The POST has ids only. Read the event with `calendar_get_event`. For a change with `occurrence_id`, read
+  the occurrence with `calendar_list_events` over its range.
 - The POSTs of two changes can arrive in a different sequence. Use a POST as a hint, and call
   `calendar_list_changes` with your last cursor to get the changes in their sequence.
 - A change from before the subscription sends no POST. You get your own changes too: skip a change with your
@@ -1254,7 +1257,8 @@ For client developers:
   `data` of the last POST that you got.
 - A calendar POST has these fields in `data`: `calendar_id`, `event_id`, `change_id`,
   `occurrence_id` (null for a change of the entire event or series), `revision`, `actor_id` and `cursor`. It has no title, time or response.
-  Read the event with `calendar_get_event`. A retry has the same `change_id`. The POSTs of two changes can
+  Read the event with `calendar_get_event`. For a change with `occurrence_id`, read the occurrence with
+  `calendar_list_events` over its range. A retry has the same `change_id`. The POSTs of two changes can
   arrive in a different sequence, and `revision` is not contiguous: call `calendar_list_changes` with your
   last cursor to get the changes in their sequence. Skip a change with your own
   `actor_id` to prevent a loop. A calendar subscription needs `calendar.read` too. The access is checked
