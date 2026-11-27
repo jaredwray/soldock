@@ -6,6 +6,7 @@ import { Icon } from "../lib/icons.tsx";
 import { lazyPage } from "../lib/lazyPage.tsx";
 import { setPageTitle } from "../lib/pageTitle.ts";
 import { Link, navigate, useLocation } from "../lib/router.tsx";
+import { useCalendarReminders } from "../lib/useCalendarReminders.ts";
 import { useChatNotifications } from "../lib/useChatNotifications.ts";
 import { useOnChange } from "../lib/useOnChange.ts";
 import { usePrincipalActivity } from "../lib/usePrincipalActivity.ts";
@@ -44,6 +45,7 @@ export function Shell() {
 	// sign in again after the session ends. The Security section of Settings shows the same notice in the Password card.
 	const { whoami } = useSession();
 	useChatNotifications(whoami.principal.id);
+	useCalendarReminders();
 	usePrincipalActivity();
 	const needsPassword =
 		whoami.sign_in?.password_set === false && !(route.page === "settings" && route.section === "security");
