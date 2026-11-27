@@ -318,8 +318,30 @@ describe("a series in the calendar of a different person", () => {
 			["Standup", false],
 		]);
 		expect(JSON.stringify(events)).not.toContain("Therapy");
+		// The series of the owner is private: the delegate reads its time only.
+		const [therapy, standup, , nextStandup] = events;
+		const { event: hidden } = await bot.call("calendar.get_event", {
+			event_id: therapy?.id ?? "",
+			calendar_id: ada.id,
+		});
+		expect([hidden.title, hidden.redacted]).toEqual(["", true]);
+		// The delegate changes one occurrence of its own series, and none of the owner.
+		expect(
+			await codeOf(
+				bot.call("calendar.update_occurrence", {
+					occurrence_id: therapy?.occurrence_id ?? "",
+					calendar_id: ada.id,
+					title: "x",
+				}),
+			),
+		).toBe("forbidden");
+		const { event: changed } = await bot.call("calendar.update_occurrence", {
+			occurrence_id: nextStandup?.occurrence_id ?? "",
+			calendar_id: ada.id,
+			title: "Standup, long",
+		});
+		expect(changed.title).toBe("Standup, long");
 		// The delegate cancels one occurrence of its own series, and none of the owner.
-		const [therapy, standup] = events;
 		await bot.call("calendar.cancel_occurrence", { occurrence_id: standup?.occurrence_id ?? "", calendar_id: ada.id });
 		expect(
 			await codeOf(
@@ -330,6 +352,7 @@ describe("a series in the calendar of a different person", () => {
 		await publishCalendarChanges(ada.id, bot.id);
 		const { changes } = await ada.call("calendar.list_changes", { cursor: adaHead });
 		expect(changes.filter((change) => change.event_id === series.id).map((change) => change.actor_id)).toEqual([
+			bot.id,
 			bot.id,
 			bot.id,
 		]);

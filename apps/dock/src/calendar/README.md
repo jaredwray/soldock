@@ -195,7 +195,8 @@ Public surface: `index.ts` only. Other domains must not import files from this f
 - The grants live in the `grants` table of the `CalendarDO` of the owner. `enterShared()` reads the
   grant on each call, so a removed grant refuses the next call at once. `enter()` stays for the owner
   only: the responses, the reminders, the change feed and the grants never pass a grant. A calendar has
-  at most 200 grants.
+  at most 200 grants. Known limit: the grant of a deleted principal counts for this limit, but
+  `calendar.list_grants` does not show it.
 - `calendar.set_grant` needs `calendar.share`. The credential must also hold `calendar.read` to give
   `free_busy`, and `calendar.read` and `calendar.write` to give `schedule`. `calendar.share` is in
   `OWN_KEY_SCOPES`, as `mail.share` is: only the person makes a key that gives grants.
@@ -231,8 +232,8 @@ the check of the revision.
   count of events. A private event and an invitation are busy time too. See [Free/busy](#freebusy) for
   each rule of busy time.
 - A calendar is `known` to the viewer when the viewer is its owner, or holds a grant of its owner
-  (either access). An archived principal, a calendar with more than 2000 events in the range, and a
-  calendar that does not answer are `unknown`. An unknown principal id gives `not_found`. The object
+  (either access). An archived principal, a calendar with more than 2000 events or occurrences in the
+  range, and a calendar that does not answer are `unknown`. An unknown principal id gives `not_found`. The object
   makes the same check for a range that can hold no event, so such a range shows no calendar as known.
 - **Unknown is never free.** `complete` is false when an entry is `unknown`, and `suggestions` is then
   empty. With `ignore_unknown` `"true"`, the suggestions use only the known calendars. The web app
@@ -254,8 +255,9 @@ the check of the revision.
   calendar of a different person also has `calendar`: the id of the owner. `actor` is the delegate. A
   line of the own calendar has no `calendar` field. A refused change of a delegate also names
   `calendar` (`deniedCalendar` of the invoker).
-- The event keeps `created_by`, so the owner sees which delegate added it. The change feed of the owner
-  records the delegate as `actor_id`.
+- The event keeps `created_by`, so the owner sees which delegate added it. The event dialog of the web
+  app shows it as **Added by** with the name of the delegate. The change feed of the owner records the
+  delegate as `actor_id`.
 
 ## Invitations
 
@@ -315,8 +317,8 @@ can come later without a change of the data:
   details, with `availability` `known` or `unknown`.
 - **A grant decides.** A caller sees the busy times of its own calendar, and of each person who gave it
   `free_busy` or `schedule` access. Each other calendar is `unknown`, with no busy times. Never treat
-  unknown as free. An archived principal, a calendar with more than 2000 single events in the range, and
-  a calendar that does not answer are `unknown` too. A principal id that the directory does not have gives
+  unknown as free. An archived principal, a calendar with more than 2000 events or occurrences in the
+  range, and a calendar that does not answer are `unknown` too. A principal id that the directory does not have gives
   `not_found`.
 - A busy time is an event or an occurrence. A cancelled occurrence is not busy. A moved occurrence is
   busy at its new time. An event or an occurrence that the principal declined is not busy. An all-day

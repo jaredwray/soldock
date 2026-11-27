@@ -1161,7 +1161,7 @@ export class CalendarDO extends DurableObject<Env> {
 	/**
 	 * The busy times of a range, merged, for a viewer: events and occurrences, without cancelled occurrences and
 	 * without the events and occurrences that the owner declined. The viewer is the owner, or a principal with a
-	 * grant of the owner (either access). Each other viewer, and a range with too many events, gives unknown. The
+	 * grant of the owner (either access). Each other viewer, and a range with too many events or occurrences, gives unknown. The
 	 * result has no id, no title and no count of events. A private event and an invitation are busy time too. An
 	 * all-day event is busy from 00:00 to 00:00 of its days in the zone of the query. A null query only checks the
 	 * access. This method does not keep the owner: only the handler of free/busy calls it.
@@ -1188,8 +1188,11 @@ export class CalendarDO extends DurableObject<Env> {
 			)
 			.toArray();
 		if (single.length > BUSY_ROWS) return { unknown: true };
+		// The limit counts the occurrences of each series too, not only the single events.
+		const views = [...single.map((row) => this.masterView(toRecord(row))), ...this.seriesInRange(query)];
+		if (views.length > BUSY_ROWS) return { unknown: true };
 		const intervals: [number, number][] = [];
-		for (const view of [...single.map((row) => this.masterView(toRecord(row))), ...this.seriesInRange(query)]) {
+		for (const view of views) {
 			if (view.my_response === "declined") continue;
 			const [start, end] =
 				view.all_day && view.start_date !== null && view.end_date !== null

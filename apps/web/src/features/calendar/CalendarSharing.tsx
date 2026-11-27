@@ -78,7 +78,8 @@ export function CalendarSharing({ onClose }: { onClose: () => void }) {
 					A person or an agent that schedules for you adds events to your calendar and invites people from it. You are
 					the organizer. It sees the time of each event, and the title of an event that is not private. It also sees the
 					busy times that other people share with you. It sees no description, location or attendees of an event that it
-					did not add.
+					did not add. A person or an agent that schedules for a person in this list also sees the busy times that you
+					share with that person.
 				</p>
 				{grants === null ? (
 					error ? (

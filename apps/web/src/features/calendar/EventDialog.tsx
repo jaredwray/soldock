@@ -111,6 +111,9 @@ export function EventDialog({ event, initial, zone, onChanged, onClose }: EventD
 		principals?.find((principal) => principal.id === id)?.display_name ??
 		id;
 
+	// The All day box is locked for an occurrence, so an all-day occurrence cannot take a timed slot.
+	const allDayLocked = occurrence !== null && form.allDay;
+
 	const set = <K extends keyof EventForm>(key: K, value: EventForm[K]) =>
 		setForm((current) => ({ ...current, [key]: value }));
 
@@ -545,12 +548,20 @@ export function EventDialog({ event, initial, zone, onChanged, onClose }: EventD
 						disabled={busy || principals === null}
 					/>
 				</div>
-				<div className="cal-find-toggle">
-					<button type="button" className="button" aria-expanded={finding} onClick={() => setFinding((open) => !open)}>
-						Find a time
-					</button>
-				</div>
-				{finding && (
+				{/* A suggestion is a timed slot. An occurrence of an all-day series cannot become timed. */}
+				{!allDayLocked && (
+					<div className="cal-find-toggle">
+						<button
+							type="button"
+							className="button"
+							aria-expanded={finding}
+							onClick={() => setFinding((open) => !open)}
+						>
+							Find a time
+						</button>
+					</div>
+				)}
+				{finding && !allDayLocked && (
 					<FindTime
 						attendees={attendees}
 						principals={principals ?? []}
@@ -595,10 +606,12 @@ export function EventDialog({ event, initial, zone, onChanged, onClose }: EventD
 						id={ids.private}
 						type="checkbox"
 						checked={form.visibility === "private"}
+						disabled={busy}
 						onChange={(change) => set("visibility", change.target.checked ? "private" : "default")}
 					/>
 					Private: a person or an agent that schedules for you sees only the time
 				</label>
+				{event?.created_by && <p className="field-hint">Added by {nameOf(event.created_by)}</p>}
 				{error && (
 					<p className="form-error" role="alert">
 						{error}

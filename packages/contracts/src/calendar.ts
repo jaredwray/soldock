@@ -919,6 +919,7 @@ const GRANT_RULES = [
 	"schedule also lets it add events to your calendar, invite attendees from your calendar, and change and delete the events that it added. You are the organizer of these events.",
 	"A principal with schedule access sees the time of each event of your calendar, and the title of an event that is not private. It sees no description, location or attendees of an event that it did not add.",
 	"It also sees the busy times that other people share with you, when it calls calendar.find_times with your calendar_id.",
+	"In the same way, a person or an agent that schedules for the principal also sees the busy times that you share with the principal.",
 ].join(" ");
 
 const Grants = z.object({ grants: z.array(CalendarGrant) });
