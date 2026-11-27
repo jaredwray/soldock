@@ -234,6 +234,7 @@ export function CalendarApp({ view, date, calendarId }: CalendarAppProps) {
 						zone={zone}
 						today={today}
 						month={month}
+						calendarId={calendarId}
 						onOpen={openEvent}
 						onCreate={createAt}
 					/>
