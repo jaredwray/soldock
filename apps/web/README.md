@@ -504,10 +504,11 @@ MCP clients. The app has no UI-only path.
     signature again when the window gets the focus. While the field has text that is not saved, the
     browser asks before it closes or reloads the tab. A link in the app does not ask.
 - **Shared mailboxes.** The UI name of a team mailbox, on the Admin page.
-  - The card of a shared mailbox has **Aliases** (`MailboxAliases.tsx`) under the name: a list of the
-    extra addresses of the mailbox, a **Remove** button for each one (with a confirmation), and a form to
-    add one (`directory.list_mailbox_aliases`, `directory.add_mailbox_alias`,
-    `directory.remove_mailbox_alias`). As in the New member form, the admin types the part before `@` and
+  - The card of a shared mailbox has **Aliases** (`MailboxAliases.tsx`) under the name. A box shows the
+    extra addresses of the mailbox. Each address has a **Remove** button (with a confirmation). A form to
+    add an address is in the same box, under a line (`panel-form-divided`, as in the member editor). The
+    part uses `directory.list_mailbox_aliases`, `directory.add_mailbox_alias` and
+    `directory.remove_mailbox_alias`. As in the New member form, the admin types the part before `@` and
     selects a saved domain from a list (`directory.list_mail_domains`). The list selects the domain of the
     primary address of the mailbox first (`defaultMailDomain`). With no saved domain, the form is disabled,
     and a hint tells the admin to add a domain in Admin › Email domains. The form checks the address with

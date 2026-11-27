@@ -126,45 +126,46 @@ export function MailboxAliases({ mailboxId, mailboxName }: MailboxAliasesProps) 
 				</div>
 			)}
 			{aliases !== null && (
-				<>
-					<div className="panel-card panel-card-list">
-						{aliases.length === 0 ? (
-							<p className="panel-empty">This mailbox has no aliases.</p>
-						) : (
-							<div className="table-scroll">
-								<table className="table table-rows">
-									<caption className="visually-hidden">Aliases of {mailboxName}</caption>
-									<thead>
-										<tr>
-											<th scope="col">Address</th>
-											<th scope="col" className="cell-actions">
-												<span className="visually-hidden">Actions</span>
-											</th>
+				// The form is in the box of the list, under a line, as in the member editor of a mailbox. In a card of
+				// Admin and on the page of a member, the box has little padding, and the divided form keeps a space
+				// below its button.
+				<div className="panel-card panel-card-list">
+					{aliases.length === 0 ? (
+						<p className="panel-empty">This mailbox has no aliases.</p>
+					) : (
+						<div className="table-scroll">
+							<table className="table table-rows">
+								<caption className="visually-hidden">Aliases of {mailboxName}</caption>
+								<thead>
+									<tr>
+										<th scope="col">Address</th>
+										<th scope="col" className="cell-actions">
+											<span className="visually-hidden">Actions</span>
+										</th>
+									</tr>
+								</thead>
+								<tbody>
+									{aliases.map((alias) => (
+										<tr key={alias.address}>
+											<td className="cell-address row-title">{alias.address}</td>
+											<td className="cell-actions">
+												<button
+													type="button"
+													className="button button-small"
+													aria-label={`Remove ${alias.address}`}
+													onClick={() => setRemove(alias.address)}
+													disabled={busy}
+												>
+													Remove
+												</button>
+											</td>
 										</tr>
-									</thead>
-									<tbody>
-										{aliases.map((alias) => (
-											<tr key={alias.address}>
-												<td className="cell-address row-title">{alias.address}</td>
-												<td className="cell-actions">
-													<button
-														type="button"
-														className="button button-small"
-														aria-label={`Remove ${alias.address}`}
-														onClick={() => setRemove(alias.address)}
-														disabled={busy}
-													>
-														Remove
-													</button>
-												</td>
-											</tr>
-										))}
-									</tbody>
-								</table>
-							</div>
-						)}
-					</div>
-					<form className="panel-card panel-form" onSubmit={add} noValidate>
+									))}
+								</tbody>
+							</table>
+						</div>
+					)}
+					<form className="panel-form panel-form-divided" onSubmit={add} noValidate>
 						<div className="field">
 							<label htmlFor={ids.input} className="field-label">
 								New alias
@@ -228,7 +229,7 @@ export function MailboxAliases({ mailboxId, mailboxName }: MailboxAliasesProps) 
 							{busy ? "Please wait…" : "Add alias"}
 						</button>
 					</form>
-				</>
+				</div>
 			)}
 			{remove && (
 				<ConfirmDialog
