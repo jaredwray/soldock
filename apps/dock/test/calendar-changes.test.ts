@@ -69,11 +69,17 @@ const typesOf = (changes: CalendarChange[]) => changes.map((change) => change.ty
 
 /**
  * Replaces the webhook queue and the principal binding of one calendar object. `failHint` makes the hint to the
- * events sockets fail, and `failSend` the queue send, as a stop of the Worker or a failed call does.
+ * events sockets fail, and `failSend` the queue send, as a stop of the Worker or a failed call does. `batches`
+ * has, for each batch of the queue, its size and the rows of the outbox that waited when the calendar sent it.
  */
 async function wireCalendar(principalId: string) {
-	const wired = { jobs: [] as Record<string, unknown>[], failHint: false, failSend: false };
-	await runInDurableObject(calendarStub(principalId), (instance) => {
+	const wired = {
+		jobs: [] as Record<string, unknown>[],
+		batches: [] as { size: number; outbox: number }[],
+		failHint: false,
+		failSend: false,
+	};
+	await runInDurableObject(calendarStub(principalId), (instance, state) => {
 		const target = instance as unknown as { env: Env };
 		const real = target.env.PRINCIPAL;
 		const principal = {
@@ -84,9 +90,11 @@ async function wireCalendar(principalId: string) {
 			}),
 		} as unknown as Env["PRINCIPAL"];
 		const queue = {
-			send: async (body: Record<string, unknown>) => {
+			sendBatch: async (messages: { body: Record<string, unknown> }[]) => {
 				if (wired.failSend) throw new Error("the queue is unavailable");
-				wired.jobs.push(body);
+				const outbox = state.storage.sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM outbox").one().n;
+				wired.batches.push({ size: messages.length, outbox });
+				wired.jobs.push(...messages.map((message) => message.body));
 			},
 		} as unknown as Queue;
 		target.env = { ...target.env, PRINCIPAL: principal, WEBHOOKS: queue };
@@ -420,23 +428,16 @@ describe("the publish of the change feed", () => {
 			await runInDurableObject(calendarStub(ada.id), (_instance, state) => state.storage.getAlarm()),
 		).not.toBeNull();
 
-		// A queue send that fails after the first change keeps the second one for the next round.
-		let sends = 0;
+		// A queue send that fails keeps each change of its batch for the next round.
+		restarted.failSend = true;
+		await runInDurableObject(calendarStub(ada.id), async (_instance, state) => {
+			state.storage.sql.exec("DELETE FROM meta WHERE key = 'publish_at'");
+			await state.storage.setAlarm(Date.now());
+		});
+		await vi.waitFor(async () => expect(await calendarMeta(ada.id, "publish_attempts")).toBe("2"));
+		expect(await calendarMeta(ada.id, "change_published")).toBeNull();
 		restarted.failSend = false;
 		const queue = restarted.jobs;
-		await runInDurableObject(calendarStub(ada.id), (instance) => {
-			const target = instance as unknown as { env: Env };
-			target.env = {
-				...target.env,
-				WEBHOOKS: {
-					send: async (body: Record<string, unknown>) => {
-						sends += 1;
-						if (sends === 2) throw new Error("the queue is unavailable");
-						queue.push(body);
-					},
-				} as unknown as Queue,
-			};
-		});
 		await publishCalendarChanges(ada.id);
 		const changes = await changesAfter(ada, start);
 		expect(queue.map((job) => job.eventId)).toEqual(changes.map((change) => change.id));
@@ -453,6 +454,45 @@ describe("the publish of the change feed", () => {
 			actorId: ada.id,
 			cursor: changes[0]?.cursor,
 		});
+	});
+
+	// A calendar with many changes to publish must not make an attendee wait for an invitation, or a reminder
+	// wait for its time: one alarm publishes one batch, then delivers the outbox, and the next alarm continues.
+	it("publishes one batch for each alarm, and delivers the outbox between two batches", async () => {
+		await calendarStub(ada.id).enableChangeEvents(ada.id);
+		const wired = await wireCalendar(ada.id);
+		await runInDurableObject(calendarStub(ada.id), (_instance, state) => {
+			const sql = state.storage.sql;
+			for (let i = 0; i < 60; i++) {
+				sql.exec(
+					"INSERT INTO changes (id, type, event_id, revision, at) VALUES (?, 'calendar.event.updated', 'evt_many', 1, ?)",
+					`chg_many_${i}`,
+					Date.now(),
+				);
+			}
+			const last = String(sql.exec<{ seq: number }>("SELECT MAX(seq) AS seq FROM changes").one().seq);
+			sql.exec("INSERT OR REPLACE INTO meta (key, value) VALUES ('change_head', ?)", last);
+		});
+		// The create adds one change and one row of the outbox, and sets the alarm.
+		await ada.call("calendar.create_event", meeting([grace.id]));
+		await publishCalendarChanges(ada.id);
+		expect(wired.batches).toEqual([
+			{ size: 50, outbox: 1 },
+			{ size: 11, outbox: 0 },
+		]);
+	});
+
+	// The hint fails while the principal object is not available. The feed tries again later, but the meeting
+	// must reach the attendee in that time: the outbox does not depend on the publish.
+	it("delivers the outbox when the publish fails", async () => {
+		const start = await head(grace);
+		const wired = await wireCalendar(ada.id);
+		wired.failHint = true;
+		await ada.call("calendar.create_event", meeting([grace.id]));
+		await settleCalendars(ada.id, grace.id);
+		expect(typesOf(await changesAfter(grace, start))).toEqual(["calendar.invitation.received"]);
+		expect(await calendarMeta(ada.id, "publish_attempts")).not.toBeNull();
+		expect(await calendarMeta(ada.id, "change_published")).toBeNull();
 	});
 
 	// Without a subscription the feed sends no queue job: a calendar that nobody watches costs no queue message.
@@ -482,7 +522,8 @@ describe("the hint of the events socket", () => {
 		await publishCalendarChanges(ada.id);
 		expect(await first.next()).toEqual({ type: "calendar.changed", calendar_id: ada.id });
 		expect(await second.next()).toEqual({ type: "calendar.changed", calendar_id: ada.id });
-		// The publish ended before the ping, so a calendar event for this socket would come before the pong.
+		// The object sends one event to each socket in one step. The two calendar sockets got it, so a calendar
+		// event for this socket would come before the pong.
 		chatOnly.socket.send("ping");
 		expect(await chatOnly.next()).toBe("pong");
 	});

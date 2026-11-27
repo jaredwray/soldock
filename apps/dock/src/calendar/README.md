@@ -344,12 +344,16 @@ gives `not_found`.
 
 ### Publish
 
-- The alarm fires the due reminders, then publishes the rows in order (`publishChanges`), then delivers the
-  outbox. One publish runs at a time. For each batch of 50 rows it
-  sends the hint to the `PrincipalDO` of the owner, then, when `webhook_events` is set, one queue job for each
-  row on `soldock-webhooks`.
-- `change_published` moves only after the sends of a row succeed. A stop of the Worker after a send and
-  before the move sends the row again, with the same id: delivery is at least once.
+- The alarm fires the due reminders, then publishes the oldest rows in order (`publishChanges`), then
+  delivers the outbox. Alarms do not overlap, so one publish runs at a time.
+- One alarm publishes at most 50 rows. When more rows wait, the alarm sets itself again for now. So a long
+  feed does not hold back a reminder or the outbox.
+- For its rows, the publish sends the hint to the `PrincipalDO` of the owner. Then, when `webhook_events` is
+  set, it sends one queue job for each row on `soldock-webhooks`, as one batch (`sendBatch`).
+- The hint does not wait for the events sockets: the `PrincipalDO` sends the event after the call returns.
+- `change_published` moves only after the sends of the batch succeed. A failed send, or a stop of the Worker
+  after a send and before the move, sends each row of the batch again, with the same id: delivery is at least
+  once.
 - A failure tries again after 1 minute, doubled for each failure, at most 1 hour, and never drops a change.
   The object sets an alarm at its start when a change waits.
 - `webhook_events` is set by `enableCalendarEvents`, before a webhook subscription or a subscription of MCP

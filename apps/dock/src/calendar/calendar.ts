@@ -210,7 +210,7 @@ const IDEMPOTENCY_TTL_MS = 24 * 60 * 60 * 1000;
 /** A fired reminder stays in `reminder_log` this long after the start of its occurrence. */
 const REMINDER_LOG_MS = 7 * 24 * 60 * 60 * 1000;
 const OUTBOX_BATCH = 50;
-/** The rows of the change feed that one round of `publishChanges` sends. */
+/** The most rows of the change feed that one alarm publishes. One batch of the queue has at most 100 messages. */
 const PUBLISH_BATCH = 50;
 /** The oldest rows that one read of the prune takes. The prune deletes only a prefix of the feed. */
 const PRUNE_BATCH = 500;
@@ -529,8 +529,6 @@ function compareViews(a: EventView, b: EventView): number {
 
 export class CalendarDO extends DurableObject<Env> {
 	private readonly sql: SqlStorage;
-	/** The publish of the change feed that runs now. One publish at a time, so the pointer never moves back. */
-	private publishTask: Promise<void> | null = null;
 
 	constructor(ctx: DurableObjectState, env: Env) {
 		super(ctx, env);
@@ -698,7 +696,7 @@ export class CalendarDO extends DurableObject<Env> {
 		});
 	}
 
-	/** The time of the next round of `publishChanges`, or null when each change is published. */
+	/** The time of the next publish (`publishChanges`), or null when each change is published. */
 	private publishDue(): number | null {
 		if (this.metaNumber("change_head") <= this.metaNumber("change_published")) return null;
 		return Math.max(this.metaNumber("publish_at"), Date.now());
@@ -722,41 +720,34 @@ export class CalendarDO extends DurableObject<Env> {
 		};
 	}
 
-	/** One publish at a time: a second call while one runs joins it. */
-	private publishChanges(): Promise<void> {
-		if (!this.publishTask) {
-			this.publishTask = this.publishNow().finally(() => {
-				this.publishTask = null;
-			});
-		}
-		return this.publishTask;
-	}
-
 	/**
-	 * Publishes the committed changes in order: a hint to the events sockets of the owner, then one queue job
-	 * for each change when a subscription of MCP Events or a webhook exists. `change_published` moves only after
-	 * the sends of a change succeed, so a stop of the Worker sends a change again, never loses one. A job sent
-	 * again has the same `eventId`, so the receiver gets the same `webhook-id`. A failure tries again later,
-	 * with `backoff`, and never drops a change. It never throws, so a failure does not stop a reminder.
+	 * Publishes the oldest committed changes, at most `PUBLISH_BATCH`: a hint to the events sockets of the
+	 * owner, then one batch of queue jobs, one job for each change, when a subscription of MCP Events or a webhook
+	 * exists. More changes wait for the next alarm, so a long feed does not hold back a reminder or the outbox.
+	 * `change_published` moves only after the sends of the batch succeed, so a stop of the Worker sends the batch
+	 * again, never loses a change. A job sent again has the same `eventId`, so the receiver gets the same
+	 * `webhook-id`. A failure tries again later, with `backoff`, and never drops a change. It never throws, so a
+	 * failure does not stop the outbox. Only the alarm calls it, and alarms do not overlap, so one publish runs
+	 * at a time.
 	 */
-	private async publishNow(): Promise<void> {
+	private async publishChanges(): Promise<void> {
 		const calendarId = this.meta("owner_id");
 		if (calendarId === null || this.publishDue() === null || this.metaNumber("publish_at") > Date.now()) return;
 		try {
-			for (;;) {
-				const rows = this.sql
-					.exec<Row>(
-						"SELECT seq, id, type, event_id, occurrence_id, revision, actor_id, at FROM changes WHERE seq > ? ORDER BY seq LIMIT ?",
-						this.metaNumber("change_published"),
-						PUBLISH_BATCH,
-					)
-					.toArray();
-				if (rows.length === 0) break;
+			const rows = this.sql
+				.exec<Row>(
+					"SELECT seq, id, type, event_id, occurrence_id, revision, actor_id, at FROM changes WHERE seq > ? ORDER BY seq LIMIT ?",
+					this.metaNumber("change_published"),
+					PUBLISH_BATCH,
+				)
+				.toArray();
+			const last = rows.at(-1);
+			if (last) {
 				await this.env.PRINCIPAL.get(this.env.PRINCIPAL.idFromName(calendarId)).calendarChanged(calendarId);
-				for (const row of rows) {
-					if (this.meta("webhook_events") === "1") {
+				if (this.meta("webhook_events") === "1") {
+					const jobs = rows.map((row): CalendarWebhookEventJob => {
 						const change = this.toChange(row, calendarId);
-						const job: CalendarWebhookEventJob = {
+						return {
 							v: 1,
 							kind: "calendar_event",
 							calendarId,
@@ -769,11 +760,10 @@ export class CalendarDO extends DurableObject<Env> {
 							actorId: change.actor_id,
 							cursor: change.cursor,
 						};
-						await this.env.WEBHOOKS.send(job);
-					}
-					this.setMeta("change_published", String(row.seq));
+					});
+					await this.env.WEBHOOKS.sendBatch(jobs.map((body) => ({ body })));
 				}
-				if (rows.length < PUBLISH_BATCH) break;
+				this.setMeta("change_published", String(last.seq));
 			}
 			if (this.meta("publish_attempts") !== null) {
 				this.sql.exec("DELETE FROM meta WHERE key IN ('publish_attempts', 'publish_at')");

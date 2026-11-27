@@ -1010,29 +1010,45 @@ export const calendarStub = (principalId: string) => env.CALENDAR.get(env.CALEND
 
 /**
  * Delivers the outbox of each calendar until each one is empty. A row that waits for its next attempt is made due
- * first. A delivery can queue messages in a different calendar of the list, so this runs in rounds. The runtime
- * also fires the alarm by itself, so this waits for a drain in flight.
+ * first. A delivery can queue messages in a different calendar of the list, so this runs in rounds.
+ *
+ * - The runtime fires the alarm. A direct run of the alarm can overlap an alarm of the runtime. That does not
+ *   occur in production, and the calendar then publishes a change two times.
+ * - A delivery can run during the reads of a round. So a round reads each calendar two times. The outbox is
+ *   empty when each read finds no row, and no calendar sent a state between its two reads.
  */
 export async function settleCalendars(...principalIds: string[]): Promise<void> {
+	// `sent` changes with each state that the calendar sends: `fanOut` adds 1 to the sequence of the event.
+	const read = async () => {
+		const result: { waiting: number; sent: number }[] = [];
+		for (const id of principalIds) {
+			result.push(
+				await runInDurableObject(calendarStub(id), (_instance, state) => ({
+					waiting: state.storage.sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM outbox").one().n,
+					sent: state.storage.sql
+						.exec<{ n: number }>("SELECT COALESCE(SUM(sequence), 0) + COUNT(*) AS n FROM events")
+						.one().n,
+				})),
+			);
+		}
+		return result;
+	};
 	await vi.waitFor(
 		async () => {
-			let waiting = 0;
 			for (const id of principalIds) {
-				const stub = calendarStub(id);
-				await runInDurableObject(stub, async (_instance, state) => {
+				await runInDurableObject(calendarStub(id), async (_instance, state) => {
 					if (state.storage.sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM outbox").one().n === 0) return;
 					state.storage.sql.exec("UPDATE outbox SET next_attempt_at = 0");
 					await state.storage.setAlarm(Date.now());
 				});
-				await runDurableObjectAlarm(stub);
 			}
-			for (const id of principalIds) {
-				waiting += await runInDurableObject(
-					calendarStub(id),
-					(_instance, state) => state.storage.sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM outbox").one().n,
-				);
-			}
+			const first = await read();
+			const second = await read();
+			const waiting = [...first, ...second].reduce((sum, entry) => sum + entry.waiting, 0);
 			if (waiting > 0) throw new Error(`${waiting} calendar outbox rows wait`);
+			if (first.some((entry, index) => entry.sent !== second[index]?.sent)) {
+				throw new Error("a calendar sent a state during the read");
+			}
 		},
 		{ timeout: 5000, interval: 20 },
 	);
@@ -1048,8 +1064,8 @@ export const calendarMeta = (principalId: string, key: string) =>
 	);
 
 /**
- * Publishes the change feed of each calendar: makes a round that waits for its backoff due, and runs the alarm
- * until `change_published` is `change_head`. The runtime also fires the alarm by itself.
+ * Publishes the change feed of each calendar: makes a round that waits for its backoff due, and sets the alarm
+ * until `change_published` is `change_head`. The runtime fires the alarm, as for `settleCalendars`.
  */
 export async function publishCalendarChanges(...principalIds: string[]): Promise<void> {
 	await vi.waitFor(
@@ -1060,7 +1076,6 @@ export async function publishCalendarChanges(...principalIds: string[]): Promise
 					state.storage.sql.exec("DELETE FROM meta WHERE key = 'publish_at'");
 					await state.storage.setAlarm(Date.now());
 				});
-				await runDurableObjectAlarm(stub);
 				const published = Number((await calendarMeta(id, "change_published")) ?? 0);
 				const head = Number((await calendarMeta(id, "change_head")) ?? 0);
 				if (published !== head) throw new Error(`calendar ${id} published ${published} of ${head} changes`);
@@ -1070,14 +1085,19 @@ export async function publishCalendarChanges(...principalIds: string[]): Promise
 	);
 }
 
-/** Replaces the webhook queue of one calendar object with a recorder, and returns the jobs that it sends. */
+/**
+ * Replaces the webhook queue of one calendar object with a recorder, and returns the jobs that it sends. The
+ * calendar sends the jobs of one publish as one batch.
+ */
 export async function captureCalendarJobs(principalId: string): Promise<unknown[]> {
 	const jobs: unknown[] = [];
 	await runInDurableObject(calendarStub(principalId), (instance) => {
 		const target = instance as unknown as { env: Env };
 		target.env = {
 			...target.env,
-			WEBHOOKS: { send: async (body: unknown) => void jobs.push(body) } as unknown as Queue,
+			WEBHOOKS: {
+				sendBatch: async (messages: { body: unknown }[]) => void jobs.push(...messages.map((message) => message.body)),
+			} as unknown as Queue,
 		};
 	});
 	return jobs;
