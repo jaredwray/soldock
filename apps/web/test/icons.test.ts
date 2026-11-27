@@ -88,6 +88,9 @@ const FILES: Record<IconName, string> = {
 	alignLeft: "align-left",
 	alignCenter: "align-center",
 	alignRight: "align-right",
+	feedback: "chat-bubble-question",
+	screenshot: "screenshot",
+	record: "video-camera",
 };
 
 const sources = import.meta.glob<string>("../src/lib/iconoir/**/*.svg", {

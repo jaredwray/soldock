@@ -1318,6 +1318,14 @@ agent carries the header `X-Asterra-Agent: true`. The policy also applies in a t
 Delivery checks queued external mail again. A policy that no longer allows the address, or an archived
 agent, fails that delivery with no retry. Mail that already left stays sent.
 
+## Feedback
+
+`feedback.get_status` tells each client if people can send feedback, and to which public GitHub repository. An
+agent and a service account cannot send feedback or upload its attachments: `feedback.submit`,
+`feedback.upload_attachment` and `feedback.delete_attachment` accept a person only. An agent reads untrusted mail,
+and a public issue would let a prompt injection publish private data. A person can call them through MCP with a
+key or an OAuth connection that holds the scope `feedback.write`.
+
 ## Untrusted content
 
 Mail from the internet can contain text that tries to give an agent instructions. Asterra marks it:

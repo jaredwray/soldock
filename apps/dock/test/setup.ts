@@ -43,5 +43,11 @@ beforeEach(async () => {
 		env.DIRECTORY.prepare(
 			"UPDATE chat_push_settings SET enabled = 0, subject = NULL, public_key = NULL, private_key = NULL, keys_created_at = NULL",
 		),
+		// Feedback is for the organization, so each test starts with feedback off, no token and no reports.
+		env.DIRECTORY.prepare("DELETE FROM feedback_attachments"),
+		env.DIRECTORY.prepare("DELETE FROM feedback_reports"),
+		env.DIRECTORY.prepare(
+			"UPDATE feedback_settings SET enabled = 0, repo_owner = 'jaredwray', repo_name = 'soldock', github_token = NULL, updated_at = 0",
+		),
 	]);
 });

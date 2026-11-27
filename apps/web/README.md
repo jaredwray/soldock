@@ -108,6 +108,8 @@ MCP clients. The app has no UI-only path.
     bottom, the rail has **Settings** and the account button. For a member, the rail asks for one
     agent of that sponsor (`directory.list_principals` with `sponsor_id`, the kind `agent` and a limit
     of 1), not for the directory. The sponsor of only a service account gets no **Admin**.
+  - When an owner or an admin turns on feedback in Admin › General, the rail has **Feedback** above
+    **Settings** (see [Feedback](#feedback)). Feedback is off by default, so the rail has no button then.
   - The account button opens a panel with the name, the address and the role of the person, the
     **Appearance** choice, **Profile and status**, and **Sign out**. **Profile and status** opens the
     profile page of the person (`/people/<own id>`). Escape closes the panel, and the focus goes back
@@ -446,6 +448,12 @@ MCP clients. The app has no UI-only path.
   screened out or in, with who decided and when, a button for the other decision, and a form that screens
   out an address that did not write yet. Without `mail.modify`, the view has no buttons and says why. When
   the Screener is off, a notice says so. Each list has loading, empty and error states, and **Load more**.
+- **Admin › General** (`/admin/general`, [`FeedbackSettingsCard.tsx`](src/features/admin/FeedbackSettingsCard.tsx)).
+  The **Feedback** card. An owner or an admin turns feedback on or off, sets the GitHub repository (the default is
+  `jaredwray/soldock`) and saves a GitHub token (`feedback.update_settings`). The token field is write-only, as
+  in Admin › AI. A status line tells if people can send feedback. After a save, the card sends the
+  `asterra:feedback-changed` event, and the shell asks for `feedback.get_status` again. A member has no General
+  section.
 - **Admin › Chat** (`/admin/chat`, [`ChatPushCard.tsx`](src/features/admin/ChatPushCard.tsx)). The first
   card, **Device notifications**, turns Web Push on or off for the organization (`chat.update_push_settings`).
   To turn it on, an owner or an admin enters a contact address (`mailto:` or `https:`) and selects **Turn on
@@ -2151,7 +2159,7 @@ dock Worker serves `index.html` for each app path, so a deep link works on reloa
 | `/mail/person/<prn_id>/…` | The same views, threads, settings and Screener, in the mailbox of a person who lets the person use it. `/mail/person/<prn_id>` goes to its inbox |
 | `/mail/agent/<prn_id>/…` | The same views, threads and settings, read only, in the mailbox of an agent, for an owner or an admin. `/mail/agent/<prn_id>` goes to its inbox |
 | `/admin` | Goes to the first section of Admin that the person can use |
-| `/admin/<section>` | One section of Admin: `members`, `shared-mailboxes`, `shared-drives`, `chat`, `mail`, `domains` or `ai` |
+| `/admin/<section>` | One section of Admin: `general`, `members`, `shared-mailboxes`, `shared-drives`, `chat`, `mail`, `domains` or `ai` |
 | `/admin/members/<prn_id>` | The page of one person, agent or service account in Admin › Members |
 | `/connect/<oar_id>` | The approval page of an OAuth request from an MCP client |
 | `/drive` | The root of the own drive |
@@ -2269,11 +2277,52 @@ Start `pnpm --filter @asterra/dock dev` in a second terminal for the API.
   no external font or CDN. `connect-src 'self'` keeps each call on the dock host. `media-src 'self'
   blob:` lets the browser load a video file that the person selected (a `blob:` address), to draw the
   small picture of the video before the upload.
+- **Screen capture is for this origin only.** `getDisplayMedia` needs the `display-capture` permission, and its
+  default is `self`. The headers do not change it. A screenshot and a recording show in the feedback dialog as
+  `blob:` addresses, which `img-src` and `media-src` allow.
 - **Zod runs without `eval`.** `@asterra/contracts` turns on Zod's `jitless` mode before it makes a
   schema ([`packages/contracts/src/zod.ts`](../../packages/contracts/src/zod.ts)), so Zod never tests
   `new Function`, and the CSP reports no violation.
 - **The app never sees a credential after sign-in.** The session cookie is HttpOnly. The app does
   not keep the password or the TOTP code after the sign-in.
+
+## Feedback
+
+The feedback dialog ([`src/features/feedback/`](src/features/feedback/)) lets a person report a bug or send an
+idea. Each report becomes a public GitHub issue ([`feedback`](../dock/src/feedback/README.md)).
+
+- The shell calls `feedback.get_status` one time ([`useFeedbackStatus.ts`](src/features/feedback/useFeedbackStatus.ts)).
+  The rail shows **Feedback** only when the answer has `can_submit: true`.
+- The dialog is a separate chunk. It loads when the person opens it the first time. The draft stays while the
+  dialog is closed, also after a capture.
+- The dialog has the kind (Bug or Idea), a title, a description, attachments, the identity choices, a preview of
+  the issue, and a confirmation. A warning names the public repository.
+- **Screenshot** asks the browser for a screen, a window or a tab (`getDisplayMedia`, no audio), closes the dialog,
+  takes one frame, and opens the dialog again. A frame wider than 1,920 pixels is made smaller. The file is a PNG,
+  or a JPEG when the PNG is over 10 MiB.
+- **Record screen** records with `MediaRecorder` (WebM, or MP4 in Safari, 1 Mbit/s, no audio). The dialog closes,
+  and a small indicator at the bottom right shows the time and a **Stop** button. The recording stops at 60
+  seconds, before 9 MiB, at **Stop**, or when the person stops the share in the browser. A screen reader gets one
+  status text that does not change, not the clock.
+- When the widget goes (a sign-out, or an admin turns feedback off), the recording and the share of the screen
+  stop. An error at the start of a recording also stops the share.
+- **Add a file**, a paste and a drop add PNG, JPEG and WebP images, and WebM and MP4 videos. The draft gets each
+  file before its upload starts, so many files in one drop stop at the limit of 5 (`withAttachment`).
+- A browser without `getDisplayMedia`, such as most phones, shows no capture buttons. A file and a paste still
+  work. A cancelled share picker shows no error.
+- Each attachment uploads at once (`feedback.upload_attachment`). **Remove** deletes it on the server
+  (`feedback.delete_attachment`), so its public address stops. If the person removes an attachment or discards the
+  draft during an upload, the dialog deletes the file when the upload ends.
+- The issue shows the name of the person by default, and the address only when the person selects it. The
+  browser line is on by default. The role, the host and the page kind are always in the issue.
+- The preview uses `buildFeedbackIssue` of `packages/contracts`, the function of the server, so it is the exact
+  text. **Send** stays off until the person confirms that the report shows no private data. A new attachment
+  clears the confirmation. While **Send** is off, a line above the buttons gives the reason, and the button names
+  that line with `aria-describedby`.
+- One idempotency key for each draft makes one issue after a second click or a retry. After the send, the
+  dialog shows a link to the issue.
+- [`model.ts`](src/features/feedback/model.ts) has the pure parts, which `test/feedback.test.ts` checks.
+  [`capture.ts`](src/features/feedback/capture.ts) has the browser calls.
 
 ## Data inventory
 

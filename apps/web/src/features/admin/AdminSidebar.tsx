@@ -5,6 +5,7 @@ import { SectionSidebar } from "../../shell/SectionSidebar.tsx";
 
 /** The title and the icon of each section. Only owners and admins see a section with `adminOnly`. */
 const SECTIONS: Record<AdminSection, { title: string; icon: IconName; adminOnly: boolean }> = {
+	general: { title: "General", icon: "settings", adminOnly: true },
 	members: { title: "Members", icon: "team", adminOnly: false },
 	"shared-mailboxes": { title: "Shared mailboxes", icon: "inbox", adminOnly: true },
 	"shared-drives": { title: "Shared drives", icon: "allMail", adminOnly: true },
