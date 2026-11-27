@@ -861,6 +861,67 @@ describe("meet", () => {
 		expect(await guestRows()).toBe(2);
 	});
 
+	it("limits the join requests of one member, deletes its old rows, and does not count a join as activity", async () => {
+		const meeting = await newMeeting();
+		const stub = env.MEETING.get(env.MEETING.idFromName(meeting.code));
+		const adaCookie = await signIn("ada@dock.test");
+		const lin = await createActor(owner, {
+			kind: "human",
+			display_name: "Lin Member",
+			address: "lin@dock.test",
+			password: PASSWORD,
+		});
+		const linCookie = await signIn(lin.address);
+		const day = 24 * 60 * 60_000;
+		const idleSince = Date.now() - 89 * day;
+		await runInDurableObject(stub, (_instance, state) => {
+			state.storage.sql.exec("UPDATE meeting SET last_activity_at = ?", idleSince);
+		});
+		const rowsOf = (principalId: string) =>
+			runInDurableObject(
+				stub,
+				(_instance, state) =>
+					state.storage.sql.exec("SELECT COUNT(*) AS n FROM participants WHERE principal_id = ?", principalId).one()
+						.n as number,
+			);
+		const activity = () =>
+			runInDurableObject(
+				stub,
+				(_instance, state) => state.storage.sql.exec("SELECT last_activity_at AS at FROM meeting").one().at as number,
+			);
+
+		// One member cannot add rows without limit. The limit is for each member, so it locks out nobody else.
+		for (let i = 0; i < MEET_LIMITS.memberJoinsPerMinute; i++) await joinAsMember(meeting.code, linCookie);
+		expect((await callRoute(meeting.code, "/join", { cookie: linCookie, body: {} })).status).toBe(429);
+		expect(await rowsOf(lin.id)).toBe(MEET_LIMITS.memberJoinsPerMinute);
+		const host = await joinAsMember(meeting.code, adaCookie);
+		expect(host.participant.state).toBe("admitted");
+		const guest = await joinAsGuest(meeting.code);
+		// After one minute the member joins again. Each closed row of the member goes: its last row and the new row stay.
+		await runInDurableObject(stub, (_instance, state) => {
+			state.storage.sql.exec(
+				"UPDATE participants SET requested_at = requested_at - 61000, left_at = left_at - 61000 WHERE principal_id = ?",
+				lin.id,
+			);
+		});
+		const back = await joinAsMember(meeting.code, linCookie);
+		expect(back.participant.state).toBe("admitted");
+		expect(await rowsOf(lin.id)).toBe(2);
+
+		// The joins and a leave are not activity. A media session of an admitted participant is.
+		expect((await callRoute(meeting.code, "/leave", { token: guest.token, body: {} })).status).toBe(200);
+		expect(await activity()).toBe(idleSince);
+		expect((await callRoute(meeting.code, "/media/session", { token: host.token, body: {} })).status).toBe(200);
+		expect(await activity()).toBeGreaterThan(idleSince);
+		// So a join does not keep an idle meeting open: the alarm ends it after 90 days.
+		await runInDurableObject(stub, (_instance, state) => {
+			state.storage.sql.exec("UPDATE meeting SET last_activity_at = ?", Date.now() - 90 * day - 1);
+		});
+		await joinAsMember(meeting.code, linCookie);
+		expect(await runDurableObjectAlarm(stub)).toBe(true);
+		expect((await callRoute(meeting.code, "")).body.status).toBe("ended");
+	});
+
 	it("closes the oldest socket at the third socket of a participant, and the first row of a member that joins again", async () => {
 		const meeting = await newMeeting();
 		const adaCookie = await signIn("ada@dock.test");

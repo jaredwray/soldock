@@ -75,7 +75,9 @@ Public surface: `index.ts` only. Other domains must not import files from this f
 - Status: `open`, then `ended` (the host). `cancelled` is for the meeting of a calendar event in a later layer. Both end
   states are final: each participant leaves, each socket closes with `4410`, the object closes each track on the SFU,
   and each later join gets `conflict`.
-- The object deletes its data 30 days after the end, and 90 days after the last activity of an open meeting.
+- The object ends an open meeting 90 days after its last activity, and deletes its data 30 days after the end.
+  Activity is a decision of the host (admit, refuse, remove) or a new media session of an admitted participant. A
+  join or a leave is not activity, so a person with the link cannot keep an idle meeting open.
 
 ## Participants
 
@@ -90,7 +92,11 @@ Public surface: `index.ts` only. Other domains must not import files from this f
 - `denied`, `left` and `removed` are final for the token. A new join makes a new row.
 - A member is a person who is signed in in the browser (the session cookie). The host joins the call at once. A
   different member joins at once too, unless the host removed that member before: then the member waits.
-- A member has one row: a new join closes the earlier row of the member, also in a different tab.
+- A member has one row: a new join closes the earlier row of the member, also in a different tab. That join also
+  deletes each closed row of the member that ended more than 1 minute before. The token of a deleted row is
+  unknown.
+- One meeting accepts 10 join requests of one member in one minute. So a member has at most 11 rows. The limit is
+  for each member: it cannot lock out a different member or the host.
 - A guest is known only by the display name that it typed: 1 to 60 characters, with no control characters and no
   format characters (such as the characters that change the direction of text). The joiners U+200C and U+200D are
   permitted. The operations mark the name `untrusted: true`.
@@ -100,10 +106,10 @@ Public surface: `index.ts` only. Other domains must not import files from this f
   (`expired`) and is refused. The alarm does the same for a participant that sends no request.
 - A waiting participant without a socket for 60 seconds leaves the lobby. An admitted participant without a socket
   for 120 seconds leaves the call. A poll of the state counts as a sign of life.
-- Limits (`MEET_LIMITS`): 16 admitted participants, 20 in the lobby, 30 join requests of guests in one minute, 500
-  rows of guests for each meeting, and a token life of 24 hours.
-- The limits of join requests count guests only. The host and each member always get a row, so a person with the
-  link cannot lock them out. The row of a guest that the host never admitted goes 10 minutes after the guest left
+- Limits (`MEET_LIMITS`): 16 admitted participants, 20 in the lobby, 30 join requests of guests in one minute, 10
+  join requests of one member in one minute, 500 rows of guests for each meeting, and a token life of 24 hours.
+- The limits of the lobby and of the rows of guests count guests only. The host and each member get a row, so a
+  person with the link cannot lock them out. The row of a guest that the host never admitted goes 10 minutes after the guest left
   the lobby. The row of each other guest goes 24 hours after the guest left. The token of a deleted row is unknown.
 
 ## Admission and media
@@ -130,7 +136,7 @@ operation. Members and guests use the same routes.
 | Route | Body and answer | Checks |
 | --- | --- | --- |
 | `GET /api/v1/meet/calls/{code}` | `CallInfo`: the title, the name of the host, the status, `media` and the viewer | None. A session cookie names the viewer |
-| `POST …/join` | `{ display_name? }` → `{ token, participant }` | A session cookie from this origin joins as a member. A guest needs a name. `409` after the end, `429` for a full lobby or too many join requests of guests, `503` without the Realtime secrets |
+| `POST …/join` | `{ display_name? }` → `{ token, participant }` | A session cookie from this origin joins as a member. A guest needs a name. `409` after the end, `429` for a full lobby, too many join requests of guests, or too many join requests of this member, `503` without the Realtime secrets |
 | `GET …/state` | `CallState` | The token. A final state tells why |
 | `POST …/leave` | `{}` | The token |
 | `POST …/media/session` | `{ session, ice_servers }` | Admitted. A new SFU session and epoch |
@@ -174,7 +180,8 @@ of pull requests set a stand-in there.
   a participant in the lobby causes no SFU call, the exact tracks that a removal and an end close, the close of the
   old session at a new media session, the new try of a failed close from the alarm, also after two days, the end
   of the tries for a session that the SFU no longer has, the close after a push or a
-  pull without an answer, the wait after a failed credential check, the limits of join requests, the
+  pull without an answer, the wait after a failed credential check, the limits of join requests of guests and of
+  one member, the delete of the old rows of a member, the idle end that a join does not move, the
   stale epoch, the alarm (absence, token life, credential, deletion) and the scope migration.
 - `e2e/tests/meet.spec.ts` runs two browsers with synthetic media against a stand-in SFU (`e2e/support/fake-sfu.ts`):
   a headless Chromium that holds one real `RTCPeerConnection` for each SFU session and sends each received track on.

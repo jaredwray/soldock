@@ -94,7 +94,7 @@ const PRUNE_LEFT_MS = 24 * 60 * 60_000;
  * closes each track there that it has no row for. No real mid has this value.
  */
 const SWEEP = "*";
-/** The time window of the limit `MEET_LIMITS.guestJoinsPerMinute`. */
+/** The time window of the limits `MEET_LIMITS.guestJoinsPerMinute` and `MEET_LIMITS.memberJoinsPerMinute`. */
 const JOIN_WINDOW_MS = 60_000;
 
 const SCHEMA: readonly string[] = [
@@ -360,6 +360,10 @@ export class MeetingDO extends DurableObject<Env> {
 		};
 	}
 
+	/**
+	 * Records activity: a decision of the host, or a media session of an admitted participant. A join or a leave
+	 * is not activity, so a person with the link cannot keep an idle meeting open.
+	 */
 	private touchActivity(now: number): void {
 		this.sql.exec("UPDATE meeting SET last_activity_at = ?", now);
 	}
@@ -548,7 +552,8 @@ export class MeetingDO extends DurableObject<Env> {
 	/**
 	 * Adds a participant with a new token. The host joins the call at once, and so does a member of the
 	 * organization that the host did not remove. A guest waits in the lobby. A member has one row: a new join closes
-	 * its earlier row.
+	 * its earlier row, and deletes each closed row of the member that is older than one minute. A join is not
+	 * activity: it does not make the life of an idle meeting longer.
 	 */
 	async join(input: JoinInput): Promise<SelfState | Refusal> {
 		if (!this.exists()) return refuse("not_found", NOT_FOUND);
@@ -556,9 +561,29 @@ export class MeetingDO extends DurableObject<Env> {
 		if (meeting.status === "cancelled") return refuse("conflict", "The meeting was cancelled.");
 		if (meeting.status !== "open") return refuse("conflict", "The meeting ended.");
 		const now = Date.now();
-		// The limits of join requests are for guests only. The host and each member always get a row, so a person
-		// with the link cannot lock them out.
-		if (!input.member) {
+		// The limits of the lobby and of the rows are for guests only. The host and each member get a row, so a
+		// person with the link cannot lock them out. A member has a limit of its own join requests only.
+		if (input.member) {
+			const principalId = input.member.principalId;
+			// A closed row of the member goes one minute after its end. Each row of the last minute stays: these
+			// rows are the count for the limit. So a member has at most `memberJoinsPerMinute` + 1 rows.
+			this.sql.exec(
+				`DELETE FROM participants WHERE principal_id = ? AND state IN ('denied', 'left', 'removed')
+					AND left_at <= ?`,
+				principalId,
+				now - JOIN_WINDOW_MS,
+			);
+			const recent = this.sql
+				.exec(
+					"SELECT COUNT(*) AS n FROM participants WHERE principal_id = ? AND requested_at > ?",
+					principalId,
+					now - JOIN_WINDOW_MS,
+				)
+				.one().n as number;
+			if (recent >= MEET_LIMITS.memberJoinsPerMinute) {
+				return refuse("rate_limited", "You asked to join this meeting too many times. Try again in one minute.");
+			}
+		} else {
 			this.sql.exec(
 				`DELETE FROM participants WHERE kind = 'guest' AND state IN ('denied', 'left', 'removed') AND (left_at <= ?
 					OR (left_at <= ? AND (state = 'denied' OR (state = 'left' AND decided_at IS NULL))))`,
@@ -629,7 +654,6 @@ export class MeetingDO extends DurableObject<Env> {
 			now,
 			state === "admitted" ? now : null,
 		);
-		this.touchActivity(now);
 		this.broadcast();
 		// The rows of the earlier join are gone now. The answer does not wait for the SFU.
 		if (earlier.length > 0) this.ctx.waitUntil(this.teardown(earlier));
@@ -663,7 +687,6 @@ export class MeetingDO extends DurableObject<Env> {
 		if (!isLive(row.state)) return { ok: true };
 		const now = Date.now();
 		this.sql.exec("UPDATE participants SET state = 'left', end_reason = 'left', left_at = ? WHERE id = ?", now, row.id);
-		this.touchActivity(now);
 		this.broadcast();
 		this.endSockets(row.id, "left");
 		await this.teardown([row.id]);

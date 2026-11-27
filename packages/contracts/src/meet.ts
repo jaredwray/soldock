@@ -17,6 +17,8 @@ export const MEET_LIMITS = {
 	participantRows: 500,
 	/** The join requests of guests that one meeting accepts in one minute. */
 	guestJoinsPerMinute: 30,
+	/** The join requests of one signed-in member that one meeting accepts in one minute. */
+	memberJoinsPerMinute: 10,
 	/** The most bytes of one SDP text. */
 	sdpBytes: 64 * 1024,
 	/** The sockets of one participant. A new socket closes the oldest. */
