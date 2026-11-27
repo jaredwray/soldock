@@ -42,6 +42,8 @@ export interface RealtimeFake {
 	failNext(status: number, match?: string): void;
 	/** The next push or pull makes its tracks, and then gives no answer, as a request that timed out. */
 	loseNextAnswer(): void;
+	/** The SFU no longer has this session, as after its life ended. Each later call for it gets 410. */
+	endSession(sessionId: string): void;
 }
 
 /** Installs the stand-in. Other requests reach a 599 answer, so a test sees a call to an unknown host. */
@@ -182,6 +184,9 @@ export function fakeRealtime(): RealtimeFake {
 		},
 		loseNextAnswer() {
 			loseAnswer = true;
+		},
+		endSession(sessionId) {
+			sessions.delete(sessionId);
 		},
 	};
 }

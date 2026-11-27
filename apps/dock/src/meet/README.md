@@ -52,7 +52,13 @@ Public surface: `index.ts` only. Other domains must not import files from this f
   each new media session records the same read for the session that ends.
 - A new try does not close a mid that has a row in `tracks` or `pulls` again.
 - A close that fails waits for the alarm. The first new try comes after 5 seconds, and each later try waits two
-  times longer, at most 5 minutes. After 24 hours the object deletes the row and writes an error line.
+  times longer, at most 5 minutes.
+- No time limit deletes a row of `pending_closes`. A participant that the host removed can still have media while
+  its close has no confirmation. So the tries continue every 5 minutes while the meeting has data. The delete of
+  the data of the meeting is the last limit.
+- After 3 failed tries of a close, the object also reads the session from the SFU. The row goes when the SFU has no
+  such session (`404` or `410`), or when the track is not open there.
+- While a row is older than 1 hour, the object writes one error line each hour.
 - TURN: each admitted participant gets a credential with a life of 12 hours when the deployment has a TURN key. URLs
   on port 53 are left out: browsers block them. Without a TURN key the browser gets only `stun:stun.cloudflare.com:3478`.
 
@@ -162,10 +168,12 @@ of pull requests set a stand-in there.
 
 ## Tests
 
-- `test/meet.test.ts` (workerd) replaces `fetch` with a stand-in of the Realtime API (`test/realtime-fake.ts`). It
+- `test/meet.test.ts` (workerd) replaces `fetch` with a stand-in of the Realtime API (`test/realtime-fake.ts`).
+  Each stand-in has its own session ids, so a late call from the object of an earlier test is not counted. It
   proves the access of each operation for a person, an agent through MCP, a service account and a scoped key, that
   a participant in the lobby causes no SFU call, the exact tracks that a removal and an end close, the close of the
-  old session at a new media session, the new try of a failed close from the alarm, the close after a push or a
+  old session at a new media session, the new try of a failed close from the alarm, also after two days, the end
+  of the tries for a session that the SFU no longer has, the close after a push or a
   pull without an answer, the wait after a failed credential check, the limits of join requests, the
   stale epoch, the alarm (absence, token life, credential, deletion) and the scope migration.
 - `e2e/tests/meet.spec.ts` runs two browsers with synthetic media against a stand-in SFU (`e2e/support/fake-sfu.ts`):

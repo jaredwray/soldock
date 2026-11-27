@@ -764,6 +764,18 @@ describe("meet", () => {
 		await runDurableObjectAlarm(stub);
 		expect(sfu.callsTo("/tracks/close")).toHaveLength(calls);
 
+		// A close that the SFU did not confirm for two days stays on record: the removed guest can still have media.
+		sfu.failNext(503, "/tracks/close");
+		await runInDurableObject(stub, (_instance, state) => {
+			state.storage.sql.exec(
+				"UPDATE pending_closes SET next_at = 0, created_at = ?",
+				Date.now() - 2 * 24 * 60 * 60_000,
+			);
+		});
+		await runDurableObjectAlarm(stub);
+		expect(open().length).toBeGreaterThan(0);
+		expect(await pending()).toBe(open().length);
+
 		await runInDurableObject(stub, (_instance, state) => {
 			state.storage.sql.exec("UPDATE pending_closes SET next_at = 0");
 		});
@@ -772,6 +784,35 @@ describe("meet", () => {
 		expect(await pending()).toBe(0);
 		// The tracks of the host stay open.
 		expect(sfu.openTracks(hostSession)).toHaveLength(2);
+	});
+
+	it("stops the tries to close the tracks of a session that the SFU no longer has", async () => {
+		const meeting = await newMeeting();
+		const host = await joinAsMember(meeting.code, await signIn("ada@dock.test"));
+		await sendMedia(meeting.code, host.token);
+		const session = sfu.sessions[0] as string;
+		const stub = env.MEETING.get(env.MEETING.idFromName(meeting.code));
+		const pending = () =>
+			runInDurableObject(
+				stub,
+				(_instance, state) => state.storage.sql.exec("SELECT COUNT(*) AS n FROM pending_closes").one().n as number,
+			);
+		// The SFU refuses the close of the two tracks, so their records stay.
+		sfu.failNext(503, "/tracks/close");
+		expect((await callRoute(meeting.code, "/leave", { token: host.token, body: {} })).status).toBe(200);
+		expect(await pending()).toBe(2);
+
+		// The close failed many times, and the SFU no longer has the session. The object reads the session, learns
+		// that it is gone, and sends no close: the next close call fails in this test.
+		sfu.endSession(session);
+		sfu.failNext(503, "/tracks/close");
+		await runInDurableObject(stub, (_instance, state) => {
+			state.storage.sql.exec("UPDATE pending_closes SET next_at = 0, attempts = 6");
+		});
+		const calls = sfu.callsTo("/tracks/close").length;
+		await runDurableObjectAlarm(stub);
+		expect(await pending()).toBe(0);
+		expect(sfu.callsTo("/tracks/close")).toHaveLength(calls);
 	});
 
 	it("limits the join requests of guests, and never locks out the host or a member", async () => {

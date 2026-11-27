@@ -76,8 +76,13 @@ const IDLE_KEEP_MS = 90 * 24 * 60 * 60_000;
 /** The alarm tries a failed close of a track again after this time. Each later try waits two times longer. */
 const CLOSE_RETRY_MS = 5_000;
 const CLOSE_RETRY_MAX_MS = 5 * 60_000;
-/** The object stops the tries to close a track after this time. No TURN credential or token lives longer. */
-const CLOSE_KEEP_MS = 24 * 60 * 60_000;
+/**
+ * After this number of failed tries of a close, the object also reads the session from the SFU. A session that is
+ * gone, or a track that is not open there, needs no close.
+ */
+const CLOSE_CHECK_TRIES = 3;
+/** The object writes an error line at most this often while a close is older than this time. */
+const CLOSE_LATE_MS = 60 * 60_000;
 /** After a credential check that failed, the next check waits this time. */
 const CREDENTIAL_RETRY_MS = 60_000;
 /** The row of a guest that the host never admitted goes this long after the guest left the lobby. */
@@ -151,7 +156,8 @@ const SCHEMA: readonly string[] = [
 	)`,
 	"CREATE INDEX IF NOT EXISTS pulls_track ON pulls (track_id)",
 	"CREATE TABLE IF NOT EXISTS removed_principals (principal_id TEXT PRIMARY KEY)",
-	// The tracks that the SFU must close. A row goes only after the SFU confirmed the close.
+	// The tracks that the SFU must close. A row goes only after the SFU confirmed the close, or showed that the
+	// track is not open. No time limit deletes a row: the delete of the data of the meeting is the last limit.
 	`CREATE TABLE IF NOT EXISTS pending_closes (
 		session_id TEXT NOT NULL,
 		mid TEXT NOT NULL,
@@ -882,8 +888,47 @@ export class MeetingDO extends DurableObject<Env> {
 	}
 
 	/**
+	 * The recorded closes of a session that failed `CLOSE_CHECK_TRIES` times: the object reads the session from the
+	 * SFU, and deletes each row of a track that is not open there. Returns false when the meeting has no data now.
+	 */
+	private async checkStuckCloses(config: RealtimeConfig, sessionId: string): Promise<boolean> {
+		const stuck = this.sql
+			.exec(
+				"SELECT mid FROM pending_closes WHERE session_id = ? AND mid != ? AND attempts >= ? AND next_at <= ?",
+				sessionId,
+				SWEEP,
+				CLOSE_CHECK_TRIES,
+				Date.now(),
+			)
+			.toArray()
+			.map((row) => row.mid as string);
+		if (stuck.length === 0) return true;
+		let onSfu: string[] | null;
+		try {
+			onSfu = await sessionState(config, sessionId);
+		} catch {
+			// The close call that follows writes the log line of a media service that does not answer.
+			return this.exists();
+		}
+		if (!this.exists()) return false;
+		const open = new Set(onSfu ?? []);
+		for (const mid of stuck) {
+			if (!open.has(mid)) {
+				this.sql.exec(
+					"DELETE FROM pending_closes WHERE session_id = ? AND mid = ? AND attempts >= ?",
+					sessionId,
+					mid,
+					CLOSE_CHECK_TRIES,
+				);
+			}
+		}
+		return true;
+	}
+
+	/**
 	 * Closes the recorded tracks of one session on the SFU. It runs on the chain of the owner of the session. A row
-	 * goes when the SFU confirmed the close. A different row waits for the alarm, each time two times longer.
+	 * goes when the SFU confirmed the close, or showed that the track is not open. A different row waits for the
+	 * alarm: each time two times longer, then each `CLOSE_RETRY_MAX_MS` while the meeting has data.
 	 */
 	private async closeSession(ownerId: string, sessionId: string): Promise<void> {
 		const config = realtimeConfig(this.env);
@@ -916,6 +961,7 @@ export class MeetingDO extends DurableObject<Env> {
 				this.sql.exec("DELETE FROM pending_closes WHERE session_id = ? AND mid = ?", sessionId, SWEEP);
 			}
 		}
+		if (!(await this.checkStuckCloses(config, sessionId))) return;
 		// A mid with a row in `tracks` or `pulls` is in use again. Its close is not wanted now.
 		const live = this.liveMids(ownerId, sessionId);
 		const mids: string[] = [];
@@ -937,19 +983,33 @@ export class MeetingDO extends DurableObject<Env> {
 	}
 
 	/**
+	 * Writes an error line for the closes that the SFU did not confirm in `CLOSE_LATE_MS`. The rows stay: a
+	 * participant that the host removed can still have media, so the object does not stop its tries.
+	 */
+	private reportLateCloses(now: number): void {
+		const late = this.sql
+			.exec("SELECT COUNT(*) AS n FROM pending_closes WHERE created_at <= ?", now - CLOSE_LATE_MS)
+			.one().n as number;
+		if (late === 0) return;
+		const reported = Number(
+			this.sql.exec("SELECT value FROM meta WHERE key = 'closes_reported_at'").toArray()[0]?.value ?? 0,
+		);
+		if (reported + CLOSE_LATE_MS > now) return;
+		this.sql.exec(
+			"INSERT INTO meta (key, value) VALUES ('closes_reported_at', ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value",
+			String(now),
+		);
+		log("error", "meet: the media service did not confirm the close of tracks", { count: late });
+	}
+
+	/**
 	 * Sends the recorded closes to the SFU: the new ones, or for the alarm (`due`) the ones whose time came. The
 	 * alarm is set before the first SFU call, so a close that fails, or an object that stops, gets a later try.
 	 */
 	private async flushCloses(due: boolean): Promise<void> {
 		if (!this.exists()) return;
 		const now = Date.now();
-		if (due) {
-			const expired = this.sql.exec(
-				"DELETE FROM pending_closes WHERE created_at <= ?",
-				now - CLOSE_KEEP_MS,
-			).rowsWritten;
-			if (expired > 0) log("error", "meet: the media service did not close tracks in one day", { count: expired });
-		}
+		if (due) this.reportLateCloses(now);
 		const sessions = (
 			due
 				? this.sql.exec("SELECT DISTINCT session_id, owner_id FROM pending_closes WHERE next_at <= ?", now)
