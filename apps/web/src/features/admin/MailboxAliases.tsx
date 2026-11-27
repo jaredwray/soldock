@@ -2,7 +2,9 @@ import { AliasAddress, MAILBOX_ALIAS_LIMITS, type MailboxAlias } from "@asterra/
 import { type FormEvent, useCallback, useEffect, useId, useState } from "react";
 import { api, errorMessage } from "../../lib/api.ts";
 import { ConfirmDialog } from "../../lib/ConfirmDialog.tsx";
+import { Select } from "../../lib/Select.tsx";
 import { useToast } from "../../lib/toast.tsx";
+import { defaultMailDomain } from "./memberAddress.ts";
 
 interface MailboxAliasesProps {
 	/** The id of a principal for its own mailbox, or the id of a team mailbox. */
@@ -13,12 +15,18 @@ interface MailboxAliasesProps {
 /**
  * The aliases of one mailbox, for an owner or an admin: extra addresses that receive mail for the mailbox
  * (`directory.list_mailbox_aliases`, `directory.add_mailbox_alias`, `directory.remove_mailbox_alias`).
- * Mail from the mailbox always uses its primary address.
+ * Mail from the mailbox always uses its primary address. The new alias is a name in a field and a saved mail
+ * domain from a list, as in the New member form. The list selects the domain of the primary address first.
  */
 export function MailboxAliases({ mailboxId, mailboxName }: MailboxAliasesProps) {
 	const toast = useToast();
 	const [aliases, setAliases] = useState<MailboxAlias[] | null>(null);
-	const [address, setAddress] = useState("");
+	const [localPart, setLocalPart] = useState("");
+	// The saved mail domains: null until they load. The server accepts an alias only on a saved domain.
+	const [domains, setDomains] = useState<readonly string[] | null>(null);
+	/** The error of the load of the domains. It shows in the form with a Try again button. */
+	const [domainsError, setDomainsError] = useState<string | null>(null);
+	const [domain, setDomain] = useState("");
 	const [busy, setBusy] = useState(false);
 	/** The error of the load. It shows above the list. */
 	const [error, setError] = useState<string | null>(null);
@@ -29,31 +37,47 @@ export function MailboxAliases({ mailboxId, mailboxName }: MailboxAliasesProps) 
 
 	const load = useCallback(async () => {
 		setError(null);
-		try {
-			setAliases((await api.call("directory.list_mailbox_aliases", { mailbox_id: mailboxId })).aliases);
-		} catch (caught) {
-			setError(errorMessage(caught));
-		}
+		const [listed, saved] = await Promise.allSettled([
+			api.call("directory.list_mailbox_aliases", { mailbox_id: mailboxId }),
+			api.call("directory.list_mail_domains"),
+		]);
+		if (listed.status === "rejected") return setError(errorMessage(listed.reason));
+		setAliases(listed.value.aliases);
+		if (saved.status === "rejected") return setDomainsError(errorMessage(saved.reason));
+		setDomainsError(null);
+		setDomains(saved.value.mail_domains);
+		setDomain(defaultMailDomain(saved.value.mail_domains, listed.value.address));
 	}, [mailboxId]);
 
 	useEffect(() => {
 		void load();
 	}, [load]);
 
+	/** Loads the aliases and the domains again, after the domains did not load. The error stays until they load. */
+	async function retry() {
+		setBusy(true);
+		try {
+			await load();
+		} finally {
+			setBusy(false);
+		}
+	}
+
 	async function add(event: FormEvent<HTMLFormElement>) {
 		event.preventDefault();
-		const parsed = AliasAddress.safeParse(address);
+		const local = localPart.trim();
+		if (!local) return setAddError("Enter the part of the alias before @.");
+		if (local.includes("@")) return setAddError("Enter only the part before @. Select the domain from the list.");
+		const parsed = AliasAddress.safeParse(`${local}@${domain}`);
 		if (!parsed.success) {
-			return setAddError(
-				"Enter one address, such as sales@example.com. Use only letters, digits, dots, hyphens and underscores before the @.",
-			);
+			return setAddError("Use only letters, digits, dots, hyphens and underscores before the @.");
 		}
 		setBusy(true);
 		setAddError(null);
 		try {
 			const result = await api.call("directory.add_mailbox_alias", { mailbox_id: mailboxId, address: parsed.data });
 			setAliases(result.aliases);
-			setAddress("");
+			setLocalPart("");
 			toast({ message: `${parsed.data} now receives mail for ${mailboxName}.` });
 		} catch (caught) {
 			setAddError(errorMessage(caught));
@@ -74,6 +98,10 @@ export function MailboxAliases({ mailboxId, mailboxName }: MailboxAliasesProps) 
 	}
 
 	const full = aliases !== null && aliases.length >= MAILBOX_ALIAS_LIMITS.aliases;
+	const noDomains = domains !== null && domains.length === 0;
+	// At the limit, the hint shows the limit, not the error of the domains.
+	const domainsFailed = !full && domainsError !== null;
+	const describedBy = addError ? `${ids.hint} ${ids.error}` : ids.hint;
 
 	return (
 		<section className="panel" aria-labelledby={ids.heading}>
@@ -141,32 +169,62 @@ export function MailboxAliases({ mailboxId, mailboxName }: MailboxAliasesProps) 
 							<label htmlFor={ids.input} className="field-label">
 								New alias
 							</label>
-							<input
-								id={ids.input}
-								className="input"
-								type="email"
-								autoComplete="off"
-								autoCapitalize="none"
-								spellCheck={false}
-								placeholder="sales@example.com"
-								value={address}
-								onChange={(event) => setAddress(event.target.value)}
-								aria-invalid={addError ? true : undefined}
-								aria-describedby={addError ? `${ids.hint} ${ids.error}` : ids.hint}
-								disabled={busy || full}
-							/>
-							<p id={ids.hint} className="field-hint">
+							<div className="address-row">
+								<input
+									id={ids.input}
+									className="input"
+									autoComplete="off"
+									autoCapitalize="none"
+									spellCheck={false}
+									placeholder="sales"
+									maxLength={64}
+									value={localPart}
+									onChange={(event) => setLocalPart(event.target.value)}
+									aria-invalid={addError ? true : undefined}
+									aria-describedby={describedBy}
+									disabled={busy || full || noDomains}
+								/>
+								<span className="address-at" aria-hidden="true">
+									@
+								</span>
+								<Select
+									label="Email domain of the alias"
+									className="input address-domain-select"
+									value={domain}
+									options={(domains ?? []).map((value) => ({ value, label: value }))}
+									onChange={setDomain}
+									placeholder={domains === null ? "Not available" : "No domains"}
+									disabled={busy || full || !domains?.length}
+									aria-describedby={describedBy}
+								/>
+							</div>
+							<p
+								id={ids.hint}
+								className={domainsFailed ? "form-error" : "field-hint"}
+								role={domainsFailed ? "alert" : undefined}
+							>
 								{full
 									? `A mailbox can have at most ${MAILBOX_ALIAS_LIMITS.aliases} aliases.`
-									: "Use a saved email domain. Mail to the alias arrives at once."}
+									: domainsError
+										? `The email domains did not load. ${domainsError}`
+										: noDomains
+											? "There are no email domains yet. Add one in Admin › Email domains."
+											: "Select a saved email domain. Mail to the alias arrives at once."}
 							</p>
+							{domainsFailed && (
+								<div>
+									<button type="button" className="button" onClick={() => void retry()} disabled={busy}>
+										Try again
+									</button>
+								</div>
+							)}
 						</div>
 						{addError && (
 							<p id={ids.error} className="form-error" role="alert">
 								{addError}
 							</p>
 						)}
-						<button type="submit" className="button button-primary" disabled={busy || full}>
+						<button type="submit" className="button button-primary" disabled={busy || full || !domain}>
 							{busy ? "Please wait…" : "Add alias"}
 						</button>
 					</form>
