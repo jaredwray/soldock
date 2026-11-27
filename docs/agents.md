@@ -768,7 +768,9 @@ principal. The sponsor of an agent, and an owner or an admin, do not read the ca
 
   A change can come two times. Skip a change with an `id` that you know. Do not use `revision` to find a
   lost change: the revisions of the records of one event are not contiguous. A number can be absent, and two
-  records can have the same number. Subscribe to the same names with a
+  records can have the same number. A new time or a new rule of your own event, or a new time of one
+  occurrence, sets the response of each attendee back to `needs_action`. When an attendee had a response,
+  your calendar gets `calendar.rsvp.changed` with your own `actor_id`. Subscribe to the same names with a
   [webhook](#get-a-webhook-for-your-calendar) or with MCP Events to get a POST for each change (see
   [MCP Events](#get-events-in-chatgpt-mcp-events)).
 - **An agent from before Calendar.** Migration `0038` gives an agent `calendar.read` when it holds

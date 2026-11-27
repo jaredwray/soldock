@@ -313,7 +313,7 @@ gives `not_found`.
 | `calendar.invitation.received` | An attendee | A copy of an event arrives |
 | `calendar.invitation.updated` | An attendee | The organizer changed the event of a copy (`occurrence_id` null), or one occurrence of it (`occurrence_id` set) |
 | `calendar.invitation.cancelled` | An attendee | The copy went away: the organizer deleted the event or removed the attendee |
-| `calendar.rsvp.changed` | Each | A response to the series (`occurrence_id` null) or to one occurrence changed: the own response, the response of an attendee to an event of the owner, or the response of a different attendee on a copy |
+| `calendar.rsvp.changed` | Each | A response to the series (`occurrence_id` null) or to one occurrence changed: the own response, the response of an attendee to an event of the owner, or the response of a different attendee on a copy. Also a reset by the organizer |
 
 - A record for the series covers each of its occurrences. A cancelled occurrence is an `updated` record with
   its `occurrence_id`: the series stays.
@@ -321,10 +321,21 @@ gives `not_found`.
   Else each changed or cancelled occurrence gives one record. Then a changed response gives
   `calendar.rsvp.changed`: one for the series when a response to the series changed, else one for each
   occurrence with a changed response.
+- A reset by the organizer gives the same record on the calendar of the organizer, in the transaction of the
+  change, after the `calendar.event.updated` record and with its `revision`. A new time or a new rule of the
+  event gives one record for the series. A new time of one occurrence gives one record for that occurrence.
+  The `actor_id` is the principal that made the change. The record is written only when an attendee that
+  stays had a response other than `needs_action`.
+- The removal of an attendee gives no `calendar.rsvp.changed`. The attendee left the event, so the
+  `updated` record covers it. A copy compares only the attendees that it has before and after the state.
+- A response to the series replaces the responses of that attendee to single occurrences. It gives a record
+  only when the response to the series is different, or when one of those responses was different and its
+  occurrence is not cancelled.
 - The response of the owner of a copy comes back in the next state of the organizer. The copy shows its own
   response for the owner, so that echo changes nothing that the owner sees, and it gives no record.
 - These calls write no record: a refusal, a `dry_run`, a retry with an idempotency key, an update or a move
-  that changes nothing, a second cancel, a repeated response, `calendar.set_reminder`, a reminder that fires,
+  that changes nothing, a second cancel, a repeated response, a response to the series that changes no shown
+  response, `calendar.set_reminder`, a reminder that fires,
   and a message of the outbox that the calendar does not take (an old `sequence` or time, a different owner or
   organizer, an unknown attendee or occurrence, or a calendar at a limit).
 
