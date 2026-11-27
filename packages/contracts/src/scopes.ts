@@ -33,6 +33,7 @@ export const SCOPES = {
 	"chat.write": "Create and join rooms, change their members, post, change and delete messages, and set what you read",
 	"calendar.read": "Read the events of your calendar",
 	"calendar.write": "Add, change and delete the events of your calendar",
+	"calendar.webhooks": "Subscribe to the changes of your calendar through MCP Events and webhooks",
 	"feedback.write":
 		"Send bug reports and ideas about Asterra as public issues to the GitHub repository that your admin chose",
 } as const;
@@ -69,6 +70,7 @@ export const AGENT_SCOPES: readonly Scope[] = [
 	"chat.write",
 	"calendar.read",
 	"calendar.write",
+	"calendar.webhooks",
 ];
 
 /**

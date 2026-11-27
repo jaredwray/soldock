@@ -512,13 +512,19 @@ MCP clients. The app has no UI-only path.
     signature again when the window gets the focus. While the field has text that is not saved, the
     browser asks before it closes or reloads the tab. A link in the app does not ask.
 - **Shared mailboxes.** The UI name of a team mailbox, on the Admin page.
-  - The card of a shared mailbox has **Aliases** (`MailboxAliases.tsx`) under the name: a list of the
-    extra addresses of the mailbox, a **Remove** button for each one (with a confirmation), and a field to
-    add one (`directory.list_mailbox_aliases`, `directory.add_mailbox_alias`,
-    `directory.remove_mailbox_alias`). The field checks the address with `AliasAddress` before the call. An
-    error of the add shows in the form and the field refers to it (`aria-invalid`, `aria-describedby`). An
-    error of the load shows above the list with **Try again**. At the limit, the field and the button are
-    disabled.
+  - The card of a shared mailbox has **Aliases** (`MailboxAliases.tsx`) under the name. A box shows the
+    extra addresses of the mailbox. Each address has a **Remove** button (with a confirmation). A form to
+    add an address is in the same box, under a line (`panel-form-divided`, as in the member editor). The
+    part uses `directory.list_mailbox_aliases`, `directory.add_mailbox_alias` and
+    `directory.remove_mailbox_alias`. As in the New member form, the admin types the part before `@` and
+    selects a saved domain from a list (`directory.list_mail_domains`). The list selects the domain of the
+    primary address of the mailbox first (`defaultMailDomain`). With no saved domain, the form is disabled,
+    and a hint tells the admin to add a domain in Admin › Email domains. The form checks the address with
+    `AliasAddress` before the call. An error of the add shows in the form. The field and the list refer to
+    it (`aria-describedby`), and the field has `aria-invalid`. An error of the load shows above the list
+    with **Try again**. If only the domains do not load, the aliases show, and the form shows the error as
+    an alert with its own **Try again**. The list and the button stay disabled until the domains load. At
+    the limit, the field, the list and the button are disabled.
   - A team mailbox has its own paths (`/mail/team/<tmb_id>/…`), so a deep link and a reload stay in
     it. Each mail call of its views sends `mailbox_id`. Search, labels and the composer use the
     same mailbox.
@@ -702,6 +708,8 @@ MCP clients. The app has no UI-only path.
       **Webhooks of …** shows one row for each webhook that gets an event of the agent.
       The rows come from `mail.list_webhook_subscriptions`, `chat.list_webhook_subscriptions` and `drive.list_webhook_subscriptions`.
       **Edit events** opens a dialog with a check box for each mail, chat and drive event.
+      The page does not offer Calendar (`AGENT_WEBHOOK_DOMAINS`): a calendar subscription is for the calendar of its creator only.
+      The page reads `calendar.list_webhook_subscriptions` only to know which webhooks of the sponsor have an event (`webhookApi.ts`).
       A save calls the create operation for each new check mark and the delete operation for each removed one.
       The **Messages** menu of Chat starts with **Direct messages, mentions and followed threads** for an agent.
       An owner or an admin who is not the sponsor cannot change it, because a different filter adds a subscription.
@@ -817,7 +825,7 @@ MCP clients. The app has no UI-only path.
     (`shell/SectionSidebar.tsx`).
   - Settings does not list webhooks. A new password
   (`account.set_password`) ends your sessions on other browsers. A new key can hold only the scopes
-  of the session. A new key does not get `account.keys`, `directory.write`, `mail.share`, `mail.webhooks`, `chat.webhooks` or `drive.webhooks`
+  of the session. A new key does not get `account.keys`, `directory.write`, `mail.share`, `mail.webhooks`, `chat.webhooks`, `drive.webhooks` or `calendar.webhooks`
   unless the person selects them. A new key has a label, an optional description and a lifetime: 1, 7,
   30, 90 or 180 days, a custom last day (from tomorrow to 729 days), or Never (`settings/ttl.ts`).
   The list shows the end of each key, and **Expired** or **Revoked**. The secret dialog shows the end.
@@ -1243,9 +1251,15 @@ MCP clients. The app has no UI-only path.
   - **Reminders.** Each page of the app shows a toast for the `calendar.reminder` event of the events
     socket (`useCalendarReminders`), with **Open**. The Activity of Chat has the chip **Event reminders**.
     A click on such an item opens the week of the event.
-  - The page gets the events of the period with `calendar.list_events` and each page of it. It gets
-    them again every 30 seconds while the tab is visible, on window focus, and after each change. A
-    failed load shows the error with **Try again**. A screen reader hears "Loading events…" and "No
+  - The page gets the events of the period with `calendar.list_events` and each page of it. It keeps
+    them current from the change feed (`sync.ts`): for each period, it gets the cursor of now with
+    `calendar.list_changes` first, then the events. On `calendar.changed` of the events socket, on
+    `hello` after each connect, and on window focus, it reads the changes after its cursor. A change, or
+    an expired cursor, loads the period again. While the socket is down, it reads the changes every 30
+    seconds when the tab is visible. The cursor moves only after the period loaded (`createSync`): after
+    a failed load, the next read of the feed gives the same changes, and the period loads again. A failed
+    load after the first one keeps the events on screen. It also loads the period after each change of
+    the person. A failed first load shows the error with **Try again**. A screen reader hears "Loading events…" and "No
     events this week".
   - Each day is a region with the full date as its name, and today has `aria-current="date"`. The name
     of an event has its title, its time and its location. The hour and day slots are hidden from
@@ -2187,7 +2201,7 @@ Sent `in:sent`, Spam `in:spam`, Trash `in:trash`, All mail an empty string, and 
 | [`src/features/drive/`](src/features/drive/) | Drive: the sidebar, the item list, the menus and dialogs (new folder, rename, move, share, versions, preview), the data hooks, the pure rules in `model.ts`, the upload queue in `uploadQueue.ts`, and the document header that the editors share |
 | [`src/features/docs/`](src/features/docs/) | Docs: the schema, the commands, the autosave, the paste of Markdown (`markdownPaste.ts`), the editor and the page. For images: the store of the images of a doc (`images.ts`), the geometry (`imageModel.ts`), the commands (`imageCommands.ts`), the view of an image (`imageView.ts`), the plugin for a drop and a paste (`imagePlugin.ts`), the toolbar and the dialogs |
 | [`src/features/sheets/`](src/features/sheets/) | Sheets: the store with the tabs and the save queue, the toolbar, the grid, the formula bar, the tab bar, and the pure modules for cell names, the selection, clipboard text, the cells of the grid, the formats of cells and the formulas of the Σ menu |
-| [`src/features/calendar/`](src/features/calendar/) | Calendar: the page and its toolbar (`CalendarApp.tsx`), the week, month and agenda views (`views.tsx`), the event dialog (`EventDialog.tsx`), the load of a period with its poll (`data.ts`), and the pure rules for the days of a period, the parts of an event on each day, the columns of overlaps and the form of an event (`model.ts`) |
+| [`src/features/calendar/`](src/features/calendar/) | Calendar: the page and its toolbar (`CalendarApp.tsx`), the week, month and agenda views (`views.tsx`), the event dialog (`EventDialog.tsx`), the load of a period and its live update (`data.ts`), the catch-up from the cursor of the change feed (`sync.ts`), and the pure rules for the days of a period, the parts of an event on each day, the columns of overlaps and the form of an event (`model.ts`) |
 | [`src/features/chat/`](src/features/chat/) | Chat: the sidebar, the room view, the dialogs (new room, public rooms, new direct message, members, name and topic), the message box with its toolbar, Markdown shortcuts and suggestions of a mention (`ChatComposer.tsx`, `composerSchema.ts`, `composerCommands.ts`), the files of a new message (`attachments.ts`, `ComposerFiles.tsx`, the drop in `fileDrop.ts`), the files and the link previews of a message (`MessageFiles.tsx`), the focus after the X of a chip (`focusAfterRemove.ts`), the data hooks, the pure rules in `model.ts`, the rules of mentions in `mentions.ts`, the part of the history that the page keeps in `history.ts`, the page reads in `pager.ts`, the last list of each room in `roomCache.ts`, the drafts in `drafts.ts`, the sends whose message the room has in `settle.ts`, the sync of the open room in `sync.ts`, and the texts and the buttons of a member request and of a share request (`memberRequests.ts`, `shareRequests.ts`, `RequestActions.tsx`) |
 | [`src/features/people/`](src/features/people/) | The profile page of a person or an agent |
 | [`src/features/settings/`](src/features/settings/) | Settings, its side navigation, the password and two-step verification cards, the TOTP setup panel, the API key manager with the lifetime of a key (`ttl.ts`), the event check boxes, the webhook list of one target, and the one-time secret dialog |

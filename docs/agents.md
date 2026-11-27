@@ -82,7 +82,7 @@ Use an API key for a client that cannot use OAuth.
    ```
 
 An agent can hold only `account.read`, `directory.read`, `mail.read`,
-`mail.modify`, `mail.send`, `mail.webhooks`, `drive.read`, `drive.write`, `drive.share`, `drive.webhooks`, `chat.read`, `chat.write`, `chat.webhooks`, `calendar.read` and `calendar.write`.
+`mail.modify`, `mail.send`, `mail.webhooks`, `drive.read`, `drive.write`, `drive.share`, `drive.webhooks`, `chat.read`, `chat.write`, `chat.webhooks`, `calendar.read`, `calendar.write` and `calendar.webhooks`.
 A new agent holds each of them as account scopes. An agent can never manage keys or connections, create
 principals, or change its own policy or access.
 
@@ -727,6 +727,10 @@ principal. The sponsor of an agent, and an owner or an admin, do not read the ca
 | `calendar_respond_to_event` | `calendar.write` | Accept or decline an invitation, for the series or for one occurrence |
 | `calendar_set_reminder` | `calendar.write` | Set your own reminder: 5, 10 or 30 minutes before, or none |
 | `calendar_query_free_busy` | `calendar.read` | The busy times of principals of the organization, without details |
+| `calendar_list_changes` | `calendar.read` | The changes of your calendar after a cursor, oldest first, with ids only |
+| `calendar_create_webhook_subscription` | `calendar.webhooks` and `calendar.read` | Send one event of your calendar to an endpoint of yours |
+| `calendar_list_webhook_subscriptions` | `calendar.webhooks` | The calendar subscriptions of your endpoints |
+| `calendar_delete_webhook_subscription` | `calendar.webhooks` | Delete a calendar subscription that you created |
 
 - **Timed events.** Give `start` and `end` as ISO 8601 times with an offset or `Z`, and `time_zone`, an
   IANA name such as `America/New_York`. The output gives `start` and `end` in UTC, with `time_zone`.
@@ -751,6 +755,22 @@ principal. The sponsor of an agent, and an owner or an admin, do not read the ca
 - **Limits.** A title has 1 to 300 characters, a location at most 500, and a description at most 8000. An
   event can be at most 366 days long, from 1970-01-01 to 2100-12-31. A calendar holds at most 50,000
   events.
+- **Changes.** Each committed change of your calendar has a record with a stable `id`, the `event_id`,
+  the `occurrence_id` for a change of one occurrence, the `revision` after the change, the `actor_id` and a `cursor`. The names are
+  `calendar.event.created`, `calendar.event.updated`, `calendar.event.deleted`,
+  `calendar.invitation.received`, `calendar.invitation.updated`, `calendar.invitation.cancelled` and
+  `calendar.rsvp.changed`. Do these steps to follow your calendar:
+  1. Call `calendar_list_changes` with no cursor. Keep the cursor.
+  2. Read your events with `calendar_list_events`.
+  3. Call `calendar_list_changes` with your cursor. Read each event that changed with
+     `calendar_get_event`. Keep the new cursor.
+  4. When `expired` is true, do step 2 again, and continue from the cursor of that result.
+
+  A change can come two times. Skip a change with an `id` that you know. Do not use `revision` to find a
+  lost change: the revisions of the records of one event are not contiguous. A number can be absent, and two
+  records can have the same number. Subscribe to the same names with a
+  [webhook](#get-a-webhook-for-your-calendar) or with MCP Events to get a POST for each change (see
+  [MCP Events](#get-events-in-chatgpt-mcp-events)).
 - **An agent from before Calendar.** Migration `0038` gives an agent `calendar.read` when it holds
   `mail.read`, and `calendar.write` when it holds `mail.modify`. An agent with narrower account scopes
   has no calendar tools, and `account_whoami` names the scopes that it does not hold.
@@ -1085,6 +1105,46 @@ The optional `auth_key` and `header` fields work as for mail webhooks.
 Each message keeps its own retries, including messages from different rooms.
 Each attempt checks your membership, credential, scopes and outbound policy again.
 
+## Get a webhook for your calendar
+
+Create an endpoint, then call `calendar_create_webhook_subscription` for each event name that you want.
+The POST has ids and a cursor. It has no title, time or answer.
+
+1. Ask your sponsor to allow the receiver host in your outbound policy.
+2. Use a key or a connection with `calendar.webhooks` and `calendar.read`.
+3. Call `webhooks_create_endpoint`, then `calendar_create_webhook_subscription` with the `endpoint_id` and the `event`.
+4. Store the signing secret from the endpoint.
+5. Call `calendar_list_changes` with no cursor, keep the cursor, and read your events one time.
+
+The events are the seven names of [Calendar](#calendar). A subscription is for your own calendar only: your
+sponsor, an owner and an admin cannot subscribe for your calendar, and cannot list or delete your calendar
+subscriptions. REST uses `/api/v1/calendar/webhook-subscriptions`.
+
+```json
+{
+  "type": "calendar.rsvp.changed",
+  "timestamp": "2026-12-02T15:00:00.000Z",
+  "data": {
+    "webhook_id": "whk_…",
+    "calendar_id": "prn_…",
+    "event_id": "evt_…",
+    "change_id": "chg_…",
+    "occurrence_id": null,
+    "revision": 3,
+    "actor_id": "prn_…",
+    "cursor": "…"
+  }
+}
+```
+
+- Verify the signature as for [mail webhooks](#get-a-webhook-for-new-mail). A retry has the same `webhook-id`
+  and the same `change_id`.
+- The POSTs of two changes can arrive in a different sequence. Use a POST as a hint, and call
+  `calendar_list_changes` with your last cursor to get the changes in their sequence.
+- A change from before the subscription sends no POST. You get your own changes too: skip a change with your
+  own `actor_id` to prevent a loop.
+- The subscription stops with `access_lost` when the agent loses `calendar.webhooks` or `calendar.read`.
+
 ## Get a webhook for a drive
 
 Create an endpoint, then call `drive_create_webhook_subscription`.
@@ -1131,7 +1191,7 @@ To set it up:
 
 1. Add the MCP endpoint of your Asterra instance to ChatGPT as a plugin, and [connect it with OAuth](#connect-an-agent-with-oauth).
    Select the agent that the dot acts as.
-2. Give the agent the scopes of the events: `mail.webhooks`, `chat.webhooks` or `drive.webhooks`.
+2. Give the agent the scopes of the events: `mail.webhooks`, `chat.webhooks`, `drive.webhooks` or `calendar.webhooks`.
    Give it also the read scope of the product, such as `chat.read`, because an event has no content.
    Select them for a new agent at the approval, or add them in **Permissions** on the page of the agent.
 3. Open the agent in **Admin › Members**, and allow the callback host of ChatGPT in its
@@ -1156,6 +1216,9 @@ The events:
 | `chat.message.deleted` | `room_id` and `filter`, optional | A message is deleted |
 | `drive.item.created`, `.updated`, `.moved`, `.trashed`, `.restored`, `.deleted`, `.shared`, `.unshared` | `space_id`, optional | An item of the drive changes |
 | `drive.members.changed`, `drive.deleted` | `space_id` of a shared drive | The shared drive changes |
+| `calendar.event.created`, `.updated`, `.deleted` | `calendar_id`, optional: only your own calendar | You add, change or delete an own event |
+| `calendar.invitation.received`, `.updated`, `.cancelled` | `calendar_id`, optional | A copy of a meeting arrives, changes or goes away |
+| `calendar.rsvp.changed` | `calendar_id`, optional | A response to an event on your calendar changes, for the series or for one occurrence |
 
 Without `room_id`, each room that the agent is a member of sends the event, also a room that it
 joins later. Without `mailbox_id` or `space_id`, the event is for the mailbox or the drive of the agent.
@@ -1185,7 +1248,15 @@ For client developers:
   send `filter: "all"`.
   `events/unsubscribe` stops the subscription with each `filter`.
 - The events have no replay: `cursor` is always `null`. After a gap, read the room, the inbox or the
-  drive to find what you did not get.
+  drive to find what you did not get. For Calendar, call `calendar_list_changes` with the `cursor` from
+  `data` of the last POST that you got.
+- A calendar POST has these fields in `data`: `calendar_id`, `event_id`, `change_id`,
+  `occurrence_id` (null for a change of the entire event or series), `revision`, `actor_id` and `cursor`. It has no title, time or response.
+  Read the event with `calendar_get_event`. A retry has the same `change_id`. The POSTs of two changes can
+  arrive in a different sequence, and `revision` is not contiguous: call `calendar_list_changes` with your
+  last cursor to get the changes in their sequence. Skip a change with your own
+  `actor_id` to prevent a loop. A calendar subscription needs `calendar.read` too. The access is checked
+  again before each POST, so an agent that loses `calendar.read` gets no more POSTs.
 
 If ChatGPT cannot start or change a subscription and shows no reason, find the log line
 `mcp events/subscribe refused` in the logs of the Worker. Its `code` and `detail` give the reason.

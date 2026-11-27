@@ -1,7 +1,7 @@
 # `webhooks` module
 
 An endpoint is a URL outside Asterra. A subscription chooses one event and one target for that URL.
-Mail, Chat and Drive use the same signature, the same queue and the same retry rules.
+Mail, Chat, Drive and Calendar use the same signature, the same queue and the same retry rules.
 Each product exposes its own subscription operations. Endpoint operations are shared.
 
 | File | Purpose |
@@ -36,10 +36,12 @@ Other modules import `index.ts` only.
 | `drive.item.unshared` | That access ends |
 | `drive.members.changed` | The members of a shared drive change |
 | `drive.deleted` | A shared drive is deleted |
+| `calendar.*` | A committed change of a calendar: seven event names ([Calendar](../calendar/README.md#changes)) |
 
-A star sends nothing. Meet and Slides have no product yet, so they have no event.
+A star sends nothing. Meet and Slides have no event yet.
 Directory changes have no event. A webhook must not leak the list of the organization.
-The POST has ids and a URI. It has no mail, no message text and no file content.
+The POST has ids and a URI. It has no mail, no message text and no file content. A calendar POST has ids and a
+cursor, and no title, time or answer.
 A chat POST also has the reason, the author and the version of the message ([Chat events](#chat-events)).
 
 ## Chat events
@@ -123,7 +125,9 @@ Mail subscriptions use `mail.webhooks`. The target is your mailbox, a team mailb
 Chat subscriptions use `chat.webhooks`. The target is you, or an agent that you sponsor.
 Drive subscriptions use `drive.webhooks`. The target is your drive, a shared drive that you belong to, or the drive of an agent that you sponsor.
 A sponsor cannot subscribe to a shared drive only because an agent belongs to it.
-The sponsor, an owner or an admin can list and delete the subscriptions of an agent.
+Calendar subscriptions use `calendar.webhooks`, and the create also needs `calendar.read`. The target is your own calendar only.
+The sponsor, an owner or an admin can list and delete the mail, chat and drive subscriptions of an agent. They cannot list or delete its calendar subscriptions.
+`webhooks.list_endpoints` uses the list of all products (`DOMAINS` in `endpoints.ts`) to find a credential that holds each webhook scope. A credential without `calendar.webhooks` does not see an endpoint that has only calendar subscriptions.
 A [service account](../identity/README.md#service-accounts) has no webhooks: its tokens hold no webhook scope, and its sponsor cannot subscribe for it.
 A delivery to a subscription for a service account stops with `access_lost`.
 An agent holds its scopes, not its key or its OAuth connection ([Access of an agent](../identity/README.md#access-of-an-agent)).
@@ -148,6 +152,7 @@ So the payload schema of MCP Events has the three fields as optional. A later ch
 A job with a reason that this Worker does not know is valid, and sends as a job with no reason (`knownReason`). So a rollback after a new reason sends no job to the dead letters.
 The previous Worker does not read the filter. During a deploy, it can send a message that is not for the target to a subscription with the filter `addressed`.
 Mail jobs stay the same. The mail body has no `endpoint_id`.
+A calendar job (`calendar_event`, then `calendar_delivery`) has the ids of one change of the feed of a `CalendarDO`. Its `eventId` is the id of the change, so a job sent again has the same `webhook-id`. The fan-out sends nothing to a subscription from after the change. The POSTs of two changes can arrive in a different sequence, so a receiver that needs the sequence uses the `cursor` and `calendar.list_changes`.
 
 Five failed deliveries in a row disable the endpoint. One success sets the count to 0.
 HTTP 410, a revoked endpoint credential, or a refused outbound policy also disables the endpoint.
@@ -161,6 +166,7 @@ Nothing changes the account scopes of an agent after its creation now. An agent 
 - The agent must hold the webhook scope of the product (`webhookScope`) on its account. If it does not, the subscription stops with `access_lost`.
 - The check of the target is the check of a membership, for a person and for an agent. A team mailbox needs `mail.read` in the membership. A shared drive or a room needs the creator in its members.
 - A subscription that a person creates, also for an agent that the person sponsors, does not get this check.
+- A calendar subscription is for the own calendar of its creator only. A different target, or an agent without `calendar.read`, stops it with `access_lost`.
 
 This check also applies to MCP Events (see [MCP Events](#mcp-events)).
 
@@ -183,6 +189,7 @@ gives it to the MCP adapter. The events are the webhook events of the table abov
 | `chat.message.created`, `chat.message.updated`, `chat.message.deleted` | `room_id`: one room that you are a member of. Without it, each room that you are a member of. `filter`: `all` or `addressed` ([Chat events](#chat-events)). The default is `addressed` for an agent and `all` for a person | `room_id`, `message_id`, `reason`, `author_id`, `version`, `uri`, and `parent_id` for a reply in a thread |
 | `drive.item.*` | `space_id`: your drive (the default), a shared drive that you belong to, or the drive of an agent that you sponsor | `space_id`, `item_id`, `uri` |
 | `drive.members.changed`, `drive.deleted` | `space_id`: a shared drive that you belong to | `space_id`, `uri` |
+| `calendar.*` (seven names) | `calendar_id`: your own calendar, the default and the only allowed value. The credential also needs `calendar.read` | `calendar_id`, `event_id`, `change_id`, `occurrence_id`, `revision`, `actor_id`, `cursor` |
 
 A subscription of MCP Events is one row in `webhook_endpoints` with `protocol = 'mcp_events'` and one
 row in `webhook_subscriptions`. So the fan-out, the queue, the access checks before each POST, the
@@ -274,7 +281,7 @@ are plaintext.
 | State | Where | Notes |
 | --- | --- | --- |
 | Endpoints | D1 `webhook_endpoints` | The creator, the credential, the URL, the label, the secret, the auth key, the header and the failure count. `ENCRYPTION_KEY` seals the secret, the auth key and the header value (see [Secrets at rest](#secrets-at-rest)). Migration `0013`. Migration `0014` adds the protocol, the secret that a refresh replaced, and the time of the last verification |
-| Subscriptions | D1 `webhook_subscriptions` | The endpoint, the product, the event, the target, the credential and the mail retry marker. The chat sequence is the row id. Migration `0014` adds the end of a subscription and the room of a chat subscription. Migration `0016` adds the filter of a chat subscription. Migration `0021` records if the creator set the filter. Migration `0023` gives `addressed` to each chat subscription of MCP Events for an agent with `all` and a filter that is not set |
+| Subscriptions | D1 `webhook_subscriptions` | The endpoint, the product, the event, the target, the credential and the mail retry marker. The chat sequence is the row id. Migration `0014` adds the end of a subscription and the room of a chat subscription. Migration `0016` adds the filter of a chat subscription. Migration `0021` records if the creator set the filter. Migration `0023` gives `addressed` to each chat subscription of MCP Events for an agent with `all` and a filter that is not set. Migration `0041` builds the table again with the domain `calendar`, with the same rows, sequences, indexes and mirror triggers |
 | Verification counts | D1 `mcp_event_verifications` | For each principal: the start of the current hour and the number of verification POSTs in it. Migration `0014`. `directory.delete_principal` deletes the row |
 | Old mail rows | D1 `webhooks` | Kept for the previous Worker. `migrated` marks a copied row |
 | Old chat rows | D1 `chat_webhooks` | Kept for the previous Worker. `migrated` marks a copied row |

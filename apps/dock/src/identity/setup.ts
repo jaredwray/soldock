@@ -36,7 +36,8 @@ import mailboxDelegatesSchema from "../../migrations/0037_mailbox_delegates.sql"
 import calendarScopesSchema from "../../migrations/0038_calendar_scopes.sql";
 import chatPushSettingsSchema from "../../migrations/0039_chat_push_settings.sql";
 import mailboxAliasSchema from "../../migrations/0040_mailbox_aliases.sql";
-import feedbackSchema from "../../migrations/0041_feedback.sql";
+import calendarWebhooksSchema from "../../migrations/0041_calendar_webhooks.sql";
+import feedbackSchema from "../../migrations/0042_feedback.sql";
 import { log, OperationError, randomToken } from "../platform/index.ts";
 import { allMailboxIds } from "./team-mailboxes.ts";
 
@@ -193,6 +194,7 @@ function freshDirectoryStatements(db: D1Database): D1PreparedStatement[] {
 		...calendarScopesSchema.split("--> statement-breakpoint"),
 		...chatPushSettingsSchema.split("--> statement-breakpoint"),
 		...mailboxAliasSchema.split("--> statement-breakpoint"),
+		...calendarWebhooksSchema.split("--> statement-breakpoint"),
 		...feedbackSchema.split("--> statement-breakpoint"),
 		// The directory now has the schema of each bundled migration. Record them in the table that
 		// `wrangler d1 migrations apply` reads, or it runs them again later. A second run of 0004 would
@@ -244,5 +246,6 @@ const BUNDLED_MIGRATIONS = [
 	"0038_calendar_scopes.sql",
 	"0039_chat_push_settings.sql",
 	"0040_mailbox_aliases.sql",
-	"0041_feedback.sql",
+	"0041_calendar_webhooks.sql",
+	"0042_feedback.sql",
 ] as const;

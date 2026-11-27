@@ -10,7 +10,8 @@ type SocketEnv = { Bindings: Env; Variables: RequestIdVariables };
 
 /**
  * The socket carries the rooms as `chat.list_rooms` returns them, so a credential gets a socket only
- * when it can call that operation. A later event type that is not Chat needs its own check.
+ * when it can call that operation. A later event type that is not Chat needs its own check: the hint
+ * `calendar.changed` goes only to a socket whose credential holds `calendar.read` (`EventsSocketOpen.calendar`).
  */
 const READ_OPERATION = operations["chat.list_rooms"];
 

@@ -1,11 +1,12 @@
 import { EmailAddress } from "@asterra/contracts";
 
 /**
- * The domain that the New member form selects first. It is the domain of the address of the admin, if
- * that domain is saved. If not, it is the first saved domain. With no saved domain, it is empty.
+ * The domain that a list of the saved domains selects first. `address` is the address whose domain the list
+ * prefers: the address of the admin in the New member form, and the primary address of the mailbox in the
+ * Aliases form. If that domain is not saved, it is the first saved domain. With no saved domain, it is empty.
  */
-export function defaultMailDomain(domains: readonly string[], ownAddress: string): string {
-	const own = ownAddress.slice(ownAddress.lastIndexOf("@") + 1).toLowerCase();
+export function defaultMailDomain(domains: readonly string[], address: string): string {
+	const own = address.slice(address.lastIndexOf("@") + 1).toLowerCase();
 	return domains.includes(own) ? own : (domains[0] ?? "");
 }
 

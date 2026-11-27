@@ -28,6 +28,7 @@ import type {
 	PrincipalRef,
 	Refusal,
 } from "./calendar.ts";
+import { calendarWebhookHandlers } from "./webhooks.ts";
 
 type CalendarOperation = Extract<OperationName, `calendar.${string}`>;
 
@@ -365,4 +366,19 @@ export const calendarHandlers: Pick<HandlerMap<CallContext>, CalendarOperation> 
 		);
 		return { calendars };
 	},
+
+	async "calendar.list_changes"(call, input) {
+		const { stub, ctx } = openCalendar(call);
+		const page = accept(
+			await stub.listChanges(ctx, input.cursor ?? null, input.limit ?? CALENDAR_LIMITS.changesPageSize),
+		);
+		return {
+			changes: page.changes.map((change) => ({ ...change, at: iso(change.at) })),
+			cursor: page.cursor,
+			has_more: page.has_more,
+			expired: page.expired,
+		};
+	},
+
+	...calendarWebhookHandlers,
 };

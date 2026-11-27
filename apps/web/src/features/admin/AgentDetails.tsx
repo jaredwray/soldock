@@ -8,7 +8,7 @@ import { viewPath } from "../../routes.ts";
 import { isOrgAdmin, useSession } from "../auth/session.tsx";
 import { ApiKeyManager } from "../settings/ApiKeys.tsx";
 import { TargetWebhooks } from "../settings/TargetWebhooks.tsx";
-import { WEBHOOK_DOMAINS } from "../settings/webhookModel.ts";
+import { AGENT_WEBHOOK_DOMAINS } from "../settings/webhookModel.ts";
 import { AccountRequests } from "./AccountRequests.tsx";
 import { MemberAccess } from "./MemberAccess.tsx";
 import { OAuthGrants } from "./OAuthGrants.tsx";
@@ -68,7 +68,7 @@ export function AgentDetails({ agent, sponsor, principals, canReadMail, showSpon
 				heading={`Webhooks of ${agent.display_name}`}
 				targetId={agent.id}
 				targetName={agent.display_name}
-				domains={WEBHOOK_DOMAINS}
+				domains={AGENT_WEBHOOK_DOMAINS}
 				canCreate={agent.sponsor_id === whoami.principal.id}
 				agent
 				note="Only the sponsor can add a webhook or an event."

@@ -58,6 +58,7 @@ const DOMAIN_HINT: Record<WebhookDomain, string> = {
 	mail: "The POST has no mail content. The receiver reads the inbox with its own key.",
 	chat: "The POST has no message text. It has the reason, for example a mention.",
 	drive: "The POST has no file content. A star sends nothing.",
+	calendar: "The POST has no title, time or answer. The receiver reads the event with its own key.",
 };
 
 const FILTER_OPTIONS = (["all", "addressed"] as const).map((value) => ({ value, label: CHAT_FILTER_LABELS[value] }));

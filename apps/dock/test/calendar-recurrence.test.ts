@@ -431,15 +431,18 @@ describe("a reminder that waits for a retry", () => {
 		await runInDurableObject(calendar(principalId), (instance) => {
 			const binding = instance as unknown as { env: Env };
 			const real = binding.env;
+			// Only the first reminder fails. The hint of the change feed goes to the real object.
 			let calls = 0;
 			const PRINCIPAL = {
 				idFromName: (name: string) => real.PRINCIPAL.idFromName(name),
 				get: (id: DurableObjectId) => {
-					calls += 1;
-					if (calls > 1) return real.PRINCIPAL.get(id);
+					const stub = real.PRINCIPAL.get(id);
 					return {
-						recordCalendarReminder: async () => {
-							throw new Error("The PrincipalDO is not available.");
+						calendarChanged: (calendarId: string) => stub.calendarChanged(calendarId),
+						recordCalendarReminder: async (...args: Parameters<typeof stub.recordCalendarReminder>) => {
+							calls += 1;
+							if (calls === 1) throw new Error("The PrincipalDO is not available.");
+							return stub.recordCalendarReminder(...args);
 						},
 					};
 				},
@@ -697,6 +700,8 @@ describe("invitations and access", () => {
 describe("a credential without calendar.read", () => {
 	it("gets no reminder in the Activity and none on the events socket", async () => {
 		await ada.call("calendar.create_event", { ...meeting, title: "Secret plan", recurrence: undefined });
+		// The hint of the change feed for the new event goes out before the sockets open.
+		await drain(ada.id);
 		const keyOf = async (scopes: InputOf<"account.create_api_key">["scopes"]) =>
 			(await ada.call("account.create_api_key", { label: "narrow", scopes })).api_key.secret;
 		const chatOnly = await keyOf(["chat.read", "chat.write"]);
