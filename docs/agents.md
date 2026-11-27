@@ -722,6 +722,11 @@ principal. The sponsor of an agent, and an owner or an admin, do not read the ca
 | `calendar_create_event` | `calendar.write` | Add an event. Takes `idempotency_key` |
 | `calendar_update_event` | `calendar.write` | Change the fields that you give. Takes `base_revision` |
 | `calendar_delete_event` | `calendar.write` | Delete an event. Takes `base_revision` and `dry_run` |
+| `calendar_update_occurrence` | `calendar.write` | Change or move one occurrence of a series. Takes `base_revision` |
+| `calendar_cancel_occurrence` | `calendar.write` | Cancel one occurrence of a series. Takes `base_revision` and `dry_run` |
+| `calendar_respond_to_event` | `calendar.write` | Accept or decline an invitation, for the series or for one occurrence |
+| `calendar_set_reminder` | `calendar.write` | Set your own reminder: 5, 10 or 30 minutes before, or none |
+| `calendar_query_free_busy` | `calendar.read` | The busy times of principals of the organization, without details |
 
 - **Timed events.** Give `start` and `end` as ISO 8601 times with an offset or `Z`, and `time_zone`, an
   IANA name such as `America/New_York`. The output gives `start` and `end` in UTC, with `time_zone`.
@@ -730,6 +735,17 @@ principal. The sponsor of an agent, and an owner or an admin, do not read the ca
 - **A range.** `calendar_list_events` takes `time_min` and `time_max` (at most 366 days apart). An event
   that ends at `time_min`, or starts at `time_max`, is not in the range. Give your own `time_zone`: it
   sets the days of all-day events. The default is UTC.
+- **Repeats.** Give `recurrence` with `frequency` (`daily`, `weekly` or `monthly`), `interval`, and
+  `until` or `count`. A meeting each other week is `weekly` with interval 2. A timed series keeps its wall
+  clock time in `time_zone` when the clock changes. A monthly series on the 31st skips the months without
+  a 31st.
+- **Occurrences.** `calendar_list_events` gives one entry for each occurrence of a series, with
+  `occurrence_id`. Use that id with `calendar_update_occurrence` or `calendar_cancel_occurrence` to change
+  one occurrence. `calendar_update_event` and `calendar_delete_event` change the entire series.
+- **Invitations.** An agent cannot invite now: `attendee_ids` gives `forbidden`. An agent can respond to
+  nothing, because only people get invitations.
+- **Reminders.** A new timed event gets your reminder of 10 minutes. It shows in your Activity
+  (`chat_list_activity`, kind `calendar_reminder`). Change it with `calendar_set_reminder`.
 - **Changes.** Send `base_revision` with the revision that you read. When the event changed after your
   read, the call returns `conflict` and changes nothing. Read the event again, then try again.
 - **Limits.** A title has 1 to 300 characters, a location at most 500, and a description at most 8000. An

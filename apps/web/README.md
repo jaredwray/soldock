@@ -1225,6 +1225,24 @@ MCP clients. The app has no UI-only path.
     dialog, so a second click on **Save** adds one event. A change sends `base_revision`, and sends
     `when` only when the time changed. On `conflict`, the dialog says that the event changed in a
     different place. **Delete** asks first, and **Cancel** goes back to the form.
+  - **Repeats** offers each day, each week, each 2 weeks and each month, and **Ends** offers never, a
+    date or a number of times. The dialog checks the rule with `checkRecurrence` from the contracts. A
+    rule that the dialog does not offer shows as text. **Reminder** offers none, 5, 10 and 30 minutes
+    before, for a timed event. It calls `calendar.set_reminder`, which does not change the revision.
+    **Attendees** adds people of the organization.
+  - **An occurrence of a series.** A save or a delete first asks "This event" or "All events". "This
+    event" calls `calendar.update_occurrence` or `calendar.cancel_occurrence`. "All events" reads the
+    series with `calendar.get_event`, and calls `calendar.update_event` or `calendar.delete_event`. A move
+    of the occurrence moves the first occurrence by the same days and to the same wall clock time
+    (`seriesWhen`). A change of the rule or of the attendees is for all events, with no question.
+  - **An invitation.** The dialog of a copy of an attendee shows the organizer and the rule, with
+    **Accept**, **Decline** (`calendar.respond_to_event`, with the same question for an occurrence) and the
+    reminder. The fields do not change.
+  - An occurrence of a series has the repeat mark before its title. A declined event has its title
+    struck through. The key of an entry is its occurrence id.
+  - **Reminders.** Each page of the app shows a toast for the `calendar.reminder` event of the events
+    socket (`useCalendarReminders`), with **Open**. The Activity of Chat has the chip **Event reminders**.
+    A click on such an item opens the week of the event.
   - The page gets the events of the period with `calendar.list_events` and each page of it. It gets
     them again every 30 seconds while the tab is visible, on window focus, and after each change. A
     failed load shows the error with **Try again**. A screen reader hears "Loading events…" and "No

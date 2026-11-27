@@ -36,6 +36,104 @@ function isPushJob(body: unknown): body is ChatPushJob {
 	);
 }
 
+/**
+ * One calendar reminder to one device. The CalendarDO of the principal sends it after the PrincipalDO
+ * recorded the reminder in the Activity. The payload has no title, as a chat push has no text.
+ */
+export interface CalendarPushJob {
+	v: 1;
+	kind: "calendar_reminder";
+	principalId: string;
+	subscriptionId: string;
+	/** The id of the Activity item. The device uses it as the tag, so a second delivery replaces the first. */
+	reminderId: string;
+	eventId: string;
+	occurrenceId: string | null;
+	startAt: number;
+	minutes: number;
+}
+
+function isCalendarPushJob(body: unknown): body is CalendarPushJob {
+	if (typeof body !== "object" || body === null) return false;
+	const job = body as Partial<CalendarPushJob>;
+	return (
+		job.v === 1 &&
+		job.kind === "calendar_reminder" &&
+		typeof job.principalId === "string" &&
+		typeof job.subscriptionId === "string" &&
+		typeof job.reminderId === "string" &&
+		typeof job.eventId === "string" &&
+		(job.occurrenceId === null || typeof job.occurrenceId === "string") &&
+		Number.isSafeInteger(job.startAt) &&
+		Number.isSafeInteger(job.minutes)
+	);
+}
+
+/** Sends calendar reminder jobs to the push queue, at most 100 in one batch. */
+export async function enqueueCalendarPush(
+	env: Pick<Env, "CHAT_PUSH">,
+	jobs: readonly CalendarPushJob[],
+): Promise<void> {
+	for (let offset = 0; offset < jobs.length; offset += 100) {
+		await env.CHAT_PUSH.sendBatch(jobs.slice(offset, offset + 100).map((body) => ({ body })));
+	}
+}
+
+async function sendPush(
+	vapid: VapidConfig,
+	target: { endpoint: string; keys: { p256dh: string; auth: string } },
+	payload: unknown,
+	remainingMs: number,
+): Promise<number> {
+	const endpoint = new URL(target.endpoint);
+	const signal = AbortSignal.timeout(10_000);
+	await checkPublicHost(endpoint.hostname, signal);
+	const body = await encryptPush(target.keys, JSON.stringify(payload));
+	const response = await fetch(endpoint.href, {
+		method: "POST",
+		headers: {
+			authorization: await pushAuthorization(vapid, endpoint.origin),
+			"content-encoding": "aes128gcm",
+			"content-type": "application/octet-stream",
+			ttl: String(Math.ceil(remainingMs / 1000)),
+		},
+		body,
+		redirect: "manual",
+		signal,
+	});
+	await response.body?.cancel();
+	return response.status;
+}
+
+async function deliverCalendarPush(job: CalendarPushJob, env: Env, vapid: VapidConfig): Promise<void> {
+	// A reminder after the start of the occurrence helps nobody.
+	const remaining = job.startAt - Date.now();
+	if (remaining <= 0) return;
+	const principal = env.PRINCIPAL.get(env.PRINCIPAL.idFromName(job.principalId));
+	const target = await principal.calendarPushTarget(job.subscriptionId, job.reminderId);
+	if (!target) return;
+	const status = await sendPush(
+		vapid,
+		target,
+		{
+			kind: "calendar_reminder",
+			principal_id: job.principalId,
+			reminder_id: job.reminderId,
+			event_id: job.eventId,
+			occurrence_id: job.occurrenceId,
+			start: new Date(job.startAt).toISOString(),
+			minutes: job.minutes,
+			sound: target.sound,
+		},
+		remaining,
+	);
+	if ([401, 403, 404, 410].includes(status)) {
+		await principal.expirePushSubscription(job.subscriptionId);
+	} else if (status < 200 || status >= 300) {
+		throw new Error(`Push service status ${status}.`);
+	}
+}
+
 async function deliverPush(job: ChatPushJob, env: Env, vapid: VapidConfig): Promise<void> {
 	const remaining = job.occurredAt + PUSH_LIFETIME_MS - Date.now();
 	if (remaining <= 0) return;
@@ -108,6 +206,9 @@ export async function handleChatPushBatch(batch: MessageBatch<unknown>, env: Env
 			} else if (isPushJob(job)) {
 				const config = await vapid();
 				if (config) await deliverPush(job, env, config);
+			} else if (isCalendarPushJob(job)) {
+				const config = await vapid();
+				if (config) await deliverCalendarPush(job, env, config);
 			} else {
 				log("warn", "invalid chat push job", { jobId: message.id });
 			}
