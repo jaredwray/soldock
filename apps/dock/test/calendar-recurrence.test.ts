@@ -818,7 +818,7 @@ describe("device notifications", () => {
 			return new Response(null, { status: 201 });
 		});
 		const batch = createMessageBatch(
-			CHAT_PUSH_QUEUE,
+			`soldock-${CHAT_PUSH_QUEUE}`,
 			jobs.map((body, index) => ({ id: String(index), timestamp: new Date(), attempts: 1, body })),
 		);
 		const context = createExecutionContext();
@@ -828,7 +828,7 @@ describe("device notifications", () => {
 
 		// After the start, a late job sends nothing.
 		vi.setSystemTime(new Date("2030-10-22T16:00:00Z"));
-		const late = createMessageBatch(CHAT_PUSH_QUEUE, [
+		const late = createMessageBatch(`soldock-${CHAT_PUSH_QUEUE}`, [
 			{ id: "late", timestamp: new Date(), attempts: 1, body: jobs[0] },
 		]);
 		await worker.queue(late, env);
