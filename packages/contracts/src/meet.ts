@@ -417,7 +417,15 @@ export const PublishRequest = z.strictObject({
 	tracks: z
 		.array(z.strictObject({ mid: z.string().regex(MEET_MID_PATTERN), kind: TrackKind }))
 		.min(1)
-		.max(2),
+		.max(2)
+		.refine(
+			(tracks) => new Set(tracks.map((track) => track.mid)).size === tracks.length,
+			"each track needs a different mid",
+		)
+		.refine(
+			(tracks) => new Set(tracks.map((track) => track.kind)).size === tracks.length,
+			"send at most one audio and one video track",
+		),
 });
 export const PublishResponse = z.object({
 	answer: z.object({ sdp: z.string() }),

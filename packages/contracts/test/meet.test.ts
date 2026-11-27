@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseMeetingCode } from "../src/meet.ts";
+import { PublishRequest, parseMeetingCode } from "../src/meet.ts";
 
 describe("parseMeetingCode", () => {
 	it("gives the canonical code of a link or a code, and null for text without a code", () => {
@@ -11,5 +11,40 @@ describe("parseMeetingCode", () => {
 		// A bad percent escape is no code. It must not throw: the Meet page and the app shell call this on user text.
 		expect(parseMeetingCode("https://dock.test/meet/%zz")).toBeNull();
 		expect(parseMeetingCode("/meet/%E0%A4%A")).toBeNull();
+	});
+});
+
+// The object refuses two tracks with one mid or one kind. The contract refuses them too, so a client that checks its
+// request with the contract never sends a request that the route refuses.
+describe("PublishRequest", () => {
+	it("needs a different mid and a different kind for each track", () => {
+		const base = { session: 1, offer: { sdp: "v=0" } };
+		expect(
+			PublishRequest.safeParse({
+				...base,
+				tracks: [
+					{ mid: "0", kind: "audio" },
+					{ mid: "1", kind: "video" },
+				],
+			}).success,
+		).toBe(true);
+		expect(
+			PublishRequest.safeParse({
+				...base,
+				tracks: [
+					{ mid: "0", kind: "audio" },
+					{ mid: "0", kind: "video" },
+				],
+			}).success,
+		).toBe(false);
+		expect(
+			PublishRequest.safeParse({
+				...base,
+				tracks: [
+					{ mid: "0", kind: "audio" },
+					{ mid: "1", kind: "audio" },
+				],
+			}).success,
+		).toBe(false);
 	});
 });
