@@ -5321,7 +5321,7 @@ fieldset {
 	overflow-wrap: anywhere;
 }
 
-/* The New member address: the mailbox name in a field, and a list of the saved domains after it. */
+/* The New member address and a new alias: the name in a field, and a list of the saved domains after it. */
 .address-row .address-domain-select {
 	flex: 1 1 0;
 	max-width: 50%;

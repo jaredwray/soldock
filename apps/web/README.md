@@ -511,8 +511,10 @@ MCP clients. The app has no UI-only path.
     selects a saved domain from a list (`directory.list_mail_domains`). The list selects the domain of the
     primary address of the mailbox first (`defaultMailDomain`). With no saved domain, the form is disabled,
     and a hint tells the admin to add a domain in Admin › Email domains. The form checks the address with
-    `AliasAddress` before the call. An error of the add shows in the form and the field refers to it
-    (`aria-invalid`, `aria-describedby`). An error of the load shows above the list with **Try again**. At
+    `AliasAddress` before the call. An error of the add shows in the form. The field and the list refer to
+    it (`aria-describedby`), and the field has `aria-invalid`. An error of the load shows above the list
+    with **Try again**. If only the domains do not load, the aliases show, and the form shows the error as
+    an alert with its own **Try again**. The list and the button stay disabled until the domains load. At
     the limit, the field, the list and the button are disabled.
   - A team mailbox has its own paths (`/mail/team/<tmb_id>/…`), so a deep link and a reload stay in
     it. Each mail call of its views sends `mailbox_id`. Search, labels and the composer use the

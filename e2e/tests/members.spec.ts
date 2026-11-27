@@ -184,6 +184,7 @@ test("an admin adds an alias on the page of a member, and removes it", async ({ 
 		await expect(aliases.getByText("This mailbox has no aliases.")).toBeVisible();
 
 		const field = aliases.getByLabel("New alias");
+		// The list of domains has an accessible name and selects a saved domain.
 		await expect(aliases.getByRole("combobox", { name: "Email domain of the alias" })).toHaveText("example.com");
 		await field.fill("tomasz");
 		await aliases.getByRole("button", { name: "Add alias" }).click();
