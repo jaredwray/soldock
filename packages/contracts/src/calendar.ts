@@ -48,6 +48,9 @@ export const CALENDAR_LIMITS = {
 	changes: 10_000,
 	/** The grants of one calendar. */
 	grants: 200,
+	/** The calendars of one page of calendar.list_shared_calendars, without `limit`, and the most. */
+	defaultSharedPageSize: 50,
+	sharedPageSize: 100,
 	/** The longest time range of one calendar.find_times, in days of the wall clock of its time zone. */
 	findRangeDays: 31,
 	/** The attendees of one calendar.find_times, without the calendar of the call. */
@@ -956,6 +959,41 @@ export const setGrant = defineOperation({
 	errors: ["not_found"],
 });
 
+export const SharedCalendar = z.object({
+	/** The id of the person who owns the calendar. Pass it as calendar_id. */
+	calendar_id: z.string(),
+	display_name: z.string(),
+	access: CalendarAccess,
+});
+export type SharedCalendar = z.infer<typeof SharedCalendar>;
+
+export const listSharedCalendars = defineOperation({
+	name: "calendar.list_shared_calendars",
+	summary: "List the calendars that people share with you",
+	description: [
+		"Returns the calendars of the people who gave you free_busy or schedule access, by the id of the owner.",
+		"Pass calendar_id only for a calendar with schedule access. A calendar with free_busy access shows its busy times in calendar.query_free_busy and calendar.find_times.",
+		"The list does not give access: each call with calendar_id checks the grant again, so a grant that ended gives forbidden.",
+		"A page can have fewer calendars than limit. When next_cursor is not null, call again with cursor set to next_cursor.",
+	].join(" "),
+	http: { method: "GET", path: "/api/v1/calendar/shared" },
+	scopes: ["calendar.read"],
+	callers: ["human", "agent", "service"],
+	annotations: READ,
+	input: z.strictObject({
+		limit: z.coerce
+			.number()
+			.int()
+			.min(1)
+			.max(CALENDAR_LIMITS.sharedPageSize)
+			.optional()
+			.describe(`The most calendars on one page. The default is ${CALENDAR_LIMITS.defaultSharedPageSize}.`),
+		cursor: z.string().max(200).optional(),
+	}),
+	output: z.object({ calendars: z.array(SharedCalendar), next_cursor: z.string().nullable() }),
+	errors: ["invalid"],
+});
+
 export const removeGrant = defineOperation({
 	name: "calendar.remove_grant",
 	summary: "Remove the access of a person or an agent to your calendar",
@@ -1099,6 +1137,7 @@ export const calendarOperations = {
 	"calendar.list_grants": listGrants,
 	"calendar.set_grant": setGrant,
 	"calendar.remove_grant": removeGrant,
+	"calendar.list_shared_calendars": listSharedCalendars,
 	"calendar.list_changes": listChanges,
 	"calendar.create_webhook_subscription": createCalendarWebhookSubscription,
 	"calendar.list_webhook_subscriptions": listCalendarWebhookSubscriptions,

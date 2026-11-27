@@ -200,7 +200,15 @@ export function Shell() {
 					/>
 				);
 			case "calendar":
-				return <CalendarApp view={route.view} date={route.date} />;
+				// A different calendar gets a new page, so no dialog or event of one calendar stays on the other.
+				return (
+					<CalendarApp
+						key={route.calendarId ?? "own"}
+						view={route.view}
+						date={route.date}
+						calendarId={route.calendarId}
+					/>
+				);
 			case "profile":
 				// The key gives each principal its own page, so the data of one never shows on a different one.
 				return <ProfilePage key={route.principalId} principalId={route.principalId} />;

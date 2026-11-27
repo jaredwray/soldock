@@ -1215,7 +1215,9 @@ MCP clients. The app has no UI-only path.
   - While no change waits, the page gets the sheet again every 15 seconds when the tab is visible,
     and on window focus.
 - **Calendar** (`/calendar`, `/calendar/week/<date>`, `/calendar/month/<date>`). The own calendar of
-  the person, in the time zone of the browser. The rail has **Calendar** after Chat.
+  the person, in the time zone of the browser. The rail has **Calendar** after Chat. The calendar of a
+  person who lets the person schedule is at `/calendar/person/<id>/<view>/<date>`: the **Calendar** list
+  of the toolbar opens it. **Calendar › Sharing** gives and removes access to the own calendar.
   - The toolbar has **Today**, **Previous** and **Next**, the title of the period, and the **Week** and
     **Month** views. Each period has its own path, so a reload or a link opens the same week or month.
     A week starts on Sunday.
@@ -2169,6 +2171,7 @@ dock Worker serves `index.html` for each app path, so a deep link works on reloa
 | `/docs/<prn_id>/<itm_id>` | The editor of one doc |
 | `/sheets/<prn_id>/<itm_id>` | The editor of one sheet |
 | `/calendar` | Calendar: the week of today |
+| `/calendar/person/<id>/<view>/<date>` | Calendar: a period of the calendar of a person who lets the person schedule |
 | `/calendar/week/<date>`, `/calendar/month/<date>` | The week or the month that holds the date (`YYYY-MM-DD`) |
 | `/chat` | Chat, without an open room |
 | `/chat/<rm_id>`, `/chat/<dm_id>` | One room, or one direct message |

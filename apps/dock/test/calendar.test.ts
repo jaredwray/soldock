@@ -382,6 +382,7 @@ describe("who reaches a calendar", () => {
 		// that take calendar_id, as for a mailbox delegate.
 		expect(missing_scopes.find((entry) => entry.scope === "calendar.read")?.operations).toEqual([
 			"calendar.query_free_busy",
+			"calendar.list_shared_calendars",
 			"calendar.list_changes",
 			"calendar.create_webhook_subscription",
 		]);

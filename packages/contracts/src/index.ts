@@ -51,6 +51,7 @@ export {
 	Recurrence,
 	RecurrenceInput,
 	type ReminderMinutes,
+	SharedCalendar,
 	splitIds,
 	zonedDate,
 	zonedDayStart,

@@ -26,6 +26,7 @@ interface ApiEvent {
 	id: string;
 	title: string;
 	organizer: { principal_id: string } | null;
+	created_by: string | null;
 }
 
 /** The events of one day in New York with this title, from the server. */
@@ -173,5 +174,102 @@ test("a person finds a time with a teammate, and an agent schedules for the pers
 		await deleteAgents(admin, agentIds);
 		await ingrid.request.delete(`/api/v1/calendar/grants/${rafaelId}`, { headers: JSON_HEADERS, data: {} });
 		for (const context of [rafael, ingrid, admin]) await context.close();
+	}
+});
+
+test("a person schedules in the calendar of a colleague from the calendar switcher, until the grant ends", async ({
+	browser,
+}) => {
+	// Tomasz lets Ingrid schedule for him. The first test uses Ingrid only as a teammate of Rafael.
+	const tomasz = await signIn(browser, "tomasz");
+	const ingrid = await signIn(browser, "ingrid");
+	const day = farDay();
+	const title = unique("Vendor call");
+	const secret = unique("Hospital");
+	const board = unique("Board prep");
+	const tomaszId = await principalId(tomasz);
+	const ingridId = await principalId(ingrid);
+	const created: string[] = [];
+	try {
+		const ownerPage = await tomasz.newPage();
+		await giveAccess(ownerPage, /^Ingrid/, "Schedule for me");
+		for (const data of [
+			{ title: secret, visibility: "private", start: "10:00", end: "11:00", description: "" },
+			{ title: board, visibility: "default", start: "13:00", end: "14:00", description: `${secret} numbers` },
+		]) {
+			const response = await tomasz.request.post("/api/v1/calendar/events", {
+				headers: JSON_HEADERS,
+				data: {
+					title: data.title,
+					visibility: data.visibility,
+					description: data.description,
+					when: {
+						kind: "timed",
+						start: `${day}T${data.start}:00-05:00`,
+						end: `${day}T${data.end}:00-05:00`,
+						time_zone: "America/New_York",
+					},
+				},
+			});
+			expect(response.ok(), await response.text()).toBe(true);
+			created.push(((await response.json()) as { event: ApiEvent }).event.id);
+		}
+
+		// Ingrid opens the calendar of Tomasz from the switcher.
+		const page = await ingrid.newPage();
+		await page.goto(`/calendar/week/${day}`);
+		await page.getByRole("combobox", { name: "Calendar" }).click();
+		await page.getByRole("option", { name: /^Tomasz/ }).click();
+		await expect(page).toHaveURL(new RegExp(`/calendar/person/${tomaszId}/week/${day}$`));
+		await expect(page.getByText(/You schedule for Tomasz/)).toBeVisible();
+		// The private event is "Busy". The other event shows its title, and no description.
+		await expect(page.getByRole("button", { name: new RegExp(`^${board}`) })).toBeVisible();
+		await expect(page.locator("main")).not.toContainText(secret);
+		await page.getByRole("button", { name: /^Busy,/ }).click();
+		const busy = page.getByRole("dialog", { name: "Busy" });
+		await expect(busy.getByText(/You see only the time/)).toBeVisible();
+		await expect(busy.getByRole("button", { name: "Save" })).toHaveCount(0);
+		await busy.getByText("Close", { exact: true }).click();
+
+		// A new event: Find a time runs as Tomasz, so his busy hour shows.
+		await page.getByRole("button", { name: "New event" }).click();
+		const dialog = page.getByRole("dialog", { name: "New event" });
+		await expect(dialog.getByText(/Tomasz Wieczorek is the organizer/)).toBeVisible();
+		await dialog.getByLabel("Title").fill(title);
+		await dialog.getByLabel("Start date").fill(day);
+		await dialog.getByRole("button", { name: "Find a time" }).click();
+		const finder = dialog.getByRole("region", { name: "Find a time" });
+		await finder.getByLabel("From", { exact: true }).fill(day);
+		await finder.getByLabel("To", { exact: true }).fill(day);
+		await finder.getByRole("button", { name: "Find times" }).click();
+		await expect(finder.getByRole("list", { name: /^Busy times of Tomasz/ })).toContainText("10:00 AM – 11:00 AM");
+		await finder.getByRole("button", { name: /9:00 AM – 9:30 AM/ }).click();
+		await dialog.getByRole("button", { name: "Save" }).click();
+		await expect(page.getByText("Event added.")).toBeVisible();
+
+		// The event is in the calendar of Tomasz, with Tomasz as organizer and Ingrid as the delegate that added it.
+		await expect
+			.poll(async () =>
+				(await eventsOn(tomasz, day, title)).map((event) => [event.organizer?.principal_id, event.created_by]),
+			)
+			.toEqual([[tomaszId, ingridId]]);
+		expect(await eventsOn(ingrid, day, title)).toEqual([]);
+		created.push(...(await eventsOn(tomasz, day, title)).map((event) => event.id));
+
+		// Tomasz removes the access: the page of Ingrid shows that the calendar is not hers to use.
+		const removed = await tomasz.request.delete(`/api/v1/calendar/grants/${ingridId}`, {
+			headers: JSON_HEADERS,
+			data: {},
+		});
+		expect(removed.ok()).toBe(true);
+		await page.reload();
+		await expect(page.getByRole("alert")).toContainText("You cannot use the calendar of");
+		await expect(page.locator("main")).not.toContainText(board);
+	} finally {
+		await tomasz.request.delete(`/api/v1/calendar/grants/${ingridId}`, { headers: JSON_HEADERS, data: {} });
+		for (const id of created) {
+			await tomasz.request.delete(`/api/v1/calendar/events/${id}`, { headers: JSON_HEADERS, data: {} });
+		}
+		for (const context of [tomasz, ingrid]) await context.close();
 	}
 });

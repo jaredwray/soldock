@@ -1,8 +1,11 @@
+import { runInDurableObject } from "cloudflare:test";
+import { env } from "cloudflare:workers";
 import { type InputOf, OWN_KEY_SCOPES } from "@asterra/contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	type Actor,
 	api,
+	callTool,
 	codeOf,
 	createActor,
 	PASSWORD,
@@ -360,6 +363,97 @@ describe("a series in the calendar of a different person", () => {
 		// The delegate has no change feed of the owner: calendar_list_changes takes no calendar_id.
 		const own = await bot.call("calendar.list_changes", { cursor: botHead });
 		expect(own.changes.filter((change) => change.event_id === series.id)).toEqual([]);
+	});
+});
+
+describe("the calendars that people share with you", () => {
+	const shared = async (actor: { call: Actor["call"] }) =>
+		(await actor.call("calendar.list_shared_calendars", {})).calendars.map((entry) => [
+			entry.calendar_id,
+			entry.display_name,
+			entry.access,
+		]);
+
+	it("lists each calendar with the access of the caller, for each kind of caller and through MCP", async () => {
+		const service = await serviceAccount();
+		await ada.call("calendar.set_grant", { principal_id: bot.id, access: "schedule" });
+		await ada.call("calendar.set_grant", { principal_id: grace.id, access: "free_busy" });
+		await ada.call("calendar.set_grant", { principal_id: service.id, access: "schedule" });
+		await grace.call("calendar.set_grant", { principal_id: bot.id, access: "free_busy" });
+		await settleCalendars(ada.id, grace.id);
+		const both = [ada.id, grace.id].sort();
+		expect((await shared(bot)).map((entry) => entry[0])).toEqual(both);
+		expect(await shared(bot)).toEqual(
+			expect.arrayContaining([
+				[ada.id, "Ada Lovelace", "schedule"],
+				[grace.id, "Grace Hopper", "free_busy"],
+			]),
+		);
+		expect(await shared(grace)).toEqual([[ada.id, "Ada Lovelace", "free_busy"]]);
+		expect(await shared(service)).toEqual([[ada.id, "Ada Lovelace", "schedule"]]);
+		// Nobody shares with the owner of the organization, and Ada does not list her own calendar.
+		expect(await shared(owner)).toEqual([]);
+		expect(await shared(ada)).toEqual([]);
+		const tool = await callTool(bot.key, "calendar_list_shared_calendars", {});
+		expect(tool.structuredContent).toEqual(await bot.call("calendar.list_shared_calendars", {}));
+		// Pages.
+		const first = await bot.call("calendar.list_shared_calendars", { limit: 1 });
+		expect(first.calendars).toHaveLength(1);
+		const second = await bot.call("calendar.list_shared_calendars", { limit: 1, cursor: first.next_cursor ?? "" });
+		expect([...first.calendars, ...second.calendars].map((entry) => entry.calendar_id)).toEqual(both);
+		expect(second.next_cursor).toBeNull();
+	});
+
+	it("follows a change and a removal of the grant, also before the hint gets the change", async () => {
+		await ada.call("calendar.set_grant", { principal_id: bot.id, access: "free_busy" });
+		await settleCalendars(ada.id);
+		expect(await shared(bot)).toEqual([[ada.id, "Ada Lovelace", "free_busy"]]);
+		await ada.call("calendar.set_grant", { principal_id: bot.id, access: "schedule" });
+		// The calendar of the owner decides now, before the outbox delivers the change.
+		expect(await shared(bot)).toEqual([[ada.id, "Ada Lovelace", "schedule"]]);
+		await ada.call("calendar.remove_grant", { principal_id: bot.id });
+		expect(await shared(bot)).toEqual([]);
+		await settleCalendars(ada.id);
+		const rows = await runInDurableObject(env.CALENDAR.get(env.CALENDAR.idFromName(bot.id)), (_instance, state) =>
+			state.storage.sql.exec<{ access: string | null }>("SELECT access FROM shared_with_me").toArray(),
+		);
+		expect(rows).toEqual([{ access: null }]);
+	});
+
+	it("never gives access from the hint alone", async () => {
+		// A pointer that no grant backs: the list leaves it out, and the calendar refuses each call.
+		await runInDurableObject(env.CALENDAR.get(env.CALENDAR.idFromName(bot.id)), (_instance, state) => {
+			state.storage.sql.exec(
+				"INSERT INTO shared_with_me (owner_id, access, version, updated_at) VALUES (?, 'schedule', 1, 0)",
+				grace.id,
+			);
+		});
+		expect(await shared(bot)).toEqual([]);
+		expect(await codeOf(bot.call("calendar.list_events", { ...DAY, calendar_id: grace.id }))).toBe("forbidden");
+		// An older state of a grant changes nothing.
+		await ada.call("calendar.set_grant", { principal_id: bot.id, access: "schedule" });
+		await settleCalendars(ada.id);
+		await runInDurableObject(env.CALENDAR.get(env.CALENDAR.idFromName(bot.id)), async (instance) => {
+			await (instance as unknown as { applyGrant: (id: string, m: unknown) => void }).applyGrant(bot.id, {
+				v: 1,
+				owner_id: ada.id,
+				access: null,
+				version: 0,
+			});
+		});
+		expect(await shared(bot)).toEqual([[ada.id, "Ada Lovelace", "schedule"]]);
+	});
+
+	it("hides the calendar of an archived owner, and needs calendar.read", async () => {
+		await grace.call("calendar.set_grant", { principal_id: ada.id, access: "schedule" });
+		await settleCalendars(grace.id);
+		expect(await shared(ada)).toEqual([[grace.id, "Grace Hopper", "schedule"]]);
+		await owner.call("directory.archive_principal", { principal_id: grace.id });
+		expect(await shared(ada)).toEqual([]);
+		const noRead = await narrowKey(ada, ["mail.read"]);
+		expect(await codeOf(noRead("calendar.list_shared_calendars", {}))).toBe("forbidden");
+		await setLegacyScopes(bot.id, ["account.read"]);
+		expect(await codeOf(bot.call("calendar.list_shared_calendars", {}))).toBe("forbidden");
 	});
 });
 

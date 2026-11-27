@@ -729,6 +729,7 @@ calendar of the agent.
 | `calendar_cancel_occurrence` | `calendar.write` | Cancel one occurrence of a series. Takes `base_revision` and `dry_run` |
 | `calendar_respond_to_event` | `calendar.write` | Accept or decline an invitation, for the series or for one occurrence |
 | `calendar_set_reminder` | `calendar.write` | Set your own reminder: 5, 10 or 30 minutes before, or none |
+| `calendar_list_shared_calendars` | `calendar.read` | The calendars that people share with you, with your access |
 | `calendar_query_free_busy` | `calendar.read` | The busy times of principals that share their availability with you, without details |
 | `calendar_list_changes` | `calendar.read` | The changes of your calendar after a cursor, oldest first, with ids only |
 | `calendar_create_webhook_subscription` | `calendar.webhooks` and `calendar.read` | Send one event of your calendar to an endpoint of yours |
@@ -738,6 +739,8 @@ calendar of the agent.
 Only a person gives access to a calendar (`calendar_set_grant` and **Calendar › Sharing** in the web
 app). An agent never gets these tools, so it cannot change its own access.
 
+- **Find the calendars.** `calendar_list_shared_calendars` lists the people who gave you access, with
+  `free_busy` or `schedule`. The list is a help only: each call with `calendar_id` checks the grant again.
 - **Access to the calendar of a person.** The person gives `free_busy` or `schedule`. With `schedule`,
   pass the id of the person as `calendar_id`. You add events and invite attendees from that calendar,
   and the person is the organizer. You change and delete only the events and the occurrences that you

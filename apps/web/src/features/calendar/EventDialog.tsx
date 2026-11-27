@@ -20,6 +20,7 @@ import {
 import { FindTime } from "./FindTime.tsx";
 import {
 	type EventForm,
+	eventTitle,
 	formOf,
 	formProblem,
 	REMINDER_OPTIONS,
@@ -34,6 +35,7 @@ import {
 	sameTimeFields,
 	seriesWhen,
 	whenOf,
+	whenText,
 	withSlot,
 	zoneOfEvent,
 } from "./model.ts";
@@ -47,6 +49,8 @@ interface EventDialogProps {
 	/** Called after a save or a delete, with the event that changed. */
 	onChanged: (event: CalendarEvent) => void;
 	onClose: () => void;
+	/** The calendar of a person who lets the person schedule, or null for the own calendar. */
+	calendar?: { id: string; name: string } | null;
 }
 
 /** An action on one occurrence of a series that asks first: this occurrence, or the entire series. */
@@ -60,9 +64,13 @@ const RESPONSE_TEXT: Record<EventResponse, string> = {
 };
 
 /** The dialog that adds an event, or changes or deletes one. For an invitation, it sets the response. */
-export function EventDialog({ event, initial, zone, onChanged, onClose }: EventDialogProps) {
+export function EventDialog({ event, initial, zone, onChanged, onClose, calendar = null }: EventDialogProps) {
 	const toast = useToast();
 	const ownId = useSession().whoami.principal.id;
+	// In the calendar of a different person, that person is the organizer: the attendees leave out that person.
+	const organizerId = calendar?.id ?? ownId;
+	const calendarId = calendar?.id ?? null;
+	const on = calendarId === null ? {} : { calendar_id: calendarId };
 	// The form that the dialog opened with. A save sends a field only when it is different.
 	const [opened] = useState<EventForm>(() => (event ? formOf(event, zone) : initial));
 	const [form, setForm] = useState<EventForm>(opened);
@@ -102,9 +110,9 @@ export function EventDialog({ event, initial, zone, onChanged, onClose }: EventD
 	const people = useMemo(
 		() =>
 			(principals ?? []).filter(
-				(principal) => principal.kind === "human" && principal.id !== ownId && !attendees.includes(principal.id),
+				(principal) => principal.kind === "human" && principal.id !== organizerId && !attendees.includes(principal.id),
 			),
-		[principals, ownId, attendees],
+		[principals, organizerId, attendees],
 	);
 	const nameOf = (id: string) =>
 		event?.attendees.find((a) => a.principal_id === id)?.display_name ??
@@ -139,6 +147,8 @@ export function EventDialog({ event, initial, zone, onChanged, onClose }: EventD
 	}
 
 	async function saveReminder() {
+		// The reminder belongs to the owner of the calendar: a delegate does not change it.
+		if (calendarId !== null) return;
 		if (event && form.reminder !== opened.reminder) await setReminder(event.id, reminderOf(form));
 	}
 
@@ -149,6 +159,7 @@ export function EventDialog({ event, initial, zone, onChanged, onClose }: EventD
 		if (target === "this" && occurrence) {
 			if (!contentChanged) return;
 			const { event: saved } = await updateOccurrence({
+				...on,
 				occurrence_id: occurrence,
 				title: form.title.trim(),
 				location: form.location.trim(),
@@ -163,10 +174,13 @@ export function EventDialog({ event, initial, zone, onChanged, onClose }: EventD
 		const timeChanged = !sameTimeFields(form, opened);
 		// From an occurrence, the change of the time applies to the first occurrence of the series.
 		const seriesTime = async () =>
-			occurrence ? seriesWhen((await getEvent(event.id)).event, opened, form, zone) : whenOf(form, zone, eventZone);
+			occurrence
+				? seriesWhen((await getEvent(event.id, calendarId)).event, opened, form, zone)
+				: whenOf(form, zone, eventZone);
 		// The form of a changed occurrence has the values of that occurrence. A save for the entire series sends
 		// only the fields that the person changed, so those values do not go into the series.
 		const { event: saved } = await updateEvent({
+			...on,
 			event_id: event.id,
 			...(form.title.trim() === opened.title.trim() ? {} : { title: form.title.trim() }),
 			...(form.location.trim() === opened.location.trim() ? {} : { location: form.location.trim() }),
@@ -227,8 +241,10 @@ export function EventDialog({ event, initial, zone, onChanged, onClose }: EventD
 					description: form.description,
 					...(recurrence ? { recurrence } : {}),
 					...(attendees.length > 0 ? { attendee_ids: attendees } : {}),
-					...(form.allDay ? {} : { reminder_minutes: reminderOf(form) }),
+					// A delegate sends no reminder: the server gives the owner the default one.
+					...(form.allDay || calendarId !== null ? {} : { reminder_minutes: reminderOf(form) }),
 					visibility: form.visibility,
+					...on,
 				};
 				const text = JSON.stringify(request);
 				const key = keys.current.get(text) ?? crypto.randomUUID();
@@ -260,8 +276,8 @@ export function EventDialog({ event, initial, zone, onChanged, onClose }: EventD
 			await commit(target);
 			toast({ message: "Event saved." });
 		} else if (action === "delete") {
-			if (target === "this" && occurrence) await cancelOccurrence(occurrence, event.revision);
-			else await deleteEvent(event.id, event.revision);
+			if (target === "this" && occurrence) await cancelOccurrence(occurrence, event.revision, calendarId);
+			else await deleteEvent(event.id, event.revision, calendarId);
 			toast({ message: target === "this" ? "Event cancelled." : "Event deleted." });
 			onChanged(event);
 		} else {
@@ -302,7 +318,7 @@ export function EventDialog({ event, initial, zone, onChanged, onClose }: EventD
 				confirmLabel="Delete"
 				danger
 				onConfirm={async () => {
-					await deleteEvent(event.id, event.revision);
+					await deleteEvent(event.id, event.revision, calendarId);
 					done.current = true;
 					toast({ message: "Event deleted." });
 					onChanged(event);
@@ -317,7 +333,7 @@ export function EventDialog({ event, initial, zone, onChanged, onClose }: EventD
 		);
 	}
 
-	const reminderField = !form.allDay && (
+	const reminderField = !form.allDay && calendarId === null && (
 		<div className="field">
 			<label className="field-label" htmlFor={ids.reminder}>
 				Reminder
@@ -331,6 +347,28 @@ export function EventDialog({ event, initial, zone, onChanged, onClose }: EventD
 			/>
 		</div>
 	);
+
+	// An event of the owner that a delegate sees only in part: the time, and the title when it is not private.
+	if (event?.redacted) {
+		return (
+			<Dialog title={eventTitle(event)} onClose={onClose} className="cal-dialog">
+				<div className="dialog-body cal-form">
+					<p>{whenText(event, zone)}</p>
+					<p className="field-hint">
+						{event.title
+							? `You see only the time and the title of this event of ${calendar?.name ?? "the owner"}.`
+							: `You see only the time of this event of ${calendar?.name ?? "the owner"}.`}
+					</p>
+					<div className="dialog-actions">
+						<span className="toolbar-spacer" />
+						<button type="button" className="button" onClick={onClose}>
+							Close
+						</button>
+					</div>
+				</div>
+			</Dialog>
+		);
+	}
 
 	if (invitation && event) {
 		const respondTo = (response: "accepted" | "declined") => {
@@ -396,6 +434,11 @@ export function EventDialog({ event, initial, zone, onChanged, onClose }: EventD
 	return (
 		<Dialog title={event ? "Edit event" : "New event"} onClose={() => !busy && onClose()} className="cal-dialog">
 			<form className="dialog-body cal-form" onSubmit={save} noValidate>
+				{calendar && (
+					<p className="field-hint">
+						In the calendar of {calendar.name}. {calendar.name} is the organizer.
+					</p>
+				)}
 				<div className="field">
 					<label className="field-label" htmlFor={ids.title}>
 						Title
@@ -566,6 +609,7 @@ export function EventDialog({ event, initial, zone, onChanged, onClose }: EventD
 						attendees={attendees}
 						principals={principals ?? []}
 						selfId={ownId}
+						calendarId={calendarId}
 						startDate={form.startDate}
 						zone={zone}
 						onPick={(start, end) => {
@@ -609,7 +653,9 @@ export function EventDialog({ event, initial, zone, onChanged, onClose }: EventD
 						disabled={busy}
 						onChange={(change) => set("visibility", change.target.checked ? "private" : "default")}
 					/>
-					Private: a person or an agent that schedules for you sees only the time
+					{calendar
+						? `Private: other people and agents that schedule for ${calendar.name} see only the time`
+						: "Private: a person or an agent that schedules for you sees only the time"}
 				</label>
 				{event?.created_by && <p className="field-hint">Added by {nameOf(event.created_by)}</p>}
 				{error && (

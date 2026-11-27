@@ -35,6 +35,8 @@ interface FindTimeProps {
 	principals: readonly Principal[];
 	/** The id of the person: the first calendar of each answer. */
 	selfId: string;
+	/** The calendar of a person who lets the person schedule: the search runs as that person. Null: own. */
+	calendarId?: string | null;
 	/** The first day of the search. */
 	startDate: string;
 	/** The time zone of the dialog. The search starts in it. */
@@ -50,7 +52,7 @@ interface FindTimeProps {
  * other calendars, and the panel tells that a suggestion is free only for them. An answer shows only while the
  * attendees and the fields are the ones of its search, so a suggestion is never from an earlier search.
  */
-export function FindTime({ attendees, principals, selfId, startDate, zone, onPick }: FindTimeProps) {
+export function FindTime({ attendees, principals, selfId, calendarId = null, startDate, zone, onPick }: FindTimeProps) {
 	// The dialog can have no start date. The search then starts today.
 	const [first] = useState(() => (isRealDate(startDate) ? startDate : zonedDate(Date.now(), zone)));
 	const [from, setFrom] = useState(first);
@@ -67,7 +69,7 @@ export function FindTime({ attendees, principals, selfId, startDate, zone, onPic
 	// The count of the searches. Only the last search changes the panel.
 	const searches = useRef(0);
 	// The inputs of a search. An answer shows only while they are the same.
-	const key = JSON.stringify([attendees, from, to, duration, searchZone]);
+	const key = JSON.stringify([attendees, from, to, duration, searchZone, calendarId]);
 	const [error, setError] = useState<string | null>(null);
 	const zones = useMemo(() => zoneOptions(zone), [zone]);
 	const ids = { duration: useId(), zone: useId() };
@@ -96,6 +98,7 @@ export function FindTime({ attendees, principals, selfId, startDate, zone, onPic
 		setError(null);
 		try {
 			const answer = await findTimes({
+				...(calendarId === null ? {} : { calendar_id: calendarId }),
 				time_min: new Date(zonedDayStart(from, searchZone)).toISOString(),
 				time_max: new Date(zonedDayStart(addDays(to, 1), searchZone)).toISOString(),
 				duration_minutes: Number(duration),

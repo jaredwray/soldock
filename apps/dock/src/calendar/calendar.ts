@@ -77,6 +77,20 @@ export interface GrantRecord {
 	created_at: number;
 }
 
+/** The state of a grant that the outbox of an owner sends to the calendar of the grantee. Null: no grant now. */
+export interface GrantMessage {
+	v: 1;
+	owner_id: string;
+	access: CalendarAccess | null;
+	version: number;
+}
+
+/** A calendar that its owner shares with the owner of this object, as the hint `shared_with_me` keeps it. */
+export interface SharedPointer {
+	owner_id: string;
+	access: CalendarAccess;
+}
+
 /** An interval of busy time, in UTC ms. `end` is not in the interval. */
 export interface BusySpan {
 	start: number;
@@ -472,6 +486,33 @@ const MIGRATIONS: readonly (readonly string[])[] = [
 			principal_id TEXT PRIMARY KEY,
 			access TEXT NOT NULL CHECK (access IN ('free_busy', 'schedule')),
 			created_at INTEGER NOT NULL
+		) WITHOUT ROWID`,
+	],
+	// The calendars that people share with the owner (`calendar.list_shared_calendars`): a hint that the outbox of
+	// each owner writes with the kind `grant`. A null access is a removed grant. The CHECK of `outbox` cannot change,
+	// so the table is built again with the new kind.
+	[
+		`CREATE TABLE outbox_next (
+			id TEXT PRIMARY KEY,
+			kind TEXT NOT NULL CHECK (kind IN ('snapshot', 'response', 'reminder', 'grant')),
+			target_id TEXT NOT NULL,
+			event_id TEXT NOT NULL,
+			payload TEXT NOT NULL,
+			version INTEGER NOT NULL,
+			attempts INTEGER NOT NULL DEFAULT 0,
+			next_attempt_at INTEGER NOT NULL,
+			created_at INTEGER NOT NULL
+		) WITHOUT ROWID`,
+		`INSERT INTO outbox_next (id, kind, target_id, event_id, payload, version, attempts, next_attempt_at, created_at)
+			SELECT id, kind, target_id, event_id, payload, version, attempts, next_attempt_at, created_at FROM outbox`,
+		"DROP TABLE outbox",
+		"ALTER TABLE outbox_next RENAME TO outbox",
+		"CREATE INDEX outbox_due ON outbox (next_attempt_at)",
+		`CREATE TABLE shared_with_me (
+			owner_id TEXT PRIMARY KEY,
+			access TEXT CHECK (access IN ('free_busy', 'schedule')),
+			version INTEGER NOT NULL,
+			updated_at INTEGER NOT NULL
 		) WITHOUT ROWID`,
 	],
 ];
@@ -1239,12 +1280,19 @@ export class CalendarDO extends DurableObject<Env> {
 		return { grants: this.grantRows() };
 	}
 
+	/** Puts the current grant of a principal in the outbox, for the hint of the calendar of that principal. */
+	private noteGrant(principalId: string): void {
+		const seq = Number(this.meta("grant_seq") ?? 0) + 1;
+		this.setMeta("grant_seq", String(seq));
+		this.putOutbox(`grant:${principalId}`, "grant", principalId, "", "", seq);
+	}
+
 	/** Gives a principal a grant, or changes it. `changed` is false when the grant was the same. */
-	setGrant(
+	async setGrant(
 		call: CalendarCall,
 		principalId: string,
 		access: CalendarAccess,
-	): { grants: GrantRecord[]; changed: boolean } | Refusal {
+	): Promise<{ grants: GrantRecord[]; changed: boolean } | Refusal> {
 		const refused = this.enter(call);
 		if (refused) return refused;
 		if (principalId === call.ownerId) return refuse("invalid", "You use your own calendar without a grant.");
@@ -1255,24 +1303,89 @@ export class CalendarDO extends DurableObject<Env> {
 			if (count >= CALENDAR_LIMITS.grants) {
 				return refuse("invalid", `A calendar can have at most ${CALENDAR_LIMITS.grants} grants.`);
 			}
-			this.sql.exec(
-				"INSERT INTO grants (principal_id, access, created_at) VALUES (?, ?, ?)",
-				principalId,
-				access,
-				Date.now(),
-			);
-		} else {
-			this.sql.exec("UPDATE grants SET access = ? WHERE principal_id = ?", access, principalId);
 		}
+		this.ctx.storage.transactionSync(() => {
+			if (before === null) {
+				this.sql.exec(
+					"INSERT INTO grants (principal_id, access, created_at) VALUES (?, ?, ?)",
+					principalId,
+					access,
+					Date.now(),
+				);
+			} else {
+				this.sql.exec("UPDATE grants SET access = ? WHERE principal_id = ?", access, principalId);
+			}
+			this.noteGrant(principalId);
+		});
+		await this.scheduleAlarm();
 		return { grants: this.grantRows(), changed: true };
 	}
 
 	/** Removes a grant. `changed` is false when the principal had no grant. */
-	removeGrant(call: CalendarCall, principalId: string): { grants: GrantRecord[]; changed: boolean } | Refusal {
+	async removeGrant(
+		call: CalendarCall,
+		principalId: string,
+	): Promise<{ grants: GrantRecord[]; changed: boolean } | Refusal> {
 		const refused = this.enter(call);
 		if (refused) return refused;
-		const changed = this.sql.exec("DELETE FROM grants WHERE principal_id = ?", principalId).rowsWritten > 0;
+		let changed = false;
+		this.ctx.storage.transactionSync(() => {
+			changed = this.sql.exec("DELETE FROM grants WHERE principal_id = ?", principalId).rowsWritten > 0;
+			if (changed) this.noteGrant(principalId);
+		});
+		if (changed) await this.scheduleAlarm();
 		return { grants: this.grantRows(), changed };
+	}
+
+	/**
+	 * The grant of the caller on this calendar, for the list of the calendars that people share with it. It does not
+	 * pass `enter`, and it gives only the own grant of the caller. Null for a calendar of a different owner.
+	 */
+	accessOf(call: CalendarCall): { access: CalendarAccess | null } {
+		if (this.meta("owner_id") !== call.ownerId) return { access: null };
+		return { access: call.actorId === call.ownerId ? null : this.grantOf(call.actorId) };
+	}
+
+	/**
+	 * Keeps the state of a grant of a different owner in the hint `shared_with_me`. An older version changes nothing,
+	 * so a late delivery is safe. Only the outbox of a CalendarDO calls it. It writes no change record.
+	 */
+	applyGrant(selfId: string, message: GrantMessage): void {
+		if (!this.pin(selfId) || message.owner_id === selfId) return;
+		this.sql.exec(
+			`INSERT INTO shared_with_me (owner_id, access, version, updated_at) VALUES (?, ?, ?, ?)
+			ON CONFLICT (owner_id) DO UPDATE SET access = excluded.access, version = excluded.version,
+				updated_at = excluded.updated_at
+			WHERE excluded.version > shared_with_me.version`,
+			message.owner_id,
+			message.access,
+			message.version,
+			Date.now(),
+		);
+	}
+
+	/** The hint of the calendars that people share with the owner, by owner id, after `after`. Owner only. */
+	sharedWithMe(
+		call: CalendarCall,
+		after: string | null,
+		limit: number,
+	): { pointers: SharedPointer[]; more: boolean } | Refusal {
+		const refused = this.enter(call);
+		if (refused) return refused;
+		const rows = this.sql
+			.exec<{ owner_id: string; access: string }>(
+				"SELECT owner_id, access FROM shared_with_me WHERE access IS NOT NULL AND owner_id > ? ORDER BY owner_id LIMIT ?",
+				after ?? "",
+				limit + 1,
+			)
+			.toArray();
+		return {
+			pointers: rows.slice(0, limit).map((row) => ({
+				owner_id: row.owner_id,
+				access: row.access === "schedule" ? "schedule" : "free_busy",
+			})),
+			more: rows.length > limit,
+		};
 	}
 
 	// --- Changes of the organizer ------------------------------------------------------------------
@@ -2008,7 +2121,7 @@ export class CalendarDO extends DurableObject<Env> {
 
 	private putOutbox(
 		id: string,
-		kind: "snapshot" | "response" | "reminder",
+		kind: "snapshot" | "response" | "reminder" | "grant",
 		target: string,
 		eventId: string,
 		payload: string,
@@ -2079,6 +2192,17 @@ export class CalendarDO extends DurableObject<Env> {
 		if (row.kind === "response") {
 			const stub = this.env.CALENDAR.get(this.env.CALENDAR.idFromName(row.target_id));
 			await stub.applyResponse(row.target_id, JSON.parse(row.payload) as ResponseMessage);
+			return true;
+		}
+		if (row.kind === "grant") {
+			// The current grant, read at the delivery, as a snapshot reads the current event.
+			const stub = this.env.CALENDAR.get(this.env.CALENDAR.idFromName(row.target_id));
+			await stub.applyGrant(row.target_id, {
+				v: 1,
+				owner_id: owner,
+				access: this.grantOf(row.target_id),
+				version: row.version,
+			});
 			return true;
 		}
 		const item = JSON.parse(row.payload) as CalendarReminderItem;

@@ -329,6 +329,7 @@ describe("a calendar from before grants", () => {
 				state.blockConcurrencyWhile(async () => {
 					const sql = state.storage.sql;
 					sql.exec("DROP TABLE grants");
+					sql.exec("DROP TABLE shared_with_me");
 					sql.exec("ALTER TABLE events DROP COLUMN visibility");
 					sql.exec("ALTER TABLE events DROP COLUMN created_by");
 					sql.exec("UPDATE meta SET value = '3' WHERE key = 'schema_version'");

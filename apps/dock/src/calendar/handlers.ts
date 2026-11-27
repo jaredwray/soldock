@@ -67,6 +67,11 @@ function calendarStub(env: Pick<Env, "CALENDAR">, principalId: string) {
 
 const NO_CALENDAR = "No calendar has that id. Only a person who is not archived can give access to a calendar.";
 
+/** True for a principal that can give grants on its calendar: a person who is not archived. */
+function isCalendarOwner(principal: { kind: string; service: boolean; archived_at: string | null }): boolean {
+	return principal.kind === "human" && !principal.service && principal.archived_at === null;
+}
+
 /** The own calendar of the caller, for the operations that only the owner uses. */
 function ownCalendar(call: CallContext): { stub: ReturnType<typeof calendarStub>; ctx: CalendarCall } {
 	const id = call.caller.principal.id;
@@ -88,9 +93,7 @@ async function openCalendar(
 		return { ...ownCalendar(call), owner: organizerOf(principal) };
 	}
 	const target = await getPrincipal(call.env.DIRECTORY, calendarId);
-	if (target?.kind !== "human" || target.service || target.archived_at !== null) {
-		throw new OperationError("not_found", NO_CALENDAR);
-	}
+	if (!target || !isCalendarOwner(target)) throw new OperationError("not_found", NO_CALENDAR);
 	const ctx: CalendarCall = { ownerId: target.id, actorId: principal.id };
 	const stub = calendarStub(call.env, target.id);
 	accept(await stub.authorize(ctx));
@@ -576,6 +579,43 @@ export const calendarHandlers: Pick<HandlerMap<CallContext>, CalendarOperation> 
 			recordServiceMemberships(call, [input.principal_id], "calendar.remove_grant", ctx.ownerId);
 		}
 		return ownGrants(call, result.grants);
+	},
+
+	async "calendar.list_shared_calendars"(call, input) {
+		const limit = input.limit ?? CALENDAR_LIMITS.defaultSharedPageSize;
+		const { stub, ctx } = ownCalendar(call);
+		const page = accept(await stub.sharedWithMe(ctx, input.cursor ?? null, limit));
+		// The hint is never the authority: the calendar of each owner gives the grant of the caller now.
+		const owners = new Map(
+			(
+				await getPrincipals(
+					call.env.DIRECTORY,
+					page.pointers.map((pointer) => pointer.owner_id),
+				)
+			)
+				.filter(isCalendarOwner)
+				.map((principal) => [principal.id, principal]),
+		);
+		const checked = await Promise.all(
+			page.pointers.map(async (pointer) => {
+				const owner = owners.get(pointer.owner_id);
+				if (!owner) return null;
+				try {
+					const { access } = await calendarStub(call.env, owner.id).accessOf({
+						ownerId: owner.id,
+						actorId: call.caller.principal.id,
+					});
+					return access === null ? null : { calendar_id: owner.id, display_name: owner.display_name, access };
+				} catch {
+					return null;
+				}
+			}),
+		);
+		const last = page.pointers.at(-1);
+		return {
+			calendars: checked.filter((entry) => entry !== null),
+			next_cursor: page.more && last ? last.owner_id : null,
+		};
 	},
 
 	async "calendar.list_changes"(call, input) {

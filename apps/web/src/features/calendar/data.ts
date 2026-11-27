@@ -1,4 +1,11 @@
-import { CALENDAR_LIMITS, type CalendarEvent, type InputOf, type OutputOf } from "@asterra/contracts";
+import {
+	ApiError,
+	CALENDAR_LIMITS,
+	type CalendarEvent,
+	type InputOf,
+	type OutputOf,
+	type SharedCalendar,
+} from "@asterra/contracts";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../../lib/api.ts";
 import { onPrincipalConnection, onPrincipalEvent, principalSocketLive } from "../../lib/principalSocket.ts";
@@ -14,8 +21,18 @@ export type EventsState =
 	| { status: "ready"; events: readonly CalendarEvent[] }
 	| { status: "error"; events: readonly CalendarEvent[]; error: unknown };
 
+/** The input field of the calendar of a person who lets the caller schedule. Nothing for the own calendar. */
+export function onCalendar(calendarId: string | null): { calendar_id?: string } {
+	return calendarId === null ? {} : { calendar_id: calendarId };
+}
+
 /** Each event of a range, over each page. */
-async function loadRange(timeMin: string, timeMax: string, zone: string): Promise<CalendarEvent[]> {
+async function loadRange(
+	timeMin: string,
+	timeMax: string,
+	zone: string,
+	calendarId: string | null,
+): Promise<CalendarEvent[]> {
 	const events: CalendarEvent[] = [];
 	let cursor: string | null = null;
 	for (let page = 0; page < MAX_PAGES; page++) {
@@ -25,6 +42,7 @@ async function loadRange(timeMin: string, timeMax: string, zone: string): Promis
 			time_zone: zone,
 			limit: CALENDAR_LIMITS.pageSize,
 			...(cursor ? { cursor } : {}),
+			...onCalendar(calendarId),
 		});
 		events.push(...result.events);
 		cursor = result.next_cursor;
@@ -49,14 +67,14 @@ async function headCursor(): Promise<string> {
  * connect, so a page that was offline catches up when it connects again. An expired cursor loads the range
  * again with a new cursor. While the socket is down, the page reads the feed each `FALLBACK_MS`.
  */
-export function useEvents(timeMin: string, timeMax: string, zone: string) {
+export function useEvents(timeMin: string, timeMax: string, zone: string, calendarId: string | null = null) {
 	const [state, setState] = useState<EventsState>({ status: "loading", events: [] });
 	const generation = useRef(0);
 	/** The position of the page in the change feed. Each range sets it again after its first load. */
 	const cursor = useRef<string | null>(null);
 	/** The range whose events are on screen, or null. A load of the range sets it, also a load of Try again. */
 	const shownRange = useRef<string | null>(null);
-	const rangeKey = `${timeMin}|${timeMax}|${zone}`;
+	const rangeKey = `${timeMin}|${timeMax}|${zone}|${calendarId ?? ""}`;
 
 	const load = useCallback(
 		async (fresh: boolean): Promise<boolean> => {
@@ -66,13 +84,23 @@ export function useEvents(timeMin: string, timeMax: string, zone: string) {
 				setState({ status: "loading", events: [] });
 			}
 			try {
-				const events = await loadRange(timeMin, timeMax, zone);
+				const events = await loadRange(timeMin, timeMax, zone, calendarId);
 				if (current !== generation.current) return false;
 				setState({ status: "ready", events });
 				shownRange.current = rangeKey;
 				return true;
 			} catch (error) {
 				if (current !== generation.current) return false;
+				// The owner removed the grant: the events of that calendar go away from the screen at once.
+				if (
+					calendarId !== null &&
+					error instanceof ApiError &&
+					(error.code === "forbidden" || error.code === "not_found")
+				) {
+					shownRange.current = null;
+					setState({ status: "error", events: [], error });
+					return false;
+				}
 				// A poll that fails keeps the events on screen. The sync keeps its cursor, so the next sync tries again.
 				setState((previous) =>
 					fresh || previous.status !== "ready" ? { status: "error", events: previous.events, error } : previous,
@@ -80,10 +108,32 @@ export function useEvents(timeMin: string, timeMax: string, zone: string) {
 				return false;
 			}
 		},
-		[timeMin, timeMax, zone, rangeKey],
+		[timeMin, timeMax, zone, calendarId, rangeKey],
 	);
 
 	useEffect(() => {
+		if (calendarId === null) return;
+		// The calendar of a different person has no change feed for the caller: the page reads the range again at
+		// each interval while it is visible, and on focus.
+		void load(true);
+		const loadIfVisible = () => {
+			if (document.visibilityState === "visible") void load(false);
+		};
+		const timer = window.setInterval(loadIfVisible, FALLBACK_MS);
+		window.addEventListener("focus", loadIfVisible);
+		window.addEventListener("online", loadIfVisible);
+		document.addEventListener("visibilitychange", loadIfVisible);
+		return () => {
+			window.clearInterval(timer);
+			window.removeEventListener("focus", loadIfVisible);
+			window.removeEventListener("online", loadIfVisible);
+			document.removeEventListener("visibilitychange", loadIfVisible);
+			generation.current++;
+		};
+	}, [calendarId, load]);
+
+	useEffect(() => {
+		if (calendarId !== null) return;
 		let stopped = false;
 		const sync = createSync({
 			cursor,
@@ -122,7 +172,7 @@ export function useEvents(timeMin: string, timeMax: string, zone: string) {
 			document.removeEventListener("visibilitychange", syncIfVisible);
 			generation.current++;
 		};
-	}, [load, rangeKey]);
+	}, [calendarId, load, rangeKey]);
 
 	const reload = useCallback(() => load(false), [load]);
 	const retry = useCallback(() => load(true), [load]);
@@ -137,20 +187,28 @@ export function updateEvent(input: InputOf<"calendar.update_event">) {
 	return api.call("calendar.update_event", input);
 }
 
-export function deleteEvent(eventId: string, baseRevision: number) {
-	return api.call("calendar.delete_event", { event_id: eventId, base_revision: baseRevision });
+export function deleteEvent(eventId: string, baseRevision: number, calendarId: string | null = null) {
+	return api.call("calendar.delete_event", {
+		event_id: eventId,
+		base_revision: baseRevision,
+		...onCalendar(calendarId),
+	});
 }
 
-export function getEvent(eventId: string) {
-	return api.call("calendar.get_event", { event_id: eventId });
+export function getEvent(eventId: string, calendarId: string | null = null) {
+	return api.call("calendar.get_event", { event_id: eventId, ...onCalendar(calendarId) });
 }
 
 export function updateOccurrence(input: InputOf<"calendar.update_occurrence">) {
 	return api.call("calendar.update_occurrence", input);
 }
 
-export function cancelOccurrence(occurrenceId: string, baseRevision: number) {
-	return api.call("calendar.cancel_occurrence", { occurrence_id: occurrenceId, base_revision: baseRevision });
+export function cancelOccurrence(occurrenceId: string, baseRevision: number, calendarId: string | null = null) {
+	return api.call("calendar.cancel_occurrence", {
+		occurrence_id: occurrenceId,
+		base_revision: baseRevision,
+		...onCalendar(calendarId),
+	});
 }
 
 export function respondToEvent(input: InputOf<"calendar.respond_to_event">) {
@@ -175,4 +233,50 @@ export function setGrant(input: InputOf<"calendar.set_grant">) {
 
 export function removeGrant(principalId: string) {
 	return api.call("calendar.remove_grant", { principal_id: principalId });
+}
+
+/** The most pages of the calendars that people share with the person. */
+const MAX_SHARED_PAGES = 20;
+
+/** Each calendar that people share with the person, over each page. */
+async function listSharedCalendars(): Promise<SharedCalendar[]> {
+	const calendars: SharedCalendar[] = [];
+	let cursor: string | null = null;
+	for (let page = 0; page < MAX_SHARED_PAGES; page++) {
+		const result: OutputOf<"calendar.list_shared_calendars"> = await api.call("calendar.list_shared_calendars", {
+			limit: CALENDAR_LIMITS.sharedPageSize,
+			...(cursor ? { cursor } : {}),
+		});
+		calendars.push(...result.calendars);
+		cursor = result.next_cursor;
+		if (!cursor) break;
+	}
+	return calendars;
+}
+
+/**
+ * The calendars that the person can schedule in: the `schedule` grants of other people, by name. It loads again on
+ * focus, so a new or a removed grant shows. An empty list while it loads or when it does not load.
+ */
+export function useSharedCalendars(): SharedCalendar[] {
+	const [calendars, setCalendars] = useState<SharedCalendar[]>([]);
+	useEffect(() => {
+		let active = true;
+		const read = () =>
+			listSharedCalendars().then(
+				(all) => {
+					if (!active) return;
+					const schedule = all.filter((entry) => entry.access === "schedule");
+					setCalendars(schedule.sort((a, b) => a.display_name.localeCompare(b.display_name)));
+				},
+				() => undefined,
+			);
+		void read();
+		window.addEventListener("focus", read);
+		return () => {
+			active = false;
+			window.removeEventListener("focus", read);
+		};
+	}, []);
+	return calendars;
 }
