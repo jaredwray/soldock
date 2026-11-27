@@ -1101,6 +1101,17 @@ export class PrincipalDO extends DurableObject<Env> {
 		return ended;
 	}
 
+	/**
+	 * Tells each events socket that holds `calendar.read` that the calendar of the principal has new changes.
+	 * The event has no content: the client reads `calendar.list_changes`. Only the `CalendarDO` of this
+	 * principal calls this method. A socket gets the event only after the credential check of `deliver`.
+	 */
+	async calendarChanged(calendarId: string): Promise<void> {
+		if (this.ctx.getWebSockets().length === 0) return;
+		const event: PrincipalEvent = { type: "calendar.changed", calendar_id: calendarId };
+		await this.enqueue([JSON.stringify(event)], undefined, (state) => state.calendar === true && !state.feed);
+	}
+
 	override async alarm(): Promise<void> {
 		await this.enqueue([]);
 		await publishPresence(this.ctx, this.env.DIRECTORY);

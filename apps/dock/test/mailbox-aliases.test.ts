@@ -296,7 +296,10 @@ describe("mailbox aliases in the directory", () => {
 			expect(await code(add(ada.id, address))).toBe("invalid");
 		}
 		expect(await code(add("tmb_00000000000000000000000000", "x@dock.test"))).toBe("not_found");
-		expect(await code(add(owner.id.replace(/.$/, "0"), "x@dock.test"))).toBe("not_found");
+		// An id that no principal has: the id of the owner with a different last character. A fixed "0" is the id of
+		// the owner itself when that id ends with "0".
+		const unknown = `${owner.id.slice(0, -1)}${owner.id.endsWith("0") ? "1" : "0"}`;
+		expect(await code(add(unknown, "x@dock.test"))).toBe("not_found");
 
 		// A second add changes nothing. A remove of an alias that the mailbox does not have changes nothing.
 		const first = await add(ada.id, "countess@dock.test");

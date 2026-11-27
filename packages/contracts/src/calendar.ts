@@ -1,5 +1,6 @@
 import { ID_CHARS, prefixedId, Timestamp } from "./common.ts";
 import { defineOperation } from "./operation.ts";
+import { CALENDAR_WEBHOOK_EVENTS, CalendarWebhookSubscription } from "./webhooks.ts";
 import { z } from "./zod.ts";
 
 // The calendar of a principal. Each person, agent and service account has one calendar. A call reaches
@@ -38,6 +39,12 @@ export const CALENDAR_LIMITS = {
 	freeBusyPrincipals: 20,
 	/** The longest range of one calendar.query_free_busy, in days. */
 	freeBusyDays: 62,
+	/** The changes of one page of calendar.list_changes, without `limit`, and the most. */
+	changesPageSize: 200,
+	/** A published change stays in the change feed for this many days. Then a cursor before it expires. */
+	changeDays: 30,
+	/** The most published changes that one calendar keeps. Older ones go first. */
+	changes: 10_000,
 } as const;
 
 /** The reminders that a participant can choose, in minutes before the start. */
@@ -721,6 +728,121 @@ export const queryFreeBusy = defineOperation({
 	errors: ["not_found"],
 });
 
+/**
+ * One committed change of a calendar. It has ids only: read the event with calendar.get_event. The change
+ * feed, the events socket hint and MCP Events use the same record, with the same `id`.
+ */
+export const CalendarChange = z.object({
+	id: z.string().describe("The stable id of the change. A retry of a delivery has the same id."),
+	type: z.enum(CALENDAR_WEBHOOK_EVENTS),
+	calendar_id: z.string().describe("The calendar: the id of its owner."),
+	event_id: z
+		.string()
+		.describe("The event: the same id on the calendar of the organizer and on the copy of each attendee."),
+	occurrence_id: z
+		.string()
+		.nullable()
+		.describe(
+			"The id of the occurrence that changed, as calendar.list_events gives it. Null for a change of the entire event or series.",
+		),
+	revision: z
+		.number()
+		.int()
+		.describe("The revision of the event after the change. A response does not change it, so deduplicate by id."),
+	actor_id: z.string().nullable().describe("The principal that caused the change, or null."),
+	at: Timestamp,
+	cursor: z.string().describe("The position after this change. Give it to calendar.list_changes to continue."),
+});
+export type CalendarChange = z.infer<typeof CalendarChange>;
+
+export const listChanges = defineOperation({
+	name: "calendar.list_changes",
+	summary: "List the changes of your calendar after a cursor",
+	description: [
+		"Returns the changes of your calendar after cursor, oldest first. Each change has ids only: read the event with calendar.get_event.",
+		"Without cursor, the result has no changes and the cursor of now: keep it, then read your events.",
+		"When has_more is true, call again with the cursor of the result.",
+		`When expired is true, the cursor is older than the feed (${CALENDAR_LIMITS.changeDays} days or ${CALENDAR_LIMITS.changes} changes): read your events again with calendar.list_events, and continue from the cursor of the result.`,
+		"A change can come two times. Skip a change with an id that you know.",
+		OWN_NOTE,
+	].join(" "),
+	http: { method: "GET", path: "/api/v1/calendar/changes" },
+	scopes: ["calendar.read"],
+	callers: ["human", "agent", "service"],
+	annotations: READ,
+	input: z.strictObject({
+		cursor: z.string().max(200).optional().describe("The cursor of a previous result or of a change."),
+		limit: z.coerce
+			.number()
+			.int()
+			.min(1)
+			.max(CALENDAR_LIMITS.changesPageSize)
+			.optional()
+			.describe(`The most changes on one page. The default is ${CALENDAR_LIMITS.changesPageSize}.`),
+	}),
+	output: z.object({
+		changes: z.array(CalendarChange),
+		cursor: z.string(),
+		has_more: z.boolean(),
+		expired: z.boolean(),
+	}),
+	errors: [],
+});
+
+const OwnCalendarParam = prefixedId("prn")
+	.optional()
+	.describe("Your own id: the calendar of the caller. No other calendar is allowed. The default is your calendar.");
+
+const createCalendarWebhookSubscription = defineOperation({
+	name: "calendar.create_webhook_subscription",
+	summary: "Send calendar events to an endpoint",
+	description: [
+		"Adds a subscription for your own calendar. No person or agent can subscribe for the calendar of a different principal.",
+		"Choose the event. Each POST is one change of calendar.list_changes, with the same id (change_id) and its cursor.",
+		"The POST has ids only, and no title, time or answer. Read the event with calendar.get_event.",
+		"A change from before the subscription sends no POST. Read it with calendar.list_changes.",
+		"The endpoint must be yours and active.",
+	].join(" "),
+	http: { method: "POST", path: "/api/v1/calendar/webhook-subscriptions" },
+	scopes: ["calendar.webhooks", "calendar.read"],
+	callers: ["human", "agent"],
+	annotations: { readOnly: false, destructive: false, idempotent: false, openWorld: true },
+	input: z.strictObject({
+		endpoint_id: prefixedId("whe"),
+		event: z.enum(CALENDAR_WEBHOOK_EVENTS),
+		calendar_id: OwnCalendarParam,
+	}),
+	output: z.object({ subscription: CalendarWebhookSubscription }),
+	errors: ["not_found", "policy_denied", "conflict", "forbidden"],
+});
+
+const listCalendarWebhookSubscriptions = defineOperation({
+	name: "calendar.list_webhook_subscriptions",
+	summary: "List calendar webhook subscriptions",
+	description:
+		"Lists the calendar subscriptions of your endpoints. A calendar subscription is always for the calendar of its creator, so calendar_id can only be your own id.",
+	http: { method: "GET", path: "/api/v1/calendar/webhook-subscriptions" },
+	scopes: ["calendar.webhooks"],
+	callers: ["human", "agent"],
+	annotations: READ,
+	input: z.strictObject({ calendar_id: OwnCalendarParam }),
+	output: z.object({ subscriptions: z.array(CalendarWebhookSubscription) }),
+	errors: ["forbidden"],
+});
+
+const deleteCalendarWebhookSubscription = defineOperation({
+	name: "calendar.delete_webhook_subscription",
+	summary: "Delete a calendar webhook subscription",
+	description: "Deletes a subscription. The endpoint stays. Only the creator of a subscription can delete it.",
+	http: { method: "DELETE", path: "/api/v1/calendar/webhook-subscriptions/{subscription_id}" },
+	scopes: ["calendar.webhooks"],
+	callers: ["human", "agent"],
+	annotations: { readOnly: false, destructive: true, idempotent: true, openWorld: false },
+	input: z.strictObject({ subscription_id: prefixedId("whk") }),
+	output: z.object({ deleted: z.boolean() }),
+	errors: ["not_found"],
+});
+
 export const calendarOperations = {
 	"calendar.list_events": listEvents,
 	"calendar.get_event": getEvent,
@@ -732,4 +854,8 @@ export const calendarOperations = {
 	"calendar.respond_to_event": respondToEvent,
 	"calendar.set_reminder": setReminder,
 	"calendar.query_free_busy": queryFreeBusy,
+	"calendar.list_changes": listChanges,
+	"calendar.create_webhook_subscription": createCalendarWebhookSubscription,
+	"calendar.list_webhook_subscriptions": listCalendarWebhookSubscriptions,
+	"calendar.delete_webhook_subscription": deleteCalendarWebhookSubscription,
 } as const;

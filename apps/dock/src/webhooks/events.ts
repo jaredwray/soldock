@@ -41,7 +41,7 @@ import { outboundHostAllowed, webhookUrlProblem } from "./url.ts";
 export const SUBSCRIPTION_ID_HEADER = "x-mcp-subscription-id";
 
 /**
- * What a product does before its target gets a subscription. Mail and Drive record events only after
+ * What a product does before its target gets a subscription. Mail, Drive and Calendar send events only after
  * their object knows that a subscription exists.
  */
 export type EventTargetHooks = Partial<Record<WebhookDomain, (call: CallContext, targetId: string) => Promise<void>>>;
@@ -68,10 +68,15 @@ const DEFINITIONS = new Map<string, EventDefinition>(
 	]),
 );
 
-/** The event when the credential holds the webhook scope of its product. Else null, as for an unknown name. */
+/**
+ * The event when the credential holds the webhook scope of its product. Else null, as for an unknown name.
+ * A calendar event also needs `calendar.read`: the event tells about an event that the credential can read.
+ */
 function usableEvent(call: CallContext, name: string): McpEventDefinition | null {
 	const event = mcpEvents.get(name);
-	return event && call.caller.scopes.has(webhookScope(event.domain)) ? event : null;
+	if (!event || !call.caller.scopes.has(webhookScope(event.domain))) return null;
+	if (event.domain === "calendar" && !call.caller.scopes.has("calendar.read")) return null;
+	return event;
 }
 
 /**
@@ -93,12 +98,15 @@ function parseArguments(
 		mailbox_id?: string;
 		room_id?: string;
 		space_id?: string;
+		calendar_id?: string;
 		filter?: ChatWebhookFilter;
 	};
 	if (event.domain === "chat") {
 		return { targetId: call.caller.id, roomId: fields.room_id ?? null, filter: fields.filter ?? null };
 	}
-	return { targetId: event.domain === "mail" ? fields.mailbox_id : fields.space_id, roomId: null, filter: null };
+	const targetId =
+		event.domain === "mail" ? fields.mailbox_id : event.domain === "calendar" ? fields.calendar_id : fields.space_id;
+	return { targetId, roomId: null, filter: null };
 }
 
 /**

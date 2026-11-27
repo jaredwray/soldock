@@ -2,7 +2,7 @@
 // MCP Events. The composition root and the tests use these maps.
 import { AGENT_ACCESS_LIMITS, type OutputOf } from "@asterra/contracts";
 import { aiHandlers } from "./ai/index.ts";
-import { calendarHandlers } from "./calendar/index.ts";
+import { calendarHandlers, enableCalendarEvents } from "./calendar/index.ts";
 import {
 	chatHandlers,
 	chatWatchers,
@@ -121,4 +121,5 @@ export const watchers: WatcherMap<CallContext> = {
 export const events: EventSubscriptions<CallContext> = createEventSubscriptions({
 	mail: enableMailEvents,
 	drive: enableDriveEvents,
+	calendar: enableCalendarEvents,
 });

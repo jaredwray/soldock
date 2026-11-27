@@ -28,6 +28,7 @@ const PRIVILEGED: readonly Scope[] = [
 	"mail.webhooks",
 	"chat.webhooks",
 	"drive.webhooks",
+	"calendar.webhooks",
 ];
 
 /**
