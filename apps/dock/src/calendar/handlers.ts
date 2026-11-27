@@ -2,12 +2,20 @@ import {
 	addDays,
 	CALENDAR_LIMITS,
 	type CalendarEvent,
+	type CalendarGrant,
 	canonicalTimeZone,
 	DAY_MS,
+	DEFAULT_REMINDER_MINUTES,
 	dateToUtcMs,
 	type EventWhenValue,
 	type MailInvitation,
 	type OperationName,
+	occurrenceId,
+	parseOccurrenceId,
+	type RecurrenceInput,
+	type RecurrenceRule,
+	type Scope,
+	splitIds,
 	zonedDate,
 	zonedDayStart,
 } from "@asterra/contracts";
@@ -15,10 +23,11 @@ import {
 	auditOk,
 	type CallContext,
 	domainOf,
+	getPrincipal,
 	getPrincipals,
 	listMailboxAliases,
 	mailDomains,
-	resolveMailboxAddress,
+	recordServiceMemberships,
 } from "../identity/index.ts";
 import {
 	type CalendarPart,
@@ -27,18 +36,32 @@ import {
 	outboundPolicyDenial,
 	readCalendarPart,
 } from "../mail/index.ts";
-import { decodeCursor, encodeCursor, type HandlerMap, newId, OperationError, sha256Hex } from "../platform/index.ts";
 import {
-	type AttendeeRef,
-	type CalendarCall,
-	type EventFields,
-	type EventRecord,
-	type EventTime,
-	mailKey,
-	type Refusal,
+	audit,
+	decodeCursor,
+	encodeCursor,
+	type HandlerMap,
+	log,
+	newId,
+	OperationError,
+	sha256Hex,
+} from "../platform/index.ts";
+import type {
+	BusyQuery,
+	CalendarCall,
+	EventFields,
+	EventTime,
+	EventView,
+	GrantRecord,
+	ListQuery,
+	OrganizerRef,
+	PrincipalRef,
+	Refusal,
 } from "./calendar.ts";
+import { suggestTimes } from "./find-times.ts";
 import { type ICalInvite, parseICalendar } from "./ical.ts";
 import { storedTime } from "./time.ts";
+import { calendarWebhookHandlers } from "./webhooks.ts";
 
 type CalendarOperation = Extract<OperationName, `calendar.${string}`>;
 
@@ -59,106 +82,71 @@ function calendarStub(env: Pick<Env, "CALENDAR">, principalId: string) {
 	return env.CALENDAR.get(env.CALENDAR.idFromName(principalId));
 }
 
-/** The calendar of the caller. Each call reaches only the own calendar of its caller. */
-function openCalendar(call: CallContext): { stub: ReturnType<typeof calendarStub>; ctx: CalendarCall } {
+const NO_CALENDAR = "No calendar has that id. Only a person who is not archived can give access to a calendar.";
+
+/** True for a principal that can give grants on its calendar: a person who is not archived. */
+function isCalendarOwner(principal: { kind: string; service: boolean; archived_at: string | null }): boolean {
+	return principal.kind === "human" && !principal.service && principal.archived_at === null;
+}
+
+/** The own calendar of the caller, for the operations that only the owner uses. */
+function ownCalendar(call: CallContext): { stub: ReturnType<typeof calendarStub>; ctx: CalendarCall } {
 	const { principal } = call.caller;
 	return {
 		stub: calendarStub(call.env, principal.id),
 		ctx: {
 			ownerId: principal.id,
 			actorId: principal.id,
-			ownerEmail: principal.address,
-			ownerName: principal.display_name,
+			ownerMail: { email: principal.address, name: principal.display_name },
 		},
 	};
 }
 
-type AttendeeInput = { principal_id?: string | undefined; email?: string | undefined };
-
 /**
- * The attendees of an input. A principal of the organization gets a copy on its calendar. An address on a domain
- * that is not a mail domain of the organization is an attendee outside it, who gets mail. The caller and a second
- * entry of the same attendee are left out. An unknown or archived principal is refused.
+ * The calendar of a call: the own calendar of the caller, or with `calendarId` the calendar of a different
+ * person. Only a person who is not archived gives grants, so only that calendar can be the target. The object
+ * checks the grant before the handler reads more input, so a caller without access learns nothing from a
+ * refusal of its attendees or its time. `owner` is the organizer of a new event.
  */
-async function resolveAttendees(call: CallContext, inputs: readonly AttendeeInput[]): Promise<AttendeeRef[]> {
-	const db = call.env.DIRECTORY;
-	const domains = inputs.some((input) => input.email !== undefined)
-		? new Set(await mailDomains(db))
-		: new Set<string>();
-	const ids = inputs.flatMap((input) => (input.principal_id ? [input.principal_id] : []));
-	const byId = new Map((await getPrincipals(db, ids)).map((principal) => [principal.id, principal]));
-	const result = new Map<string, AttendeeRef>();
-	for (const input of inputs) {
-		let principal = input.principal_id ? byId.get(input.principal_id) : undefined;
-		if (input.principal_id && !principal) {
-			throw new OperationError(
-				"invalid",
-				`No person, agent or service account of the organization has the id ${input.principal_id}.`,
-			);
-		}
-		if (input.email !== undefined) {
-			const address = input.email.toLowerCase();
-			if (!domains.has(domainOf(address))) {
-				// An address outside the organization: the attendee gets the invitation by mail.
-				const key = mailKey(address);
-				if (!result.has(key)) result.set(key, { key, principal_id: null, email: address, name: address });
-				continue;
-			}
-			// The address of a person, also an alias. A team mailbox has no calendar.
-			const mailbox = await resolveMailboxAddress(db, address);
-			const found = mailbox?.kind === "personal" ? (await getPrincipals(db, [mailbox.id]))[0] : undefined;
-			if (!found) {
-				throw new OperationError(
-					"invalid",
-					`No person, agent or service account of the organization has the address ${input.email}.`,
-				);
-			}
-			principal = found;
-		}
-		if (!principal) continue;
-		if (principal.archived_at !== null) {
-			throw new OperationError(
-				"invalid",
-				`${principal.address} is archived. An archived account cannot attend a meeting.`,
-			);
-		}
-		if (principal.id === call.caller.principal.id || result.has(principal.id)) continue;
-		result.set(principal.id, {
-			key: principal.id,
-			principal_id: principal.id,
-			email: principal.address,
-			name: principal.display_name,
-		});
-	}
-	return [...result.values()];
-}
-
-/**
- * Refuses a call that sends mail when the credential cannot send mail, or when the outbound policy of an agent
- * does not allow an address. The outbox of the mailbox checks the policy again before each delivery.
- */
-function assertMayMail(call: CallContext, addresses: readonly string[]): void {
-	if (addresses.length === 0) return;
-	if (!call.caller.scopes.has("mail.send")) {
-		throw new OperationError(
-			"forbidden",
-			"An attendee or an organizer outside the organization gets mail. The credential does not have the scope mail.send.",
-		);
-	}
+async function openCalendar(
+	call: CallContext,
+	calendarId: string | undefined,
+): Promise<{ stub: ReturnType<typeof calendarStub>; ctx: CalendarCall; owner: OrganizerRef }> {
 	const { principal } = call.caller;
-	const denied = deniedOutboundAddresses(principal, [...new Set(addresses)]);
-	if (denied.length > 0)
-		throw new OperationError("policy_denied", outboundPolicyDenial(outboundMode(principal), denied));
+	if (calendarId === undefined || calendarId === principal.id) {
+		return { ...ownCalendar(call), owner: organizerOf(principal) };
+	}
+	const target = await getPrincipal(call.env.DIRECTORY, calendarId);
+	if (!target || !isCalendarOwner(target)) throw new OperationError("not_found", NO_CALENDAR);
+	const ctx: CalendarCall = {
+		ownerId: target.id,
+		actorId: principal.id,
+		ownerMail: { email: target.address, name: target.display_name },
+	};
+	const stub = calendarStub(call.env, target.id);
+	accept(await stub.authorize(ctx));
+	return { stub, ctx, owner: organizerOf(target) };
 }
 
-/** The addresses of the attendees outside the organization. */
-function mailAttendees(attendees: readonly { principal_id: string | null; email: string }[]): string[] {
-	return attendees.filter((attendee) => attendee.principal_id === null).map((attendee) => attendee.email);
-}
-
-/** True for the copy of a meeting by mail from outside the organization. */
-function isMailCopy(record: EventRecord): boolean {
-	return record.role === "attendee" && record.organizer?.principal_id === null;
+/**
+ * The audit line of a change. In the calendar of a different person, the line names that person in `calendar`,
+ * and the actor is the delegate. A line of the own calendar has no `calendar` field.
+ */
+function auditCalendar(call: CallContext, ctx: CalendarCall, op: string, target: string): void {
+	if (ctx.ownerId === ctx.actorId) {
+		auditOk(call, op, target);
+		return;
+	}
+	audit({
+		op,
+		actor: call.caller.principal.id,
+		actorKind: call.caller.kind,
+		credential: call.caller.credential,
+		target,
+		calendar: ctx.ownerId,
+		result: "ok",
+		requestId: call.requestId,
+	});
 }
 
 /** Turns a refusal from the object into an OperationError, and returns any other result. */
@@ -177,61 +165,113 @@ function timeOf(when: EventWhenValue): EventTime {
 	return time;
 }
 
+/**
+ * Refuses a message by mail that the credential or the outbound policy of the caller does not allow: the scope
+ * mail.send, and the policy of an agent, also of a delegate. The send checks the policy of the actor again.
+ */
+function assertMayMail(call: CallContext, addresses: readonly string[]): void {
+	if (addresses.length === 0) return;
+	if (!call.caller.scopes.has("mail.send")) {
+		throw new OperationError(
+			"forbidden",
+			"An attendee or an organizer outside the organization gets mail. The credential does not have the scope mail.send.",
+		);
+	}
+	const { principal } = call.caller;
+	const denied = deniedOutboundAddresses(principal, [...new Set(addresses)]);
+	if (denied.length > 0) {
+		throw new OperationError("policy_denied", outboundPolicyDenial(outboundMode(principal), denied));
+	}
+}
+
+/**
+ * The attendees by mail of an event: addresses outside the organization, in lowercase, each one time. The organizer
+ * must be a person. `internalCount` is the number of attendees of the organization, for the limit.
+ */
+async function resolveExternal(
+	call: CallContext,
+	owner: OrganizerRef,
+	emails: readonly string[] | undefined,
+	internalCount: number,
+): Promise<string[] | undefined> {
+	if (emails === undefined) return undefined;
+	const unique = [...new Set(emails.map((email) => email.toLowerCase()))];
+	if (unique.length === 0) return [];
+	if (owner.kind !== "human") throw new OperationError("forbidden", ORGANIZER_PERSON);
+	const domains = await mailDomains(call.env.DIRECTORY);
+	const own = unique.find((email) => domains.has(domainOf(email)));
+	if (own) {
+		throw new OperationError(
+			"invalid",
+			`${own} is an address of your organization. Invite a person of your organization with attendee_ids.`,
+		);
+	}
+	if (internalCount + unique.length > CALENDAR_LIMITS.attendees) {
+		throw new OperationError("invalid", `An event can have at most ${CALENDAR_LIMITS.attendees} attendees.`);
+	}
+	return unique;
+}
+
+function ruleOf(input: RecurrenceInput): RecurrenceRule {
+	return {
+		frequency: input.frequency,
+		interval: input.interval,
+		until: input.until ?? null,
+		count: input.count ?? null,
+	};
+}
+
 function iso(ms: number): string {
 	return new Date(ms).toISOString();
 }
 
-function toEvent(record: EventRecord, call: CallContext): CalendarEvent {
-	const { principal } = call.caller;
-	const isOrganizer = record.role === "owner";
-	const organizer: CalendarEvent["organizer"] = isOrganizer
-		? record.attendees.length > 0
-			? { principal_id: principal.id, email: principal.address, name: principal.display_name, self: true }
-			: null
-		: {
-				principal_id: record.organizer?.principal_id ?? null,
-				email: record.organizer?.email ?? "",
-				name: record.organizer?.name ?? "",
-				self: false,
-			};
+function toEvent(view: EventView): CalendarEvent {
 	return {
-		id: record.id,
-		uid: record.uid,
-		title: record.title,
-		description: record.description,
-		location: record.location,
+		id: view.id,
+		title: view.title,
+		description: view.description,
+		location: view.location,
 		when:
-			record.all_day && record.start_date !== null && record.end_date !== null
-				? { kind: "all_day", start_date: record.start_date, end_date: record.end_date }
+			view.all_day && view.start_date !== null && view.end_date !== null
+				? { kind: "all_day", start_date: view.start_date, end_date: view.end_date }
 				: {
 						kind: "timed",
-						start: iso(record.start_at),
-						end: iso(record.end_at),
-						time_zone: record.time_zone ?? "UTC",
+						start: iso(view.start_at),
+						end: iso(view.end_at),
+						time_zone: view.time_zone ?? "UTC",
 					},
-		revision: record.revision,
-		is_organizer: isOrganizer,
-		organizer,
-		attendees: record.attendees.map((attendee) => {
-			const self = attendee.principal_id === principal.id || (isMailCopy(record) && attendee.email === record.my_email);
-			// The copy of an attendee shows its own answer and its time, which can be newer than the snapshot of the
-			// organizer.
-			const own = self && !isOrganizer && record.my_response !== null;
-			const response = own && record.my_response ? record.my_response : attendee.response;
-			const respondedAt = own ? record.my_responded_at : attendee.responded_at;
-			return {
-				principal_id: attendee.principal_id,
-				email: attendee.email,
-				name: attendee.name,
-				response,
-				responded_at: respondedAt === null ? null : iso(respondedAt),
-				self,
-			};
-		}),
-		my_response: isOrganizer ? null : record.my_response,
-		untrusted: isMailCopy(record),
-		created_at: iso(record.created_at),
-		updated_at: iso(record.updated_at),
+		revision: view.revision,
+		created_at: iso(view.created_at),
+		updated_at: iso(view.updated_at),
+		recurrence: view.recurrence,
+		occurrence_id: view.occurrence_key === null ? null : occurrenceId(view.id, view.occurrence_key),
+		original_start:
+			view.occurrence_key === null
+				? null
+				: (view.original_date ?? (view.original_start_at === null ? null : iso(view.original_start_at))),
+		is_exception: view.is_exception,
+		role: view.role,
+		organizer:
+			view.organizer === null
+				? null
+				: { principal_id: view.organizer.principal_id, display_name: view.organizer.display_name },
+		attendees: view.attendees.map(({ principal_id, display_name, response }) => ({
+			principal_id,
+			display_name,
+			response,
+		})),
+		my_response: view.my_response,
+		reminder_minutes: view.reminder_minutes,
+		visibility: view.visibility,
+		created_by: view.created_by,
+		redacted: view.redacted,
+		external_attendees: view.external_attendees.map(({ email, display_name, response }) => ({
+			email,
+			display_name,
+			response,
+		})),
+		external_organizer: view.external_organizer,
+		untrusted: view.untrusted,
 	};
 }
 
@@ -241,52 +281,186 @@ function firstDateFrom(ms: number, zone: string): string {
 	return zonedDayStart(date, zone) >= ms ? date : addDays(date, 1);
 }
 
+/** The organizer of a new event: the owner of the calendar. */
+function organizerOf(principal: { id: string; display_name: string; kind: string }): OrganizerRef {
+	return {
+		principal_id: principal.id,
+		display_name: principal.display_name,
+		kind: principal.kind === "human" ? "human" : "agent",
+	};
+}
+
+const ORGANIZER_PERSON =
+	"Only a person can be the organizer of an event with attendees. An agent can invite from the calendar of a person who gave it schedule access.";
+
+/**
+ * The attendees of an event. The organizer (the owner of the calendar) must be a person, and only active people of
+ * the organization can be invited. So an agent invites only from the calendar of a person who gave it schedule
+ * access, and never invites an agent. `kept` holds the current attendees of an update: they stay without a new
+ * check, so an attendee who left the organization does not block a change.
+ */
+async function resolveAttendees(
+	call: CallContext,
+	owner: OrganizerRef,
+	ids: readonly string[] | undefined,
+	kept: readonly PrincipalRef[] = [],
+): Promise<PrincipalRef[] | undefined> {
+	if (ids === undefined) return undefined;
+	const unique = [...new Set(ids)];
+	if (unique.length === 0) return [];
+	if (owner.kind !== "human") throw new OperationError("forbidden", ORGANIZER_PERSON);
+	if (unique.includes(owner.principal_id)) {
+		throw new OperationError(
+			"invalid",
+			"The owner of the calendar is the organizer of the event. Do not put the owner in attendee_ids.",
+		);
+	}
+	const known = new Map(kept.map((attendee) => [attendee.principal_id, attendee]));
+	const fresh = unique.filter((id) => !known.has(id));
+	const found = fresh.length === 0 ? [] : await getPrincipals(call.env.DIRECTORY, fresh);
+	const byId = new Map(found.map((principal) => [principal.id, principal]));
+	return unique.map((id) => {
+		const stay = known.get(id);
+		if (stay) return { principal_id: stay.principal_id, display_name: stay.display_name };
+		const principal = byId.get(id);
+		if (!principal || principal.archived_at !== null) {
+			throw new OperationError("invalid", `No active principal of your organization has the id ${id}.`);
+		}
+		if (principal.kind !== "human" || principal.service) {
+			throw new OperationError("invalid", `${principal.display_name} is not a person. Only people can be invited now.`);
+		}
+		return { principal_id: principal.id, display_name: principal.display_name };
+	});
+}
+
+function occurrenceOf(id: string): { eventId: string; key: string } {
+	const parsed = parseOccurrenceId(id);
+	if (!parsed) throw new OperationError("not_found", "The event has no occurrence with that id.");
+	return parsed;
+}
+
+/** The range of a query in the window of events, with the dates of all-day events in the zone. Null when empty. */
+function rangeOf(timeMin: string, timeMax: string, zone: string): Omit<ListQuery, "after" | "limit"> | null {
+	// The input accepts each year from 0000 to 9999. No event is outside the window.
+	const min = Math.max(Date.parse(timeMin), WINDOW_START_MS);
+	const max = Math.min(Date.parse(timeMax), WINDOW_END_MS);
+	if (min >= max) return null;
+	return { min, max, minDate: zonedDate(min, zone), maxDate: firstDateFrom(max, zone), lowerBound: min - LOOK_BACK_MS };
+}
+
+const ZONE_PROBLEM = "time_zone must be an IANA time zone, such as America/New_York.";
+
+interface Availability {
+	principal_id: string;
+	availability: "known" | "unknown";
+	busy: { start: string; end: string }[];
+	/** The busy intervals in ms, for the suggestions. Null when unknown. */
+	intervals: [number, number][] | null;
+}
+
+/**
+ * The busy times of each principal, as `viewerId` sees them. A principal id that the directory does not have gives
+ * not_found. An archived principal, a calendar without a grant for the viewer, too many events, and a calendar
+ * that does not answer give unknown: never free.
+ */
+async function readAvailability(
+	call: CallContext,
+	viewerId: string,
+	ids: readonly string[],
+	range: Omit<ListQuery, "after" | "limit"> | null,
+	zone: string,
+): Promise<Availability[]> {
+	const found = new Map((await getPrincipals(call.env.DIRECTORY, ids)).map((principal) => [principal.id, principal]));
+	const missing = ids.find((id) => !found.has(id));
+	if (missing) throw new OperationError("not_found", `No principal of your organization has the id ${missing}.`);
+	const query: BusyQuery | null = range ? { ...range, zone } : null;
+	return Promise.all(
+		ids.map(async (id): Promise<Availability> => {
+			const unknown: Availability = { principal_id: id, availability: "unknown", busy: [], intervals: null };
+			if (found.get(id)?.archived_at !== null) return unknown;
+			try {
+				const result = await calendarStub(call.env, id).freeBusy({ ownerId: id, actorId: viewerId }, query);
+				if ("unknown" in result) return unknown;
+				return {
+					principal_id: id,
+					availability: "known",
+					busy: result.busy.map(({ start, end }) => ({ start: iso(start), end: iso(end) })),
+					intervals: result.busy.map(({ start, end }): [number, number] => [start, end]),
+				};
+			} catch (error) {
+				log("warn", "calendar free/busy failed", { error: error instanceof Error ? error.message : String(error) });
+				return unknown;
+			}
+		}),
+	);
+}
+
+function toGrant(record: GrantRecord): CalendarGrant {
+	return { principal_id: record.principal_id, access: record.access, created_at: iso(record.created_at) };
+}
+
+/** The grants of the own calendar of the caller, without the principals that the directory no longer has. */
+async function ownGrants(call: CallContext, records: readonly GrantRecord[]): Promise<{ grants: CalendarGrant[] }> {
+	const ids = records.map((record) => record.principal_id);
+	const live = new Set((await getPrincipals(call.env.DIRECTORY, ids)).map((principal) => principal.id));
+	return { grants: records.filter((record) => live.has(record.principal_id)).map(toGrant) };
+}
+
+function contentPatch(input: {
+	title?: string | undefined;
+	description?: string | undefined;
+	location?: string | undefined;
+	when?: EventWhenValue | undefined;
+}): Partial<EventFields> {
+	return {
+		...(input.title !== undefined ? { title: input.title } : {}),
+		...(input.description !== undefined ? { description: input.description } : {}),
+		...(input.location !== undefined ? { location: input.location } : {}),
+		...(input.when !== undefined ? timeOf(input.when) : {}),
+	};
+}
+
 export const calendarHandlers: Pick<HandlerMap<CallContext>, CalendarOperation> = {
 	async "calendar.list_events"(call, input) {
+		// The grant comes first, so an empty range or a bad cursor does not skip it.
+		const { stub, ctx } = await openCalendar(call, input.calendar_id);
 		const zone = canonicalTimeZone(input.time_zone ?? "UTC");
-		if (!zone) throw new OperationError("invalid", "time_zone must be an IANA time zone, such as America/New_York.");
-		// The input accepts each year from 0000 to 9999. No event is outside the window.
-		const min = Math.max(Date.parse(input.time_min), WINDOW_START_MS);
-		const max = Math.min(Date.parse(input.time_max), WINDOW_END_MS);
+		if (!zone) throw new OperationError("invalid", ZONE_PROBLEM);
 		let after: { start_at: number; id: string } | null = null;
 		if (input.cursor !== undefined) {
 			const values = decodeCursor<[number, string]>(input.cursor, ["number", "string"]);
 			if (!values) throw new OperationError("invalid", "The cursor is not valid. Start again without a cursor.");
 			after = { start_at: values[0], id: values[1] };
 		}
-		if (min >= max) return { events: [], next_cursor: null };
+		const range = rangeOf(input.time_min, input.time_max, zone);
+		if (!range) return { events: [], next_cursor: null };
 		const limit = input.limit ?? CALENDAR_LIMITS.defaultPageSize;
-		const { stub, ctx } = openCalendar(call);
-		const page = accept(
-			await stub.list(ctx, {
-				min,
-				max,
-				minDate: zonedDate(min, zone),
-				maxDate: firstDateFrom(max, zone),
-				lowerBound: min - LOOK_BACK_MS,
-				after,
-				limit,
-			}),
-		);
+		const page = accept(await stub.list(ctx, { ...range, after, limit }));
 		const last = page.events.at(-1);
+		const lastId = last && (last.occurrence_key === null ? last.id : occurrenceId(last.id, last.occurrence_key));
 		return {
-			events: page.events.map((record) => toEvent(record, call)),
-			next_cursor: page.more && last ? encodeCursor([last.start_at, last.id]) : null,
+			events: page.events.map(toEvent),
+			next_cursor: page.more && last && lastId ? encodeCursor([last.start_at, lastId]) : null,
 		};
 	},
 
 	async "calendar.get_event"(call, input) {
-		const { stub, ctx } = openCalendar(call);
-		return { event: toEvent(accept(await stub.get(ctx, input.event_id)), call) };
+		const { stub, ctx } = await openCalendar(call, input.calendar_id);
+		return { event: toEvent(accept(await stub.get(ctx, input.event_id))) };
 	},
 
 	async "calendar.create_event"(call, input) {
+		const { stub, ctx, owner } = await openCalendar(call, input.calendar_id);
 		const fields: EventFields = {
 			title: input.title,
 			description: input.description,
 			location: input.location,
+			visibility: input.visibility,
 			...timeOf(input.when),
 		};
+		const attendees = (await resolveAttendees(call, owner, input.attendee_ids)) ?? [];
+		const external = (await resolveExternal(call, owner, input.attendee_emails, attendees.length)) ?? [];
+		assertMayMail(call, external);
 		const { idempotency_key: key, ...request } = input;
 		const idempotency =
 			key === undefined
@@ -295,60 +469,255 @@ export const calendarHandlers: Pick<HandlerMap<CallContext>, CalendarOperation> 
 						key: `${call.caller.principal.id}:${key}`,
 						requestHash: await sha256Hex(JSON.stringify(["calendar.create_event", request])),
 					};
-		const { stub, ctx } = openCalendar(call);
-		// A retry with the key returns the first event. It does not read the directory again: an attendee that
-		// is archived now does not make the retry fail.
-		if (idempotency && input.attendees?.length) {
-			const earlier = await stub.replay(ctx, idempotency);
-			if (earlier) return { event: toEvent(accept(earlier), call) };
-		}
-		const attendees = input.attendees ? await resolveAttendees(call, input.attendees) : [];
-		assertMayMail(call, mailAttendees(attendees));
 		const id = newId("evt");
-		const record = accept(await stub.create(ctx, { id, fields, attendees, idempotency }));
+		const record = accept(
+			await stub.create(ctx, {
+				id,
+				fields,
+				recurrence: input.recurrence === undefined ? null : ruleOf(input.recurrence),
+				organizer: owner,
+				attendees,
+				externalAttendees: external,
+				reminderMinutes: input.reminder_minutes === undefined ? DEFAULT_REMINDER_MINUTES : input.reminder_minutes,
+				idempotency,
+			}),
+		);
 		// A retry with the key returns the first event: only the call that added it audits.
-		if (record.id === id) auditOk(call, "calendar.create_event", id);
-		return { event: toEvent(record, call) };
+		if (record.id === id) auditCalendar(call, ctx, "calendar.create_event", id);
+		return { event: toEvent(record) };
 	},
 
 	async "calendar.update_event"(call, input) {
+		const { stub, ctx, owner } = await openCalendar(call, input.calendar_id);
 		const patch: Partial<EventFields> = {
-			...(input.title !== undefined ? { title: input.title } : {}),
-			...(input.description !== undefined ? { description: input.description } : {}),
-			...(input.location !== undefined ? { location: input.location } : {}),
-			...(input.when !== undefined ? timeOf(input.when) : {}),
+			...contentPatch(input),
+			...(input.visibility !== undefined ? { visibility: input.visibility } : {}),
 		};
-		const attendees = input.attendees ? await resolveAttendees(call, input.attendees) : undefined;
-		const { stub, ctx } = openCalendar(call);
-		// A change goes by mail to each attendee outside the organization, the old ones and the new ones.
-		const current = await stub.get(ctx, input.event_id);
-		const before = "error" in current || current.role !== "owner" ? [] : mailAttendees(current.attendees);
-		assertMayMail(call, [...before, ...mailAttendees(attendees ?? [])]);
-		const result = accept(await stub.update(ctx, input.event_id, patch, attendees, input.base_revision));
-		if (result.changed) auditOk(call, "calendar.update_event", input.event_id);
-		return { event: toEvent(result.event, call) };
+		// The current attendees stay without a new check of the directory. A refusal of `get` is the refusal of
+		// `update`, so it goes to `update`.
+		const read = await stub.get(ctx, input.event_id);
+		const current = "error" in read ? null : read;
+		const kept = input.attendee_ids === undefined ? [] : accept(read).attendees;
+		const attendees = await resolveAttendees(call, owner, input.attendee_ids, kept);
+		const internalCount = (attendees ?? current?.attendees ?? []).length;
+		const external = await resolveExternal(call, owner, input.attendee_emails, internalCount);
+		// The attendees by mail of now and of after the change can get mail: an update or a cancellation.
+		const mailed = current?.role === "organizer" ? current.external_attendees.map((guest) => guest.email) : [];
+		assertMayMail(call, [...mailed, ...(external ?? [])]);
+		const result = accept(
+			await stub.update(ctx, input.event_id, {
+				patch,
+				recurrence:
+					input.recurrence === undefined ? undefined : input.recurrence === null ? null : ruleOf(input.recurrence),
+				attendees,
+				externalAttendees: external,
+				baseRevision: input.base_revision,
+			}),
+		);
+		if (result.changed) auditCalendar(call, ctx, "calendar.update_event", input.event_id);
+		return { event: toEvent(result.event) };
 	},
 
 	async "calendar.delete_event"(call, input) {
-		const { stub, ctx } = openCalendar(call);
+		const { stub, ctx } = await openCalendar(call, input.calendar_id);
 		if (!input.dry_run) {
+			// The deletion of an own event cancels it by mail for each attendee by mail.
 			const current = await stub.get(ctx, input.event_id);
-			if (!("error" in current) && current.role === "owner") assertMayMail(call, mailAttendees(current.attendees));
+			if (!("error" in current) && current.role === "organizer") {
+				assertMayMail(
+					call,
+					current.external_attendees.map((guest) => guest.email),
+				);
+			}
 		}
 		const record = accept(await stub.remove(ctx, input.event_id, input.base_revision, input.dry_run));
-		if (!input.dry_run) auditOk(call, "calendar.delete_event", input.event_id);
-		return { event: toEvent(record, call), dry_run: input.dry_run };
+		if (!input.dry_run) auditCalendar(call, ctx, "calendar.delete_event", input.event_id);
+		return { event: toEvent(record), dry_run: input.dry_run };
 	},
 
-	async "calendar.respond_to_invitation"(call, input) {
-		const { stub, ctx } = openCalendar(call);
-		const current = await stub.get(ctx, input.event_id);
-		if (!("error" in current) && isMailCopy(current) && current.my_response !== input.response) {
-			assertMayMail(call, [current.organizer?.email ?? ""]);
+	async "calendar.update_occurrence"(call, input) {
+		const { stub, ctx } = await openCalendar(call, input.calendar_id);
+		const { eventId, key } = occurrenceOf(input.occurrence_id);
+		const result = accept(await stub.updateOccurrence(ctx, eventId, key, contentPatch(input), input.base_revision));
+		if (result.changed) auditCalendar(call, ctx, "calendar.update_occurrence", input.occurrence_id);
+		return { event: toEvent(result.event) };
+	},
+
+	async "calendar.cancel_occurrence"(call, input) {
+		const { stub, ctx } = await openCalendar(call, input.calendar_id);
+		const { eventId, key } = occurrenceOf(input.occurrence_id);
+		const record = accept(await stub.cancelOccurrence(ctx, eventId, key, input.base_revision, input.dry_run));
+		if (!input.dry_run) auditCalendar(call, ctx, "calendar.cancel_occurrence", input.occurrence_id);
+		return { event: toEvent(record), dry_run: input.dry_run };
+	},
+
+	async "calendar.respond_to_event"(call, input) {
+		let key: string | null = null;
+		if (input.occurrence_id !== undefined) {
+			const parsed = occurrenceOf(input.occurrence_id);
+			if (parsed.eventId !== input.event_id) {
+				throw new OperationError("invalid", "occurrence_id must be an occurrence of event_id.");
+			}
+			key = parsed.key;
 		}
-		const result = accept(await stub.respond(ctx, input.event_id, input.response));
-		if (result.changed) auditOk(call, "calendar.respond_to_invitation", input.event_id);
-		return { event: toEvent(result.event, call) };
+		const { stub, ctx } = ownCalendar(call);
+		// The answer to a meeting by mail goes to its organizer by mail.
+		const current = await stub.get(ctx, input.event_id);
+		if (!("error" in current) && current.external_organizer && current.my_response !== input.response) {
+			assertMayMail(call, [current.external_organizer.email]);
+		}
+		const record = accept(await stub.respond(ctx, input.event_id, key, input.response));
+		auditOk(call, "calendar.respond_to_event", input.occurrence_id ?? input.event_id);
+		return { event: toEvent(record) };
+	},
+
+	async "calendar.set_reminder"(call, input) {
+		const { stub, ctx } = ownCalendar(call);
+		const record = accept(await stub.setReminder(ctx, input.event_id, input.minutes));
+		return { event: toEvent(record) };
+	},
+
+	async "calendar.query_free_busy"(call, input) {
+		const zone = canonicalTimeZone(input.time_zone ?? "UTC");
+		if (!zone) throw new OperationError("invalid", ZONE_PROBLEM);
+		const ids = [...new Set(splitIds(input.principal_ids))];
+		const calendars = await readAvailability(
+			call,
+			call.caller.principal.id,
+			ids,
+			rangeOf(input.time_min, input.time_max, zone),
+			zone,
+		);
+		return { calendars: calendars.map(({ intervals: _intervals, ...calendar }) => calendar) };
+	},
+
+	async "calendar.find_times"(call, input) {
+		// The calendar of the call. With calendar_id, the caller must hold schedule access to it, and each attendee
+		// calendar is asked as its owner: the caller sees what the attendees share with that person.
+		const viewer = input.calendar_id ?? call.caller.principal.id;
+		if (viewer !== call.caller.principal.id) await openCalendar(call, viewer);
+		const zone = canonicalTimeZone(input.time_zone);
+		if (!zone) throw new OperationError("invalid", ZONE_PROBLEM);
+		const targets = [...new Set([viewer, ...splitIds(input.attendee_ids)])];
+		const range = rangeOf(input.time_min, input.time_max, zone);
+		const calendars = await readAvailability(call, viewer, targets, range, zone);
+		const complete = calendars.every((calendar) => calendar.availability === "known");
+		// Unknown is never free: without ignore_unknown, a calendar with unknown availability gives no suggestion.
+		const suggest = range !== null && (complete || input.ignore_unknown === "true");
+		const suggestions = suggest
+			? suggestTimes(
+					calendars.flatMap((calendar) => calendar.intervals ?? []),
+					{
+						min: range.min,
+						max: range.max,
+						zone,
+						dayStart: input.day_start ?? "09:00",
+						dayEnd: input.day_end ?? "17:00",
+						durationMinutes: input.duration_minutes,
+						now: Date.now(),
+						limit: input.limit ?? CALENDAR_LIMITS.defaultSuggestions,
+					},
+				)
+			: [];
+		return {
+			time_zone: zone,
+			calendars: calendars.map(({ intervals: _intervals, ...calendar }) => calendar),
+			suggestions: suggestions.map(([start, end]) => ({ start: iso(start), end: iso(end) })),
+			complete,
+		};
+	},
+
+	// The grants of the own calendar of a person. The operations take no calendar_id: only the owner of a calendar
+	// reads and changes its grants, never an owner or an admin for a different person.
+	async "calendar.list_grants"(call) {
+		const { stub, ctx } = ownCalendar(call);
+		return ownGrants(call, accept(await stub.grants(ctx)).grants);
+	},
+
+	async "calendar.set_grant"(call, input) {
+		const ownerId = call.caller.principal.id;
+		if (input.principal_id === ownerId) {
+			throw new OperationError("invalid", "You use your own calendar without a grant.");
+		}
+		// A credential cannot give access that it does not hold, so a narrow key cannot give more than it can do.
+		const needed: Scope[] = input.access === "schedule" ? ["calendar.read", "calendar.write"] : ["calendar.read"];
+		const notHeld = needed.filter((scope) => !call.caller.scopes.has(scope));
+		if (notHeld.length > 0) {
+			throw new OperationError(
+				"forbidden",
+				`Your credential does not hold ${notHeld.join(", ")}, so it cannot give ${input.access} access.`,
+			);
+		}
+		const target = await getPrincipal(call.env.DIRECTORY, input.principal_id);
+		if (!target || target.archived_at !== null) throw new OperationError("not_found", "No principal has that id.");
+		const { stub, ctx } = ownCalendar(call);
+		const result = accept(await stub.setGrant(ctx, target.id, input.access));
+		// A call that changes nothing writes no line, so a script can send the wanted grants again.
+		if (result.changed) {
+			auditOk(call, "calendar.set_grant", `${target.id}:${input.access}`);
+			recordServiceMemberships(call, [target.id], "calendar.set_grant", ownerId);
+		}
+		return ownGrants(call, result.grants);
+	},
+
+	async "calendar.remove_grant"(call, input) {
+		const { stub, ctx } = ownCalendar(call);
+		const result = accept(await stub.removeGrant(ctx, input.principal_id));
+		if (result.changed) {
+			auditOk(call, "calendar.remove_grant", input.principal_id);
+			recordServiceMemberships(call, [input.principal_id], "calendar.remove_grant", ctx.ownerId);
+		}
+		return ownGrants(call, result.grants);
+	},
+
+	async "calendar.list_shared_calendars"(call, input) {
+		const limit = input.limit ?? CALENDAR_LIMITS.defaultSharedPageSize;
+		const { stub, ctx } = ownCalendar(call);
+		const page = accept(await stub.sharedWithMe(ctx, input.cursor ?? null, limit));
+		// The hint is never the authority: the calendar of each owner gives the grant of the caller now.
+		const owners = new Map(
+			(
+				await getPrincipals(
+					call.env.DIRECTORY,
+					page.pointers.map((pointer) => pointer.owner_id),
+				)
+			)
+				.filter(isCalendarOwner)
+				.map((principal) => [principal.id, principal]),
+		);
+		const checked = await Promise.all(
+			page.pointers.map(async (pointer) => {
+				const owner = owners.get(pointer.owner_id);
+				if (!owner) return null;
+				try {
+					const { access } = await calendarStub(call.env, owner.id).accessOf({
+						ownerId: owner.id,
+						actorId: call.caller.principal.id,
+					});
+					return access === null ? null : { calendar_id: owner.id, display_name: owner.display_name, access };
+				} catch {
+					return null;
+				}
+			}),
+		);
+		const last = page.pointers.at(-1);
+		return {
+			calendars: checked.filter((entry) => entry !== null),
+			next_cursor: page.more && last ? last.owner_id : null,
+		};
+	},
+
+	async "calendar.list_changes"(call, input) {
+		const { stub, ctx } = ownCalendar(call);
+		const page = accept(
+			await stub.listChanges(ctx, input.cursor ?? null, input.limit ?? CALENDAR_LIMITS.changesPageSize),
+		);
+		return {
+			changes: page.changes.map((change) => ({ ...change, at: iso(change.at) })),
+			cursor: page.cursor,
+			has_more: page.has_more,
+			expired: page.expired,
+		};
 	},
 
 	async "calendar.get_mail_invitation"(call, input) {
@@ -366,7 +735,7 @@ export const calendarHandlers: Pick<HandlerMap<CallContext>, CalendarOperation> 
 		const organizer = invite.organizer as { email: string; name: string };
 		const myEmail = before.attendees.find((attendee) => attendee.self)?.email as string;
 		assertMayMail(call, [organizer.email]);
-		const { stub, ctx } = openCalendar(call);
+		const { stub, ctx } = ownCalendar(call);
 		const result = accept(
 			await stub.respondToMail(ctx, {
 				invite,
@@ -379,9 +748,11 @@ export const calendarHandlers: Pick<HandlerMap<CallContext>, CalendarOperation> 
 		if (result.changed) auditOk(call, "calendar.respond_to_mail_invitation", input.message_id);
 		return {
 			invitation: await invitationOf(call, read.part, invite),
-			event: result.event ? toEvent(result.event, call) : null,
+			event: result.event ? toEvent(result.event) : null,
 		};
 	},
+
+	...calendarWebhookHandlers,
 };
 
 /** The calendar part of a message of the own mailbox of the caller, read and parsed. */
@@ -395,7 +766,7 @@ async function readInvitation(
 }
 
 const RESPONSE_OF_PARTSTAT = {
-	"NEEDS-ACTION": "pending",
+	"NEEDS-ACTION": "needs_action",
 	ACCEPTED: "accepted",
 	TENTATIVE: "tentative",
 	DECLINED: "declined",
@@ -410,7 +781,7 @@ async function invitationOf(call: CallContext, part: CalendarPart, invite: ICalI
 	]);
 	const myEmail = invite.attendees.find((attendee) => mine.has(attendee.email))?.email ?? null;
 	const method = invite.method === "OTHER" ? "other" : (invite.method.toLowerCase() as "request" | "reply" | "cancel");
-	const { stub, ctx } = openCalendar(call);
+	const { stub, ctx } = ownCalendar(call);
 	const onCalendar = accept(await stub.mailInvitationState(ctx, invite.uid, invite.sequence));
 	let state: MailInvitation["state"] = onCalendar.state;
 	// A cancellation that the calendar did not apply leaves the event: the state then tells that it is there.

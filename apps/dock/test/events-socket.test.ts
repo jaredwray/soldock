@@ -300,8 +300,6 @@ describe("the events socket", () => {
 
 	// A tab must learn of a sign-out at once: it does not poll while its socket is live.
 	it("closes the sockets of a session that signs out and of a revoked key at once, and no other socket", async () => {
-		// The room sends the first state of the membership after MEMBER_DELAY_MS. That state must not come before
-		// the close of a socket, so the scenario starts after it.
 		const room = await roomAfterJoin(owner, "Launch", ada);
 		const cookie = await signIn(ada.address);
 		const { api_key: second } = await ada.call("account.create_api_key", { label: "Second", scopes: ["chat.read"] });

@@ -4,15 +4,24 @@ import {
 	addDays,
 	CALENDAR_LIMITS,
 	type CalendarEvent,
+	checkRecurrence,
 	checkWhen,
 	DAY_MS,
+	DEFAULT_REMINDER_MINUTES,
 	dateToUtcMs,
+	daysBetween,
 	type EventResponse,
+	type EventVisibility,
 	type EventWhenValue,
 	type MailInvitation,
+	type Recurrence,
+	type RecurrenceInput,
+	type SeriesTime,
 	zonedDate,
 	zonedDayStart,
+	zonedInstant,
 	zonedTime,
+	zonedWall,
 	zoneOffsetMs,
 } from "@asterra/contracts";
 import { type CalendarView, isCalendarDate } from "../../routes.ts";
@@ -214,6 +223,78 @@ export interface EventForm {
 	endTime: string;
 	location: string;
 	description: string;
+	/** How the event repeats. Biweekly is weekly with an interval of 2. */
+	repeat: RepeatChoice;
+	/** How a repeat ends: never, on a date (`until`, YYYY-MM-DD) or after `count` occurrences. */
+	ends: "never" | "until" | "count";
+	until: string;
+	count: string;
+	/** The own reminder, in minutes before the start, or "none". */
+	reminder: ReminderChoice;
+	/** private: a person or an agent that schedules for you sees only the time. */
+	visibility: EventVisibility;
+}
+
+export type RepeatChoice = "none" | "daily" | "weekly" | "biweekly" | "monthly";
+export type ReminderChoice = "none" | "5" | "10" | "30";
+
+export const REPEAT_OPTIONS: readonly { value: RepeatChoice; label: string }[] = [
+	{ value: "none", label: "Does not repeat" },
+	{ value: "daily", label: "Every day" },
+	{ value: "weekly", label: "Every week" },
+	{ value: "biweekly", label: "Every 2 weeks" },
+	{ value: "monthly", label: "Every month" },
+];
+
+export const REMINDER_OPTIONS: readonly { value: ReminderChoice; label: string }[] = [
+	{ value: "none", label: "No reminder" },
+	{ value: "5", label: "5 minutes before" },
+	{ value: "10", label: "10 minutes before" },
+	{ value: "30", label: "30 minutes before" },
+];
+
+/** The fields of a form that do not depend on the event. */
+const REPEAT_DEFAULTS = { repeat: "none", ends: "never", until: "", count: "10" } as const;
+
+/** The repeat choice of a rule. A rule that the dialog cannot show, such as every 3 weeks, keeps its own text. */
+export function repeatChoice(recurrence: Recurrence | null): RepeatChoice | null {
+	if (recurrence === null) return "none";
+	if (recurrence.frequency === "weekly" && recurrence.interval === 2) return "biweekly";
+	if (recurrence.interval !== 1) return null;
+	return recurrence.frequency;
+}
+
+/** The rule of the form, or null for no repeat. */
+export function recurrenceOf(form: EventForm): RecurrenceInput | null {
+	if (form.repeat === "none") return null;
+	const frequency = form.repeat === "biweekly" ? "weekly" : form.repeat;
+	const interval = form.repeat === "biweekly" ? 2 : 1;
+	return {
+		frequency,
+		interval,
+		...(form.ends === "until" && form.until ? { until: form.until } : {}),
+		...(form.ends === "count" ? { count: Number(form.count) } : {}),
+	};
+}
+
+/** True when the repeat fields of two forms give the same rule. */
+export function sameRepeat(form: EventForm, opened: EventForm): boolean {
+	return JSON.stringify(recurrenceOf(form)) === JSON.stringify(recurrenceOf(opened));
+}
+
+/** The reminder of the form, in minutes, or null. */
+export function reminderOf(form: EventForm): 5 | 10 | 30 | null {
+	return form.reminder === "none" ? null : (Number(form.reminder) as 5 | 10 | 30);
+}
+
+/** The text of a rule, for example "Every 2 weeks, 5 times". */
+export function repeatText(recurrence: Recurrence): string {
+	const unit = { daily: "day", weekly: "week", monthly: "month" }[recurrence.frequency];
+	const every = recurrence.interval === 1 ? `Every ${unit}` : `Every ${recurrence.interval} ${unit}s`;
+	if (recurrence.count !== null) return `${every}, ${recurrence.count} times`;
+	if (recurrence.until !== null)
+		return `${every}, until ${shortDate(recurrence.until)}, ${recurrence.until.slice(0, 4)}`;
+	return every;
 }
 
 function wallTime(ms: number, zone: string): string {
@@ -234,12 +315,26 @@ export function newEventForm(date: string, hour = 9): EventForm {
 		endTime: `${String(end % 24).padStart(2, "0")}:00`,
 		location: "",
 		description: "",
+		...REPEAT_DEFAULTS,
+		reminder: String(DEFAULT_REMINDER_MINUTES) as ReminderChoice,
+		visibility: "default",
 	};
 }
 
 /** The form of an existing event, in the time zone of the person. */
 export function formOf(event: CalendarEvent, zone: string): EventForm {
-	const base = { title: event.title, location: event.location, description: event.description };
+	const rule = event.recurrence;
+	const base = {
+		title: event.title,
+		location: event.location,
+		description: event.description,
+		repeat: repeatChoice(rule) ?? "none",
+		ends: rule?.count != null ? ("count" as const) : rule?.until != null ? ("until" as const) : ("never" as const),
+		until: rule?.until ?? "",
+		count: String(rule?.count ?? 10),
+		reminder: (event.reminder_minutes === null ? "none" : String(event.reminder_minutes)) as ReminderChoice,
+		visibility: event.visibility,
+	};
 	if (event.when.kind === "all_day") {
 		return {
 			...base,
@@ -262,24 +357,113 @@ export function formOf(event: CalendarEvent, zone: string): EventForm {
 	};
 }
 
-/** The time of an event from the fields of the form. The last day of an all-day form is in the event. */
-export function whenOf(form: EventForm, zone: string): EventWhenValue {
+/**
+ * The time zone that a save of an event keeps: the zone of a timed event, or the zone of the person for a new
+ * event and for an all-day event. The person can be in a different zone than the event.
+ */
+export function zoneOfEvent(event: CalendarEvent | null, zone: string): string {
+	return event?.when.kind === "timed" ? event.when.time_zone : zone;
+}
+
+/**
+ * The time of an event from the fields of the form. The last day of an all-day form is in the event. The
+ * fields are on the clock of `zone`, the zone of the person. `eventZone` is the zone that the event keeps.
+ */
+export function whenOf(form: EventForm, zone: string, eventZone = zone): EventWhenValue {
 	if (form.allDay) return { kind: "all_day", start_date: form.startDate, end_date: addDays(form.endDate, 1) };
 	return {
 		kind: "timed",
 		start: new Date(zonedTime(form.startDate, form.startTime, zone)).toISOString(),
 		end: new Date(zonedTime(form.endDate, form.endTime, zone)).toISOString(),
-		time_zone: zone,
+		time_zone: eventZone,
 	};
 }
 
-/** The problem with the time of the form, with the text of the server, or null. */
-export function formProblem(form: EventForm, zone: string): string | null {
+/**
+ * The problem with the time of the form, with the text of the server, or null. With `ruleStays`, the form is
+ * the form of one occurrence and its rule did not change, so the rule gets no check: the time of one occurrence
+ * can be outside the rule, and the server checks a change of the series.
+ */
+export function formProblem(
+	form: EventForm,
+	zone: string,
+	options: { eventZone?: string; ruleStays?: boolean } = {},
+): string | null {
 	if (!form.startDate || !form.endDate || (!form.allDay && (!form.startTime || !form.endTime))) {
 		return "Give a start and an end.";
 	}
 	if (form.allDay && form.endDate < form.startDate) return "The last day of an event must not be before its first day.";
-	return checkWhen(whenOf(form, zone));
+	const when = whenOf(form, zone, options.eventZone);
+	const problem = checkWhen(when);
+	if (problem) return problem;
+	const rule = recurrenceOf(form);
+	if (rule === null || options.ruleStays) return null;
+	if (form.ends === "until" && !form.until) return "Give the last day of the repeat.";
+	if (form.ends === "count" && !/^\d+$/.test(form.count)) return "Give the number of times as a number.";
+	return checkRecurrence(seriesTimeOf(when), {
+		frequency: rule.frequency,
+		interval: rule.interval,
+		until: rule.until ?? null,
+		count: rule.count ?? null,
+	});
+}
+
+/** The time of an event in the form that the recurrence engine reads. */
+function seriesTimeOf(when: EventWhenValue): SeriesTime {
+	if (when.kind === "all_day") {
+		return {
+			all_day: true,
+			start_at: 0,
+			end_at: 0,
+			start_date: when.start_date,
+			end_date: when.end_date,
+			time_zone: null,
+		};
+	}
+	return {
+		all_day: false,
+		start_at: Date.parse(when.start),
+		end_at: Date.parse(when.end),
+		start_date: null,
+		end_date: null,
+		time_zone: when.time_zone,
+	};
+}
+
+/**
+ * The time of a series after a change to one of its occurrences for the entire series. The occurrence moves
+ * by some days and gets a new wall clock time: the first occurrence moves by the same days and gets the same
+ * time and length. `master` is the series as calendar.get_event returns it.
+ *
+ * A timed series keeps its own time zone. The fields of the form are on the clock of `zone`, the zone of the
+ * person, so the days and the new time are computed on the clock of the series.
+ */
+export function seriesWhen(master: CalendarEvent, opened: EventForm, form: EventForm, zone: string): EventWhenValue {
+	if (master.when.kind === "all_day" || form.allDay) {
+		const shift = daysBetween(opened.startDate, form.startDate);
+		const first = formOf(master, zone);
+		const length = daysBetween(form.startDate, form.endDate);
+		const startDate = addDays(first.startDate, shift);
+		return whenOf({ ...form, startDate, endDate: addDays(startDate, length) }, zone);
+	}
+	const seriesZone = master.when.time_zone;
+	const from = zonedTime(opened.startDate, opened.startTime, zone);
+	const to = zonedTime(form.startDate, form.startTime, zone);
+	const length = zonedTime(form.endDate, form.endTime, zone) - to;
+	const shift = daysBetween(zonedDate(from, seriesZone), zonedDate(to, seriesZone));
+	const firstDate = addDays(zonedDate(Date.parse(master.when.start), seriesZone), shift);
+	const start = zonedInstant(firstDate, zonedWall(to, seriesZone).msOfDay, seriesZone);
+	return {
+		kind: "timed",
+		start: new Date(start).toISOString(),
+		end: new Date(start + length).toISOString(),
+		time_zone: seriesZone,
+	};
+}
+
+/** The key of an entry of a list: the id of the occurrence, or the id of a one-off event. */
+export function eventKey(event: CalendarEvent): string {
+	return event.occurrence_id ?? event.id;
 }
 
 /**
@@ -370,30 +554,13 @@ export function responseLabel(response: EventResponse): string {
 		case "declined":
 			return "No";
 		default:
-			return "No answer yet";
+			return "No answer";
 	}
-}
-
-/** The state of the copy of a meeting in the accessible name of its event. An accepted meeting has none. */
-const STATE_TEXT: Record<EventResponse, string | null> = {
-	pending: "invitation, not answered",
-	tentative: "maybe",
-	declined: "declined",
-	accepted: null,
-};
-
-/**
- * The accessible name of an event: its title, its time and its place. The copy of a meeting that the person did
- * not accept also has its state, so the state is not only a color.
- */
-export function eventLabel(event: CalendarEvent, zone: string): string {
-	const state = event.is_organizer || event.my_response === null ? null : STATE_TEXT[event.my_response];
-	return [event.title, whenText(event, zone), event.location, state].filter(Boolean).join(", ");
 }
 
 /** The time of an invitation by mail with its day: "Thu, Dec 3, 9:00 AM – 10:00 AM", or "All day, Dec 10". */
 export function invitationWhenText(when: CalendarEvent["when"], zone: string): string {
-	const day = when.kind === "all_day" ? when.start_date : zonedDate(Date.parse(when.start), zone);
+	const day = invitationDay(when, zone);
 	const text = whenText({ when }, zone);
 	if (when.kind === "all_day") return text === "All day" ? `All day, ${longDate(day)}` : text;
 	return text.includes(",") ? text : `${longDate(day)}, ${text}`;
@@ -438,57 +605,11 @@ export function invitationStateText(invitation: Pick<MailInvitation, "method" | 
 /** The line of the card of an answer by mail: "Priya Natarajan answered Yes." */
 export function replyText(invitation: Pick<MailInvitation, "attendees">): string | null {
 	const [attendee] = invitation.attendees;
-	if (!attendee || attendee.response === "pending") return null;
+	if (!attendee || attendee.response === "needs_action") return null;
 	return `${attendee.name || attendee.email} answered ${responseLabel(attendee.response)}.`;
 }
 
-/** The class of the button of an event: a pending, a tentative or a declined invitation looks different. */
-export function eventStateClass(event: CalendarEvent): string {
-	if (event.is_organizer || event.my_response === null || event.my_response === "accepted") return "";
-	return `cal-event-${event.my_response}`;
-}
-
-/**
- * An attendee that the organizer chose in the event dialog: a person, agent or service account of the
- * organization, or an address outside it (`principal_id` null), who gets the invitation by mail.
- */
-export interface ChosenAttendee {
-	principal_id: string | null;
-	name: string;
-	email: string;
-	kind?: "human" | "agent" | "service";
-}
-
-/** The key of a chosen attendee: the principal id, or the address in lowercase. */
-export function attendeeKey(attendee: Pick<ChosenAttendee, "principal_id" | "email">): string {
-	return attendee.principal_id ?? attendee.email.toLowerCase();
-}
-
-/** The attendees of an event, as the dialog shows them at the start. */
-export function chosenOf(event: CalendarEvent | null): ChosenAttendee[] {
-	return (event?.attendees ?? []).map((attendee) => ({
-		principal_id: attendee.principal_id,
-		name: attendee.name,
-		email: attendee.email,
-	}));
-}
-
-/** The attendees for the input of an operation. */
-export function attendeeInputs(chosen: readonly ChosenAttendee[]): ({ principal_id: string } | { email: string })[] {
-	return chosen.map((attendee) =>
-		attendee.principal_id ? { principal_id: attendee.principal_id } : { email: attendee.email },
-	);
-}
-
-/** True when two lists have the same attendees, in each order. */
-export function sameAttendees(a: readonly ChosenAttendee[], b: readonly ChosenAttendee[]): boolean {
-	const keys = new Set(a.map(attendeeKey));
-	return a.length === b.length && keys.size === new Set(b.map(attendeeKey)).size
-		? b.every((attendee) => keys.has(attendeeKey(attendee)))
-		: false;
-}
-
-/** The address of an attendee outside the organization that the person types, or null. */
+/** The address outside the organization that the person types, in lowercase, or null. */
 export function typedAddress(text: string): string | null {
 	const address = text.trim().toLowerCase();
 	return /^[a-z0-9.!#$%&'*+/=?^_`{|}~-]{1,64}@[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$/.test(
@@ -496,6 +617,50 @@ export function typedAddress(text: string): string | null {
 	)
 		? address
 		: null;
+}
+
+/**
+ * An interval of busy or free time in a time zone: "Mon, Mar 4, 10:00 AM – 12:30 PM", with the date of the end
+ * when it is on a different day.
+ */
+export function intervalText(start: number, end: number, zone: string): string {
+	const day = format(zone, { weekday: "short", month: "short", day: "numeric" });
+	const startText = `${day.format(start)}, ${timeText(start, zone)}`;
+	if (zonedDate(start, zone) === zonedDate(end - 1, zone)) return `${startText} – ${timeText(end, zone)}`;
+	return `${startText} – ${day.format(end)}, ${timeText(end, zone)}`;
+}
+
+/** The title of an event, or "Busy" for a private event of a different person that has no title for the caller. */
+export function eventTitle(event: CalendarEvent): string {
+	return event.title || "Busy";
+}
+
+/**
+ * The form with the time of a suggestion of Find a time. The start and the end are instants: the form shows them
+ * on the clock of the time zone of the dialog, which can differ from the zone of the search.
+ */
+export function withSlot(form: EventForm, start: number, end: number, zone: string): EventForm {
+	return {
+		...form,
+		allDay: false,
+		startDate: zonedDate(start, zone),
+		startTime: wallTime(start, zone),
+		endDate: zonedDate(end, zone),
+		endTime: wallTime(end, zone),
+	};
+}
+
+/** The accessible name of an event: its title, its time and its place. */
+export function eventLabel(event: CalendarEvent, zone: string): string {
+	return [
+		eventTitle(event),
+		whenText(event, zone),
+		event.location,
+		event.recurrence ? repeatText(event.recurrence) : "",
+		event.my_response === "declined" ? "Declined" : "",
+	]
+		.filter(Boolean)
+		.join(", ");
 }
 
 /** The hours of the grid of the week view. */

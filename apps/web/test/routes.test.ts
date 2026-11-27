@@ -316,10 +316,29 @@ describe("routes", () => {
 
 	// Each period of Calendar has its own path, so a reload or a shared link opens the same week or month.
 	it("parses the path of each Calendar view back to its view and day, and a day that is not real to not-found", () => {
-		expect(parseRoute("/calendar")).toEqual({ page: "calendar", view: "week", date: null });
+		expect(parseRoute("/calendar")).toEqual({ page: "calendar", view: "week", date: null, calendarId: null });
 		for (const view of ["week", "month"] as const) {
-			expect(parseRoute(calendarPath(view, "2026-12-01"))).toEqual({ page: "calendar", view, date: "2026-12-01" });
+			expect(parseRoute(calendarPath(view, "2026-12-01"))).toEqual({
+				page: "calendar",
+				view,
+				date: "2026-12-01",
+				calendarId: null,
+			});
 		}
+		// The calendar of a person who lets the person schedule has its own path, so a reload stays on it.
+		const ada = "prn_01JD0000000000000000000001";
+		expect(parseRoute(`/calendar/person/${ada}`)).toEqual({
+			page: "calendar",
+			view: "week",
+			date: null,
+			calendarId: ada,
+		});
+		expect(parseRoute(calendarPath("month", "2026-12-01", ada))).toEqual({
+			page: "calendar",
+			view: "month",
+			date: "2026-12-01",
+			calendarId: ada,
+		});
 		for (const path of [
 			"/calendar/day/2026-12-01",
 			"/calendar/week",
@@ -327,6 +346,9 @@ describe("routes", () => {
 			"/calendar/week/2026-12-1",
 			"/calendar/week/1969-12-31",
 			"/calendar/week/2026-12-01/x",
+			"/calendar/person",
+			"/calendar/person/not-an-id",
+			"/calendar/person/prn_01JD0000000000000000000001/week",
 		]) {
 			expect(parseRoute(path), path).toEqual({ page: "not-found" });
 		}

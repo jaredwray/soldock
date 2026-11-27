@@ -4,10 +4,13 @@ import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 
 import { errorMessage } from "../../lib/api.ts";
 import { Icon } from "../../lib/icons.tsx";
 import { setPageTitle } from "../../lib/pageTitle.ts";
-import { Link } from "../../lib/router.tsx";
+import { Link, navigate } from "../../lib/router.tsx";
+import { Select, type SelectOption } from "../../lib/Select.tsx";
+import { usePrincipals } from "../../lib/usePrincipals.ts";
 import { type CalendarView, calendarPath, isCalendarDate } from "../../routes.ts";
 import { PageHeader } from "../../shell/PageHeader.tsx";
-import { getEvent, useEvents } from "./data.ts";
+import { CalendarSharing } from "./CalendarSharing.tsx";
+import { useEvents, useSharedCalendars } from "./data.ts";
 import { EventDialog } from "./EventDialog.tsx";
 import { clampDay, type EventForm, type FirstDay, newEventForm, periodOf, periodTitle, shiftTarget } from "./model.ts";
 import { AgendaList, MonthView, WeekView } from "./views.tsx";
@@ -48,25 +51,49 @@ interface CalendarAppProps {
 	view: CalendarView;
 	/** A day of the period to show, or null for today. */
 	date: string | null;
+	/** The person whose calendar the page shows, who lets the person schedule. Null for the own calendar. */
+	calendarId: string | null;
 }
 
 type DialogState = { event: CalendarEvent | null; initial: EventForm } | null;
 
 /** Calendar: the week or the month of a day, with the events of the own calendar of the person. */
-export function CalendarApp({ view, date }: CalendarAppProps) {
+export function CalendarApp({ view, date, calendarId }: CalendarAppProps) {
 	const zone = useMemo(browserZone, []);
 	const today = useToday(zone);
 	const anchor = date ?? today;
 	const period = useMemo(() => periodOf(view, anchor, zone, FIRST_DAY), [view, anchor, zone]);
-	const { state, reload, retry } = useEvents(period.timeMin, period.timeMax, zone);
+	const { state, reload, retry } = useEvents(period.timeMin, period.timeMax, zone, calendarId);
+	const shared = useSharedCalendars();
+	const principals = usePrincipals();
+	// The name of the owner: from the list of shared calendars, or from the directory while the list loads.
+	const ownerName =
+		calendarId === null
+			? null
+			: (shared.find((entry) => entry.calendar_id === calendarId)?.display_name ??
+				principals?.find((principal) => principal.id === calendarId)?.display_name ??
+				"this person");
+	const calendarOptions: SelectOption<string>[] = [
+		{ value: "", label: "My calendar" },
+		...shared.map((entry) => ({ value: entry.calendar_id, label: entry.display_name })),
+		...(calendarId !== null && !shared.some((entry) => entry.calendar_id === calendarId)
+			? [{ value: calendarId, label: ownerName ?? calendarId }]
+			: []),
+	];
+	const refused =
+		calendarId !== null &&
+		state.status === "error" &&
+		state.error instanceof ApiError &&
+		(state.error.code === "forbidden" || state.error.code === "not_found");
 	const phone = useMediaQuery(PHONE_QUERY);
 	const [dialog, setDialog] = useState<DialogState>(null);
+	const [sharing, setSharing] = useState(false);
 	const title = periodTitle(view, anchor, FIRST_DAY);
 	const unit = view === "week" ? "week" : "month";
 
 	useEffect(() => {
-		setPageTitle(`${title} – Calendar – Asterra`);
-	}, [title]);
+		setPageTitle(ownerName ? `${title} – Calendar of ${ownerName} – Asterra` : `${title} – Calendar – Asterra`);
+	}, [title, ownerName]);
 
 	const openEvent = useCallback((event: CalendarEvent) => setDialog({ event, initial: newEventForm(today) }), [today]);
 	// The first and the last week show days before 1970 and after 2100. No event can use them.
@@ -82,45 +109,32 @@ export function CalendarApp({ view, date }: CalendarAppProps) {
 				: `${anchor.slice(0, 7)}-01`,
 	);
 
-	// An open invitation shows the newest copy of each load, so a change of the organizer shows in the dialog.
-	// A load has only the events of the period. A copy that it does not have can be in a different period now, so
-	// the page reads the copy by its id. Only `not_found` means that the organizer cancelled the meeting or removed
-	// the person.
-	const openCopy = dialog?.event && !dialog.event.is_organizer ? dialog.event : null;
-	const loadedCopy =
-		openCopy && state.status === "ready" ? state.events.find((event) => event.id === openCopy.id) : undefined;
-	const missingId = openCopy !== null && state.status === "ready" && !loadedCopy ? openCopy.id : null;
-	const [outside, setOutside] = useState<{ id: string; event: CalendarEvent | null } | null>(null);
-	useEffect(() => {
-		if (missingId === null || state.status !== "ready") return;
-		let current = true;
-		getEvent(missingId).then(
-			({ event }) => current && setOutside({ id: missingId, event }),
-			(error: unknown) => {
-				if (current && error instanceof ApiError && error.code === "not_found")
-					setOutside({ id: missingId, event: null });
-			},
-		);
-		return () => {
-			current = false;
-		};
-	}, [missingId, state]);
-	const refreshed = missingId !== null && outside?.id === missingId ? outside : null;
-	const copyGone = refreshed !== null && refreshed.event === null;
-
 	const month = anchor.slice(0, 7);
 	const agendaDays = view === "month" ? period.days.filter((day) => day.slice(0, 7) === month) : period.days;
 
 	return (
 		<main id="main" className="page-main cal-main" tabIndex={-1}>
 			<PageHeader title="Calendar" icon="calendar">
+				{calendarId === null && (
+					<button type="button" className="button" onClick={() => setSharing(true)}>
+						Sharing
+					</button>
+				)}
 				<button type="button" className="button button-primary" onClick={() => createAt(newEventDay)}>
 					<Icon name="plus" />
 					New event
 				</button>
 			</PageHeader>
 			<div className="toolbar cal-toolbar">
-				<Link to={calendarPath(view, today)} className="button">
+				{calendarOptions.length > 1 && (
+					<Select<string>
+						label="Calendar"
+						value={calendarId ?? ""}
+						options={calendarOptions}
+						onChange={(id) => navigate(calendarPath(view, anchor, id === "" ? null : id))}
+					/>
+				)}
+				<Link to={calendarPath(view, today, calendarId)} className="button">
 					Today
 				</Link>
 				{(
@@ -133,7 +147,13 @@ export function CalendarApp({ view, date }: CalendarAppProps) {
 					const target = shiftTarget(view, anchor, steps, FIRST_DAY);
 					const label = `${name} ${unit}`;
 					return target ? (
-						<Link key={name} to={calendarPath(view, target)} className="icon-button" aria-label={label} title={label}>
+						<Link
+							key={name}
+							to={calendarPath(view, target, calendarId)}
+							className="icon-button"
+							aria-label={label}
+							title={label}
+						>
 							<Icon name={icon} />
 						</Link>
 					) : (
@@ -150,7 +170,7 @@ export function CalendarApp({ view, date }: CalendarAppProps) {
 					{(["week", "month"] as const).map((option) => (
 						<Link
 							key={option}
-							to={calendarPath(option, anchor)}
+							to={calendarPath(option, anchor, calendarId)}
 							className={option === view ? "button cal-view cal-view-active" : "button cal-view"}
 							aria-current={option === view ? "page" : undefined}
 						>
@@ -159,7 +179,21 @@ export function CalendarApp({ view, date }: CalendarAppProps) {
 					))}
 				</nav>
 			</div>
-			{state.status === "error" && (
+			{ownerName !== null && !refused && (
+				<p className="field-hint cal-delegated">
+					You schedule for {ownerName}. You see the time of each event, and the title of an event that is not private.{" "}
+					{ownerName} is the organizer of the events that you add.
+				</p>
+			)}
+			{refused && (
+				<div className="cal-error" role="alert">
+					<span>You cannot use the calendar of {ownerName}. The access ended.</span>
+					<Link to={calendarPath(view, anchor)} className="button button-small">
+						My calendar
+					</Link>
+				</div>
+			)}
+			{state.status === "error" && !refused && (
 				<div className="cal-error" role="alert">
 					<span>The events did not load. {errorMessage(state.error)}</span>
 					<button type="button" className="button button-small" onClick={() => void retry()}>
@@ -200,15 +234,17 @@ export function CalendarApp({ view, date }: CalendarAppProps) {
 						zone={zone}
 						today={today}
 						month={month}
+						calendarId={calendarId}
 						onOpen={openEvent}
 						onCreate={createAt}
 					/>
 				)}
 			</div>
+			{sharing && <CalendarSharing onClose={() => setSharing(false)} />}
 			{dialog && (
 				<EventDialog
-					event={loadedCopy ?? refreshed?.event ?? dialog.event}
-					gone={copyGone}
+					calendar={calendarId === null ? null : { id: calendarId, name: ownerName ?? calendarId }}
+					event={dialog.event}
 					initial={dialog.initial}
 					zone={zone}
 					onChanged={() => void reload()}

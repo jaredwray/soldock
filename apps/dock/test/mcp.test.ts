@@ -60,8 +60,7 @@ describe("the MCP endpoint", () => {
 		await setLegacyScopes(bot.id, ["account.read", "mail.read"]);
 		const narrow = instructionsOf((await initialize(bot.key)).body);
 		expect(narrow).toMatch(/chat\.read \(\d+ tools\)/);
-		// mail_send names a mailbox, so it is not counted. The one mail.send tool is the answer to an invitation by
-		// mail, which acts on the own mailbox only.
+		// The one mail.send tool in the text answers an invitation from the own mailbox: no membership gives it.
 		expect(narrow).toContain("mail.send (1 tool)");
 		expect(narrow).toContain("apply only to your own mailbox, your own drive, your own calendar");
 		expect(narrow).not.toContain("create a key with more scopes");
@@ -97,7 +96,7 @@ describe("the MCP endpoint", () => {
 		const { owner, bot } = await seedOrg();
 		const all = names((await mcp(owner.key, "tools/list")).body);
 		expect(all).toContain("directory_update_agent_policy");
-		expect(all).toHaveLength(234);
+		expect(all).toHaveLength(253);
 		// Only a person decides a member request or a share request, and only an agent or a service account makes one.
 		expect(all).not.toContain("chat_request_member");
 		expect(all).not.toContain("drive_request_share");
@@ -131,18 +130,31 @@ describe("the MCP endpoint", () => {
 				"mail_list_delegates",
 				"mail_set_delegate",
 				"mail_remove_delegate",
+				"calendar_list_grants",
+				"calendar_set_grant",
+				"calendar_remove_grant",
 			]),
 		);
 		expect(names((await mcp(bot.key, "tools/list")).body)).toEqual([
 			"account_whoami",
+			"calendar_cancel_occurrence",
 			"calendar_create_event",
+			"calendar_create_webhook_subscription",
 			"calendar_delete_event",
+			"calendar_delete_webhook_subscription",
+			"calendar_find_times",
 			"calendar_get_event",
 			"calendar_get_mail_invitation",
+			"calendar_list_changes",
 			"calendar_list_events",
-			"calendar_respond_to_invitation",
+			"calendar_list_shared_calendars",
+			"calendar_list_webhook_subscriptions",
+			"calendar_query_free_busy",
+			"calendar_respond_to_event",
 			"calendar_respond_to_mail_invitation",
+			"calendar_set_reminder",
 			"calendar_update_event",
+			"calendar_update_occurrence",
 			"chat_add_members",
 			"chat_add_reaction",
 			"chat_archive_room",
@@ -259,6 +271,7 @@ describe("the MCP endpoint", () => {
 			"drive_upload_file",
 			"drive_upload_part",
 			"drive_upload_version",
+			"feedback_get_status",
 			"mail_create_label",
 			"mail_create_webhook_subscription",
 			"mail_delete_label",

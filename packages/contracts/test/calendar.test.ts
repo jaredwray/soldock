@@ -111,28 +111,25 @@ describe("the time of an event", () => {
 		expect(range("2026-12-08T00:00:00Z", "2026-12-01T00:00:00Z")).toBe(false);
 		expect(range("2026-01-01T00:00:00Z", "2027-01-03T00:00:00Z")).toBe(false);
 	});
-});
 
-describe("the attendees of an event", () => {
-	const create = operations["calendar.create_event"].input;
-	const base = {
-		title: "Review",
-		when: { kind: "all_day", start_date: "2026-12-01", end_date: "2026-12-02" },
-	};
-
-	it("takes one principal_id or one email for each attendee", () => {
-		const id = "prn_01ARZ3NDEKTSV4RRFFQ69G5FAV";
-		expect(create.safeParse({ ...base, attendees: [{ principal_id: id }] }).success).toBe(true);
-		expect(create.safeParse({ ...base, attendees: [{ email: "ada@example.com" }] }).success).toBe(true);
-		expect(create.safeParse({ ...base, attendees: [{}] }).success).toBe(false);
-		expect(create.safeParse({ ...base, attendees: [{ principal_id: id, email: "ada@example.com" }] }).success).toBe(
-			false,
-		);
-	});
-
-	// The idempotency hash is the JSON of the parsed input. A default value would change the hash of a retry of a
-	// request from before attendees, and the retry would get conflict.
-	it("parses an input without attendees to an input without the key", () => {
-		expect(Object.keys(create.parse(base))).not.toContain("attendees");
+	it("takes a find range of 31 days of a time zone with a day of 25 hours, and 20 ids with spaces", () => {
+		const input = operations["calendar.find_times"].input;
+		const parse = (extra: Record<string, unknown>) =>
+			input.safeParse({
+				time_min: "2030-10-15T04:00:00Z",
+				time_max: "2030-11-15T05:00:00Z",
+				duration_minutes: 30,
+				time_zone: "America/New_York",
+				...extra,
+			}).success;
+		// From 00:00 on October 15 to 00:00 on November 15 in New York. The clock goes back on November 3.
+		expect(parse({})).toBe(true);
+		expect(parse({ time_max: "2030-11-16T05:00:00Z" })).toBe(false);
+		// The hour of the change of the clock is not free time: 31 days and one hour in UTC is too long.
+		expect(parse({ time_zone: "UTC", time_min: "2030-03-01T00:00:00Z", time_max: "2030-04-01T00:00:00Z" })).toBe(true);
+		expect(parse({ time_zone: "UTC", time_min: "2030-03-01T00:00:00Z", time_max: "2030-04-01T01:00:00Z" })).toBe(false);
+		const ids = Array.from({ length: 21 }, (_, at) => `prn_01JD00000000000000000000${String(at).padStart(2, "0")}`);
+		expect(parse({ attendee_ids: ids.slice(0, 20).join(", ") })).toBe(true);
+		expect(parse({ attendee_ids: ids.join(", ") })).toBe(false);
 	});
 });

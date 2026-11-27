@@ -17,6 +17,11 @@ export type { CalendarSenderCheck } from "./calendar-part.ts";
 export interface CalendarMailInput {
 	/** The principal that sends: its own mailbox sends the message. */
 	senderId: string;
+	/**
+	 * The principal that made the change: the owner or a delegate. The send checks again that it is active and that
+	 * its outbound policy allows the address. Undefined checks only the sender.
+	 */
+	actorId?: string | undefined;
 	to: string;
 	subject: string;
 	text: string;
@@ -46,6 +51,14 @@ export async function sendCalendarMail(env: Env, input: CalendarMailInput): Prom
 	if (!principal || principal.archived_at !== null) return { status: "refused", reason: "sender" };
 	const to = input.to.toLowerCase();
 	if (deniedOutboundAddresses(principal, [to]).length > 0) return { status: "refused", reason: "policy" };
+	if (input.actorId !== undefined && input.actorId !== principal.id) {
+		// A delegate can lose its access or get a narrower policy after the change. The policy of the send is the
+		// policy of now.
+		const actor = await getPrincipal(env.DIRECTORY, input.actorId);
+		if (!actor || actor.archived_at !== null || deniedOutboundAddresses(actor, [to]).length > 0) {
+			return { status: "refused", reason: "policy" };
+		}
+	}
 	let from = principal.address;
 	const wanted = input.fromAddress?.toLowerCase();
 	if (wanted && wanted !== principal.address.toLowerCase()) {

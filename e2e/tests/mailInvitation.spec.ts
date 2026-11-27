@@ -83,9 +83,57 @@ test("a person answers an invitation in Mail, and the meeting goes on the calend
 		await expect(card.getByRole("button", { name: "Yes" })).toHaveAttribute("aria-pressed", "true");
 		await card.getByRole("link", { name: "Open in Calendar" }).click();
 		await expect(page).toHaveURL(new RegExp(`/calendar/week/${day}$`));
-		await expect(page.getByRole("button", { name: `${title}, 10:00 AM – 11:00 AM, Studio floor` })).toBeVisible();
+		const meeting = page.getByRole("button", { name: `${title}, 10:00 AM – 11:00 AM, Studio floor` });
+		await expect(meeting).toBeVisible();
+
+		// The meeting tells that it came by mail. The person removes it from the own calendar only.
+		await meeting.click();
+		const dialog = page.getByRole("dialog", { name: "Invitation" });
+		await expect(dialog.getByRole("note")).toHaveText(/came by mail from outside your organization/);
+		await dialog.getByRole("button", { name: "Remove from my calendar" }).click();
+		await page.getByRole("dialog", { name: "Remove this meeting?" }).getByRole("button", { name: "Remove" }).click();
+		await expect(page.getByText("Meeting removed.")).toBeVisible();
+		await expect(meeting).toBeHidden();
 	} finally {
 		await person.close();
 		await sender.close();
+	}
+});
+
+test("an organizer invites an address outside the organization by mail", async ({ browser }) => {
+	const organizer = await signIn(browser, "rafael");
+	try {
+		const day = farDay();
+		const title = unique("Fabric sampling");
+		const page = await organizer.newPage();
+		await page.goto(`/calendar/week/${day}`);
+		await page.getByRole("button", { name: "New event" }).click();
+		const dialog = page.getByRole("dialog", { name: "New event" });
+		await dialog.getByLabel("Title").fill(title);
+		await dialog.getByLabel("Start date").fill(day);
+		await dialog.getByLabel("Start time").fill("10:00");
+		await dialog.getByLabel("End date").fill(day);
+		await dialog.getByLabel("End time").fill("11:00");
+		// Enter adds the address. It does not save the form.
+		await dialog.getByLabel("Invite by mail").fill("Guest@Partner.test");
+		await dialog.getByLabel("Invite by mail").press("Enter");
+		await expect(dialog).toBeVisible();
+		const people = dialog.getByRole("list", { name: "Attendees" });
+		await expect(people.getByText("guest@partner.test (by mail)")).toBeVisible();
+		await dialog.getByRole("button", { name: "Save" }).click();
+		await expect(page.getByText("Event added.")).toBeVisible();
+
+		// The event keeps the address, and the invitation is in Sent.
+		await page.getByRole("button", { name: `${title}, 10:00 AM – 11:00 AM` }).click();
+		const edit = page.getByRole("dialog", { name: "Edit event" });
+		await expect(edit.getByRole("list", { name: "Attendees" }).getByText("guest@partner.test (by mail)")).toBeVisible();
+		await expect(async () => {
+			const response = await organizer.request.get("/api/v1/mail/threads?query=in%3Asent");
+			expect(response.ok(), await response.text()).toBe(true);
+			const { threads } = (await response.json()) as { threads: { subject: string }[] };
+			expect(threads.map((thread) => thread.subject)).toContain(`Invitation: ${title}`);
+		}).toPass({ timeout: 20_000 });
+	} finally {
+		await organizer.close();
 	}
 });

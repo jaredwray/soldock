@@ -1,4 +1,6 @@
 import {
+	CALENDAR_WEBHOOK_EVENTS,
+	type CalendarWebhookEvent,
 	CHAT_EVENT_REASONS,
 	CHAT_LIMITS,
 	CHAT_WEBHOOK_EVENTS,
@@ -40,8 +42,8 @@ import {
 } from "./store.ts";
 import { outboundHostAllowed } from "./url.ts";
 
-/** The queue that carries webhook events, and one POST for each subscription. */
-export const WEBHOOK_QUEUE = "soldock-webhooks";
+/** The queue that carries webhook events, and one POST for each subscription. A suffix: see `queues.ts`. */
+export const WEBHOOK_QUEUE = "webhooks";
 
 /** The result of a delivery when a sealed value of the endpoint does not open. No POST goes out. */
 const SECRET_UNREADABLE = "secret_unreadable";
@@ -146,15 +148,45 @@ interface DriveWebhookDeliveryJob {
 	attempt?: number;
 }
 
+/** The ids of one change of a calendar. They are no content: a receiver reads the event with its own credential. */
+interface CalendarChangeFacts {
+	calendarId: string;
+	eventType: CalendarWebhookEvent;
+	/** The id of the change: the same on each redelivery and in `calendar.list_changes`. */
+	eventId: string;
+	occurredAt: number;
+	calendarEventId: string;
+	occurrenceId: string | null;
+	revision: number;
+	actorId: string | null;
+	/** The position after the change, for `calendar.list_changes`. */
+	cursor: string;
+}
+
+/** A committed change of one calendar. The `CalendarDO` sends it from its change feed. */
+export interface CalendarWebhookEventJob extends CalendarChangeFacts {
+	v: 1;
+	kind: "calendar_event";
+}
+
+interface CalendarWebhookDeliveryJob extends CalendarChangeFacts {
+	v: 1;
+	kind: "calendar_delivery";
+	webhookId: string;
+	attempt?: number;
+}
+
 export type WebhookJob =
 	| WebhookEventJob
 	| WebhookDeliveryJob
 	| ChatWebhookEventJob
 	| ChatWebhookDeliveryJob
 	| DriveWebhookEventJob
-	| DriveWebhookDeliveryJob;
+	| DriveWebhookDeliveryJob
+	| CalendarWebhookEventJob
+	| CalendarWebhookDeliveryJob;
 
-type DeliveryJob = WebhookDeliveryJob | ChatWebhookDeliveryJob | DriveWebhookDeliveryJob;
+type DeliveryJob = WebhookDeliveryJob | ChatWebhookDeliveryJob | DriveWebhookDeliveryJob | CalendarWebhookDeliveryJob;
 
 /** The delay in seconds before attempt 2, 3, 4 and 5 of a POST. */
 const RETRY_DELAYS_S = [10, 60, 300, 1800] as const;
@@ -174,6 +206,30 @@ function knownReason(reason: string | undefined): ChatEventReason | undefined {
 	return CHAT_REASONS.has(reason) ? (reason as ChatEventReason) : undefined;
 }
 const DRIVE_EVENTS = new Set<string>(DRIVE_WEBHOOK_EVENTS);
+const CALENDAR_EVENTS = new Set<string>(CALENDAR_WEBHOOK_EVENTS);
+
+function nullableString(value: unknown): boolean {
+	return value === null || typeof value === "string";
+}
+
+/** True when a calendar job has the facts of `CalendarChangeFacts` in the right form. */
+function validCalendarJob(job: Record<string, unknown>): boolean {
+	const attempt = job.attempt;
+	return (
+		typeof job.calendarId === "string" &&
+		typeof job.eventType === "string" &&
+		CALENDAR_EVENTS.has(job.eventType) &&
+		typeof job.calendarEventId === "string" &&
+		nullableString(job.occurrenceId) &&
+		typeof job.revision === "number" &&
+		Number.isSafeInteger(job.revision) &&
+		nullableString(job.actorId) &&
+		typeof job.cursor === "string" &&
+		(job.kind === "calendar_event" ||
+			(typeof job.webhookId === "string" &&
+				(attempt === undefined || (typeof attempt === "number" && Number.isInteger(attempt) && attempt >= 1))))
+	);
+}
 
 /** True when the facts of a chat job are absent or have the right form. */
 function validChatFacts(job: Record<string, unknown>): boolean {
@@ -200,6 +256,7 @@ function isWebhookJob(body: unknown): body is WebhookJob {
 	) {
 		return false;
 	}
+	if (job.kind === "calendar_event" || job.kind === "calendar_delivery") return validCalendarJob(job);
 	if (job.kind === "drive_event" || job.kind === "drive_delivery") {
 		const attempt = job.attempt;
 		const validAttempt =
@@ -286,6 +343,8 @@ async function handleJob(message: Message<unknown>, env: Env): Promise<void> {
 			await fanOutChat(env, job);
 		} else if (job.kind === "drive_event") {
 			await fanOutDrive(env, job);
+		} else if (job.kind === "calendar_event") {
+			await fanOutCalendar(env, job);
 		} else if (job.kind === "event") {
 			await fanOut(env, job);
 		} else {
@@ -396,6 +455,24 @@ async function fanOutDrive(env: Env, job: DriveWebhookEventJob): Promise<void> {
 	);
 }
 
+/**
+ * Sends one delivery job for each active subscription of the event for the calendar. A subscription from
+ * after the change gets nothing: it starts from now, and `calendar.list_changes` gives the changes before it.
+ */
+async function fanOutCalendar(env: Env, job: CalendarWebhookEventJob): Promise<void> {
+	const rows = (await activeSubscriptions(env.DIRECTORY, job.eventType, job.calendarId)).filter(
+		(row) => Date.parse(row.created_at) <= job.occurredAt,
+	);
+	const { v: _v, kind: _kind, ...facts } = job;
+	for (let offset = 0; offset < rows.length; offset += 100) {
+		await env.WEBHOOKS.sendBatch(
+			rows.slice(offset, offset + 100).map((row) => ({
+				body: { v: 1, kind: "calendar_delivery", webhookId: row.id, ...facts } satisfies CalendarWebhookDeliveryJob,
+			})),
+		);
+	}
+}
+
 function sameCredential(endpoint: EndpointRow, subscription: SubscriptionRow): boolean {
 	return (
 		endpoint.credential_kind === subscription.credential_kind && endpoint.credential_id === subscription.credential_id
@@ -434,7 +511,13 @@ async function checkDelivery(
 	if (creator.kind === "agent" && !creator.agent_scopes.includes(webhookScope(subscription.domain))) {
 		return { action: "disable_subscription", reason: "access_lost" };
 	}
-	if (memberIds !== undefined) {
+	if (subscription.domain === "calendar") {
+		// A calendar is for its owner only: no sponsor, delegate, owner or admin, and no free/busy access, gets
+		// its changes. An agent also needs calendar.read, as a read of the event does.
+		if (target !== creator.id || (creator.kind === "agent" && !creator.agent_scopes.includes("calendar.read"))) {
+			return { action: "disable_subscription", reason: "access_lost" };
+		}
+	} else if (memberIds !== undefined) {
 		if (!memberIds.includes(creator.id)) return { action: "disable_subscription", reason: "access_lost" };
 	} else if (subscription.domain === "drive" && target.startsWith("drv_")) {
 		// A shared drive event stores its members. The directory index can be behind, so a job with no list sends nothing.
@@ -459,6 +542,7 @@ async function checkDelivery(
 }
 
 function targetOf(job: DeliveryJob): string {
+	if (job.kind === "calendar_delivery") return job.calendarId;
 	return job.kind === "drive_delivery" ? job.spaceId : job.mailboxId;
 }
 
@@ -571,6 +655,27 @@ function chatBody(subscription: SubscriptionRow, job: ChatWebhookDeliveryJob): s
 	});
 }
 
+/** The ids of a calendar change, as the payload of `calendar.*` events gives them. No title, time or answer. */
+function calendarData(job: CalendarWebhookDeliveryJob): Record<string, string | number | null> {
+	return {
+		calendar_id: job.calendarId,
+		event_id: job.calendarEventId,
+		change_id: job.eventId,
+		occurrence_id: job.occurrenceId,
+		revision: job.revision,
+		actor_id: job.actorId,
+		cursor: job.cursor,
+	};
+}
+
+function calendarBody(subscription: SubscriptionRow, job: CalendarWebhookDeliveryJob): string {
+	return JSON.stringify({
+		type: job.eventType,
+		timestamp: new Date(job.occurredAt).toISOString(),
+		data: { webhook_id: subscription.id, ...calendarData(job) },
+	});
+}
+
 function driveBody(subscription: SubscriptionRow, job: DriveWebhookDeliveryJob): string {
 	const itemEvent = job.eventType.startsWith("drive.item.");
 	const data: Record<string, string> = {
@@ -593,8 +698,10 @@ function driveBody(subscription: SubscriptionRow, job: DriveWebhookDeliveryJob):
  * ids, a URI and, for Chat, the facts of `chatData`: no mail, no message text and no file content.
  */
 function eventBody(subscription: SubscriptionRow, job: DeliveryJob, id: string): string {
-	let data: Record<string, string | number>;
-	if (job.kind === "delivery") {
+	let data: Record<string, string | number | null>;
+	if (job.kind === "calendar_delivery") {
+		data = calendarData(job);
+	} else if (job.kind === "delivery") {
 		data = {
 			mailbox_id: job.mailboxId,
 			uri: expandTemplate(resources["mail.inbox"].uriTemplate, { mailbox_id: job.mailboxId }),
@@ -627,6 +734,7 @@ function bodyOf(endpoint: EndpointRow, subscription: SubscriptionRow, job: Deliv
 	if (endpoint.protocol === "mcp_events") return eventBody(subscription, job, id);
 	if (job.kind === "delivery") return webhookBody({ id: subscription.id, mailbox_id: job.mailboxId }, job.occurredAt);
 	if (job.kind === "chat_delivery") return chatBody(subscription, job);
+	if (job.kind === "calendar_delivery") return calendarBody(subscription, job);
 	return driveBody(subscription, job);
 }
 

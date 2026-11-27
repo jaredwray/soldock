@@ -11,9 +11,9 @@ export const SCOPES = {
 	"account.keys":
 		"Create, list and revoke API keys and OAuth connections for yourself and for the agents that you sponsor, approve OAuth requests, and change passwords and two-step verification",
 	"directory.read":
-		"Read the directory; owners and admins can also read mail domain settings, the mail settings of the organization, AI settings and AI usage",
+		"Read the directory; owners and admins can also read mail domain settings, the mail settings of the organization, AI settings, AI usage and feedback settings",
 	"directory.write":
-		"Create accounts and change agent policies; owners and admins can also manage mail domains, team mailboxes, the mail settings of the organization and AI settings",
+		"Create accounts and change agent policies; owners and admins can also manage mail domains, team mailboxes, the mail settings of the organization, AI settings and feedback settings",
 	"mail.read":
 		"Read your mail, labels and Screener, and those of your team mailboxes and of the mailboxes that their owners let you use; owners and admins can also read the mailboxes of agents",
 	"mail.modify":
@@ -31,8 +31,14 @@ export const SCOPES = {
 		"Give and remove access to the items of your drive, and change the members of the shared drives that you manage",
 	"chat.read": "Read your rooms and direct messages, and find the public rooms",
 	"chat.write": "Create and join rooms, change their members, post, change and delete messages, and set what you read",
-	"calendar.read": "Read the events of your calendar",
-	"calendar.write": "Add, change and delete the events of your calendar, invite people, and answer invitations",
+	"calendar.read":
+		"Read the events of your calendar and of the calendars that their owners let you schedule in, and find free times",
+	"calendar.write":
+		"Add, change and delete the events of your calendar and the events that you add to the calendars that their owners let you schedule in",
+	"calendar.share": "Give and remove the access of other people and agents to your own calendar",
+	"calendar.webhooks": "Subscribe to the changes of your calendar through MCP Events and webhooks",
+	"feedback.write":
+		"Send bug reports and ideas about Asterra as public issues to the GitHub repository that your admin chose",
 } as const;
 
 export type Scope = keyof typeof SCOPES;
@@ -42,9 +48,10 @@ export const ALL_SCOPES = Object.keys(SCOPES) as Scope[];
 /**
  * The scopes that only the person gives to a key of the person. An owner or an admin who creates or rotates a
  * key of a different person cannot give them. `mail.share` gives other principals access to the mailbox of
- * the person, and that access stays after the key ends.
+ * the person, and `calendar.share` gives them access to the calendar of the person. That access stays after
+ * the key ends.
  */
-export const OWN_KEY_SCOPES: readonly Scope[] = ["mail.share"];
+export const OWN_KEY_SCOPES: readonly Scope[] = ["mail.share", "calendar.share"];
 
 /**
  * The account scopes of a new agent, and the most that an agent can hold. An agent cannot manage keys or the
@@ -67,6 +74,7 @@ export const AGENT_SCOPES: readonly Scope[] = [
 	"chat.write",
 	"calendar.read",
 	"calendar.write",
+	"calendar.webhooks",
 ];
 
 /**
@@ -110,9 +118,10 @@ export const SERVICE_SCOPE_DESCRIPTIONS: Readonly<Record<ServiceScope, string>> 
 	"drive.share": "Give and remove access to the items of its own drive",
 	"chat.read": "Find the public rooms, and read the threads, mentions, saved messages and settings of the account",
 	"chat.write": "Create rooms, open direct messages, and change the sections, reminders and settings of the account",
-	"calendar.read": "Read the events of the own calendar of the service account",
+	"calendar.read":
+		"Read the events of the own calendar of the service account and of the calendars whose owners let it schedule, and find free times",
 	"calendar.write":
-		"Add, change and delete the events of the own calendar of the service account, invite people, and answer invitations",
+		"Add, change and delete the events of the own calendar of the service account, and the events that it adds to the calendars whose owners let it schedule",
 };
 
 /** The text of a scope for a caller of this kind: the service text for a service account. */

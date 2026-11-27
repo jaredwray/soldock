@@ -95,32 +95,6 @@
 	background: color-mix(in srgb, var(--link) 22%, var(--background));
 }
 
-/*
- * The copy of a meeting. A pending invitation has a dashed border and no fill, so it looks different from an
- * accepted meeting. Maybe has stripes. No is faded with a line through the title. The accessible name of the
- * event has the same state, so the state is not only a look.
- */
-.cal-event-pending,
-.cal-event-pending.cal-event-all-day {
-	border: 1px dashed var(--link);
-	border-left: 3px dashed var(--link);
-	background: var(--background);
-}
-
-.cal-event-tentative,
-.cal-event-tentative.cal-event-all-day {
-	background: repeating-linear-gradient(
-		135deg,
-		color-mix(in srgb, var(--link) 14%, var(--background)) 0 6px,
-		var(--background) 6px 12px
-	);
-}
-
-.cal-event-declined {
-	opacity: 0.6;
-	background: var(--background);
-}
-
 .cal-event-short {
 	flex-direction: row;
 	align-items: baseline;
@@ -140,10 +114,6 @@
 	font-weight: 600;
 	text-overflow: ellipsis;
 	white-space: nowrap;
-}
-
-.cal-event-declined .cal-event-title {
-	text-decoration: line-through;
 }
 
 .cal-event-location {
@@ -499,127 +469,6 @@
 	align-items: center;
 }
 
-/* The attendees of the event dialog: the search of people and the list with the answers. */
-.cal-people-field {
-	position: relative;
-}
-
-.cal-people-options {
-	position: absolute;
-	top: calc(100% + 4px);
-	left: 0;
-	z-index: 20;
-	width: 100%;
-	max-height: 296px;
-	padding: 4px;
-	overflow-y: auto;
-	border: 1px solid var(--border);
-	border-radius: var(--radius-md);
-	background: var(--popover);
-	box-shadow: var(--shadow-menu);
-}
-
-.cal-people-option {
-	display: flex;
-	flex-direction: column;
-	min-height: 40px;
-	padding: 6px 8px;
-	border-radius: var(--radius-sm);
-	cursor: pointer;
-}
-
-.cal-people-option[aria-selected="true"] {
-	background: var(--hover);
-}
-
-.cal-attendee-list {
-	display: flex;
-	flex-direction: column;
-	gap: 4px;
-	margin-top: 8px;
-}
-
-.cal-attendee {
-	display: flex;
-	align-items: center;
-	gap: 8px;
-	min-height: 36px;
-}
-
-.cal-person {
-	display: flex;
-	flex: 1;
-	flex-direction: column;
-	min-width: 0;
-}
-
-.cal-person-name,
-.cal-person-address {
-	overflow: hidden;
-	text-overflow: ellipsis;
-	white-space: nowrap;
-}
-
-.cal-person-name {
-	font-size: 14px;
-}
-
-.cal-person-kind,
-.cal-person-address,
-.cal-attendee-response {
-	color: var(--muted-foreground);
-	font-size: 12px;
-}
-
-.cal-attendee-response {
-	white-space: nowrap;
-}
-
-/* The invitation view of an attendee: the fields as text, and the answer buttons. */
-.cal-invitation p,
-.cal-invitation h3 {
-	margin: 0;
-}
-
-.cal-invitation-notice {
-	padding: 8px 10px;
-	border: 1px solid var(--warning-border);
-	border-radius: var(--radius-md);
-	background: var(--warning-soft);
-	font-size: 13px;
-}
-
-.cal-invitation-title {
-	font-size: 18px;
-	font-weight: 600;
-	overflow-wrap: anywhere;
-}
-
-.cal-invitation-organizer,
-.cal-invitation-location {
-	color: var(--muted-foreground);
-	overflow-wrap: anywhere;
-}
-
-.cal-invitation-description {
-	white-space: pre-wrap;
-	overflow-wrap: anywhere;
-}
-
-.cal-answer {
-	display: inline-flex;
-	align-items: center;
-	gap: 6px;
-	min-width: 0;
-	margin: 0;
-	padding: 0;
-	border: 0;
-}
-
-.cal-answer .field-label {
-	margin: 0 4px 0 0;
-}
-
 @media (max-width: 600px) {
 	.cal-toolbar {
 		padding-right: 16px;
@@ -641,4 +490,167 @@
 		margin: 0;
 		border-radius: 0;
 	}
+}
+
+/* A declined event stays in the calendar, with its title struck through. */
+.cal-event-declined {
+	opacity: 0.6;
+}
+
+.cal-event-declined .cal-event-title {
+	text-decoration: line-through;
+}
+
+.cal-event-repeat {
+	font-weight: normal;
+}
+
+.cal-repeat-ends {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
+	align-items: center;
+}
+
+.cal-scope {
+	display: grid;
+	gap: 8px;
+	margin-block: 12px;
+}
+
+.cal-people {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 4px;
+	margin: 0;
+	padding: 0;
+	list-style: none;
+}
+
+.cal-person {
+	display: inline-flex;
+	align-items: center;
+	gap: 4px;
+}
+
+.cal-rsvp {
+	display: flex;
+	gap: 8px;
+	align-items: center;
+}
+
+/* Find a time: the search fields, the busy times of each calendar, and the suggestions. */
+.cal-find {
+	display: flex;
+	flex-direction: column;
+	gap: 10px;
+	padding: 12px;
+	border: 1px solid var(--border);
+	border-radius: var(--radius-sm);
+}
+
+.cal-find-fields {
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+	gap: 8px;
+}
+
+.cal-find-field {
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+	min-width: 0;
+}
+
+.cal-find-heading {
+	margin: 8px 0 4px;
+	font-size: 13px;
+	font-weight: 600;
+}
+
+.cal-find-calendars,
+.cal-find-busy,
+.cal-find-slots,
+.cal-grants {
+	margin: 0;
+	padding: 0;
+	list-style: none;
+}
+
+.cal-find-calendar {
+	display: grid;
+	grid-template-columns: minmax(80px, 30%) 1fr;
+	gap: 8px;
+	padding: 4px 0;
+	font-size: 13px;
+}
+
+.cal-find-name {
+	font-weight: 500;
+	overflow-wrap: anywhere;
+}
+
+/* Unknown is never free: it has its own look, not the look of an empty row. */
+.cal-find-unknown {
+	color: var(--warning-foreground, var(--foreground));
+	font-style: italic;
+}
+
+.cal-find-free {
+	color: var(--muted-foreground);
+}
+
+.cal-find-warning {
+	margin: 4px 0;
+	padding: 6px 8px;
+	border-left: 3px solid var(--border-strong, var(--border));
+	font-size: 13px;
+}
+
+.cal-find-slots {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px;
+}
+
+.cal-grant {
+	display: grid;
+	grid-template-columns: 1fr minmax(150px, auto) auto;
+	align-items: center;
+	gap: 8px;
+	padding: 6px 0;
+	border-bottom: 1px solid var(--border);
+}
+
+.cal-grant-name {
+	overflow-wrap: anywhere;
+}
+
+.cal-grant-add {
+	display: grid;
+	grid-template-columns: 1fr minmax(150px, auto) auto;
+	gap: 8px;
+	margin: 0;
+	padding: 0;
+	border: 0;
+}
+
+@media (max-width: 600px) {
+	.cal-grant,
+	.cal-grant-add,
+	.cal-find-calendar {
+		grid-template-columns: 1fr;
+	}
+}
+
+/* The address field and its button: one row, the button wraps on a narrow screen. */
+.cal-by-mail {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 0.5rem;
+}
+
+.cal-by-mail .input {
+	flex: 1 1 14rem;
+	min-width: 0;
 }

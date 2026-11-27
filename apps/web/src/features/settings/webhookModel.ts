@@ -1,4 +1,5 @@
 import {
+	CALENDAR_WEBHOOK_EVENTS,
 	CHAT_WEBHOOK_EVENTS,
 	type ChatWebhookFilter,
 	DRIVE_WEBHOOK_EVENTS,
@@ -14,6 +15,7 @@ export type { WebhookDomain };
 export function eventsOf(domain: WebhookDomain): readonly WebhookEvent[] {
 	if (domain === "mail") return MAIL_WEBHOOK_EVENTS;
 	if (domain === "chat") return CHAT_WEBHOOK_EVENTS;
+	if (domain === "calendar") return CALENDAR_WEBHOOK_EVENTS;
 	return DRIVE_WEBHOOK_EVENTS;
 }
 
@@ -43,6 +45,13 @@ export const EVENT_LABELS: Record<WebhookEvent, string> = {
 	"drive.item.unshared": "A removed share",
 	"drive.members.changed": "A change to the members",
 	"drive.deleted": "A deleted shared drive",
+	"calendar.event.created": "A new event",
+	"calendar.event.updated": "A changed event",
+	"calendar.event.deleted": "A deleted event",
+	"calendar.invitation.received": "A new invitation",
+	"calendar.invitation.updated": "A changed invitation",
+	"calendar.invitation.cancelled": "A cancelled invitation",
+	"calendar.rsvp.changed": "A changed answer",
 };
 
 const ENDPOINT_STOP: Record<NonNullable<WebhookEndpoint["disabled_reason"]>, string> = {
@@ -77,10 +86,21 @@ export function stoppedText(
 }
 
 /** The name of a product above its events. */
-export const DOMAIN_LABELS: Record<WebhookDomain, string> = { mail: "Mail", chat: "Chat", drive: "Drive" };
+export const DOMAIN_LABELS: Record<WebhookDomain, string> = {
+	mail: "Mail",
+	chat: "Chat",
+	drive: "Drive",
+	calendar: "Calendar",
+};
 
 /** The products in the sequence that a list of events uses. */
-export const WEBHOOK_DOMAINS: readonly WebhookDomain[] = ["mail", "chat", "drive"];
+export const WEBHOOK_DOMAINS: readonly WebhookDomain[] = ["mail", "chat", "drive", "calendar"];
+
+/**
+ * The products whose events a sponsor can get for an agent. A calendar subscription is for the calendar of its
+ * creator only (`calendar.create_webhook_subscription`), so the page of an agent does not offer Calendar.
+ */
+export const AGENT_WEBHOOK_DOMAINS: readonly WebhookDomain[] = ["mail", "chat", "drive"];
 
 /** A subscription of one product, with the id of its target in one field. */
 export interface ListedSubscription {
@@ -117,6 +137,7 @@ export const ALL_EVENTS_LABELS: Record<WebhookDomain, string> = {
 	mail: "All mail events",
 	chat: "All three changes",
 	drive: "All drive events",
+	calendar: "All calendar events",
 };
 
 /**

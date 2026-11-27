@@ -174,6 +174,16 @@ function toActivity(record: ActivityRecord): ChatActivityItem {
 		untrusted: record.untrusted,
 		subject: record.subject,
 		item: record.item,
+		event:
+			record.event === null
+				? null
+				: {
+						event_id: record.event.event_id,
+						occurrence_id: record.event.occurrence_id,
+						title: record.event.title,
+						start: iso(record.event.start_at),
+						minutes: record.event.minutes,
+					},
 		read_at: record.read_at === null ? null : iso(record.read_at),
 		created_at: iso(record.created_at),
 	};
@@ -319,6 +329,8 @@ export const chatLayer8Handlers: Pick<HandlerMap<CallContext>, Layer8ChatOperati
 			filter: input.filter ?? "all",
 			after: cursor === null ? null : { createdAt: cursor[0], id: cursor[1] },
 			limit,
+			// A reminder has the title and the start of an event. A credential without calendar.read does not get it.
+			calendar: call.caller.scopes.has("calendar.read"),
 		});
 		const shown = listed.items.slice(0, limit);
 		const last = shown[shown.length - 1];
@@ -342,7 +354,8 @@ export const chatLayer8Handlers: Pick<HandlerMap<CallContext>, Layer8ChatOperati
 		);
 		const byRoom = new Map<string, string[]>();
 		for (const item of shown) {
-			if (item.kind === "member_request" || item.kind === "share_request") continue;
+			if (item.kind === "member_request" || item.kind === "share_request" || item.kind === "calendar_reminder")
+				continue;
 			const list = byRoom.get(item.room_id);
 			if (list) list.push(item.message_id);
 			else byRoom.set(item.room_id, [item.message_id]);
@@ -360,6 +373,11 @@ export const chatLayer8Handlers: Pick<HandlerMap<CallContext>, Layer8ChatOperati
 		const liveItems: ActivityRecord[] = [];
 		const staleIds: string[] = [];
 		for (const item of shown) {
+			// A calendar reminder is about an occurrence of the own calendar, not about a message: it stays.
+			if (item.kind === "calendar_reminder") {
+				liveItems.push(item);
+				continue;
+			}
 			const live =
 				item.kind === "member_request"
 					? liveRequests
@@ -374,7 +392,7 @@ export const chatLayer8Handlers: Pick<HandlerMap<CallContext>, Layer8ChatOperati
 		}
 		let unreadCount = listed.unreadCount;
 		if (staleIds.length > 0) {
-			unreadCount = await principal.deleteChatActivities(staleIds);
+			unreadCount = await principal.deleteChatActivities(staleIds, call.caller.scopes.has("calendar.read"));
 		}
 		return {
 			items: liveItems.map(toActivity),
@@ -384,7 +402,10 @@ export const chatLayer8Handlers: Pick<HandlerMap<CallContext>, Layer8ChatOperati
 	},
 
 	async "chat.mark_activity_read"(call, input) {
-		const unread = await principalStub(call.env, call.caller.id).markChatActivityRead(input.activity_id);
+		const unread = await principalStub(call.env, call.caller.id).markChatActivityRead(
+			input.activity_id,
+			call.caller.scopes.has("calendar.read"),
+		);
 		return { unread_count: unread };
 	},
 

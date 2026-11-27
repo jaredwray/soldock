@@ -5,6 +5,8 @@ import type { CredentialRef } from "./access.ts";
 export interface EventsSocketState {
 	credential: CredentialRef;
 	feed: boolean;
+	/** True when the credential held `calendar.read` at the open. Older sockets do not have it. */
+	calendar?: boolean;
 	openedAt: number;
 	checkedAt: number;
 	activity?: { active: boolean; room_id: string | null; at: number };

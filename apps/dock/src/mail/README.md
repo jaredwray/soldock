@@ -804,7 +804,9 @@ After the reset, setup cancels the old outboxes. A failed directory transaction 
 Agent mail carries `X-Asterra-Agent: true`. It also carries `X-Soldock-Agent: true` for existing mail filters.
 Calendar sends its invitations, changes, cancellations and answers by mail with `sendCalendarMail`: from the
 own mailbox of the principal, with the agent headers of `mail.send`, an idempotency key from Calendar, and the
-same outbox, retries, policy check and delivery status as `mail.send`. The message is
+same outbox, retries, policy check and delivery status as `mail.send`. When a delegate made the change,
+`sendCalendarMail` also checks that the delegate is active and that its outbound policy allows the address. The
+message is
 `multipart/alternative` of a plain text part and a `text/calendar; method=<METHOD>` part (base64). An answer
 to an invitation that names an alias of the sender goes from that alias, so the organizer can match it. Before
 each delivery, the outbox accepts the primary address of the sender or an alias of the same mailbox. A REQUEST

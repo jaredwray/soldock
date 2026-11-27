@@ -1,6 +1,6 @@
 import { runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
-import type { CalendarEvent, InputOf } from "@asterra/contracts";
+import type { CalendarChange, CalendarEvent, InputOf } from "@asterra/contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import appleAllDay from "../../../fixtures/calendar/apple-request-all-day.ics?raw";
 import googleCancel from "../../../fixtures/calendar/google-cancel.ics?raw";
@@ -39,12 +39,33 @@ beforeEach(async () => {
 
 const RANGE = { time_min: "2026-11-01T00:00:00Z", time_max: "2027-01-31T00:00:00Z" } as const;
 
-const meeting = (attendees: InputOf<"calendar.create_event">["attendees"]): InputOf<"calendar.create_event"> => ({
+const meeting = (emails: string[], attendeeIds: string[] = []): InputOf<"calendar.create_event"> => ({
 	title: "Design review",
 	when: { kind: "timed", start: "2026-12-03T15:00:00Z", end: "2026-12-03T16:00:00Z", time_zone: "UTC" },
 	location: "Room 4",
-	attendees,
+	attendee_emails: emails,
+	attendee_ids: attendeeIds,
 });
+
+/** Moves the invitations by mail of the calendar of Ada ten minutes back, so a DTSTAMP of now is after them. */
+async function inviteEarlier() {
+	await runInDurableObject(calendarStub(ada.id), (_instance, state) => {
+		state.storage.sql.exec("UPDATE external_attendees SET invited_at = ?", Date.now() - 600_000);
+	});
+}
+
+/** The calendar key of a credential of Ada without mail.send. */
+async function calendarOnlyKey() {
+	return api(
+		(await ada.call("account.create_api_key", { label: "cal", scopes: ["calendar.read", "calendar.write"] })).api_key
+			.secret,
+	);
+}
+
+/** The changes of the calendar of an actor after a cursor, oldest first. */
+async function changesAfter(actor: Actor, cursor: string): Promise<CalendarChange[]> {
+	return (await actor.call("calendar.list_changes", { cursor })).changes;
+}
 
 /** A DMARC pass for the domain of an address, as the receiving server records it. */
 const pass = (address: string) => {
@@ -151,13 +172,12 @@ describe("invitations by mail to addresses outside the organization", () => {
 	});
 
 	it("sends a standard iCalendar invitation for a timed and an all-day meeting", async () => {
-		const { event } = await ada.call(
-			"calendar.create_event",
-			meeting([{ email: "Guest@Partner.example" }, { principal_id: owner.id }]),
-		);
-		expect(event.attendees.map((attendee) => [attendee.principal_id, attendee.email, attendee.response])).toEqual([
-			[null, "guest@partner.example", "pending"],
-			[owner.id, "owner@dock.test", "pending"],
+		const { event } = await ada.call("calendar.create_event", meeting(["Guest@Partner.example"], [owner.id]));
+		expect(event.external_attendees).toEqual([
+			{ email: "guest@partner.example", display_name: "guest@partner.example", response: "needs_action" },
+		]);
+		expect(event.attendees.map((attendee) => [attendee.principal_id, attendee.response])).toEqual([
+			[owner.id, "needs_action"],
 		]);
 		await deliverAll(ada.id, owner.id);
 		expect(email.sent).toEqual([{ from: "ada@dock.test", to: "guest@partner.example" }]);
@@ -165,32 +185,30 @@ describe("invitations by mail to addresses outside the organization", () => {
 		expect(sent?.subject).toBe("Invitation: Design review");
 		expect(sent?.ical).toMatchObject({
 			method: "REQUEST",
-			uid: event.uid,
-			sequence: 0,
+			uid: event.id,
 			title: "Design review",
 			location: "Room 4",
 			when: { kind: "timed", start: "2026-12-03T15:00:00.000Z", end: "2026-12-03T16:00:00.000Z" },
 			organizer: { email: "ada@dock.test", name: "Ada Lovelace" },
-			attendees: [
-				{ email: "guest@partner.example", partstat: "NEEDS-ACTION" },
-				{ email: "owner@dock.test", name: "Olive Owner", partstat: "NEEDS-ACTION" },
-			],
+			// The REQUEST lists the attendees by mail only: the calendar has no address of the attendees inside.
+			attendees: [{ email: "guest@partner.example", partstat: "NEEDS-ACTION" }],
 		});
 		// A long line is folded. The read of a text part gives LF line ends: mime.test.ts checks the CRLF of the bytes.
 		expect(sent?.raw.replace(/\r?\n[ \t]/g, "")).toContain("RSVP=TRUE:mailto:guest@partner.example");
 		// The internal attendee gets a copy on the calendar, and no mail.
-		expect((await eventsOf(owner)).map((item) => item.uid)).toEqual([event.uid]);
+		const [copy] = await eventsOf(owner);
+		expect(copy).toMatchObject({ id: event.id, role: "attendee", external_attendees: [], untrusted: false });
 
 		const { event: allDay } = await ada.call("calendar.create_event", {
 			title: "Offsite",
 			when: { kind: "all_day", start_date: "2026-12-10", end_date: "2026-12-12" },
-			attendees: [{ email: "guest@partner.example" }],
+			attendee_emails: ["guest@partner.example"],
 		});
 		await deliverAll(ada.id);
 		const last = (await sentInvites(ada)).at(-1);
 		expect(last?.raw).toMatch(/DTSTART;VALUE=DATE:20261210\r?\nDTEND;VALUE=DATE:20261212\r?\n/);
 		expect(last?.ical).toMatchObject({
-			uid: allDay.uid,
+			uid: allDay.id,
 			when: { kind: "all_day", start_date: "2026-12-10", end_date: "2026-12-12" },
 		});
 	});
@@ -198,7 +216,7 @@ describe("invitations by mail to addresses outside the organization", () => {
 	it("keeps the UID for a change and a cancellation, and sends no mail for an answer inside the organization", async () => {
 		const { event } = await ada.call(
 			"calendar.create_event",
-			meeting([{ email: "one@partner.example" }, { email: "two@partner.example" }, { principal_id: owner.id }]),
+			meeting(["one@partner.example", "two@partner.example"], [owner.id]),
 		);
 		await deliverAll(ada.id, owner.id);
 		await ada.call("calendar.update_event", {
@@ -206,22 +224,22 @@ describe("invitations by mail to addresses outside the organization", () => {
 			when: { kind: "timed", start: "2026-12-04T17:00:00Z", end: "2026-12-04T18:00:00Z", time_zone: "UTC" },
 		});
 		await deliverAll(ada.id, owner.id);
-		const copy = (await eventsOf(owner)).find((item) => item.uid === event.uid) as CalendarEvent;
-		await owner.call("calendar.respond_to_invitation", { event_id: copy.id, response: "accepted" });
+		await owner.call("calendar.respond_to_event", { event_id: event.id, response: "accepted" });
 		await deliverAll(owner.id, ada.id);
 		expect(email.sent).toHaveLength(4);
+		// A change that an attendee by mail does not see sends no mail.
+		await ada.call("calendar.update_event", { event_id: event.id, visibility: "private" });
+		await deliverAll(ada.id, owner.id);
+		expect(email.sent).toHaveLength(4);
 
-		await ada.call("calendar.update_event", {
-			event_id: event.id,
-			attendees: [{ email: "one@partner.example" }, { principal_id: owner.id }],
-		});
+		await ada.call("calendar.update_event", { event_id: event.id, attendee_emails: ["one@partner.example"] });
 		await deliverAll(ada.id, owner.id);
 		await ada.call("calendar.delete_event", { event_id: event.id });
 		await deliverAll(ada.id, owner.id);
 
 		const sent = await sentInvites(ada);
 		const sequences = sent.map((item) => item.ical.sequence);
-		expect(sent.every((item) => item.ical.uid === event.uid)).toBe(true);
+		expect(sent.every((item) => item.ical.uid === event.id)).toBe(true);
 		expect(sent.slice(0, 4).map((item) => [item.ical.method, item.to, item.subject])).toEqual([
 			["REQUEST", "one@partner.example", "Invitation: Design review"],
 			["REQUEST", "two@partner.example", "Invitation: Design review"],
@@ -263,29 +281,34 @@ describe("invitations by mail to addresses outside the organization", () => {
 	});
 
 	it("honors the outbound policy of an agent and the scope mail.send", async () => {
-		const botMail = await fakeEmailService(bot.id);
-		// A new agent is internal-only.
-		expect(await codeOf(bot.call("calendar.create_event", meeting([{ email: "guest@partner.example" }])))).toBe(
-			"policy_denied",
-		);
+		// An agent is not the organizer of an event with attendees on its own calendar.
+		expect(await codeOf(bot.call("calendar.create_event", meeting(["guest@partner.example"])))).toBe("forbidden");
 		expect(await eventsOf(bot)).toEqual([]);
+
+		// With schedule access, the agent invites from the calendar of Ada, in the limits of its own policy.
+		await ada.call("calendar.set_grant", { principal_id: bot.id, access: "schedule" });
+		const fromBot = { ...meeting(["guest@partner.example"]), calendar_id: ada.id };
+		expect(await codeOf(bot.call("calendar.create_event", fromBot))).toBe("policy_denied");
+		expect(await eventsOf(ada)).toEqual([]);
 		await ada.call("directory.update_agent_policy", {
 			principal_id: bot.id,
 			mode: "allowlist",
 			allowlist: ["partner.example"],
 		});
-		const { event } = await bot.call("calendar.create_event", meeting([{ email: "guest@partner.example" }]));
-		await deliverAll(bot.id);
-		expect(botMail.sent).toEqual([{ from: "bot@dock.test", to: "guest@partner.example" }]);
+		const { event } = await bot.call("calendar.create_event", fromBot);
+		await deliverAll(ada.id);
+		expect(email.sent).toEqual([{ from: "ada@dock.test", to: "guest@partner.example" }]);
 
-		// After a change of the policy, a change of the meeting is refused, and a message that waits does not leave.
+		// After a change of the policy, a change of the meeting is refused, and a message of the agent that waits
+		// does not leave.
 		await ada.call("directory.update_agent_policy", { principal_id: bot.id, mode: "internal-only" });
-		expect(await codeOf(bot.call("calendar.update_event", { event_id: event.id, title: "Moved" }))).toBe(
-			"policy_denied",
-		);
+		expect(
+			await codeOf(bot.call("calendar.update_event", { event_id: event.id, calendar_id: ada.id, title: "Moved" })),
+		).toBe("policy_denied");
 		expect(
 			await sendCalendarMail(env as Env, {
-				senderId: bot.id,
+				senderId: ada.id,
+				actorId: bot.id,
 				to: "guest@partner.example",
 				subject: "Updated invitation: Design review",
 				text: "Hello.",
@@ -294,24 +317,62 @@ describe("invitations by mail to addresses outside the organization", () => {
 				idempotencyKey: "asterra-calendar:policy:REQUEST:1:guest@partner.example",
 			}),
 		).toEqual({ status: "refused", reason: "policy" });
-		await drainOutbox(bot.id);
-		expect(botMail.sent).toHaveLength(1);
+		await drainOutbox(ada.id);
+		expect(email.sent).toHaveLength(1);
 
 		// A key of a person without mail.send cannot invite outside the organization. Inside, it needs no mail.send.
-		const calendarOnly = api(
-			(await ada.call("account.create_api_key", { label: "cal", scopes: ["calendar.read", "calendar.write"] })).api_key
-				.secret,
-		);
-		expect(await codeOf(calendarOnly("calendar.create_event", meeting([{ email: "guest@partner.example" }])))).toBe(
-			"forbidden",
-		);
-		const { event: internal } = await calendarOnly("calendar.create_event", meeting([{ principal_id: owner.id }]));
+		const calendarOnly = await calendarOnlyKey();
+		expect(await codeOf(calendarOnly("calendar.create_event", meeting(["guest@partner.example"])))).toBe("forbidden");
+		const { event: internal } = await calendarOnly("calendar.create_event", meeting([], [owner.id]));
 		expect(internal.attendees).toHaveLength(1);
 
 		// The cancellation of a meeting with an attendee outside goes by mail too: the key cannot delete it.
-		const { event: outside } = await ada.call("calendar.create_event", meeting([{ email: "guest@partner.example" }]));
+		const { event: outside } = await ada.call("calendar.create_event", meeting(["guest@partner.example"]));
 		expect(await codeOf(calendarOnly("calendar.delete_event", { event_id: outside.id }))).toBe("forbidden");
-		expect((await ada.call("calendar.get_event", { event_id: outside.id })).event.attendees).toHaveLength(1);
+		expect((await ada.call("calendar.get_event", { event_id: outside.id })).event.external_attendees).toHaveLength(1);
+	});
+
+	it("refuses a repeat, an address of the organization, and too many attendees", async () => {
+		const weekly = { frequency: "weekly", interval: 1 } as const;
+		expect(
+			await codeOf(ada.call("calendar.create_event", { ...meeting(["guest@partner.example"]), recurrence: weekly })),
+		).toBe("invalid");
+		const { event } = await ada.call("calendar.create_event", meeting(["guest@partner.example"]));
+		expect(await codeOf(ada.call("calendar.update_event", { event_id: event.id, recurrence: weekly }))).toBe("invalid");
+		expect((await ada.call("calendar.get_event", { event_id: event.id })).event.recurrence).toBeNull();
+
+		// A person of the organization is an attendee by id, not by mail.
+		expect(await codeOf(ada.call("calendar.create_event", meeting(["Owner@Dock.test"])))).toBe("invalid");
+		const many = Array.from({ length: 50 }, (_, index) => `guest${index}@partner.example`);
+		expect(await codeOf(ada.call("calendar.create_event", meeting(many, [owner.id])))).toBe("invalid");
+		await deliverAll(ada.id);
+		// Only the first event sent an invitation.
+		expect(email.sent).toEqual([{ from: "ada@dock.test", to: "guest@partner.example" }]);
+	});
+
+	it("asks the attendees by mail again after a new time", async () => {
+		const { event } = await ada.call("calendar.create_event", meeting(["priya@partner.example"]));
+		await inviteEarlier();
+		const reply = (ms: number) =>
+			invitationMail({
+				from: "priya@partner.example",
+				to: "ada@dock.test",
+				subject: `Accepted ${ms}`,
+				ics: stamped(googleReply.replaceAll("{UID}", event.id), ms),
+			});
+		await inject(reply(Date.now() - 120_000), "ada@dock.test", { from: "priya@partner.example" });
+		const response = async () =>
+			(await ada.call("calendar.get_event", { event_id: event.id })).event.external_attendees[0]?.response;
+		expect(await response()).toBe("accepted");
+		const beforeMove = Date.now();
+		await ada.call("calendar.update_event", {
+			event_id: event.id,
+			when: { kind: "timed", start: "2026-12-05T15:00:00Z", end: "2026-12-05T16:00:00Z", time_zone: "UTC" },
+		});
+		expect(await response()).toBe("needs_action");
+		// An answer from before the new time is for the old time.
+		await inject(reply(beforeMove - 1), "ada@dock.test", { from: "priya@partner.example" });
+		expect(await response()).toBe("needs_action");
 	});
 });
 
@@ -320,16 +381,17 @@ describe("answers by mail from attendees outside the organization", () => {
 		await fakeEmailService(ada.id);
 		const { event } = await ada.call(
 			"calendar.create_event",
-			meeting([{ email: "priya@partner.example" }, { email: "tunde.okafor@contoso.example" }]),
+			meeting(["priya@partner.example", "tunde.okafor@contoso.example"]),
 		);
+		const cursor = (await ada.call("calendar.list_changes", {})).cursor;
 		// The attendees were invited ten minutes ago, so each DTSTAMP below is after the invitation and before the
 		// arrival of the mail.
 		const now = Date.now();
 		await runInDurableObject(calendarStub(ada.id), (_instance, state) => {
-			state.storage.sql.exec("UPDATE attendees SET added_at = ?", now - 600_000);
+			state.storage.sql.exec("UPDATE external_attendees SET invited_at = ?", now - 600_000);
 		});
 		const later = now - 240_000;
-		const reply = stamped(googleReply.replaceAll("{UID}", event.uid), later);
+		const reply = stamped(googleReply.replaceAll("{UID}", event.id), later);
 		const mail = invitationMail({
 			from: "priya@partner.example",
 			to: "ada@dock.test",
@@ -339,14 +401,14 @@ describe("answers by mail from attendees outside the organization", () => {
 		await inject(mail, "ada@dock.test", { from: "priya@partner.example" });
 		const responses = async () =>
 			Object.fromEntries(
-				(await ada.call("calendar.get_event", { event_id: event.id })).event.attendees.map((attendee) => [
+				(await ada.call("calendar.get_event", { event_id: event.id })).event.external_attendees.map((attendee) => [
 					attendee.email,
 					attendee.response,
 				]),
 			);
 		expect(await responses()).toEqual({
 			"priya@partner.example": "accepted",
-			"tunde.okafor@contoso.example": "pending",
+			"tunde.okafor@contoso.example": "needs_action",
 		});
 		// The same mail again, as a retry of the queue or of the sender: one message and the same state.
 		await inject(mail, "ada@dock.test", { from: "priya@partner.example" });
@@ -354,7 +416,7 @@ describe("answers by mail from attendees outside the organization", () => {
 
 		// An older answer after a newer one changes nothing.
 		const older = stamped(
-			outlookTentative.replaceAll("{UID}", event.uid).replace("tunde.okafor@contoso.example", "priya@partner.example"),
+			outlookTentative.replaceAll("{UID}", event.id).replace("tunde.okafor@contoso.example", "priya@partner.example"),
 			later - 120_000,
 		);
 		await inject(
@@ -365,7 +427,7 @@ describe("answers by mail from attendees outside the organization", () => {
 
 		// The answer of Tunde from the address of Priya, from a failed DMARC check, and from an address that is not an
 		// attendee change nothing.
-		const tunde = stamped(outlookTentative.replaceAll("{UID}", event.uid), later + 60_000);
+		const tunde = stamped(outlookTentative.replaceAll("{UID}", event.id), later + 60_000);
 		await inject(
 			invitationMail({ from: "priya@partner.example", to: "ada@dock.test", subject: "Forged", ics: tunde }),
 			"ada@dock.test",
@@ -381,7 +443,7 @@ describe("answers by mail from attendees outside the organization", () => {
 			"ada@dock.test",
 		);
 		const stranger = stamped(
-			googleReply.replaceAll("{UID}", event.uid).replaceAll("priya@partner.example", "eve@evil.example"),
+			googleReply.replaceAll("{UID}", event.id).replaceAll("priya@partner.example", "eve@evil.example"),
 			later + 60_000,
 		);
 		await inject(
@@ -390,7 +452,7 @@ describe("answers by mail from attendees outside the organization", () => {
 		);
 		expect(await responses()).toEqual({
 			"priya@partner.example": "accepted",
-			"tunde.okafor@contoso.example": "pending",
+			"tunde.okafor@contoso.example": "needs_action",
 		});
 
 		// The real answer of Tunde applies.
@@ -402,6 +464,32 @@ describe("answers by mail from attendees outside the organization", () => {
 			"priya@partner.example": "accepted",
 			"tunde.okafor@contoso.example": "tentative",
 		});
+		// One record for each answer that changed, with no actor: the retry, the old answer and the refusals write none.
+		expect((await changesAfter(ada, cursor)).map((change) => [change.type, change.event_id, change.actor_id])).toEqual([
+			["calendar.rsvp.changed", event.id, null],
+			["calendar.rsvp.changed", event.id, null],
+		]);
+	});
+
+	it("applies an answer with no DMARC result", async () => {
+		const { event } = await ada.call("calendar.create_event", meeting(["priya@partner.example"]));
+		await inviteEarlier();
+		const answer = (partstat: string, auth: string | null) =>
+			inject(
+				invitationMail({
+					from: "priya@partner.example",
+					to: "ada@dock.test",
+					subject: partstat,
+					ics: stamped(googleReply.replaceAll("{UID}", event.id).replace("PARTSTAT=ACCEPTED", partstat), Date.now()),
+					auth,
+				}),
+				"ada@dock.test",
+			);
+		const response = async () =>
+			(await ada.call("calendar.get_event", { event_id: event.id })).event.external_attendees[0]?.response;
+		// Many servers of small domains send no DMARC result. The organizer still gets the answer.
+		await answer("PARTSTAT=ACCEPTED", null);
+		expect(await response()).toBe("accepted");
 	});
 });
 
@@ -448,13 +536,17 @@ describe("invitations by mail from outside the organization", () => {
 			response: "accepted",
 		});
 		expect(answered.event).toMatchObject({
-			uid: "4f7c2b1e9a0d3c8b@google.com",
 			title: "Façade review",
-			is_organizer: false,
+			role: "attendee",
 			untrusted: true,
 			my_response: "accepted",
-			organizer: { principal_id: null, email: "priya@partner.example", self: false },
+			organizer: null,
+			external_organizer: { email: "priya@partner.example", display_name: "Priya Natarajan" },
 		});
+		expect(answered.event?.external_attendees).toEqual([
+			{ email: "ada@dock.test", display_name: "ada@dock.test", response: "accepted" },
+			{ email: "priya@partner.example", display_name: "Priya Natarajan", response: "accepted" },
+		]);
 		expect(answered.invitation).toMatchObject({
 			state: "on_calendar",
 			my_response: "accepted",
@@ -478,7 +570,7 @@ describe("invitations by mail from outside the organization", () => {
 		expect(again.event?.id).toBe(answered.event?.id);
 		await deliverAll(ada.id);
 		expect(email.sent).toHaveLength(1);
-		expect((await eventsOf(ada)).filter((item) => item.uid === "4f7c2b1e9a0d3c8b@google.com")).toHaveLength(1);
+		expect((await eventsOf(ada)).filter((item) => item.title === "Façade review")).toHaveLength(1);
 	});
 
 	it("reads an all-day invitation of Apple Calendar and a Windows zone of Outlook", async () => {
@@ -515,7 +607,8 @@ describe("invitations by mail from outside the organization", () => {
 			message_id: first,
 			response: "accepted",
 		});
-		const startOf = async () => (await eventsOf(ada)).find((item) => item.uid === event?.uid)?.when;
+		const startOf = async () => (await eventsOf(ada)).find((item) => item.id === event?.id)?.when;
+		const cursor = (await ada.call("calendar.list_changes", {})).cursor;
 
 		// A change from a different sender, from a sender that the server did not verify, or with a different
 		// organizer changes nothing.
@@ -532,10 +625,10 @@ describe("invitations by mail from outside the organization", () => {
 			can_respond: false,
 		});
 
-		// The real change moves the meeting with no call, and keeps the answer.
+		// The real change moves the meeting with no call. A new time asks the owner again.
 		await receive(googleUpdate, "Updated invitation: Façade review");
-		const moved = (await eventsOf(ada)).find((item) => item.uid === event?.uid);
-		expect(moved).toMatchObject({ when: { start: "2026-12-04T17:00:00.000Z" }, my_response: "accepted" });
+		const moved = (await eventsOf(ada)).find((item) => item.id === event?.id);
+		expect(moved).toMatchObject({ when: { start: "2026-12-04T17:00:00.000Z" }, my_response: "needs_action" });
 		const { invitation: old } = await ada.call("calendar.get_mail_invitation", { message_id: first });
 		expect(old).toMatchObject({ state: "outdated", can_respond: false });
 
@@ -548,6 +641,12 @@ describe("invitations by mail from outside the organization", () => {
 		// invitation after it cannot bring it back.
 		await receive(sameSequence, "Cancelled: Façade review");
 		expect(await eventsOf(ada)).toEqual([]);
+		// The refused mails write no record.
+		expect((await changesAfter(ada, cursor)).map((change) => [change.type, change.actor_id])).toEqual([
+			["calendar.invitation.updated", null],
+			["calendar.rsvp.changed", null],
+			["calendar.invitation.cancelled", null],
+		]);
 		expect((await ada.call("calendar.get_mail_invitation", { message_id: first })).invitation?.state).toBe("cancelled");
 		expect(
 			await codeOf(ada.call("calendar.respond_to_mail_invitation", { message_id: first, response: "accepted" })),
@@ -559,6 +658,29 @@ describe("invitations by mail from outside the organization", () => {
 		expect(await eventsOf(ada)).toEqual([]);
 	});
 
+	it("keeps the answer when a change keeps the time, and shows a copy by mail to a delegate without addresses", async () => {
+		const first = await receive(googleTimed, "Invitation: Façade review");
+		const { event } = await ada.call("calendar.respond_to_mail_invitation", {
+			message_id: first,
+			response: "accepted",
+		});
+		const renamed = googleTimed
+			.replace("SEQUENCE:0", "SEQUENCE:1")
+			.replace("SUMMARY:Façade review", "SUMMARY:Façade samples")
+			.replace("DTSTAMP:20261126T101500Z", "DTSTAMP:20261126T111500Z");
+		await receive(renamed, "Updated invitation: Façade samples");
+		expect((await ada.call("calendar.get_event", { event_id: event?.id as string })).event).toMatchObject({
+			title: "Façade samples",
+			my_response: "accepted",
+		});
+
+		await ada.call("calendar.set_grant", { principal_id: owner.id, access: "schedule" });
+		const { events } = await owner.call("calendar.list_events", { ...RANGE, calendar_id: ada.id });
+		expect(events).toEqual([
+			expect.objectContaining({ id: event?.id, external_attendees: [], external_organizer: null, untrusted: true }),
+		]);
+	});
+
 	// The answer on the copy goes to the organizer by mail, so it has the rules of a send.
 	it("needs mail.send to change the answer on a copy by mail", async () => {
 		const messageId = await receive(googleTimed, "Invitation: Façade review");
@@ -566,17 +688,17 @@ describe("invitations by mail from outside the organization", () => {
 			message_id: messageId,
 			response: "accepted",
 		});
-		const calendarOnly = api(
-			(await ada.call("account.create_api_key", { label: "cal", scopes: ["calendar.read", "calendar.write"] })).api_key
-				.secret,
-		);
+		const calendarOnly = await calendarOnlyKey();
 		const event_id = event?.id as string;
-		expect(await codeOf(calendarOnly("calendar.respond_to_invitation", { event_id, response: "declined" }))).toBe(
+		expect(await codeOf(calendarOnly("calendar.respond_to_event", { event_id, response: "declined" }))).toBe(
 			"forbidden",
 		);
 		expect((await ada.call("calendar.get_event", { event_id })).event.my_response).toBe("accepted");
+		// With mail.send, the new answer goes to the organizer.
+		await ada.call("calendar.respond_to_event", { event_id, response: "declined" });
 		await deliverAll(ada.id);
-		expect(email.sent).toHaveLength(1);
+		expect(email.sent).toHaveLength(2);
+		expect((await sentInvites(ada)).at(-1)?.ical.attendees[0]?.partstat).toBe("DECLINED");
 	});
 
 	it("adds nothing for No, and adds the meeting for a later Yes", async () => {

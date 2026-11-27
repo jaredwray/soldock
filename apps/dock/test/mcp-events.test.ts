@@ -8,18 +8,24 @@ import {
 	type Actor,
 	api,
 	base64,
+	captureCalendarJobs,
 	captureWebhookEvents,
 	codeOf,
 	consumeWebhooks,
+	createActor,
 	drainWebhookEvents,
 	inject,
 	mcp,
 	modern,
 	openStored,
+	PASSWORD,
+	publishCalendarChanges,
 	rawMessage,
 	receiveWebhooks,
 	SEALED,
 	seedOrg,
+	setLegacyScopes,
+	settleCalendars,
 	type WebhookPost,
 } from "./helpers.ts";
 
@@ -1033,5 +1039,152 @@ describe("the webhook operations", () => {
 			),
 		).toBe("not_found");
 		expect(await rows()).toHaveLength(1);
+	});
+});
+
+describe("calendar events", () => {
+	let grace: Actor;
+	beforeEach(async () => {
+		grace = await createActor(owner, {
+			kind: "human",
+			display_name: "Grace Hopper",
+			address: "grace@dock.test",
+			password: PASSWORD,
+		});
+		await ada.call("directory.update_agent_policy", {
+			principal_id: bot.id,
+			mode: "allowlist",
+			allowlist: ["receiver.example.com"],
+		});
+	});
+
+	const WHEN = { kind: "timed", start: "2026-12-02T15:00:00Z", end: "2026-12-02T16:00:00Z", time_zone: "UTC" } as const;
+
+	/**
+	 * Ada invites grace and the owner, and the owner accepts. Returns the jobs of the calendar of grace, whose MCP
+	 * client watches her calendar. Only a person invites and attends, so the client acts with the key of grace.
+	 */
+	async function acceptedMeeting() {
+		const jobs = await captureCalendarJobs(grace.id);
+		const { event } = await ada.call("calendar.create_event", {
+			title: "Design review",
+			when: WHEN,
+			attendee_ids: [grace.id, owner.id],
+		});
+		await settleCalendars(ada.id, grace.id, owner.id);
+		await owner.call("calendar.respond_to_event", { event_id: event.id, response: "accepted" });
+		await settleCalendars(ada.id, grace.id, owner.id);
+		await publishCalendarChanges(grace.id);
+		return { event, jobs };
+	}
+
+	/** The agent adds an event to its own calendar. Returns the jobs of its calendar. */
+	async function botEvent() {
+		const jobs = await captureCalendarJobs(bot.id);
+		await bot.call("calendar.create_event", { title: "Agent task", when: WHEN });
+		await publishCalendarChanges(bot.id);
+		return jobs;
+	}
+
+	// A calendar event tells about an event that the credential reads, so the catalog needs both scopes.
+	it("lists the calendar events only for a credential with calendar.webhooks and calendar.read", async () => {
+		const names = (key: string) =>
+			mcp(key, "events/list").then((answer) => eventsOf(answer).map((e) => String(e.name)));
+		expect(await names(bot.key)).toEqual(expect.arrayContaining(["calendar.rsvp.changed"]));
+		await setLegacyScopes(bot.id, ["calendar.webhooks", "calendar.write"]);
+		expect((await names(bot.key)).filter((name) => name.startsWith("calendar."))).toEqual([]);
+		const { posts } = receiver();
+		expect(errorOf(await subscribe(bot.key, "calendar.rsvp.changed")).code).toBe(-32602);
+		expect(posts).toEqual([]);
+	});
+
+	// The acceptance test: a client that subscribes to RSVP changes only gets one POST for the response of the
+	// owner, with ids and no title, and no POST for the invitation of grace.
+	it("sends only the subscribed change, with ids only and the id of the change", async () => {
+		const { events } = receiver();
+		expect(resultOf(await subscribe(grace.key, "calendar.rsvp.changed")).id).toBeTruthy();
+		const { event, jobs } = await acceptedMeeting();
+		expect(jobs.map((job) => (job as { eventType: string }).eventType)).toEqual([
+			"calendar.invitation.received",
+			"calendar.rsvp.changed",
+		]);
+		await deliver(jobs);
+		expect(events()).toHaveLength(1);
+		const body = JSON.parse(events()[0]?.body ?? "{}");
+		// The change of the POST is the change of the feed: same id, and its cursor is the end of the feed now.
+		const feed = await grace.call("calendar.list_changes", { cursor: body.data.cursor });
+		expect(feed).toMatchObject({ changes: [], expired: false });
+		expect(body).toMatchObject({
+			name: "calendar.rsvp.changed",
+			data: { calendar_id: grace.id, event_id: event.id, actor_id: owner.id, occurrence_id: null },
+			cursor: null,
+		});
+		expect(body.eventId.startsWith(`${body.data.change_id}_`)).toBe(true);
+		expect(JSON.stringify(body)).not.toContain("Design review");
+		expect(mcpEvents.get("calendar.rsvp.changed")?.payload.safeParse(body.data).success).toBe(true);
+		// The receiver reads the event with the normal authorized operation.
+		const read = await grace.call("calendar.get_event", { event_id: body.data.event_id });
+		expect(read.event.id).toBe(event.id);
+	});
+
+	// A failed POST tries again with the same webhook-id, so the receiver can drop the copy.
+	it("tries a failed POST again with the same webhook-id", async () => {
+		let calls = 0;
+		const { events } = receiver(() => new Response(null, { status: calls++ === 0 ? 500 : 204 }));
+		await subscribe(grace.key, "calendar.rsvp.changed");
+		const { jobs } = await acceptedMeeting();
+		const { delivered } = await deliver(jobs);
+		expect(delivered.sent).toHaveLength(1);
+		await consumeWebhooks(delivered.sent);
+		const ids = events().map((post) => post.headers.get("webhook-id"));
+		expect(ids).toHaveLength(2);
+		expect(ids[0]).toBe(ids[1]);
+	});
+
+	// Revocation while a delivery waits: the check before each POST sees the access of now, not of the subscribe.
+	it("sends nothing after the agent loses calendar.read while the delivery waits", async () => {
+		const { events } = receiver();
+		await subscribe(bot.key, "calendar.event.created");
+		const { sent } = await consumeWebhooks(await botEvent());
+		expect(sent).toHaveLength(1);
+		await setLegacyScopes(bot.id, ["calendar.webhooks", "calendar.write"]);
+		await consumeWebhooks(sent);
+		expect(events()).toEqual([]);
+		const status = await env.DIRECTORY.prepare(
+			"SELECT status, disabled_reason FROM webhook_subscriptions WHERE domain = 'calendar'",
+		).first();
+		expect(status).toEqual({ status: "disabled", disabled_reason: "access_lost" });
+	});
+
+	// The subscription is active when its delivery job goes on the queue. An unsubscribe before the POST must
+	// stop that job: the agent said that it wants no more events.
+	it("sends nothing after the agent unsubscribes while the delivery waits", async () => {
+		const { events } = receiver();
+		await subscribe(bot.key, "calendar.event.created");
+		const { sent } = await consumeWebhooks(await botEvent());
+		expect(sent).toHaveLength(1);
+		expect(resultOf(await unsubscribe(bot.key, "calendar.event.created"))).toBeTruthy();
+		await consumeWebhooks(sent);
+		expect(events()).toEqual([]);
+	});
+
+	// A calendar is for its owner only: a sponsor gets no subscription for the calendar of its agent.
+	it("refuses the calendar of a different principal, also of a sponsored agent", async () => {
+		const { posts } = receiver();
+		const refused = await subscribe(ada.key, "calendar.rsvp.changed", { arguments: { calendar_id: bot.id } });
+		expect(errorOf(refused).data?.code ?? errorOf(refused).message).toMatch(/forbidden|own calendar/);
+		expect(posts).toEqual([]);
+	});
+
+	// A subscription starts from now: a change from before it is in calendar.list_changes, not in a POST.
+	// A different subscription of grace starts the queue jobs, so the change has a real job.
+	it("sends no change from before the subscription", async () => {
+		const { events } = receiver();
+		await subscribe(grace.key, "calendar.event.created");
+		const { jobs } = await acceptedMeeting();
+		expect(jobs.map((job) => (job as { eventType: string }).eventType)).toContain("calendar.rsvp.changed");
+		await subscribe(grace.key, "calendar.rsvp.changed");
+		await deliver(jobs);
+		expect(events()).toEqual([]);
 	});
 });

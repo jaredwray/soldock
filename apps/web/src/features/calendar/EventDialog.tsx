@@ -1,166 +1,526 @@
-import { ApiError, CALENDAR_LIMITS, type CalendarEvent, type EventAnswer } from "@asterra/contracts";
-import { type FormEvent, useId, useRef, useState } from "react";
+import { ApiError, CALENDAR_LIMITS, type CalendarEvent, type EventResponse } from "@asterra/contracts";
+import { type FormEvent, useId, useMemo, useRef, useState } from "react";
 import { errorMessage } from "../../lib/api.ts";
 import { ConfirmDialog } from "../../lib/ConfirmDialog.tsx";
 import { Dialog } from "../../lib/Dialog.tsx";
+import { Select } from "../../lib/Select.tsx";
 import { useToast } from "../../lib/toast.tsx";
+import { principalOption, usePrincipals } from "../../lib/usePrincipals.ts";
 import { useSession } from "../auth/session.tsx";
-import { AttendeePicker } from "./AttendeePicker.tsx";
-import { createEvent, deleteEvent, respondToInvitation, updateEvent } from "./data.ts";
 import {
-	attendeeInputs,
-	type ChosenAttendee,
-	chosenOf,
+	cancelOccurrence,
+	createEvent,
+	deleteEvent,
+	getEvent,
+	respondToEvent,
+	setReminder,
+	updateEvent,
+	updateOccurrence,
+} from "./data.ts";
+import { FindTime } from "./FindTime.tsx";
+import {
 	type EventForm,
+	eventTitle,
 	formOf,
 	formProblem,
+	REMINDER_OPTIONS,
+	REPEAT_OPTIONS,
+	type ReminderChoice,
+	type RepeatChoice,
+	recurrenceOf,
+	reminderOf,
+	repeatChoice,
+	repeatText,
 	responseLabel,
-	sameAttendees,
+	sameRepeat,
 	sameTimeFields,
+	seriesWhen,
+	typedAddress,
 	whenOf,
 	whenText,
+	withSlot,
+	zoneOfEvent,
 } from "./model.ts";
 
 interface EventDialogProps {
-	/** The event to change, or null for a new event. */
+	/** The event or the occurrence to change, or null for a new event. */
 	event: CalendarEvent | null;
-	/** True when the calendar does not have the open copy of a meeting now. */
-	gone?: boolean;
 	/** The form of a new event. */
 	initial: EventForm;
 	zone: string;
 	/** Called after a save or a delete, with the event that changed. */
 	onChanged: (event: CalendarEvent) => void;
 	onClose: () => void;
+	/** The calendar of a person who lets the person schedule, or null for the own calendar. */
+	calendar?: { id: string; name: string } | null;
 }
 
-/** The dialog that adds an event, or changes or deletes one. The copy of a meeting opens the invitation view. */
-export function EventDialog(props: EventDialogProps) {
-	if (props.event && !props.event.is_organizer) {
-		return (
-			<InvitationDialog
-				event={props.event}
-				zone={props.zone}
-				gone={props.gone === true}
-				onChanged={props.onChanged}
-				onClose={props.onClose}
-			/>
-		);
-	}
-	return <OrganizerDialog {...props} />;
-}
+/** An action on one occurrence of a series that asks first: this occurrence, or the entire series. */
+type ScopedAction = "save" | "delete" | "accepted" | "declined";
+type Scope = "this" | "all";
 
-function OrganizerDialog({ event, initial, zone, onChanged, onClose }: EventDialogProps) {
+const RESPONSE_TEXT: Record<EventResponse, string> = {
+	needs_action: "You did not respond yet.",
+	accepted: "You accepted.",
+	tentative: "You answered Maybe.",
+	declined: "You declined.",
+};
+
+const NO_REPEAT_BY_MAIL = "A repeated event cannot have people outside your organization yet.";
+
+/** The dialog that adds an event, or changes or deletes one. For an invitation, it sets the response. */
+export function EventDialog({ event, initial, zone, onChanged, onClose, calendar = null }: EventDialogProps) {
 	const toast = useToast();
-	const { whoami } = useSession();
-	const [openedAttendees] = useState<ChosenAttendee[]>(() => chosenOf(event));
-	const [attendees, setAttendees] = useState<ChosenAttendee[]>(openedAttendees);
-	// The form that the dialog opened with. A save sends the time only when a time field is different.
+	const ownId = useSession().whoami.principal.id;
+	// In the calendar of a different person, that person is the organizer: the attendees leave out that person.
+	const organizerId = calendar?.id ?? ownId;
+	const calendarId = calendar?.id ?? null;
+	const on = calendarId === null ? {} : { calendar_id: calendarId };
+	// The form that the dialog opened with. A save sends a field only when it is different.
 	const [opened] = useState<EventForm>(() => (event ? formOf(event, zone) : initial));
 	const [form, setForm] = useState<EventForm>(opened);
+	const openedAttendees = useMemo(() => (event?.attendees ?? []).map((a) => a.principal_id), [event]);
+	const [attendees, setAttendees] = useState<string[]>(openedAttendees);
+	// The attendees by mail: addresses outside the organization.
+	const openedGuests = useMemo(() => (event?.external_attendees ?? []).map((guest) => guest.email), [event]);
+	const [guests, setGuests] = useState<string[]>(openedGuests);
+	const [typed, setTyped] = useState("");
+	const [confirmRemove, setConfirmRemove] = useState(false);
 	const [busy, setBusy] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 	const [conflict, setConflict] = useState(false);
 	const [confirmDelete, setConfirmDelete] = useState(false);
+	const [scoped, setScoped] = useState<ScopedAction | null>(null);
+	const [scope, setScope] = useState<Scope>("this");
 	// One key for each request of the dialog. A second click on Save, or a retry after a lost answer, sends the
 	// same request with the same key, so the server adds one event. A different request gets its own key.
 	const keys = useRef(new Map<string, string>());
-	// Cancel in the delete question goes back to the form. After the delete, the whole dialog closes.
-	const deleted = useRef(false);
-	const ids = { title: useId(), allDay: useId(), location: useId(), notes: useId() };
+	// Cancel in a question goes back to the form. After the action, the whole dialog closes.
+	const done = useRef(false);
+	const ids = {
+		title: useId(),
+		allDay: useId(),
+		location: useId(),
+		notes: useId(),
+		repeat: useId(),
+		reminder: useId(),
+		people: useId(),
+		byMail: useId(),
+		byMailHint: useId(),
+		private: useId(),
+	};
+	const [finding, setFinding] = useState(false);
+	const startTime = useRef<HTMLInputElement>(null);
+
+	// A timed event keeps its own time zone. The person can be in a different zone.
+	const eventZone = zoneOfEvent(event, zone);
+	const invitation = event?.role === "attendee";
+	const occurrence = event?.occurrence_id ?? null;
+	// A rule that the dialog cannot show, such as every 3 weeks, keeps its text and cannot change here.
+	const customRule = event?.recurrence && repeatChoice(event.recurrence) === null ? event.recurrence : null;
+	const principals = usePrincipals();
+	const people = useMemo(
+		() =>
+			(principals ?? []).filter(
+				(principal) => principal.kind === "human" && principal.id !== organizerId && !attendees.includes(principal.id),
+			),
+		[principals, organizerId, attendees],
+	);
+	const nameOf = (id: string) =>
+		event?.attendees.find((a) => a.principal_id === id)?.display_name ??
+		principals?.find((principal) => principal.id === id)?.display_name ??
+		id;
+
+	// The All day box is locked for an occurrence, so an all-day occurrence cannot take a timed slot.
+	const allDayLocked = occurrence !== null && form.allDay;
 
 	const set = <K extends keyof EventForm>(key: K, value: EventForm[K]) =>
 		setForm((current) => ({ ...current, [key]: value }));
 
+	const sameAttendees =
+		attendees.length === openedAttendees.length && attendees.every((id) => openedAttendees.includes(id));
+	const contentChanged =
+		form.title.trim() !== opened.title.trim() ||
+		form.location.trim() !== opened.location.trim() ||
+		form.description !== opened.description ||
+		!sameTimeFields(form, opened);
+	const sameGuests = guests.length === openedGuests.length && guests.every((email) => openedGuests.includes(email));
+	const sameVisibility = form.visibility === opened.visibility;
+	// A change of the rule, of the attendees or of the visibility is a change of the entire series.
+	const seriesOnly = !sameRepeat(form, opened) || !sameAttendees || !sameGuests || !sameVisibility;
+	const repeats = customRule !== null || form.repeat !== "none";
+	const address = typedAddress(typed);
+
+	/** Adds the typed address. The address of a person of the organization adds that person. */
+	function addTyped() {
+		if (!address) return;
+		const person = (principals ?? []).find(
+			(principal) => principal.kind === "human" && principal.address.toLowerCase() === address,
+		);
+		if (person) {
+			if (person.id !== organizerId) setAttendees((current) => [...new Set([...current, person.id])]);
+		} else {
+			setGuests((current) => [...new Set([...current, address])]);
+		}
+		setTyped("");
+	}
+
+	function fail(caught: unknown) {
+		setBusy(false);
+		if (caught instanceof ApiError && caught.code === "conflict" && event) {
+			setConflict(true);
+			setError("The event changed in a different place. Close this dialog to see the new version, then try again.");
+			return;
+		}
+		setError(errorMessage(caught));
+	}
+
+	async function saveReminder() {
+		// The reminder belongs to the owner of the calendar: a delegate does not change it.
+		if (calendarId !== null) return;
+		if (event && form.reminder !== opened.reminder) await setReminder(event.id, reminderOf(form));
+	}
+
+	/** Saves the changes of the form, for this occurrence or for the entire event. */
+	async function commit(target: Scope) {
+		if (!event) return;
+		await saveReminder();
+		if (target === "this" && occurrence) {
+			if (!contentChanged) return;
+			const { event: saved } = await updateOccurrence({
+				...on,
+				occurrence_id: occurrence,
+				title: form.title.trim(),
+				location: form.location.trim(),
+				description: form.description,
+				...(sameTimeFields(form, opened) ? {} : { when: whenOf(form, zone, eventZone) }),
+				base_revision: event.revision,
+			});
+			onChanged(saved);
+			return;
+		}
+		if (!contentChanged && !seriesOnly) return;
+		const timeChanged = !sameTimeFields(form, opened);
+		// From an occurrence, the change of the time applies to the first occurrence of the series.
+		const seriesTime = async () =>
+			occurrence
+				? seriesWhen((await getEvent(event.id, calendarId)).event, opened, form, zone)
+				: whenOf(form, zone, eventZone);
+		// The form of a changed occurrence has the values of that occurrence. A save for the entire series sends
+		// only the fields that the person changed, so those values do not go into the series.
+		const { event: saved } = await updateEvent({
+			...on,
+			event_id: event.id,
+			...(form.title.trim() === opened.title.trim() ? {} : { title: form.title.trim() }),
+			...(form.location.trim() === opened.location.trim() ? {} : { location: form.location.trim() }),
+			...(form.description === opened.description ? {} : { description: form.description }),
+			...(timeChanged ? { when: await seriesTime() } : {}),
+			...(customRule || sameRepeat(form, opened) ? {} : { recurrence: recurrenceOf(form) }),
+			...(sameAttendees ? {} : { attendee_ids: attendees }),
+			...(sameGuests ? {} : { attendee_emails: guests }),
+			...(sameVisibility ? {} : { visibility: form.visibility }),
+			// The revision that the dialog opened with: a change from a different place gives a conflict.
+			base_revision: event.revision,
+		});
+		onChanged(saved);
+	}
+
 	async function save(submitted: FormEvent) {
 		submitted.preventDefault();
+		if (invitation && event) {
+			setBusy(true);
+			try {
+				await saveReminder();
+				onChanged(event);
+				onClose();
+			} catch (caught) {
+				fail(caught);
+			}
+			return;
+		}
 		const title = form.title.trim();
 		if (!title) {
 			setError("Give the event a title.");
 			return;
 		}
-		const problem = formProblem(form, zone);
+		const problem = formProblem(form, zone, {
+			eventZone,
+			ruleStays: occurrence !== null && sameRepeat(form, opened),
+		});
 		if (problem) {
 			setError(problem);
+			return;
+		}
+		if (repeats && guests.length > 0) {
+			setError(NO_REPEAT_BY_MAIL);
+			return;
+		}
+		if (event && occurrence && contentChanged && !seriesOnly) {
+			setScope("this");
+			setScoped("save");
 			return;
 		}
 		setBusy(true);
 		setError(null);
 		try {
 			if (event) {
-				const { event: saved } = await updateEvent({
-					event_id: event.id,
-					title,
-					location: form.location.trim(),
-					description: form.description,
-					...(sameTimeFields(form, opened) ? {} : { when: whenOf(form, zone) }),
-					...(sameAttendees(attendees, openedAttendees) ? {} : { attendees: attendeeInputs(attendees) }),
-					base_revision: event.revision,
-				});
+				await commit("all");
 				toast({ message: "Event saved." });
-				onChanged(saved);
 			} else {
+				const recurrence = recurrenceOf(form);
 				const request = {
 					title,
 					when: whenOf(form, zone),
 					location: form.location.trim(),
 					description: form.description,
-					...(attendees.length > 0 ? { attendees: attendeeInputs(attendees) } : {}),
+					...(recurrence ? { recurrence } : {}),
+					...(attendees.length > 0 ? { attendee_ids: attendees } : {}),
+					...(guests.length > 0 ? { attendee_emails: guests } : {}),
+					// A delegate sends no reminder: the server gives the owner the default one.
+					...(form.allDay || calendarId !== null ? {} : { reminder_minutes: reminderOf(form) }),
+					visibility: form.visibility,
+					...on,
 				};
 				const text = JSON.stringify(request);
 				const key = keys.current.get(text) ?? crypto.randomUUID();
 				keys.current.set(text, key);
 				const { event: saved } = await createEvent({ ...request, idempotency_key: key });
-				toast({ message: attendees.length > 0 ? "Invitations sent." : "Event added." });
+				toast({ message: "Event added." });
 				onChanged(saved);
 			}
 			onClose();
 		} catch (caught) {
-			setBusy(false);
-			if (caught instanceof ApiError && caught.code === "conflict" && event) {
-				setConflict(true);
-				setError("The event changed in a different place. Close this dialog to see the new version, then try again.");
-				return;
-			}
-			setError(errorMessage(caught));
+			fail(caught);
 		}
 	}
 
-	if (confirmDelete && event) {
-		const meeting = event.attendees.length > 0;
+	async function respond(response: "accepted" | "declined", target: Scope) {
+		if (!event) return;
+		const { event: saved } = await respondToEvent({
+			event_id: event.id,
+			...(target === "this" && occurrence ? { occurrence_id: occurrence } : {}),
+			response,
+		});
+		toast({ message: response === "accepted" ? "You accepted the event." : "You declined the event." });
+		onChanged(saved);
+	}
+
+	async function runScoped(action: ScopedAction, target: Scope) {
+		if (!event) return;
+		if (action === "save") {
+			await commit(target);
+			toast({ message: "Event saved." });
+		} else if (action === "delete") {
+			if (target === "this" && occurrence) await cancelOccurrence(occurrence, event.revision, calendarId);
+			else await deleteEvent(event.id, event.revision, calendarId);
+			toast({ message: target === "this" ? "Event cancelled." : "Event deleted." });
+			onChanged(event);
+		} else {
+			await respond(action, target);
+		}
+		done.current = true;
+	}
+
+	if (scoped && event) {
+		const verb = { save: "Change", delete: "Delete", accepted: "Accept", declined: "Decline" }[scoped];
 		return (
 			<ConfirmDialog
-				title={meeting ? "Cancel this meeting?" : "Delete this event?"}
-				confirmLabel={meeting ? "Cancel meeting" : "Delete"}
-				{...(meeting ? { cancelLabel: "Keep meeting" } : {})}
+				title={`${verb} a repeated event`}
+				confirmLabel={verb}
+				danger={scoped === "delete"}
+				onConfirm={() => runScoped(scoped, scope)}
+				onClose={() => (done.current ? onClose() : setScoped(null))}
+			>
+				<fieldset className="cal-scope">
+					<legend className="visually-hidden">Which events</legend>
+					<label className="check-row">
+						<input type="radio" name="scope" checked={scope === "this"} onChange={() => setScope("this")} />
+						This event
+					</label>
+					<label className="check-row">
+						<input type="radio" name="scope" checked={scope === "all"} onChange={() => setScope("all")} />
+						All events
+					</label>
+				</fieldset>
+			</ConfirmDialog>
+		);
+	}
+
+	if (confirmDelete && event) {
+		return (
+			<ConfirmDialog
+				title="Delete this event?"
+				confirmLabel="Delete"
 				danger
 				onConfirm={async () => {
-					await deleteEvent(event.id, event.revision);
-					deleted.current = true;
-					toast({ message: meeting ? "Meeting cancelled." : "Event deleted." });
+					await deleteEvent(event.id, event.revision, calendarId);
+					done.current = true;
+					toast({ message: "Event deleted." });
 					onChanged(event);
 				}}
-				onClose={() => (deleted.current ? onClose() : setConfirmDelete(false))}
+				onClose={() => (done.current ? onClose() : setConfirmDelete(false))}
 			>
 				<p>
-					{meeting ? (
-						<>
-							<strong>{event.title}</strong> goes away from your calendar and from the calendar of each attendee. This
-							cannot be undone.
-						</>
-					) : (
-						<>
-							<strong>{event.title}</strong> goes away from your calendar. This cannot be undone.
-						</>
-					)}
+					<strong>{event.title}</strong> goes away from your calendar
+					{event.attendees.length > 0 ? " and from the calendar of each attendee" : ""}. This cannot be undone.
+					{event.external_attendees.length > 0
+						? " Each person outside your organization gets a cancellation by mail."
+						: ""}
 				</p>
 			</ConfirmDialog>
+		);
+	}
+
+	if (confirmRemove && event) {
+		return (
+			<ConfirmDialog
+				title="Remove this meeting?"
+				confirmLabel="Remove"
+				danger
+				onConfirm={async () => {
+					await deleteEvent(event.id, event.revision, calendarId);
+					done.current = true;
+					toast({ message: "Meeting removed." });
+					onChanged(event);
+				}}
+				onClose={() => (done.current ? onClose() : setConfirmRemove(false))}
+			>
+				<p>
+					<strong>{event.title}</strong> goes away from your calendar only. The organizer gets no mail.
+				</p>
+			</ConfirmDialog>
+		);
+	}
+
+	const reminderField = !form.allDay && calendarId === null && (
+		<div className="field">
+			<label className="field-label" htmlFor={ids.reminder}>
+				Reminder
+			</label>
+			<Select<ReminderChoice>
+				value={form.reminder}
+				options={REMINDER_OPTIONS.map((option) => ({ ...option }))}
+				onChange={(value) => set("reminder", value)}
+				id={ids.reminder}
+				disabled={busy}
+			/>
+		</div>
+	);
+
+	// An event of the owner that a delegate sees only in part: the time, and the title when it is not private.
+	if (event?.redacted) {
+		return (
+			<Dialog title={eventTitle(event)} onClose={onClose} className="cal-dialog">
+				<div className="dialog-body cal-form">
+					<p>{whenText(event, zone)}</p>
+					<p className="field-hint">
+						{event.title
+							? `You see only the time and the title of this event of ${calendar?.name ?? "the owner"}.`
+							: `You see only the time of this event of ${calendar?.name ?? "the owner"}.`}
+					</p>
+					<div className="dialog-actions">
+						<span className="toolbar-spacer" />
+						<button type="button" className="button" onClick={onClose}>
+							Close
+						</button>
+					</div>
+				</div>
+			</Dialog>
+		);
+	}
+
+	if (invitation && event) {
+		const respondTo = (response: "accepted" | "declined") => {
+			if (occurrence) {
+				setScope("this");
+				setScoped(response);
+				return;
+			}
+			setBusy(true);
+			respond(response, "all").then(onClose, fail);
+		};
+		return (
+			<Dialog title="Invitation" onClose={() => !busy && onClose()} className="cal-dialog">
+				<form className="dialog-body cal-form" onSubmit={save} noValidate>
+					<h3 className="cal-invite-title">{event.title}</h3>
+					{event.external_organizer ? (
+						<>
+							<p className="field-hint">
+								From {event.external_organizer.display_name || event.external_organizer.email} (
+								{event.external_organizer.email}).
+							</p>
+							<p className="field-hint" role="note">
+								This meeting came by mail from outside your organization. Asterra shows its text as the sender wrote it.
+							</p>
+						</>
+					) : (
+						<p className="field-hint">
+							From {event.organizer?.display_name ?? "the organizer"}
+							{event.recurrence ? `. ${repeatText(event.recurrence)}` : ""}.
+						</p>
+					)}
+					{event.location && <p>{event.location}</p>}
+					{event.description && <p className="cal-invite-notes">{event.description}</p>}
+					<div className="cal-rsvp">
+						<span role="status">{RESPONSE_TEXT[event.my_response ?? "needs_action"]}</span>
+						<button
+							type="button"
+							className="button"
+							disabled={busy}
+							aria-pressed={event.my_response === "accepted"}
+							onClick={() => respondTo("accepted")}
+						>
+							Accept
+						</button>
+						<button
+							type="button"
+							className="button"
+							disabled={busy}
+							aria-pressed={event.my_response === "declined"}
+							onClick={() => respondTo("declined")}
+						>
+							Decline
+						</button>
+					</div>
+					{event.external_organizer && <p className="field-hint">Answer Maybe from the message in Mail.</p>}
+					{reminderField}
+					{error && (
+						<p className="form-error" role="alert">
+							{error}
+						</p>
+					)}
+					<div className="dialog-actions cal-actions">
+						{event.external_organizer && (
+							<button
+								type="button"
+								className="button button-danger"
+								disabled={busy}
+								onClick={() => setConfirmRemove(true)}
+							>
+								Remove from my calendar
+							</button>
+						)}
+						<span className="toolbar-spacer" />
+						<button type="button" className="button" disabled={busy} onClick={onClose}>
+							Close
+						</button>
+						<button type="submit" className="button button-primary" disabled={busy}>
+							{busy ? "Saving…" : "Save"}
+						</button>
+					</div>
+				</form>
+			</Dialog>
 		);
 	}
 
 	return (
 		<Dialog title={event ? "Edit event" : "New event"} onClose={() => !busy && onClose()} className="cal-dialog">
 			<form className="dialog-body cal-form" onSubmit={save} noValidate>
+				{calendar && (
+					<p className="field-hint">
+						In the calendar of {calendar.name}. {calendar.name} is the organizer.
+					</p>
+				)}
 				<div className="field">
 					<label className="field-label" htmlFor={ids.title}>
 						Title
@@ -180,6 +540,7 @@ function OrganizerDialog({ event, initial, zone, onChanged, onClose }: EventDial
 						id={ids.allDay}
 						type="checkbox"
 						checked={form.allDay}
+						disabled={occurrence !== null}
 						onChange={(change) => set("allDay", change.target.checked)}
 					/>
 					All day
@@ -198,6 +559,7 @@ function OrganizerDialog({ event, initial, zone, onChanged, onClose }: EventDial
 							className="input"
 							type="time"
 							aria-label="Start time"
+							ref={startTime}
 							value={form.startTime}
 							onChange={(change) => set("startTime", change.target.value)}
 						/>
@@ -223,6 +585,177 @@ function OrganizerDialog({ event, initial, zone, onChanged, onClose }: EventDial
 					)}
 				</fieldset>
 				{!form.allDay && <p className="field-hint cal-zone">Times are in {zone}.</p>}
+				{customRule ? (
+					<p className="field-hint">{repeatText(customRule)}. Use the API to change this repeat.</p>
+				) : (
+					<div className="field">
+						<label className="field-label" htmlFor={ids.repeat}>
+							Repeats
+						</label>
+						<Select<RepeatChoice>
+							value={form.repeat}
+							options={REPEAT_OPTIONS.map((option) => ({ ...option }))}
+							onChange={(value) => set("repeat", value)}
+							id={ids.repeat}
+							disabled={busy}
+						/>
+					</div>
+				)}
+				{!customRule && form.repeat !== "none" && (
+					<fieldset className="cal-repeat-ends">
+						<legend className="field-label">Ends</legend>
+						<label className="check-row">
+							<input type="radio" name="ends" checked={form.ends === "never"} onChange={() => set("ends", "never")} />
+							Never
+						</label>
+						<label className="check-row">
+							<input type="radio" name="ends" checked={form.ends === "until"} onChange={() => set("ends", "until")} />
+							On
+						</label>
+						<input
+							className="input"
+							type="date"
+							aria-label="Last day of the repeat"
+							value={form.until}
+							disabled={form.ends !== "until"}
+							onChange={(change) => set("until", change.target.value)}
+						/>
+						<label className="check-row">
+							<input type="radio" name="ends" checked={form.ends === "count"} onChange={() => set("ends", "count")} />
+							After
+						</label>
+						<input
+							className="input cal-count"
+							type="number"
+							min={1}
+							max={CALENDAR_LIMITS.recurrenceCount}
+							aria-label="Number of times"
+							value={form.count}
+							disabled={form.ends !== "count"}
+							onChange={(change) => set("count", change.target.value)}
+						/>
+						<span>times</span>
+					</fieldset>
+				)}
+				{reminderField}
+				<div className="field">
+					<label className="field-label" htmlFor={ids.people}>
+						Attendees
+					</label>
+					{attendees.length + guests.length > 0 && (
+						<ul className="cal-people" aria-label="Attendees">
+							{attendees.map((id) => {
+								const response = event?.attendees.find((a) => a.principal_id === id)?.response;
+								return (
+									<li key={id} className="chip cal-person">
+										{nameOf(id)}
+										{response && response !== "needs_action" ? ` (${response})` : ""}
+										<button
+											type="button"
+											className="icon-button"
+											aria-label={`Remove ${nameOf(id)}`}
+											disabled={busy}
+											onClick={() => setAttendees((current) => current.filter((other) => other !== id))}
+										>
+											×
+										</button>
+									</li>
+								);
+							})}
+							{guests.map((email) => {
+								const response = event?.external_attendees.find((guest) => guest.email === email)?.response;
+								return (
+									<li key={email} className="chip cal-person">
+										{email} (by mail)
+										{response && response !== "needs_action" ? `, ${responseLabel(response)}` : ""}
+										<button
+											type="button"
+											className="icon-button"
+											aria-label={`Remove ${email}`}
+											disabled={busy}
+											onClick={() => setGuests((current) => current.filter((other) => other !== email))}
+										>
+											×
+										</button>
+									</li>
+								);
+							})}
+						</ul>
+					)}
+					<Select<string>
+						value=""
+						options={people.map(principalOption)}
+						placeholder={principals === null ? "Loading…" : "Add a person…"}
+						onChange={(value) => value && setAttendees((current) => [...new Set([...current, value])])}
+						id={ids.people}
+						disabled={busy || principals === null}
+					/>
+				</div>
+				<div className="field">
+					<label className="field-label" htmlFor={ids.byMail}>
+						Invite by mail
+					</label>
+					<div className="cal-by-mail">
+						<input
+							id={ids.byMail}
+							className="input"
+							type="email"
+							placeholder="name@example.com"
+							value={typed}
+							disabled={busy || repeats}
+							aria-describedby={repeats ? ids.byMailHint : undefined}
+							onChange={(change) => setTyped(change.target.value)}
+							onKeyDown={(key) => {
+								// Enter adds the address. It does not save the form.
+								if (key.key !== "Enter") return;
+								key.preventDefault();
+								addTyped();
+							}}
+						/>
+						<button
+							type="button"
+							className="button"
+							disabled={busy || repeats || address === null || guests.includes(address)}
+							onClick={addTyped}
+						>
+							{address ? `Invite ${address} by mail` : "Invite by mail"}
+						</button>
+					</div>
+					{repeats && (
+						<p className="field-hint" id={ids.byMailHint}>
+							{NO_REPEAT_BY_MAIL}
+						</p>
+					)}
+				</div>
+				{/* A suggestion is a timed slot. An occurrence of an all-day series cannot become timed. */}
+				{!allDayLocked && (
+					<div className="cal-find-toggle">
+						<button
+							type="button"
+							className="button"
+							aria-expanded={finding}
+							onClick={() => setFinding((open) => !open)}
+						>
+							Find a time
+						</button>
+					</div>
+				)}
+				{finding && !allDayLocked && (
+					<FindTime
+						attendees={attendees}
+						principals={principals ?? []}
+						selfId={ownId}
+						calendarId={calendarId}
+						startDate={form.startDate}
+						zone={zone}
+						onPick={(start, end) => {
+							setForm((current) => withSlot(current, start, end, zone));
+							setFinding(false);
+							// The fields of the time hold the suggestion now. The focus goes there.
+							requestAnimationFrame(() => startTime.current?.focus());
+						}}
+					/>
+				)}
 				<div className="field">
 					<label className="field-label" htmlFor={ids.location}>
 						Location
@@ -248,13 +781,19 @@ function OrganizerDialog({ event, initial, zone, onChanged, onClose }: EventDial
 						onChange={(change) => set("description", change.target.value)}
 					/>
 				</div>
-				<AttendeePicker
-					chosen={attendees}
-					onChange={setAttendees}
-					saved={event?.attendees ?? []}
-					selfId={whoami.principal.id}
-					disabled={busy}
-				/>
+				<label className="check-row" htmlFor={ids.private}>
+					<input
+						id={ids.private}
+						type="checkbox"
+						checked={form.visibility === "private"}
+						disabled={busy}
+						onChange={(change) => set("visibility", change.target.checked ? "private" : "default")}
+					/>
+					{calendar
+						? `Private: other people and agents that schedule for ${calendar.name} see only the time`
+						: "Private: a person or an agent that schedules for you sees only the time"}
+				</label>
+				{event?.created_by && <p className="field-hint">Added by {nameOf(event.created_by)}</p>}
 				{error && (
 					<p className="form-error" role="alert">
 						{error}
@@ -266,9 +805,16 @@ function OrganizerDialog({ event, initial, zone, onChanged, onClose }: EventDial
 							type="button"
 							className="button button-danger-outline"
 							disabled={busy}
-							onClick={() => setConfirmDelete(true)}
+							onClick={() => {
+								if (occurrence) {
+									setScope("this");
+									setScoped("delete");
+								} else {
+									setConfirmDelete(true);
+								}
+							}}
 						>
-							{event.attendees.length > 0 ? "Cancel meeting" : "Delete"}
+							Delete
 						</button>
 					)}
 					<span className="toolbar-spacer" />
@@ -282,146 +828,6 @@ function OrganizerDialog({ event, initial, zone, onChanged, onClose }: EventDial
 					)}
 				</div>
 			</form>
-		</Dialog>
-	);
-}
-
-const GONE_TEXT = "The organizer cancelled this meeting or removed you from it.";
-
-const ANSWERS: { response: EventAnswer; label: string }[] = [
-	{ response: "accepted", label: "Yes" },
-	{ response: "tentative", label: "Maybe" },
-	{ response: "declined", label: "No" },
-];
-
-/**
- * The copy of a meeting that a different principal organizes. The fields are read-only: only the organizer
- * changes them. The attendee answers Yes, Maybe or No.
- */
-function InvitationDialog({
-	event,
-	zone,
-	gone: goneNow,
-	onChanged,
-	onClose,
-}: {
-	event: CalendarEvent;
-	zone: string;
-	/** True when a load of the calendar does not have the copy now. */
-	gone: boolean;
-	onChanged: (event: CalendarEvent) => void;
-	onClose: () => void;
-}) {
-	const toast = useToast();
-	const [busy, setBusy] = useState(false);
-	const [error, setError] = useState<string | null>(null);
-	const [refused, setRefused] = useState(false);
-	const gone = refused || goneNow;
-	const pending = event.my_response === "pending";
-
-	async function answer(response: EventAnswer) {
-		setBusy(true);
-		setError(null);
-		try {
-			const { event: saved } = await respondToInvitation(event.id, response);
-			toast({ message: "Answer sent." });
-			onChanged(saved);
-			onClose();
-		} catch (caught) {
-			setBusy(false);
-			if (caught instanceof ApiError && caught.code === "not_found") {
-				setRefused(true);
-				return;
-			}
-			setError(errorMessage(caught));
-		}
-	}
-
-	/** A meeting by mail from outside the organization: the person removes it from the own calendar only. */
-	async function removeCopy() {
-		setBusy(true);
-		setError(null);
-		try {
-			await deleteEvent(event.id, event.revision);
-			toast({ message: "Meeting removed from your calendar." });
-			onChanged(event);
-			onClose();
-		} catch (caught) {
-			setBusy(false);
-			setError(errorMessage(caught));
-		}
-	}
-
-	return (
-		<Dialog title={pending ? "Invitation" : "Meeting"} onClose={() => !busy && onClose()} className="cal-dialog">
-			<div className="dialog-body cal-form cal-invitation">
-				{event.untrusted && (
-					<p className="cal-invitation-notice">
-						This meeting came by mail from outside your organization. Be careful with links and requests in it.
-					</p>
-				)}
-				<h3 className="cal-invitation-title">{event.title}</h3>
-				<p className="cal-invitation-when">{whenText(event, zone)}</p>
-				{event.location && <p className="cal-invitation-location">{event.location}</p>}
-				{event.organizer && (
-					<p className="cal-invitation-organizer">
-						Organizer: {event.organizer.name} ({event.organizer.email})
-					</p>
-				)}
-				{event.description && <p className="cal-invitation-description">{event.description}</p>}
-				<ul className="cal-list cal-attendee-list" aria-label="Attendees">
-					{event.attendees.map((attendee) => (
-						<li key={attendee.email} className="cal-attendee">
-							<span className="cal-person">
-								<span className="cal-person-name">
-									{attendee.name}
-									{attendee.self && " (you)"}
-								</span>
-								<span className="cal-person-address">{attendee.email}</span>
-							</span>
-							<span className="cal-attendee-response">{responseLabel(attendee.response)}</span>
-						</li>
-					))}
-				</ul>
-				{(gone || error) && (
-					<p className="form-error" role="alert">
-						{gone ? GONE_TEXT : error}
-					</p>
-				)}
-				<div className="dialog-actions cal-actions">
-					{!gone && (
-						<fieldset className="cal-answer" aria-label="Your answer">
-							<span className="field-label">Going?</span>
-							{ANSWERS.map(({ response, label }) => (
-								<button
-									key={response}
-									type="button"
-									className={`button${event.my_response === response ? " cal-view-active" : ""}`}
-									aria-pressed={event.my_response === response}
-									disabled={busy}
-									onClick={() => void answer(response)}
-								>
-									{label}
-								</button>
-							))}
-						</fieldset>
-					)}
-					<span className="toolbar-spacer" />
-					{event.untrusted && !gone && (
-						<button
-							type="button"
-							className="button button-danger-outline"
-							disabled={busy}
-							onClick={() => void removeCopy()}
-						>
-							Remove from my calendar
-						</button>
-					)}
-					<button type="button" className="button" disabled={busy} onClick={onClose} data-autofocus>
-						Close
-					</button>
-				</div>
-			</div>
 		</Dialog>
 	);
 }

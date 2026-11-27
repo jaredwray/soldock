@@ -9,7 +9,8 @@ import type { LinkPreviewJob } from "./room.ts";
 // `publicFetch`, and the outbound policy of the author when the author is an agent. The result is
 // plain text and a stored picture: the reader of the message never asks the site of the link.
 
-export const CHAT_PREVIEW_QUEUE = "soldock-chat-previews";
+/** The queue that carries link preview jobs. A suffix: see `queues.ts`. */
+export const CHAT_PREVIEW_QUEUE = "chat-previews";
 
 const PAGE_BYTES = 1024 * 1024;
 const IMAGE_BYTES = 1024 * 1024;

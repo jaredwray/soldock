@@ -4,7 +4,8 @@ import type { Scope } from "./scopes.ts";
 // What decides the access of an agent or a service account. Its API keys and OAuth connections only prove
 // its identity. In a team mailbox, a room and a shared drive, and for an item that somebody shares with it,
 // the membership or the share decides what it can do: the object of the resource checks it on each call.
-// In the mailbox of a person, the grant of that person decides (`mail.set_delegate`).
+// In the mailbox of a person, the grant of that person decides (`mail.set_delegate`). In the calendar of a
+// person, the grant of that person decides (`calendar.set_grant`).
 // The account scopes of the agent apply to its own mailbox, its own drive and to the actions that have no
 // mailbox, room or drive. An agent gets each scope of its kind when it is created, and nothing changes them
 // after that. An account from before keeps the narrower list that it had.
@@ -19,16 +20,19 @@ export const RESOURCE_SCOPES: readonly Scope[] = [
 	"drive.read",
 	"drive.write",
 	"drive.share",
+	"calendar.read",
+	"calendar.write",
 ];
 
 /** The products whose resources have members or shares. */
-type ResourceDomain = "mail" | "chat" | "drive";
+type ResourceDomain = "mail" | "chat" | "drive" | "calendar";
 
 /** The input fields that name the resource of an operation, for each product. */
 const TARGET_FIELDS: Readonly<Record<ResourceDomain, readonly string[]>> = {
 	mail: ["mailbox_id"],
 	chat: ["room_id", "target_room_id"],
 	drive: ["space_id", "target_space_id", "from_space_id", "drive_id"],
+	calendar: ["calendar_id"],
 };
 
 /**
@@ -71,6 +75,8 @@ const ACCOUNT_DECIDED: ReadonlySet<string> = new Set([
 	"chat.join_room",
 	// The stars of the caller are in its own drive, also for an item of a different drive.
 	"drive.star_items",
+	// The calendar_id of a calendar webhook can only be the id of the caller: no grant decides it.
+	"calendar.create_webhook_subscription",
 ]);
 
 /**
@@ -92,7 +98,7 @@ function isResourceDecided(operation: Pick<Operation, "name" | "callers">): bool
 /** The product of an operation whose resources have members or shares, or null. */
 function domainOf(operation: Pick<Operation, "name">): ResourceDomain | null {
 	const prefix = operation.name.slice(0, operation.name.indexOf("."));
-	if (prefix === "mail" || prefix === "chat") return prefix;
+	if (prefix === "mail" || prefix === "chat" || prefix === "calendar") return prefix;
 	if (prefix === "drive" || prefix === "docs" || prefix === "sheets") return "drive";
 	return null;
 }
@@ -115,9 +121,9 @@ export function inputFields(operation: Pick<Operation, "input">): string[] {
 }
 
 /**
- * True when the operation can name a mailbox, a room or a drive that has members or shares, or is a list of
- * such resources. MCP uses this to list a tool for an agent whose account scopes do not hold the scope of
- * the tool: a membership can still give it.
+ * True when the operation can name a mailbox, a room, a drive or a calendar that has members, shares or grants,
+ * or is a list of such resources. MCP uses this to list a tool for an agent whose account scopes do not hold the
+ * scope of the tool: a membership or a grant can still give it.
  */
 export function canTargetSharedResource(operation: Pick<Operation, "name" | "scopes" | "input" | "callers">): boolean {
 	const domain = domainOf(operation);
@@ -142,6 +148,10 @@ function isSharedTarget(domain: ResourceDomain, field: string, value: unknown, c
 			// The own drive of a principal has the id of the principal. Each other drive is a shared drive, or the
 			// drive of a different principal, where only its shares reach.
 			return field === "drive_id" ? value.length > 0 : value.length > 0 && value !== callerId;
+		case "calendar":
+			// The calendar of a principal has the id of the principal. The calendar of a different principal: only a
+			// grant of its owner reaches it (`calendar.set_grant`).
+			return value.startsWith("prn_") && value !== callerId;
 	}
 }
 

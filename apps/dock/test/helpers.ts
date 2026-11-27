@@ -436,6 +436,22 @@ export async function drainDrive(principalId: string): Promise<void> {
 	);
 }
 
+/** Runs the alarm of a calendar until its outbox is empty: each invitation reaches each attendee. */
+export async function drainCalendar(principalId: string): Promise<void> {
+	const stub = env.CALENDAR.get(env.CALENDAR.idFromName(principalId));
+	await vi.waitFor(
+		async () => {
+			await runDurableObjectAlarm(stub);
+			const waiting = await runInDurableObject(
+				stub,
+				(_instance, state) => state.storage.sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM outbox").one().n,
+			);
+			if (waiting > 0) throw new Error(`${waiting} calendar outbox rows wait`);
+		},
+		{ timeout: 5000, interval: 20 },
+	);
+}
+
 /** The keys of the R2 objects of one drive. */
 export async function driveBlobKeys(principalId: string): Promise<string[]> {
 	const listed = await env.BLOBS.list({ prefix: `drive/${principalId}/` });
@@ -1008,22 +1024,6 @@ export async function consumeAutoLabels(
 /** The CalendarDO of a principal. */
 export const calendarStub = (principalId: string) => env.CALENDAR.get(env.CALENDAR.idFromName(principalId));
 
-/** The rows of the outbox of a calendar, oldest first, with the payload as JSON. */
-export async function calendarOutbox(
-	principalId: string,
-): Promise<
-	{ kind: string; target: string; uid: string; attempts: number; next_attempt_at: number; payload: unknown }[]
-> {
-	return runInDurableObject(calendarStub(principalId), (_instance, state) =>
-		state.storage.sql
-			.exec<{ kind: string; target: string; uid: string; attempts: number; next_attempt_at: number; payload: string }>(
-				"SELECT kind, target, uid, attempts, next_attempt_at, payload FROM outbox ORDER BY id",
-			)
-			.toArray()
-			.map((row) => ({ ...row, payload: JSON.parse(row.payload) as unknown })),
-	);
-}
-
 /**
  * Delivers the outbox of each calendar until each one is empty. A row that waits for its next attempt is made due
  * first. A delivery can queue messages in a different calendar of the list, so this runs in rounds. The runtime
@@ -1054,79 +1054,65 @@ export async function settleCalendars(...principalIds: string[]): Promise<void> 
 	);
 }
 
-export interface BrokenCalendarDelivery {
-	/** When set, each delivery from the calendar to a different calendar fails with this error. */
-	fail: Error | null;
-	/** When set, each delivery waits for this promise first, so a test can change the calendar while a call runs. */
-	hold?: Promise<void> | null;
-}
+/** The rows of the outbox of a calendar, in the order of their ids. */
+export const calendarOutbox = (principalId: string) =>
+	runInDurableObject(calendarStub(principalId), (_instance, state) =>
+		state.storage.sql
+			.exec<{
+				id: string;
+				kind: string;
+				target_id: string;
+				event_id: string;
+				version: number;
+				attempts: number;
+				next_attempt_at: number;
+				payload: string;
+			}>("SELECT id, kind, target_id, event_id, version, attempts, next_attempt_at, payload FROM outbox ORDER BY id")
+			.toArray()
+			.map((row) => ({ ...row })),
+	);
+
+/** A meta value of the calendar object of a principal, or null. */
+export const calendarMeta = (principalId: string, key: string) =>
+	runInDurableObject(
+		calendarStub(principalId),
+		(_instance, state) =>
+			state.storage.sql.exec<{ value: string }>("SELECT value FROM meta WHERE key = ?", key).toArray()[0]?.value ??
+			null,
+	);
 
 /**
- * Replaces the CALENDAR binding of one calendar object with a wrapper. While `fail` is set, each delivery from
- * its outbox to a different calendar throws, as a lost or failed call does.
+ * Publishes the change feed of each calendar: makes a round that waits for its backoff due, and runs the alarm
+ * until `change_published` is `change_head`. The runtime also fires the alarm by itself.
  */
-export async function breakCalendarDelivery(principalId: string): Promise<BrokenCalendarDelivery> {
-	const broken: BrokenCalendarDelivery = { fail: new Error("calendar delivery failed") };
+export async function publishCalendarChanges(...principalIds: string[]): Promise<void> {
+	await vi.waitFor(
+		async () => {
+			for (const id of principalIds) {
+				const stub = calendarStub(id);
+				await runInDurableObject(stub, async (_instance, state) => {
+					state.storage.sql.exec("DELETE FROM meta WHERE key = 'publish_at'");
+					await state.storage.setAlarm(Date.now());
+				});
+				await runDurableObjectAlarm(stub);
+				const published = Number((await calendarMeta(id, "change_published")) ?? 0);
+				const head = Number((await calendarMeta(id, "change_head")) ?? 0);
+				if (published !== head) throw new Error(`calendar ${id} published ${published} of ${head} changes`);
+			}
+		},
+		{ timeout: 5000, interval: 20 },
+	);
+}
+
+/** Replaces the webhook queue of one calendar object with a recorder, and returns the jobs that it sends. */
+export async function captureCalendarJobs(principalId: string): Promise<unknown[]> {
+	const jobs: unknown[] = [];
 	await runInDurableObject(calendarStub(principalId), (instance) => {
 		const target = instance as unknown as { env: Env };
-		const real = target.env.CALENDAR;
-		const wrapper = {
-			idFromName: (name: string) => real.idFromName(name),
-			get: (id: DurableObjectId) => {
-				const stub = real.get(id);
-				return {
-					applyMeeting: async (...args: Parameters<typeof stub.applyMeeting>) => {
-						await broken.hold;
-						if (broken.fail) throw broken.fail;
-						return stub.applyMeeting(...args);
-					},
-					applyReply: async (...args: Parameters<typeof stub.applyReply>) => {
-						await broken.hold;
-						if (broken.fail) throw broken.fail;
-						return stub.applyReply(...args);
-					},
-				};
-			},
-		} as unknown as Env["CALENDAR"];
-		target.env = { ...target.env, CALENDAR: wrapper };
+		target.env = {
+			...target.env,
+			WEBHOOKS: { send: async (body: unknown) => void jobs.push(body) } as unknown as Queue,
+		};
 	});
-	return broken;
-}
-
-/**
- * Restarts a calendar with the schema of the first layer: no meetings, no meetings by mail, no outbox. The rows of `events` keep
- * their values. Commit the fixture before an alarm can read it.
- */
-export async function restartLegacyCalendar(principalId: string): Promise<void> {
-	await expect(
-		runInDurableObject(calendarStub(principalId), (_instance, state) =>
-			state.blockConcurrencyWhile(async () => {
-				await state.storage.deleteAlarm();
-				const sql = state.storage.sql;
-				sql.exec("DROP INDEX events_uid");
-				for (const column of [
-					"uid",
-					"role",
-					"sequence",
-					"organizer_id",
-					"organizer_email",
-					"organizer_name",
-					"my_response",
-					"my_reply_stamp",
-					"attendees_json",
-					"sender_email",
-					"organizer_stamp",
-					"my_email",
-				]) {
-					sql.exec(`ALTER TABLE events DROP COLUMN ${column}`);
-				}
-				sql.exec("DROP TABLE attendees");
-				sql.exec("DROP TABLE meeting_tombstones");
-				sql.exec("DROP TABLE outbox");
-				sql.exec("UPDATE meta SET value = '1' WHERE key = 'schema_version'");
-				await state.storage.sync();
-				state.abort("Restart the legacy calendar.");
-			}),
-		),
-	).rejects.toThrow("Restart the legacy calendar.");
+	return jobs;
 }
