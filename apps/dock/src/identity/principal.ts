@@ -897,6 +897,7 @@ export class PrincipalDO extends DurableObject<Env> {
 				title: item.title,
 				start: new Date(item.start_at).toISOString(),
 				minutes: item.minutes,
+				untrusted: item.untrusted === true,
 			};
 			// The reminder has content of the calendar. A socket of a credential without `calendar.read` does not get it.
 			this.ctx.waitUntil(this.enqueue([JSON.stringify(reminder)], undefined, (state) => state.calendar === true));

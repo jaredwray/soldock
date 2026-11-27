@@ -737,7 +737,7 @@ describe("a credential without calendar.read", () => {
 		const wide = await open(both);
 		await drain(ada.id);
 
-		expect(await wide.next()).toMatchObject({ type: "calendar.reminder", title: "Secret plan" });
+		expect(await wide.next()).toMatchObject({ type: "calendar.reminder", title: "Secret plan", untrusted: false });
 		expect(await wide.next()).toEqual({ type: "chat.activity", unread_count: 1 });
 		// The count of a socket without calendar.read does not tell that a reminder came.
 		expect(await narrow.next()).toEqual({ type: "chat.activity", unread_count: 0 });

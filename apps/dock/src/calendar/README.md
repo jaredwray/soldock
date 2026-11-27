@@ -712,7 +712,9 @@ write no record.
 - A mailbox delegate, the sponsor of an agent, and an owner or an admin get no access to a different
   calendar without a grant of its owner.
 - A copy by mail comes from outside the organization. Its event has `untrusted: true`, and the MCP output
-  has the notice for untrusted content. `calendar.get_mail_invitation` marks the invitation of an external
+  has the notice for untrusted content. Its reminder has `untrusted: true` in the Activity item and in the
+  `calendar.reminder` event of the events socket. The push of a reminder has no title.
+  `calendar.get_mail_invitation` marks the invitation of an external
   message the same way. The web app shows each text of it as text only.
 - `calendar.get_mail_invitation` needs `calendar.read` and `mail.read`. `calendar.respond_to_mail_invitation`
   needs `calendar.write`, `mail.read` and `mail.send`. Both act on the own mailbox and the own calendar only.
