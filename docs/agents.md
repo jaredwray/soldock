@@ -714,17 +714,19 @@ So a person who manages that account must agree.
 Each agent and each service account has its own calendar, as each person has. The calendar tools act
 on the own calendar of the caller only. No tool reads or changes the calendar of a different
 principal. The sponsor of an agent, and an owner or an admin, do not read the calendar of the agent.
-An invitation puts a copy of one meeting on the calendar of each attendee. Nothing else of a calendar is
-shared.
 
 | Tool | Scope | What |
 | --- | --- | --- |
 | `calendar_list_events` | `calendar.read` | The events that overlap a range, first start first, with pages |
 | `calendar_get_event` | `calendar.read` | One event |
-| `calendar_create_event` | `calendar.write` | Add an event. Takes `idempotency_key` and `attendees` |
-| `calendar_update_event` | `calendar.write` | Change the fields that you give. Takes `base_revision` and `attendees` |
-| `calendar_delete_event` | `calendar.write` | Delete an event. Takes `base_revision` and `dry_run`. Cancels a meeting for each attendee |
-| `calendar_respond_to_invitation` | `calendar.write` | Answer an invitation: `accepted`, `tentative` or `declined` |
+| `calendar_create_event` | `calendar.write` | Add an event. Takes `idempotency_key` |
+| `calendar_update_event` | `calendar.write` | Change the fields that you give. Takes `base_revision` |
+| `calendar_delete_event` | `calendar.write` | Delete an event. Takes `base_revision` and `dry_run` |
+| `calendar_update_occurrence` | `calendar.write` | Change or move one occurrence of a series. Takes `base_revision` |
+| `calendar_cancel_occurrence` | `calendar.write` | Cancel one occurrence of a series. Takes `base_revision` and `dry_run` |
+| `calendar_respond_to_event` | `calendar.write` | Accept or decline an invitation, for the series or for one occurrence |
+| `calendar_set_reminder` | `calendar.write` | Set your own reminder: 5, 10 or 30 minutes before, or none |
+| `calendar_query_free_busy` | `calendar.read` | The busy times of principals of the organization, without details |
 | `calendar_list_changes` | `calendar.read` | The changes of your calendar after a cursor, oldest first, with ids only |
 | `calendar_create_webhook_subscription` | `calendar.webhooks` and `calendar.read` | Send one event of your calendar to an endpoint of yours |
 | `calendar_list_webhook_subscriptions` | `calendar.webhooks` | The calendar subscriptions of your endpoints |
@@ -737,23 +739,24 @@ shared.
 - **A range.** `calendar_list_events` takes `time_min` and `time_max` (at most 366 days apart). An event
   that ends at `time_min`, or starts at `time_max`, is not in the range. Give your own `time_zone`: it
   sets the days of all-day events. The default is UTC.
+- **Repeats.** Give `recurrence` with `frequency` (`daily`, `weekly` or `monthly`), `interval`, and
+  `until` or `count`. A meeting each other week is `weekly` with interval 2. A timed series keeps its wall
+  clock time in `time_zone` when the clock changes. A monthly series on the 31st skips the months without
+  a 31st.
+- **Occurrences.** `calendar_list_events` gives one entry for each occurrence of a series, with
+  `occurrence_id`. Use that id with `calendar_update_occurrence` or `calendar_cancel_occurrence` to change
+  one occurrence. `calendar_update_event` and `calendar_delete_event` change the entire series.
+- **Invitations.** An agent cannot invite now: `attendee_ids` gives `forbidden`. An agent can respond to
+  nothing, because only people get invitations.
+- **Reminders.** A new timed event gets your reminder of 10 minutes. It shows in your Activity
+  (`chat_list_activity`, kind `calendar_reminder`). Change it with `calendar_set_reminder`.
 - **Changes.** Send `base_revision` with the revision that you read. When the event changed after your
   read, the call returns `conflict` and changes nothing. Read the event again, then try again.
 - **Limits.** A title has 1 to 300 characters, a location at most 500, and a description at most 8000. An
   event can be at most 366 days long, from 1970-01-01 to 2100-12-31. A calendar holds at most 50,000
   events.
-- **Meetings.** Set `attendees` to invite people, agents or service accounts of the organization. Give
-  the `principal_id` or the `email` of each one. Find them with `directory_list_principals` and
-  `order: "match"`. Each attendee gets a copy with `is_organizer: false` and `my_response: "pending"`.
-  `attendees` in `calendar_update_event` is the complete new list.
-- **Only the organizer changes a meeting.** On a copy, `calendar_update_event` and
-  `calendar_delete_event` return `forbidden`. Answer with `calendar_respond_to_invitation` and the `id`
-  of the copy. The organizer sees the `response` of each attendee in `attendees`. An answer does not
-  change the `revision` of the event of the organizer.
-- **Delivery.** A change of a meeting reaches the other calendars in a few seconds, through an outbox
-  with retries. A list right after a change can still show the state before it.
 - **Changes.** Each committed change of your calendar has a record with a stable `id`, the `event_id`,
-  the `uid`, the `revision` after the change, the `actor_id` and a `cursor`. The names are
+  the `occurrence_id` for a change of one occurrence, the `revision` after the change, the `actor_id` and a `cursor`. The names are
   `calendar.event.created`, `calendar.event.updated`, `calendar.event.deleted`,
   `calendar.invitation.received`, `calendar.invitation.updated`, `calendar.invitation.cancelled` and
   `calendar.rsvp.changed`. Do these steps to follow your calendar:
@@ -1125,7 +1128,6 @@ subscriptions. REST uses `/api/v1/calendar/webhook-subscriptions`.
     "webhook_id": "whk_…",
     "calendar_id": "prn_…",
     "event_id": "evt_…",
-    "uid": "evt_…",
     "change_id": "chg_…",
     "occurrence_id": null,
     "revision": 3,
@@ -1216,7 +1218,7 @@ The events:
 | `drive.members.changed`, `drive.deleted` | `space_id` of a shared drive | The shared drive changes |
 | `calendar.event.created`, `.updated`, `.deleted` | `calendar_id`, optional: only your own calendar | You add, change or delete an own event |
 | `calendar.invitation.received`, `.updated`, `.cancelled` | `calendar_id`, optional | A copy of a meeting arrives, changes or goes away |
-| `calendar.rsvp.changed` | `calendar_id`, optional | An answer to a meeting on your calendar changes |
+| `calendar.rsvp.changed` | `calendar_id`, optional | A response to an event on your calendar changes, for the series or for one occurrence |
 
 Without `room_id`, each room that the agent is a member of sends the event, also a room that it
 joins later. Without `mailbox_id` or `space_id`, the event is for the mailbox or the drive of the agent.
@@ -1248,8 +1250,8 @@ For client developers:
 - The events have no replay: `cursor` is always `null`. After a gap, read the room, the inbox or the
   drive to find what you did not get. For Calendar, call `calendar_list_changes` with the `cursor` from
   `data` of the last POST that you got.
-- A calendar POST has these fields in `data`: `calendar_id`, `event_id`, `uid`, `change_id`,
-  `occurrence_id` (null for now), `revision`, `actor_id` and `cursor`. It has no title, time or answer.
+- A calendar POST has these fields in `data`: `calendar_id`, `event_id`, `change_id`,
+  `occurrence_id` (null for a change of the entire event or series), `revision`, `actor_id` and `cursor`. It has no title, time or response.
   Read the event with `calendar_get_event`. A retry has the same `change_id`. The POSTs of two changes can
   arrive in a different sequence, and `revision` is not contiguous: call `calendar_list_changes` with your
   last cursor to get the changes in their sequence. Skip a change with your own

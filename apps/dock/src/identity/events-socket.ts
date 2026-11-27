@@ -28,7 +28,7 @@ export async function openEventsSocket(
 	const open: EventsSocketOpen = {
 		credential: credentialRef(caller),
 		feed: options.feed,
-		...(!options.feed && caller.scopes.has("calendar.read") ? { calendar: true } : {}),
+		calendar: caller.scopes.has("calendar.read"),
 	};
 	const principal = env.PRINCIPAL.get(env.PRINCIPAL.idFromName(caller.principal.id));
 	const response = await principal.fetch("https://principal.internal/events", {

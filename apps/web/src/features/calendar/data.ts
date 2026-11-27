@@ -1,12 +1,4 @@
-import {
-	CALENDAR_LIMITS,
-	type CalendarEvent,
-	DIRECTORY_LIMITS,
-	type DirectoryEntry,
-	type EventAnswer,
-	type InputOf,
-	type OutputOf,
-} from "@asterra/contracts";
+import { CALENDAR_LIMITS, type CalendarEvent, type InputOf, type OutputOf } from "@asterra/contracts";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../../lib/api.ts";
 import { onPrincipalConnection, onPrincipalEvent, principalSocketLive } from "../../lib/principalSocket.ts";
@@ -153,52 +145,18 @@ export function getEvent(eventId: string) {
 	return api.call("calendar.get_event", { event_id: eventId });
 }
 
-export function respondToInvitation(eventId: string, response: EventAnswer) {
-	return api.call("calendar.respond_to_invitation", { event_id: eventId, response });
+export function updateOccurrence(input: InputOf<"calendar.update_occurrence">) {
+	return api.call("calendar.update_occurrence", input);
 }
 
-/** The wait after the last key before the attendee field asks the server, in ms. */
-const PEOPLE_SEARCH_MS = 150;
-/** The people that the attendee field shows at most. */
-const PEOPLE_LIMIT = 8;
+export function cancelOccurrence(occurrenceId: string, baseRevision: number) {
+	return api.call("calendar.cancel_occurrence", { occurrence_id: occurrenceId, base_revision: baseRevision });
+}
 
-/**
- * The people, agents and service accounts of the organization for the typed text of the attendee field, best
- * match first, without the archived ones. It asks `PEOPLE_SEARCH_MS` after the last key. An older answer never
- * replaces a newer one. An empty text gives an empty list.
- */
-export function usePeopleSearch(query: string): { found: readonly DirectoryEntry[]; query: string | null } {
-	const [state, setState] = useState<{ found: readonly DirectoryEntry[]; query: string | null }>({
-		found: [],
-		query: null,
-	});
-	const asked = useRef(0);
-	useEffect(() => {
-		const ask = ++asked.current;
-		const text = query.trim();
-		if (text === "") {
-			setState({ found: [], query: null });
-			return;
-		}
-		const timer = window.setTimeout(() => {
-			api
-				.call("directory.list_principals", {
-					query: text.slice(0, DIRECTORY_LIMITS.queryChars),
-					order: "match",
-					active_only: "true",
-					limit: PEOPLE_LIMIT,
-				})
-				.then(
-					(page) => {
-						if (ask === asked.current) setState({ found: page.principals, query: text });
-					},
-					() => {
-						// A suggestion is only a help. After a failure the list closes.
-						if (ask === asked.current) setState({ found: [], query: text });
-					},
-				);
-		}, PEOPLE_SEARCH_MS);
-		return () => window.clearTimeout(timer);
-	}, [query]);
-	return state;
+export function respondToEvent(input: InputOf<"calendar.respond_to_event">) {
+	return api.call("calendar.respond_to_event", input);
+}
+
+export function setReminder(eventId: string, minutes: 5 | 10 | 30 | null) {
+	return api.call("calendar.set_reminder", { event_id: eventId, minutes });
 }

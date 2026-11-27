@@ -41,6 +41,9 @@ export const EVENTS_SOCKET_CLOSE = {
  *   chat.list_addressed without the room: a message in a direct message, a mention, a reply in a
  *   followed thread, or a delete of a message of the principal by a different member. Changes of one
  *   room in a short time give one event, with the newest change.
+ * - `calendar.reminder` tells that an occurrence of an event of the principal starts soon. The same reminder
+ *   is in chat.list_activity, with the kind `calendar_reminder`. Only a socket of a credential with
+ *   `calendar.read` gets it.
  * - `calendar.changed` tells that the calendar of the principal has new changes. It has no content. Call
  *   calendar.list_changes with your cursor. A client gets it only when its credential holds calendar.read.
  */
@@ -68,6 +71,14 @@ export const PrincipalEvent = z.discriminatedUnion("type", [
 		note: z.string(),
 	}),
 	z.object({ type: z.literal("chat.scheduled"), scheduled_id: z.string(), room_id: z.string() }),
+	z.object({
+		type: z.literal("calendar.reminder"),
+		event_id: z.string(),
+		occurrence_id: z.string().nullable(),
+		title: z.string(),
+		start: z.string(),
+		minutes: z.number().int(),
+	}),
 	z.object({ type: z.literal("calendar.changed"), calendar_id: z.string() }),
 ]);
 export type PrincipalEvent = z.infer<typeof PrincipalEvent>;

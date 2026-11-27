@@ -23,7 +23,12 @@ async function openWeek(page: Page, day: string) {
 	await expect(page.getByRole("heading", { name: "Calendar", level: 1 })).toBeVisible();
 }
 
-async function api<T>(context: BrowserContext, method: "POST" | "DELETE", path: string, data?: unknown): Promise<T> {
+async function api<T>(
+	context: BrowserContext,
+	method: "GET" | "POST" | "DELETE",
+	path: string,
+	data?: unknown,
+): Promise<T> {
 	const response = await context.request.fetch(path, {
 		method,
 		...(data === undefined ? {} : { data }),
@@ -78,6 +83,7 @@ test("each open calendar updates live, and a session that was offline catches up
 		await Promise.all([openWeek(organizerPage, day), openWeek(secondPage, day), openWeek(teammatePage, day)]);
 
 		// The organizer invites the teammate. Each open page shows the meeting without a reload.
+		const chidi = await api<{ principal: { id: string } }>(teammate, "GET", "/api/v1/account");
 		const { event } = await api<{ event: { id: string; revision: number } }>(
 			organizer,
 			"POST",
@@ -85,27 +91,25 @@ test("each open calendar updates live, and a session that was offline catches up
 			{
 				title,
 				when: { kind: "timed", start: at(day, "10:00"), end: at(day, "11:00"), time_zone: "America/New_York" },
-				attendees: [{ email: "chidi@example.com" }],
+				attendee_ids: [chidi.principal.id],
 			},
 		);
 		await expect(secondPage.getByRole("button", { name: `${title}, 10:00 AM – 11:00 AM` })).toHaveCount(1);
-		const pending = teammatePage.getByRole("button", {
-			name: `${title}, 10:00 AM – 11:00 AM, invitation, not answered`,
-		});
-		await expect(pending).toHaveCount(1);
+		const copy = teammatePage.getByRole("button", { name: `${title}, 10:00 AM – 11:00 AM` });
+		await expect(copy).toHaveCount(1);
 
 		// The teammate accepts in the page.
-		await pending.click();
+		await copy.click();
 		const invitation = teammatePage.getByRole("dialog", { name: "Invitation" });
-		await invitation.getByRole("group", { name: "Your answer" }).getByRole("button", { name: "Yes" }).click();
-		await expect(teammatePage.getByRole("button", { name: `${title}, 10:00 AM – 11:00 AM` })).toHaveCount(1);
-		// The answer reaches the calendar of the organizer through the outbox, and then the page of the organizer
+		await invitation.getByRole("button", { name: "Accept" }).click();
+		await expect(invitation).toHaveCount(0);
+		// The response reaches the calendar of the organizer through the outbox, and then the page of the organizer
 		// updates without a reload. An open dialog keeps the event of its open, so open it again until it shows.
 		const edit = organizerPage.getByRole("dialog", { name: "Edit event" });
 		await expect(async () => {
 			await organizerPage.getByRole("button", { name: `${title}, 10:00 AM – 11:00 AM` }).click();
 			try {
-				await expect(edit.getByRole("list", { name: "Attendees" }).getByText("Yes", { exact: true })).toBeVisible({
+				await expect(edit.getByRole("list", { name: "Attendees" }).getByText("(accepted)")).toBeVisible({
 					timeout: 1000,
 				});
 			} finally {

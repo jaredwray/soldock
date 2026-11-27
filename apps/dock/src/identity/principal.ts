@@ -26,6 +26,7 @@ import {
 	type ActivityActor,
 	type ActivityInsert,
 	type ActivityRecord,
+	CHAT_ACTIVITY_EVENT_MIGRATION,
 	CHAT_ACTIVITY_ITEM_MIGRATION,
 	CHAT_ACTIVITY_SUBJECT_MIGRATION,
 	CHAT_PERSONAL_MIGRATION,
@@ -54,6 +55,19 @@ import {
 	viewsRoom,
 } from "./socket-presence.ts";
 import { getPrincipal } from "./store.ts";
+
+/** A calendar reminder that fired. The CalendarDO of the principal sends it. */
+export interface CalendarReminderInput {
+	/** The idempotency key: `calrem:<event id>:<occurrence key>:<start ms>`. */
+	id: string;
+	event_id: string;
+	occurrence_id: string | null;
+	title: string;
+	start_at: number;
+	minutes: number;
+	/** The organizer of the event. */
+	actor: ActivityActor;
+}
 
 // Each person, agent and service account has one PrincipalDO. It holds their room state, notification
 // settings, registered push devices and events sockets, and the activity log of a service account. Its
@@ -215,7 +229,7 @@ export interface EventsSocketOpen {
 	 * ends the stream. So the object never closes a feed to make room for a new socket.
 	 */
 	feed: boolean;
-	/** True when the credential holds `calendar.read`. Only such a socket gets `calendar.changed`. */
+	/** True when the credential holds `calendar.read`. Only such a socket gets the `calendar.reminder` event. */
 	calendar?: boolean;
 }
 
@@ -357,6 +371,7 @@ const MIGRATIONS: string[][] = [
 	SERVICE_ACTIVITY_MIGRATION,
 	CHAT_ACTIVITY_SUBJECT_MIGRATION,
 	CHAT_ACTIVITY_ITEM_MIGRATION,
+	CHAT_ACTIVITY_EVENT_MIGRATION,
 ];
 
 const COLUMNS = `room_id, kind, name, name_key, topic, created_at, created_by_json, member_count, role, last_seq,
@@ -519,6 +534,7 @@ export class PrincipalDO extends DurableObject<Env> {
 					]),
 				);
 				const events: PrincipalEvent[] = [];
+				const activityChanged = false;
 				for (const row of kept) {
 					const entry = joined.get(row.room_id);
 					if (entry) events.push({ type: "chat.room", room: chatRoomOutput(entry) });
@@ -839,6 +855,80 @@ export class PrincipalDO extends DurableObject<Env> {
 		this.notifications.expire(id);
 	}
 
+	/**
+	 * Records a calendar reminder in the Activity of the principal. The id of the item is the idempotency key,
+	 * so a retry adds no second item. Only the CalendarDO of the principal calls it. Returns the devices that
+	 * get a push: none during the quiet hours.
+	 */
+	recordCalendarReminder(item: CalendarReminderInput): string[] {
+		const now = Date.now();
+		let added = false;
+		this.ctx.storage.transactionSync(() => {
+			added = this.personal.recordActivity({
+				id: item.id,
+				kind: "calendar_reminder",
+				room_id: "",
+				room_name: null,
+				message_id: item.occurrence_id ?? item.event_id,
+				parent_id: null,
+				seq: 0,
+				parent_seq: null,
+				actor: item.actor,
+				emoji: null,
+				preview: item.title,
+				event: {
+					event_id: item.event_id,
+					occurrence_id: item.occurrence_id,
+					title: item.title,
+					start_at: item.start_at,
+					minutes: item.minutes,
+				},
+				created_at: now,
+			});
+		});
+		if (added && this.ctx.getWebSockets().length > 0) {
+			const reminder: PrincipalEvent = {
+				type: "calendar.reminder",
+				event_id: item.event_id,
+				occurrence_id: item.occurrence_id,
+				title: item.title,
+				start: new Date(item.start_at).toISOString(),
+				minutes: item.minutes,
+			};
+			// The reminder has content of the calendar. A socket of a credential without `calendar.read` does not get it.
+			this.ctx.waitUntil(this.enqueue([JSON.stringify(reminder)], undefined, (state) => state.calendar === true));
+			this.ctx.waitUntil(this.publishActivityCount());
+		}
+		if (this.notifications.quiet(now)) return [];
+		return this.notifications.credentials(now).map(({ id }) => id);
+	}
+
+	/**
+	 * The device of a calendar push, after a check of the credential that registered it, of the quiet hours, and
+	 * of the reminder: a reminder that the principal read or deleted gets no push.
+	 */
+	async calendarPushTarget(id: string, reminderId: string) {
+		const now = Date.now();
+		const device = this.notifications.device(id, now);
+		if (!device) return null;
+		const credential = JSON.parse(device.credential) as CredentialRef;
+		const [state] = await checkCredentials(this.env.DIRECTORY, [credential]);
+		if (state !== "live") {
+			this.expirePushSubscription(id);
+			return null;
+		}
+		if (this.notifications.quiet(now) || !this.notifications.device(id, now)) return null;
+		const unread = this.sql
+			.exec("SELECT 1 FROM chat_activity WHERE id = ? AND read_at IS NULL", reminderId)
+			.toArray().length;
+		if (unread === 0) return null;
+		return {
+			endpoint: device.endpoint,
+			keys: { p256dh: device.p256dh, auth: device.auth },
+			sound: this.notifications.sound(),
+		};
+	}
+
 	/** The room outbox holds each post until the queue accepts it. A retry keeps the device ids. */
 	async chatNotificationDevices(event: {
 		principalId: string;
@@ -1019,7 +1109,7 @@ export class PrincipalDO extends DurableObject<Env> {
 	async calendarChanged(calendarId: string): Promise<void> {
 		if (this.ctx.getWebSockets().length === 0) return;
 		const event: PrincipalEvent = { type: "calendar.changed", calendar_id: calendarId };
-		await this.enqueue([JSON.stringify(event)], undefined, "calendar");
+		await this.enqueue([JSON.stringify(event)], undefined, (state) => state.calendar === true && !state.feed);
 	}
 
 	override async alarm(): Promise<void> {
@@ -1055,30 +1145,42 @@ export class PrincipalDO extends DurableObject<Env> {
 				if (this.personal.recordActivity(item)) added += 1;
 			}
 		});
-		if (added > 0 && this.ctx.getWebSockets().length > 0) {
-			const unread = this.personal.activityUnreadCount();
-			this.ctx.waitUntil(this.publish(() => [{ type: "chat.activity", unread_count: unread }]));
-		}
+		if (added > 0 && this.ctx.getWebSockets().length > 0) this.ctx.waitUntil(this.publishActivityCount());
 	}
 
-	deleteChatActivities(ids: readonly string[]): number {
-		return this.personal.deleteActivities(ids);
+	deleteChatActivities(ids: readonly string[], calendar = true): number {
+		return this.personal.deleteActivities(ids, calendar);
 	}
 
 	listChatActivity(query: {
 		filter: "all" | "unread" | ChatActivityKind;
 		after: { createdAt: number; id: string } | null;
 		limit: number;
+		calendar?: boolean;
 	}): { items: ActivityRecord[]; unreadCount: number } {
 		return this.personal.listActivity(query);
 	}
 
-	markChatActivityRead(activityId?: string): number {
-		const unread = this.personal.markActivityRead(activityId, Date.now());
-		if (this.ctx.getWebSockets().length > 0) {
-			this.ctx.waitUntil(this.publish(() => [{ type: "chat.activity", unread_count: unread }]));
-		}
+	/** Marks items read. Returns the unread count, without the calendar reminders when `calendar` is false. */
+	markChatActivityRead(activityId?: string, calendar = true): number {
+		const unread = this.personal.markActivityRead(activityId, Date.now(), calendar);
+		if (this.ctx.getWebSockets().length > 0) this.ctx.waitUntil(this.publishActivityCount());
 		return unread;
+	}
+
+	/**
+	 * Sends the unread count of the Activity to the sockets. A socket of a credential without `calendar.read`
+	 * gets the count without the calendar reminders, so it cannot tell that a reminder came.
+	 */
+	private publishActivityCount(): Promise<void> {
+		const event = (count: number) =>
+			JSON.stringify({ type: "chat.activity", unread_count: count } satisfies PrincipalEvent);
+		void this.enqueue([event(this.personal.activityUnreadCount())], undefined, (state) => state.calendar === true);
+		return this.enqueue(
+			[event(this.personal.activityUnreadCount(false))],
+			undefined,
+			(state) => state.calendar !== true,
+		);
 	}
 
 	listChatSections(): SectionRecord[] {
@@ -1252,6 +1354,7 @@ export class PrincipalDO extends DurableObject<Env> {
 	async processDuePersonalWork(): Promise<void> {
 		const now = Date.now();
 		const events: PrincipalEvent[] = [];
+		let activityChanged = false;
 
 		// 1. Trigger due reminders.
 		const dueRem = this.personal.dueReminders(now);
@@ -1279,7 +1382,7 @@ export class PrincipalDO extends DurableObject<Env> {
 					});
 				}
 			}
-			events.push({ type: "chat.activity", unread_count: this.personal.activityUnreadCount() });
+			activityChanged = true;
 		}
 
 		// 2. Deliver due scheduled messages.
@@ -1376,6 +1479,7 @@ export class PrincipalDO extends DurableObject<Env> {
 			}
 		}
 
+		if (activityChanged && this.ctx.getWebSockets().length > 0) this.ctx.waitUntil(this.publishActivityCount());
 		if (events.length > 0 && this.ctx.getWebSockets().length > 0) {
 			this.ctx.waitUntil(this.publish(() => events));
 		}
@@ -1458,11 +1562,15 @@ export class PrincipalDO extends DurableObject<Env> {
 
 	/**
 	 * Puts a send behind each send from before. An empty list sends nothing, and checks each socket whose
-	 * check is due, as for a send.
+	 * check is due, as for a send. With `only`, the events go only to the sockets that it accepts.
 	 */
-	private enqueue(texts: string[], notificationAt?: number | null, audience?: "calendar"): Promise<void> {
+	private enqueue(
+		texts: string[],
+		notificationAt?: number | null,
+		only?: (state: EventsSocketState) => boolean,
+	): Promise<void> {
 		this.announced = this.announced
-			.then(() => this.deliver(texts, notificationAt, audience))
+			.then(() => this.deliver(texts, notificationAt, only))
 			.catch((error: unknown) => {
 				log("error", "events socket send failed", { error: error instanceof Error ? error.message : String(error) });
 			});
@@ -1475,7 +1583,11 @@ export class PrincipalDO extends DurableObject<Env> {
 	 * of all sockets with one query. A socket whose credential stopped closes. If the check fails, the
 	 * sockets that waited for it close, and their clients open new ones, which the Worker authenticates.
 	 */
-	private async deliver(texts: string[], notificationAt?: number | null, audience?: "calendar"): Promise<void> {
+	private async deliver(
+		texts: string[],
+		notificationAt?: number | null,
+		only?: (state: EventsSocketState) => boolean,
+	): Promise<void> {
 		const now = Date.now();
 		const open: { socket: WebSocket; state: EventsSocketState; waits: boolean }[] = [];
 		for (const socket of this.ctx.getWebSockets()) {
@@ -1485,9 +1597,8 @@ export class PrincipalDO extends DurableObject<Env> {
 				continue;
 			}
 			if (socket.readyState !== WebSocket.OPEN) continue;
+			if (only && !only(state)) continue;
 			if (notificationAt === null && (!state.activity || state.feed)) continue;
-			// A calendar event goes only to a socket of a client whose credential can read the calendar.
-			if (audience === "calendar" && (state.feed || state.calendar !== true)) continue;
 			if (typeof notificationAt === "number" && !listensForSound(state, notificationAt, now)) continue;
 			const waits = now - state.checkedAt >= EVENTS_SOCKET_RECHECK_MS;
 			if (!waits) for (const text of texts) this.send(socket, text);

@@ -118,11 +118,8 @@ month view shows six weeks. An event has a title, a time, a location and a descr
 in a time zone, or all day. An all-day event is on the same days in each time zone. On a phone, the views
 become a list of the days that have events.
 
-Invite people, agents and service accounts of the organization to a meeting. Each attendee answers Yes,
-Maybe or No, and the organizer sees each answer. Only the organizer changes or cancels the meeting. An agent
-adds, reads and answers events of its own calendar with tools such as `calendar_create_event`,
-`calendar_list_events` and `calendar_respond_to_invitation`. Recurring events and reminders come in later
-layers.
+An agent adds and reads the events of its own calendar with tools such as `calendar_create_event` and
+`calendar_list_events`. Invitations, recurring events and reminders come in later layers.
 
 ![The week view of Calendar with the meetings of the studio director](docs/screenshots/calendar.png)
 

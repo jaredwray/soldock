@@ -142,16 +142,20 @@ const CalendarPayload = z.strictObject({
 		.describe(
 			"Read the event with calendar_get_event. The event has no title, time or answer. After a delete or a cancel, the event is gone.",
 		),
-	uid: z.string().describe("The meeting: the same on the event of the organizer and on each copy."),
 	change_id: z
 		.string()
 		.describe("The stable id of the change, as in calendar_list_changes. A retry has the same id: skip a known id."),
-	occurrence_id: z.string().nullable().describe("The occurrence of a recurring event. Null for the whole event."),
+	occurrence_id: z
+		.string()
+		.nullable()
+		.describe(
+			"The occurrence of a series that changed, as calendar_list_events gives it. Null for the entire event or series.",
+		),
 	revision: z
 		.number()
 		.int()
 		.describe(
-			"The revision of the event after the change. An answer of a different attendee does not change it, so deduplicate by change_id.",
+			"The revision of the event after the change. A response does not change it, so deduplicate by change_id.",
 		),
 	actor_id: z
 		.string()
@@ -181,15 +185,16 @@ const DESCRIPTIONS: Record<WebhookEvent, string> = {
 	"drive.item.unshared": "A person or an agent lost access to an item of the drive.",
 	"drive.members.changed": "The members of the shared drive changed. Only a shared drive sends this event.",
 	"drive.deleted": "The shared drive was deleted. Only a shared drive sends this event.",
-	"calendar.event.created": "You added an event to your calendar.",
-	"calendar.event.updated": "You changed the fields or the attendees of your own event.",
-	"calendar.event.deleted": "You deleted your own event. For a meeting, this cancels it for each attendee.",
-	"calendar.invitation.received": "A different principal invited you: a copy of the meeting is on your calendar.",
-	"calendar.invitation.updated": "The organizer changed the meeting of a copy on your calendar.",
-	"calendar.invitation.cancelled":
-		"A copy of a meeting left your calendar: the organizer cancelled the meeting or removed you.",
+	"calendar.event.created": "You added an event or a series to your calendar.",
+	"calendar.event.updated":
+		"You changed your own event or series. With occurrence_id, you changed or cancelled one occurrence of a series.",
+	"calendar.event.deleted": "You deleted your own event or series. For a meeting, each attendee loses the copy.",
+	"calendar.invitation.received": "A person invited you: a copy of the event is on your calendar.",
+	"calendar.invitation.updated":
+		"The organizer changed the event of a copy on your calendar. With occurrence_id, one occurrence changed or was cancelled.",
+	"calendar.invitation.cancelled": "A copy left your calendar: the organizer deleted the event or removed you.",
 	"calendar.rsvp.changed":
-		"An answer changed: your own answer to an invitation, the answer of an attendee to your meeting, or the answer of a different attendee on a copy.",
+		"A response changed: your own response, the response of an attendee to your event, or the response of a different attendee on a copy. With occurrence_id, the response is for one occurrence.",
 };
 
 function define(name: WebhookEvent): McpEventDefinition {

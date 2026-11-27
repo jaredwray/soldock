@@ -90,7 +90,6 @@ describe("calendar webhook subscriptions", () => {
 				webhook_id: subscription.id,
 				calendar_id: ada.id,
 				event_id: event.id,
-				uid: event.uid,
 				occurrence_id: null,
 				revision: event.revision,
 				actor_id: ada.id,
@@ -208,13 +207,8 @@ describe("calendar webhook subscriptions", () => {
 			allowlist: ["hooks.example.com"],
 		});
 		const jobs = await captureCalendarJobs(bot.id);
-		await subscribe(bot, "calendar.invitation.received");
-		await ada.call("calendar.create_event", {
-			title: "Design review",
-			when: WHEN,
-			attendees: [{ principal_id: bot.id }],
-		});
-		await settleCalendars(ada.id, bot.id);
+		await subscribe(bot, "calendar.event.created");
+		await bot.call("calendar.create_event", { title: "Design review", when: WHEN });
 		await publishCalendarChanges(bot.id);
 		const { sent } = await consumeWebhooks(jobs.splice(0));
 		expect(sent).toHaveLength(1);

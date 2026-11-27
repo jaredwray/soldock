@@ -1,4 +1,4 @@
-import { EmailAddress, prefixedId, Timestamp } from "./common.ts";
+import { ID_CHARS, prefixedId, Timestamp } from "./common.ts";
 import { defineOperation } from "./operation.ts";
 import { CALENDAR_WEBHOOK_EVENTS, CalendarWebhookSubscription } from "./webhooks.ts";
 import { z } from "./zod.ts";
@@ -19,12 +19,26 @@ export const CALENDAR_LIMITS = {
 	pageSize: 250,
 	/** The events of one calendar. */
 	events: 50_000,
-	/** The attendees of one event, without the organizer. */
-	attendees: 100,
 	/** The first day that an event can use. */
 	firstDate: "1970-01-01",
 	/** The last day that an event can use. */
 	lastDate: "2100-12-31",
+	/** The repeated events (series) of one calendar. */
+	recurringEvents: 500,
+	/** The changed and cancelled occurrences of one series. */
+	exceptions: 500,
+	/** The most occurrences of a repeat with a count. */
+	recurrenceCount: 730,
+	/** The largest interval of a repeat. */
+	recurrenceInterval: 99,
+	/** The most occurrences of one series in one range query. */
+	occurrencesPerSeries: 400,
+	/** The attendees of one event, without the organizer. */
+	attendees: 50,
+	/** The principals of one calendar.query_free_busy. */
+	freeBusyPrincipals: 20,
+	/** The longest range of one calendar.query_free_busy, in days. */
+	freeBusyDays: 62,
 	/** The changes of one page of calendar.list_changes, without `limit`, and the most. */
 	changesPageSize: 200,
 	/** A published change stays in the change feed for this many days. Then a cursor before it expires. */
@@ -32,6 +46,12 @@ export const CALENDAR_LIMITS = {
 	/** The most published changes that one calendar keeps. Older ones go first. */
 	changes: 10_000,
 } as const;
+
+/** The reminders that a participant can choose, in minutes before the start. */
+export const REMINDER_MINUTES = [5, 10, 30] as const;
+export type ReminderMinutes = (typeof REMINDER_MINUTES)[number];
+/** The reminder of a new timed event and of a new invitation. */
+export const DEFAULT_REMINDER_MINUTES: ReminderMinutes = 10;
 
 export const DAY_MS = 86_400_000;
 
@@ -169,6 +189,37 @@ export function zonedTime(date: string, time: string, timeZone: string): number 
 	return wallToInstant(dateToUtcMs(date) + ((hour ?? 0) * 60 + (minute ?? 0)) * 60_000, timeZone);
 }
 
+/** The date and the ms from 00:00 of an instant on the wall clock of a time zone. */
+export function zonedWall(ms: number, timeZone: string): { date: string; msOfDay: number } {
+	const wall = wallClock(ms, timeZone);
+	const date = `${String(wall.year).padStart(4, "0")}-${String(wall.month).padStart(2, "0")}-${String(wall.day).padStart(2, "0")}`;
+	return {
+		date,
+		msOfDay: ((wall.hour * 60 + wall.minute) * 60 + wall.second) * 1000 + (ms - Math.floor(ms / 1000) * 1000),
+	};
+}
+
+/**
+ * The instant of a date and a time of the wall clock (ms from 00:00) in a time zone. The rules of `zonedTime`
+ * apply: a time that the clock shows two times gives the first instant, and a time that the clock skips gives
+ * the same time after the skip.
+ */
+export function zonedInstant(date: string, msOfDay: number, timeZone: string): number {
+	return wallToInstant(dateToUtcMs(date) + msOfDay, timeZone);
+}
+
+/** The bounds of the days of an all-day event in each time zone: from UTC+14 to UTC-12. */
+const EARLIEST_ZONE_MS = 14 * 60 * 60 * 1000;
+const LATEST_ZONE_MS = 12 * 60 * 60 * 1000;
+
+/**
+ * The widest instants of the days of an all-day event in each time zone, in UTC ms: UTC midnight of
+ * `startDate` minus 14 hours, and UTC midnight of `endDate` plus 12 hours.
+ */
+export function allDayBounds(startDate: string, endDate: string): { start_at: number; end_at: number } {
+	return { start_at: dateToUtcMs(startDate) - EARLIEST_ZONE_MS, end_at: dateToUtcMs(endDate) + LATEST_ZONE_MS };
+}
+
 /** The time of an event. `timed` has two instants. `all_day` has days, without a time zone. */
 export type EventWhenValue =
 	| { kind: "timed"; start: string; end: string; time_zone: string }
@@ -259,6 +310,46 @@ const WHEN_NOTE = [
 	`An event can be at most ${CALENDAR_LIMITS.eventDays} days long, from ${CALENDAR_LIMITS.firstDate} to ${CALENDAR_LIMITS.lastDate}.`,
 ].join(" ");
 
+const RECURRENCE_NOTE = [
+	'recurrence repeats the event. frequency is "daily", "weekly" or "monthly". interval is the number of periods from one occurrence to the next: a meeting each other week has frequency "weekly" and interval 2.',
+	"A weekly repeat uses the weekday of the start. A monthly repeat uses the day of the month of the start. A month without that day has no occurrence: a repeat on the 31st skips April, June, September, November and February.",
+	"A timed repeat keeps the wall clock time of the start in time_zone, also when the clock changes for daylight saving time. An all-day repeat keeps dates.",
+	`Set until (a date, the last day that can have an occurrence, in time_zone) or count (from 1 to ${CALENDAR_LIMITS.recurrenceCount} occurrences), or neither for no end. Not both.`,
+].join(" ");
+
+export const RecurrenceInput = z
+	.strictObject({
+		frequency: z.enum(["daily", "weekly", "monthly"]),
+		interval: z.number().int().min(1).max(CALENDAR_LIMITS.recurrenceInterval).default(1),
+		until: DateOnly.optional(),
+		count: z.number().int().min(1).max(CALENDAR_LIMITS.recurrenceCount).optional(),
+	})
+	.refine((rule) => rule.until === undefined || rule.count === undefined, "Set until or count, not both")
+	.describe(RECURRENCE_NOTE);
+export type RecurrenceInput = z.infer<typeof RecurrenceInput>;
+
+export const Recurrence = z.object({
+	frequency: z.enum(["daily", "weekly", "monthly"]),
+	interval: z.number().int(),
+	until: z.string().nullable(),
+	count: z.number().int().nullable(),
+});
+export type Recurrence = z.infer<typeof Recurrence>;
+
+const ReminderInput = z
+	.union([z.literal(5), z.literal(10), z.literal(30), z.null()])
+	.describe("Minutes before the start: 5, 10 or 30. null for no reminder. Only a timed event has a reminder.");
+
+export const EventResponse = z.enum(["needs_action", "accepted", "declined"]);
+export type EventResponse = z.infer<typeof EventResponse>;
+
+export const EventAttendee = z.object({
+	principal_id: z.string(),
+	display_name: z.string(),
+	response: EventResponse,
+});
+export type EventAttendee = z.infer<typeof EventAttendee>;
+
 /** The time of an event, as a caller gives it. */
 export const EventWhenInput = z
 	.discriminatedUnion("kind", [
@@ -283,93 +374,42 @@ export const EventWhen = z.discriminatedUnion("kind", [
 ]);
 export type EventWhen = z.infer<typeof EventWhen>;
 
-/** The answer of an attendee to an invitation. `pending` is no answer yet. */
-export const EventResponse = z.enum(["pending", "accepted", "tentative", "declined"]);
-export type EventResponse = z.infer<typeof EventResponse>;
-
-/** The answer that an attendee can give: Yes, Maybe or No. */
-export const EventAnswer = z.enum(["accepted", "tentative", "declined"]);
-export type EventAnswer = z.infer<typeof EventAnswer>;
-
-export const EventAttendee = z.object({
-	/** The principal of the attendee. */
-	principal_id: z.string().nullable(),
-	email: z.string(),
-	name: z.string(),
-	response: EventResponse,
-	/** The time of the last answer. Null while the attendee did not answer. */
-	responded_at: Timestamp.nullable(),
-	/** True for the entry of the caller. */
-	self: z.boolean(),
-});
-export type EventAttendee = z.infer<typeof EventAttendee>;
-
-export const EventOrganizer = z.object({
-	principal_id: z.string().nullable(),
-	email: z.string(),
-	name: z.string(),
-	/** True when the caller is the organizer. */
-	self: z.boolean(),
-});
-export type EventOrganizer = z.infer<typeof EventOrganizer>;
-
 export const CalendarEvent = z.object({
+	/** The id of the event. All the occurrences of a series have the id of the series. */
 	id: z.string(),
-	/**
-	 * The stable identity of the meeting. Each calendar that has the meeting has the same uid. For an event
-	 * without attendees, it is the id of the event.
-	 */
-	uid: z.string(),
 	title: z.string(),
 	description: z.string(),
 	location: z.string(),
+	/** The time of this occurrence. For a series from calendar.get_event, the time of the first occurrence. */
 	when: EventWhen,
-	/** 1 for a new event. Each change adds 1. */
+	/** 1 for a new event. Each change of the series or of one occurrence adds 1. */
 	revision: z.number().int(),
-	/** True for an event of your own. False for the copy of a meeting that a different principal organizes. */
-	is_organizer: z.boolean(),
-	/** The organizer of a meeting. Null for an event without attendees. */
-	organizer: EventOrganizer.nullable(),
-	/** The attendees of a meeting, without the organizer. Empty for an event without attendees. */
-	attendees: z.array(EventAttendee),
-	/** Your answer to the invitation. Null when you are the organizer. */
-	my_response: EventResponse.nullable(),
 	created_at: Timestamp,
 	updated_at: Timestamp,
+	/** The rule of a series. Null for a one-off event. */
+	recurrence: Recurrence.nullable(),
+	/** The id of this occurrence of a series. Null for a one-off event and for a series from calendar.get_event. */
+	occurrence_id: z.string().nullable(),
+	/** The start of this occurrence as the rule gives it: a UTC time, or a date for an all-day series. */
+	original_start: z.string().nullable(),
+	/** True when this occurrence has a change of its own. */
+	is_exception: z.boolean(),
+	/** organizer: you own the event. attendee: a copy of an event of a different principal that invited you. */
+	role: z.enum(["organizer", "attendee"]),
+	organizer: z.object({ principal_id: z.string(), display_name: z.string() }).nullable(),
+	/** The invited principals, without the organizer, with the response for this occurrence. */
+	attendees: z.array(EventAttendee),
+	/** Your response for this occurrence. Null when you are the organizer. */
+	my_response: EventResponse.nullable(),
+	/** Your reminder, in minutes before the start. Null for no reminder. */
+	reminder_minutes: z.number().int().nullable(),
 });
 export type CalendarEvent = z.infer<typeof CalendarEvent>;
 
 const READ = { readOnly: true, destructive: false, idempotent: true, openWorld: false } as const;
 
-const OWN_NOTE = [
-	"The calendar is your own calendar. Each person, agent and service account has one.",
-	"An invitation puts a copy of one meeting on the calendar of each attendee. Only the organizer and the attendees of that meeting can read it.",
-	"Nobody else can read or change your calendar.",
-].join(" ");
-
-const MEETING_NOTE = [
-	"A meeting is an event with attendees. The event of the organizer is the authority.",
-	"Only the organizer changes or cancels a meeting. Each attendee changes only their own answer, with calendar.respond_to_invitation.",
-	"is_organizer is false on the copy of a meeting that a different principal organizes. my_response is pending until you answer.",
-].join(" ");
-
-const PrincipalId = prefixedId("prn");
-
-const AttendeeInput = z
-	.strictObject({
-		principal_id: PrincipalId.optional().describe("The id of a person, agent or service account of the organization."),
-		email: EmailAddress.optional().describe("The address of a person, agent or service account of the organization."),
-	})
-	.refine((attendee) => (attendee.principal_id === undefined) !== (attendee.email === undefined), {
-		message: "set principal_id or email, not the two",
-	});
-
-const AttendeesInput = z
-	.array(AttendeeInput)
-	.max(CALENDAR_LIMITS.attendees)
-	.describe(
-		`The attendees of a meeting, at most ${CALENDAR_LIMITS.attendees}. Give the principal_id or the email of each one. Find a person with directory.list_principals. You are the organizer: do not add yourself.`,
-	);
+const OWN_NOTE =
+	"The calendar is your own calendar. Each person, agent and service account has one. Nobody else can read or change it.";
 
 const BASE_REVISION = z
 	.number()
@@ -379,6 +419,19 @@ const BASE_REVISION = z
 	.describe(
 		"The revision of the event that you read. When the event has a different revision now, the call changes nothing and returns conflict. Read the event again, then try again.",
 	);
+
+const ATTENDEES_NOTE = [
+	"attendee_ids invites people of your organization: each gets a copy of the event in their calendar, and can accept or decline it.",
+	`An event can have at most ${CALENDAR_LIMITS.attendees} attendees. Only a person can invite, and only people can be invited.`,
+].join(" ");
+
+const REMINDER_NOTE =
+	"reminder_minutes is your own reminder: 5, 10 or 30 minutes before each occurrence, or null for none. The default for a timed event is 10. An all-day event has no reminder. A reminder shows in your Activity, and on your devices when you turned on notifications.";
+
+const AttendeeIds = z
+	.array(prefixedId("prn"))
+	.max(CALENDAR_LIMITS.attendees)
+	.describe("The principal ids of the people to invite.");
 
 const RangeTime = z
 	.string()
@@ -390,12 +443,11 @@ export const listEvents = defineOperation({
 	summary: "List the events of your calendar in a time range",
 	description: [
 		"Returns the events of your calendar that overlap the range from time_min to time_max, first start first.",
+		"A repeated event (a series) gives one entry for each occurrence in the range, with occurrence_id set. A cancelled occurrence gives no entry. A moved occurrence is at its new time.",
 		"An event that ends at time_min, or starts at time_max, is not in the range.",
 		`The range can be at most ${CALENDAR_LIMITS.rangeDays} days long.`,
 		"time_zone sets the days of all-day events: an all-day event is in the range when one of its days, from 00:00 to 00:00 in time_zone, overlaps the range. The default is UTC. Give your own time zone.",
 		"When next_cursor is not null, more events follow: call again with the same input and cursor set to next_cursor.",
-		"The list also has the meetings that other principals invited you to.",
-		MEETING_NOTE,
 		OWN_NOTE,
 	].join(" "),
 	http: { method: "GET", path: "/api/v1/calendar/events" },
@@ -430,7 +482,10 @@ export const listEvents = defineOperation({
 export const getEvent = defineOperation({
 	name: "calendar.get_event",
 	summary: "Read one event of your calendar",
-	description: ["Returns one event of your calendar.", MEETING_NOTE, OWN_NOTE].join(" "),
+	description: [
+		"Returns one event of your calendar. For a series, when is the time of the first occurrence and occurrence_id is null: use calendar.list_events for the occurrences.",
+		OWN_NOTE,
+	].join(" "),
 	http: { method: "GET", path: "/api/v1/calendar/events/{event_id}" },
 	scopes: ["calendar.read"],
 	callers: ["human", "agent", "service"],
@@ -446,10 +501,11 @@ export const createEvent = defineOperation({
 	description: [
 		"Adds an event to your calendar and returns it.",
 		WHEN_NOTE,
-		"Set attendees to invite people, agents or service accounts of the organization. Each attendee gets a copy of the meeting on their calendar, with my_response pending.",
-		`A calendar can have at most ${CALENDAR_LIMITS.events} events.`,
+		RECURRENCE_NOTE,
+		ATTENDEES_NOTE,
+		REMINDER_NOTE,
+		`A calendar can have at most ${CALENDAR_LIMITS.events} events and ${CALENDAR_LIMITS.recurringEvents} series.`,
 		"Set idempotency_key to make a retry safe.",
-		MEETING_NOTE,
 		OWN_NOTE,
 	].join(" "),
 	http: { method: "POST", path: "/api/v1/calendar/events" },
@@ -461,7 +517,9 @@ export const createEvent = defineOperation({
 		when: EventWhenInput,
 		description: Description.default("").describe("Plain text. Line breaks stay."),
 		location: Location.default(""),
-		attendees: AttendeesInput.optional(),
+		recurrence: RecurrenceInput.optional(),
+		attendee_ids: AttendeeIds.optional(),
+		reminder_minutes: ReminderInput.optional(),
 		idempotency_key: z
 			.string()
 			.min(1)
@@ -472,7 +530,7 @@ export const createEvent = defineOperation({
 			),
 	}),
 	output: z.object({ event: CalendarEvent }),
-	errors: ["conflict"],
+	errors: ["conflict", "forbidden"],
 });
 
 export const updateEvent = defineOperation({
@@ -480,13 +538,15 @@ export const updateEvent = defineOperation({
 	summary: "Change an event of your calendar",
 	description: [
 		"Changes the fields that you give. A field that you do not give stays. when replaces the whole time of the event, so you can change a timed event to an all-day event.",
+		"For a series, the change applies to the entire series: when is the time of the first occurrence. To change one occurrence, use calendar.update_occurrence.",
+		"A change of when or of recurrence removes the changes and the cancellations of single occurrences, and sets the response of each attendee to needs_action.",
 		WHEN_NOTE,
+		"recurrence: null makes a series a one-off event.",
+		"attendee_ids replaces the list of attendees.",
+		"Only the organizer can change an event. On an invitation, use calendar.respond_to_event and calendar.set_reminder.",
 		"A call that changes nothing keeps the revision.",
 		"Set base_revision to the revision that you read. When the event has a different revision now, the call fails with conflict and changes nothing: read the event again.",
 		"Without base_revision, the change applies to the current event.",
-		"attendees is the complete new list of attendees. A new attendee gets an invitation. A removed attendee loses the meeting and gets no later change. Each kept attendee keeps their answer. An empty list removes each attendee.",
-		"A change of a meeting goes to the calendar of each attendee. Only the organizer can change a meeting: on the copy of a meeting the call fails with forbidden.",
-		MEETING_NOTE,
 		OWN_NOTE,
 	].join(" "),
 	http: { method: "POST", path: "/api/v1/calendar/events/{event_id}" },
@@ -499,23 +559,23 @@ export const updateEvent = defineOperation({
 		when: EventWhenInput.optional(),
 		description: Description.optional(),
 		location: Location.optional(),
-		attendees: AttendeesInput.optional(),
+		recurrence: RecurrenceInput.nullable().optional(),
+		attendee_ids: AttendeeIds.optional(),
 		base_revision: BASE_REVISION,
 	}),
 	output: z.object({ event: CalendarEvent }),
-	errors: ["not_found", "conflict"],
+	errors: ["not_found", "conflict", "forbidden"],
 });
 
 export const deleteEvent = defineOperation({
 	name: "calendar.delete_event",
 	summary: "Delete an event of your calendar",
 	description: [
-		"Deletes an event of your calendar. This cannot be undone.",
+		"Deletes an event of your calendar. This cannot be undone. For a series, it deletes each occurrence. To cancel one occurrence, use calendar.cancel_occurrence.",
+		"The event is removed from the calendar of each attendee too. On an invitation, the call fails with forbidden: decline it with calendar.respond_to_event.",
 		"Set dry_run to true to get the event without a change.",
 		"Set base_revision to the revision that you read. When the event has a different revision now, the call fails with conflict and deletes nothing: read the event again.",
 		"Without base_revision, the call deletes the current event.",
-		"For a meeting with attendees, the delete cancels the meeting for each attendee: it goes away from each calendar.",
-		"Only the organizer can cancel a meeting: on the copy of a meeting the call fails with forbidden. Answer No with calendar.respond_to_invitation instead.",
 		OWN_NOTE,
 	].join(" "),
 	http: { method: "DELETE", path: "/api/v1/calendar/events/{event_id}" },
@@ -528,18 +588,75 @@ export const deleteEvent = defineOperation({
 		dry_run: z.boolean().default(false),
 	}),
 	output: z.object({ event: CalendarEvent, dry_run: z.boolean() }),
-	errors: ["not_found", "conflict"],
+	errors: ["not_found", "conflict", "forbidden"],
 });
 
-export const respondToInvitation = defineOperation({
-	name: "calendar.respond_to_invitation",
-	summary: "Answer an invitation on your calendar",
+const OCCURRENCE_ID_PATTERN = new RegExp(`^evt_${ID_CHARS}_\\d{8}(?:T\\d{6}Z)?$`);
+
+export const OccurrenceId = z
+	.string()
+	.regex(OCCURRENCE_ID_PATTERN, "must be an occurrence id, as calendar.list_events returns it in occurrence_id")
+	.describe("The id of one occurrence of a series, as calendar.list_events returns it in occurrence_id.");
+
+const SCOPE_NOTE =
+	"The change applies to this occurrence only. The other occurrences of the series and the id of this occurrence stay the same. base_revision is the revision of the series.";
+
+export const updateOccurrence = defineOperation({
+	name: "calendar.update_occurrence",
+	summary: "Change one occurrence of a repeated event",
 	description: [
-		"Sets your answer to a meeting that a different principal invited you to: accepted (Yes), tentative (Maybe) or declined (No).",
-		"event_id is the id of the copy on your calendar, as calendar.list_events returns it. The organizer sees your answer.",
-		"You can change your answer later. A declined meeting stays on your calendar, so you can change the answer.",
-		"The organizer of an event cannot answer it: the call fails with invalid.",
+		"Changes the fields that you give for one occurrence of a series. A field that you do not give stays.",
+		"when moves the occurrence to a different date or time. Its kind must be the kind of the series.",
+		SCOPE_NOTE,
+		"The attendees get the change. To change the entire series, use calendar.update_event.",
 		OWN_NOTE,
+	].join(" "),
+	http: { method: "POST", path: "/api/v1/calendar/occurrences/{occurrence_id}" },
+	scopes: ["calendar.write"],
+	callers: ["human", "agent", "service"],
+	annotations: { readOnly: false, destructive: true, idempotent: true, openWorld: false },
+	input: z.strictObject({
+		occurrence_id: OccurrenceId,
+		title: Title.optional(),
+		when: EventWhenInput.optional(),
+		description: Description.optional(),
+		location: Location.optional(),
+		base_revision: BASE_REVISION,
+	}),
+	output: z.object({ event: CalendarEvent }),
+	errors: ["not_found", "conflict", "forbidden"],
+});
+
+export const cancelOccurrence = defineOperation({
+	name: "calendar.cancel_occurrence",
+	summary: "Cancel one occurrence of a repeated event",
+	description: [
+		"Cancels one occurrence of a series. The occurrence is removed from your calendar and from the calendar of each attendee. Its reminders do not occur. This cannot be undone.",
+		SCOPE_NOTE,
+		"Set dry_run to true to get the occurrence without a change. To delete the entire series, use calendar.delete_event.",
+		OWN_NOTE,
+	].join(" "),
+	http: { method: "DELETE", path: "/api/v1/calendar/occurrences/{occurrence_id}" },
+	scopes: ["calendar.write"],
+	callers: ["human", "agent", "service"],
+	annotations: { readOnly: false, destructive: true, idempotent: true, openWorld: false },
+	input: z.strictObject({
+		occurrence_id: OccurrenceId,
+		base_revision: BASE_REVISION,
+		dry_run: z.boolean().default(false),
+	}),
+	output: z.object({ event: CalendarEvent, dry_run: z.boolean() }),
+	errors: ["not_found", "conflict", "forbidden"],
+});
+
+export const respondToEvent = defineOperation({
+	name: "calendar.respond_to_event",
+	summary: "Accept or decline an invitation",
+	description: [
+		"Sets your response to an event of a different principal that invited you.",
+		"Without occurrence_id, the response is for the entire series. With occurrence_id, it is for that occurrence only.",
+		"A declined occurrence has no reminder and does not show as busy in calendar.query_free_busy.",
+		"The organizer gets the response. The organizer of an event cannot respond to it.",
 	].join(" "),
 	http: { method: "POST", path: "/api/v1/calendar/events/{event_id}/response" },
 	scopes: ["calendar.write"],
@@ -547,9 +664,67 @@ export const respondToInvitation = defineOperation({
 	annotations: { readOnly: false, destructive: false, idempotent: true, openWorld: false },
 	input: z.strictObject({
 		event_id: EventId,
-		response: EventAnswer.describe("accepted is Yes, tentative is Maybe, declined is No."),
+		occurrence_id: OccurrenceId.optional(),
+		response: z.enum(["accepted", "declined"]),
 	}),
 	output: z.object({ event: CalendarEvent }),
+	errors: ["not_found", "invalid"],
+});
+
+export const setReminder = defineOperation({
+	name: "calendar.set_reminder",
+	summary: "Set or remove your reminder of an event",
+	description: [
+		"Sets your own reminder of an event: 5, 10 or 30 minutes before each occurrence, or null for no reminder.",
+		"The reminder is yours only. The organizer and each attendee choose their own reminder. It does not change the revision.",
+		REMINDER_NOTE,
+	].join(" "),
+	http: { method: "POST", path: "/api/v1/calendar/events/{event_id}/reminder" },
+	scopes: ["calendar.write"],
+	callers: ["human", "agent", "service"],
+	annotations: { readOnly: false, destructive: false, idempotent: true, openWorld: false },
+	input: z.strictObject({ event_id: EventId, minutes: ReminderInput }),
+	output: z.object({ event: CalendarEvent }),
+	errors: ["not_found", "invalid"],
+});
+
+export const BusyInterval = z.object({ start: Timestamp, end: Timestamp });
+
+export const queryFreeBusy = defineOperation({
+	name: "calendar.query_free_busy",
+	summary: "Get the busy times of principals of your organization",
+	description: [
+		"Returns the busy times of each principal in principal_ids from time_min to time_max, without titles or other details.",
+		'principal_ids is one text, with a comma between the ids, for example "prn_…,prn_…".',
+		"A busy time is a timed event or occurrence. Cancelled occurrences, and events and occurrences that the principal declined, are not busy. All-day events are not busy.",
+		`One call takes at most ${CALENDAR_LIMITS.freeBusyPrincipals} principals and a range of at most ${CALENDAR_LIMITS.freeBusyDays} days.`,
+	].join(" "),
+	http: { method: "GET", path: "/api/v1/calendar/free_busy" },
+	scopes: ["calendar.read"],
+	callers: ["human", "agent", "service"],
+	annotations: READ,
+	input: z
+		.strictObject({
+			principal_ids: z
+				.string()
+				.max(1000)
+				.regex(
+					new RegExp(
+						`^\\s*prn_${ID_CHARS}(?:\\s*,\\s*prn_${ID_CHARS}){0,${CALENDAR_LIMITS.freeBusyPrincipals - 1}}\\s*$`,
+					),
+					`must be at most ${CALENDAR_LIMITS.freeBusyPrincipals} ids that start with prn_, with a comma between them`,
+				),
+			time_min: RangeTime,
+			time_max: RangeTime,
+		})
+		.refine((input) => Date.parse(input.time_max) > Date.parse(input.time_min), "time_max must be after time_min")
+		.refine(
+			(input) => Date.parse(input.time_max) - Date.parse(input.time_min) <= CALENDAR_LIMITS.freeBusyDays * DAY_MS,
+			`The range can be at most ${CALENDAR_LIMITS.freeBusyDays} days long`,
+		),
+	output: z.object({
+		calendars: z.array(z.object({ principal_id: z.string(), busy: z.array(BusyInterval) })),
+	}),
 	errors: ["not_found"],
 });
 
@@ -561,18 +736,19 @@ export const CalendarChange = z.object({
 	id: z.string().describe("The stable id of the change. A retry of a delivery has the same id."),
 	type: z.enum(CALENDAR_WEBHOOK_EVENTS),
 	calendar_id: z.string().describe("The calendar: the id of its owner."),
-	event_id: z.string(),
-	uid: z.string().describe("The meeting: the same on the event of the organizer and on each copy."),
+	event_id: z
+		.string()
+		.describe("The event: the same id on the calendar of the organizer and on the copy of each attendee."),
 	occurrence_id: z
 		.string()
 		.nullable()
-		.describe("The occurrence of a recurring event that changed. Null for a change of the whole event."),
+		.describe(
+			"The id of the occurrence that changed, as calendar.list_events gives it. Null for a change of the entire event or series.",
+		),
 	revision: z
 		.number()
 		.int()
-		.describe(
-			"The revision of the event after the change. An answer of a different attendee does not change it, so deduplicate by id.",
-		),
+		.describe("The revision of the event after the change. A response does not change it, so deduplicate by id."),
 	actor_id: z.string().nullable().describe("The principal that caused the change, or null."),
 	at: Timestamp,
 	cursor: z.string().describe("The position after this change. Give it to calendar.list_changes to continue."),
@@ -673,7 +849,11 @@ export const calendarOperations = {
 	"calendar.create_event": createEvent,
 	"calendar.update_event": updateEvent,
 	"calendar.delete_event": deleteEvent,
-	"calendar.respond_to_invitation": respondToInvitation,
+	"calendar.update_occurrence": updateOccurrence,
+	"calendar.cancel_occurrence": cancelOccurrence,
+	"calendar.respond_to_event": respondToEvent,
+	"calendar.set_reminder": setReminder,
+	"calendar.query_free_busy": queryFreeBusy,
 	"calendar.list_changes": listChanges,
 	"calendar.create_webhook_subscription": createCalendarWebhookSubscription,
 	"calendar.list_webhook_subscriptions": listCalendarWebhookSubscriptions,

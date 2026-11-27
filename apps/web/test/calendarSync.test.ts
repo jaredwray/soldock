@@ -7,7 +7,6 @@ function change(id: string): ChangePage["changes"][number] {
 		type: "calendar.rsvp.changed",
 		calendar_id: "prn_1",
 		event_id: "evt_1",
-		uid: "evt_1",
 		occurrence_id: null,
 		revision: 1,
 		actor_id: null,

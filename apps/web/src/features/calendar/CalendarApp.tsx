@@ -1,5 +1,5 @@
 import "./calendar.css";
-import { ApiError, type CalendarEvent, canonicalTimeZone, zonedDate } from "@asterra/contracts";
+import { type CalendarEvent, canonicalTimeZone, zonedDate } from "@asterra/contracts";
 import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import { errorMessage } from "../../lib/api.ts";
 import { Icon } from "../../lib/icons.tsx";
@@ -7,7 +7,7 @@ import { setPageTitle } from "../../lib/pageTitle.ts";
 import { Link } from "../../lib/router.tsx";
 import { type CalendarView, calendarPath, isCalendarDate } from "../../routes.ts";
 import { PageHeader } from "../../shell/PageHeader.tsx";
-import { getEvent, useEvents } from "./data.ts";
+import { useEvents } from "./data.ts";
 import { EventDialog } from "./EventDialog.tsx";
 import { clampDay, type EventForm, type FirstDay, newEventForm, periodOf, periodTitle, shiftTarget } from "./model.ts";
 import { AgendaList, MonthView, WeekView } from "./views.tsx";
@@ -81,32 +81,6 @@ export function CalendarApp({ view, date }: CalendarAppProps) {
 				? period.start
 				: `${anchor.slice(0, 7)}-01`,
 	);
-
-	// An open invitation shows the newest copy of each load, so a change of the organizer shows in the dialog.
-	// A load has only the events of the period. A copy that it does not have can be in a different period now, so
-	// the page reads the copy by its id. Only `not_found` means that the organizer cancelled the meeting or removed
-	// the person.
-	const openCopy = dialog?.event && !dialog.event.is_organizer ? dialog.event : null;
-	const loadedCopy =
-		openCopy && state.status === "ready" ? state.events.find((event) => event.id === openCopy.id) : undefined;
-	const missingId = openCopy !== null && state.status === "ready" && !loadedCopy ? openCopy.id : null;
-	const [outside, setOutside] = useState<{ id: string; event: CalendarEvent | null } | null>(null);
-	useEffect(() => {
-		if (missingId === null || state.status !== "ready") return;
-		let current = true;
-		getEvent(missingId).then(
-			({ event }) => current && setOutside({ id: missingId, event }),
-			(error: unknown) => {
-				if (current && error instanceof ApiError && error.code === "not_found")
-					setOutside({ id: missingId, event: null });
-			},
-		);
-		return () => {
-			current = false;
-		};
-	}, [missingId, state]);
-	const refreshed = missingId !== null && outside?.id === missingId ? outside : null;
-	const copyGone = refreshed !== null && refreshed.event === null;
 
 	const month = anchor.slice(0, 7);
 	const agendaDays = view === "month" ? period.days.filter((day) => day.slice(0, 7) === month) : period.days;
@@ -207,8 +181,7 @@ export function CalendarApp({ view, date }: CalendarAppProps) {
 			</div>
 			{dialog && (
 				<EventDialog
-					event={loadedCopy ?? refreshed?.event ?? dialog.event}
-					gone={copyGone}
+					event={dialog.event}
 					initial={dialog.initial}
 					zone={zone}
 					onChanged={() => void reload()}

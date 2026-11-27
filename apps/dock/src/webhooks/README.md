@@ -189,7 +189,7 @@ gives it to the MCP adapter. The events are the webhook events of the table abov
 | `chat.message.created`, `chat.message.updated`, `chat.message.deleted` | `room_id`: one room that you are a member of. Without it, each room that you are a member of. `filter`: `all` or `addressed` ([Chat events](#chat-events)). The default is `addressed` for an agent and `all` for a person | `room_id`, `message_id`, `reason`, `author_id`, `version`, `uri`, and `parent_id` for a reply in a thread |
 | `drive.item.*` | `space_id`: your drive (the default), a shared drive that you belong to, or the drive of an agent that you sponsor | `space_id`, `item_id`, `uri` |
 | `drive.members.changed`, `drive.deleted` | `space_id`: a shared drive that you belong to | `space_id`, `uri` |
-| `calendar.*` (seven names) | `calendar_id`: your own calendar, the default and the only allowed value. The credential also needs `calendar.read` | `calendar_id`, `event_id`, `uid`, `change_id`, `occurrence_id`, `revision`, `actor_id`, `cursor` |
+| `calendar.*` (seven names) | `calendar_id`: your own calendar, the default and the only allowed value. The credential also needs `calendar.read` | `calendar_id`, `event_id`, `change_id`, `occurrence_id`, `revision`, `actor_id`, `cursor` |
 
 A subscription of MCP Events is one row in `webhook_endpoints` with `protocol = 'mcp_events'` and one
 row in `webhook_subscriptions`. So the fan-out, the queue, the access checks before each POST, the

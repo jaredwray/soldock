@@ -32,7 +32,7 @@ export const SCOPES = {
 	"chat.read": "Read your rooms and direct messages, and find the public rooms",
 	"chat.write": "Create and join rooms, change their members, post, change and delete messages, and set what you read",
 	"calendar.read": "Read the events of your calendar",
-	"calendar.write": "Add, change and delete the events of your calendar, invite people, and answer invitations",
+	"calendar.write": "Add, change and delete the events of your calendar",
 	"calendar.webhooks": "Subscribe to the changes of your calendar through MCP Events and webhooks",
 } as const;
 
@@ -113,8 +113,7 @@ export const SERVICE_SCOPE_DESCRIPTIONS: Readonly<Record<ServiceScope, string>> 
 	"chat.read": "Find the public rooms, and read the threads, mentions, saved messages and settings of the account",
 	"chat.write": "Create rooms, open direct messages, and change the sections, reminders and settings of the account",
 	"calendar.read": "Read the events of the own calendar of the service account",
-	"calendar.write":
-		"Add, change and delete the events of the own calendar of the service account, invite people, and answer invitations",
+	"calendar.write": "Add, change and delete the events of the own calendar of the service account",
 };
 
 /** The text of a scope for a caller of this kind: the service text for a service account. */

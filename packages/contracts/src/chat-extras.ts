@@ -44,6 +44,7 @@ export const CHAT_ACTIVITY_KINDS = [
 	"card_action",
 	"member_request",
 	"share_request",
+	"calendar_reminder",
 ] as const;
 export type ChatActivityKind = (typeof CHAT_ACTIVITY_KINDS)[number];
 
@@ -75,6 +76,20 @@ export const ChatActivityItem = z.object({
 		.object({ space_id: z.string(), item_id: z.string(), name: z.string(), role: z.enum(["editor", "viewer"]) })
 		.nullable()
 		.default(null),
+	/**
+	 * For `calendar_reminder`: the occurrence that starts soon. `room_id` and `message_id` are empty and
+	 * `room_name` is null for this kind. Null for each other kind.
+	 */
+	event: z
+		.object({
+			event_id: z.string(),
+			occurrence_id: z.string().nullable(),
+			title: z.string(),
+			start: Timestamp,
+			minutes: z.number().int(),
+		})
+		.nullable()
+		.default(null),
 	created_at: Timestamp,
 	read_at: Timestamp.nullable(),
 });
@@ -84,7 +99,7 @@ export const listActivity = defineOperation({
 	name: "chat.list_activity",
 	summary: "List your activity: mentions, replies, reactions, reminders, card clicks and member requests",
 	description:
-		"Returns recent activity items for you, newest first. Filter by kind or by unread. Pass next_cursor as cursor for the next page. An item of the kind member_request is a request of an agent to add an agent or a service account that you manage to a room: approve or deny it with chat.approve_member_request or chat.deny_member_request.",
+		"Returns recent activity items for you, newest first. Filter by kind or by unread. Pass next_cursor as cursor for the next page. An item of the kind member_request is a request of an agent to add an agent or a service account that you manage to a room: approve or deny it with chat.approve_member_request or chat.deny_member_request. An item of the kind calendar_reminder has the title and the start of an event: the list leaves it out when the credential does not have the scope calendar.read.",
 	http: { method: "GET", path: "/api/v1/chat/activity" },
 	scopes: ["chat.read"],
 	callers: ["human", "agent", "service"],

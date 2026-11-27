@@ -7,7 +7,6 @@ import {
 	type Actor,
 	api,
 	bearer,
-	breakCalendarDelivery,
 	calendarMeta,
 	calendarStub,
 	callTool,
@@ -42,10 +41,10 @@ beforeEach(async () => {
 const WHEN = { kind: "timed", start: "2026-12-02T15:00:00Z", end: "2026-12-02T16:00:00Z", time_zone: "UTC" } as const;
 const LATER = { kind: "timed", start: "2026-12-03T17:00:00Z", end: "2026-12-03T18:00:00Z", time_zone: "UTC" } as const;
 
-const meeting = (attendees: InputOf<"calendar.create_event">["attendees"]): InputOf<"calendar.create_event"> => ({
+const meeting = (attendeeIds: string[]): InputOf<"calendar.create_event"> => ({
 	title: "Design review",
 	when: WHEN,
-	attendees,
+	attendee_ids: attendeeIds,
 });
 
 /** The cursor of now in the feed of an actor. */
@@ -114,10 +113,9 @@ describe("the change feed of a calendar", () => {
 
 		const changes = await changesAfter(ada, start);
 		expect(
-			changes.map(({ type, event_id, uid, revision, actor_id, calendar_id, occurrence_id }) => ({
+			changes.map(({ type, event_id, revision, actor_id, calendar_id, occurrence_id }) => ({
 				type,
 				event_id,
-				uid,
 				revision,
 				actor_id,
 				calendar_id,
@@ -131,7 +129,6 @@ describe("the change feed of a calendar", () => {
 			].map(([type, revision]) => ({
 				type,
 				event_id: event.id,
-				uid: event.id,
 				revision,
 				actor_id: ada.id,
 				calendar_id: ada.id,
@@ -146,83 +143,79 @@ describe("the change feed of a calendar", () => {
 		]);
 	});
 
-	// The user story: an RSVP of one attendee is a change on the calendar of the organizer and of each other
-	// attendee. The answer of the owner of a copy comes back in the next snapshot of the organizer: that echo must
-	// not be a second change, or an agent that watches answers gets each answer two times.
-	it("records invitations, answers, changes and the cancel on each calendar of a meeting", async () => {
-		const [adaStart, graceStart, botStart] = [await head(ada), await head(grace), await head(bot)];
-		const { event } = await ada.call(
-			"calendar.create_event",
-			meeting([{ principal_id: grace.id }, { principal_id: bot.id }]),
-		);
-		await settleCalendars(ada.id, grace.id, bot.id);
+	// The user story: a response of one attendee is a change on the calendar of the organizer and of each other
+	// attendee. The response of the owner of a copy comes back in the next state of the organizer: that echo must
+	// not be a second change, or an agent that watches responses gets each response two times.
+	it("records invitations, responses, changes and the delete on each calendar of a meeting", async () => {
+		const [adaStart, graceStart, ownerStart] = [await head(ada), await head(grace), await head(owner)];
+		const { event } = await ada.call("calendar.create_event", meeting([grace.id, owner.id]));
+		await settleCalendars(ada.id, grace.id, owner.id);
 		const [copy] = await changesAfter(grace, graceStart);
-		expect(copy).toMatchObject({ type: "calendar.invitation.received", uid: event.id, revision: 1, actor_id: ada.id });
+		expect(copy).toMatchObject({
+			type: "calendar.invitation.received",
+			event_id: event.id,
+			revision: 1,
+			actor_id: ada.id,
+		});
 
-		await grace.call("calendar.respond_to_invitation", { event_id: copy?.event_id ?? "", response: "accepted" });
-		await settleCalendars(ada.id, grace.id, bot.id);
+		await grace.call("calendar.respond_to_event", { event_id: event.id, response: "accepted" });
+		// A second equal response is no change.
+		await grace.call("calendar.respond_to_event", { event_id: event.id, response: "accepted" });
+		await settleCalendars(ada.id, grace.id, owner.id);
 		expect(typesOf(await changesAfter(grace, graceStart))).toEqual([
 			"calendar.invitation.received",
 			"calendar.rsvp.changed",
 		]);
-		const organizer = await changesAfter(ada, adaStart);
-		expect(organizer.at(-1)).toMatchObject({
+		expect((await changesAfter(ada, adaStart)).at(-1)).toMatchObject({
 			type: "calendar.rsvp.changed",
 			event_id: event.id,
 			revision: 1,
 			actor_id: grace.id,
 		});
-		expect((await changesAfter(bot, botStart)).map(({ type, actor_id }) => [type, actor_id])).toEqual([
+		expect((await changesAfter(owner, ownerStart)).map(({ type, actor_id }) => [type, actor_id])).toEqual([
 			["calendar.invitation.received", ada.id],
 			["calendar.rsvp.changed", grace.id],
 		]);
 
+		// A new time asks each attendee again: the copy of grace changes, and her response goes back to
+		// needs_action because of the organizer.
 		await ada.call("calendar.update_event", { event_id: event.id, when: LATER });
-		await settleCalendars(ada.id, grace.id, bot.id);
+		await settleCalendars(ada.id, grace.id, owner.id);
 		await ada.call("calendar.delete_event", { event_id: event.id });
-		await settleCalendars(ada.id, grace.id, bot.id);
+		await settleCalendars(ada.id, grace.id, owner.id);
 		expect(typesOf(await changesAfter(ada, adaStart))).toEqual([
 			"calendar.event.created",
 			"calendar.rsvp.changed",
 			"calendar.event.updated",
 			"calendar.event.deleted",
 		]);
-		expect(typesOf(await changesAfter(grace, graceStart))).toEqual([
-			"calendar.invitation.received",
-			"calendar.rsvp.changed",
-			"calendar.invitation.updated",
-			"calendar.invitation.cancelled",
+		expect((await changesAfter(grace, graceStart)).map(({ type, actor_id }) => [type, actor_id])).toEqual([
+			["calendar.invitation.received", ada.id],
+			["calendar.rsvp.changed", grace.id],
+			["calendar.invitation.updated", ada.id],
+			["calendar.rsvp.changed", ada.id],
+			["calendar.invitation.cancelled", ada.id],
 		]);
 	});
 
-	// The organizer removed an attendee and invited it again before the removal arrived. The answer of that
-	// attendee goes back to pending on the copy of each other attendee. The attendee did not answer, so the record
-	// must not name it as the actor: an agent that skips its own changes, or trusts the actor, would be misled.
-	it("names the organizer for an answer that a new invitation reset on a different copy", async () => {
-		const { event } = await ada.call(
-			"calendar.create_event",
-			meeting([{ principal_id: grace.id }, { principal_id: bot.id }]),
-		);
-		await settleCalendars(ada.id, grace.id, bot.id);
-		const { events } = await bot.call("calendar.list_events", {
-			time_min: "2026-12-01T00:00:00Z",
-			time_max: "2026-12-08T00:00:00Z",
-		});
-		const botCopy = events.find((item) => item.uid === event.id);
-		await bot.call("calendar.respond_to_invitation", { event_id: botCopy?.id ?? "", response: "accepted" });
-		await settleCalendars(ada.id, grace.id, bot.id);
+	// The organizer removed an attendee and invited it again before the removal arrived. The response of that
+	// attendee goes back to needs_action on the copy of each other attendee. The attendee did not respond, so the
+	// record must name the organizer: an agent that skips its own changes, or trusts the actor, would be misled.
+	it("names the organizer for a response that a new invitation reset on a different copy", async () => {
+		const { event } = await ada.call("calendar.create_event", meeting([grace.id, owner.id]));
+		await settleCalendars(ada.id, grace.id, owner.id);
+		await owner.call("calendar.respond_to_event", { event_id: event.id, response: "accepted" });
+		await settleCalendars(ada.id, grace.id, owner.id);
 		const graceStart = await head(grace);
 
-		const broken = await breakCalendarDelivery(ada.id);
-		await ada.call("calendar.update_event", { event_id: event.id, attendees: [{ principal_id: grace.id }] });
-		await ada.call("calendar.update_event", {
-			event_id: event.id,
-			attendees: [{ principal_id: grace.id }, { principal_id: bot.id }],
-		});
-		broken.fail = null;
-		await settleCalendars(ada.id, grace.id, bot.id);
-		const answers = (await changesAfter(grace, graceStart)).filter((change) => change.type === "calendar.rsvp.changed");
-		expect(answers.map((change) => change.actor_id)).toEqual([ada.id]);
+		// The two states for grace merge in one row of the outbox, so the copy sees only the newest one.
+		await ada.call("calendar.update_event", { event_id: event.id, attendee_ids: [grace.id] });
+		await ada.call("calendar.update_event", { event_id: event.id, attendee_ids: [grace.id, owner.id] });
+		await settleCalendars(ada.id, grace.id, owner.id);
+		const responses = (await changesAfter(grace, graceStart)).filter(
+			(change) => change.type === "calendar.rsvp.changed",
+		);
+		expect(responses.map((change) => change.actor_id)).toEqual([ada.id]);
 	});
 
 	// A page that missed many edits reads them in pages, and an expired cursor makes it read the range again.
@@ -264,7 +257,7 @@ describe("the change feed of a calendar", () => {
 			const old = Date.now() - (CALENDAR_LIMITS.changeDays + 1) * 86_400_000;
 			for (let i = 0; i < 1200; i++) {
 				sql.exec(
-					"INSERT INTO changes (id, type, event_id, uid, revision, at) VALUES (?, 'calendar.event.updated', 'evt_old', 'evt_old', 1, ?)",
+					"INSERT INTO changes (id, type, event_id, revision, at) VALUES (?, 'calendar.event.updated', 'evt_old', 1, ?)",
 					`chg_old_${i}`,
 					old,
 				);
@@ -299,6 +292,105 @@ describe("the change feed of a calendar", () => {
 		expect(fromGrace.changes).toEqual([]);
 		const { api_key } = await ada.call("account.create_api_key", { label: "chat", scopes: ["chat.read"] });
 		expect(await codeOf(api(api_key.secret)("calendar.list_changes", {}))).toBe("forbidden");
+	});
+});
+
+describe("the changes of single occurrences", () => {
+	const weekly = (attendeeIds: string[] = []): InputOf<"calendar.create_event"> => ({
+		title: "Weekly sync",
+		when: WHEN,
+		recurrence: { frequency: "weekly", interval: 1 },
+		attendee_ids: attendeeIds,
+	});
+
+	/** The occurrence ids of a series in the first three weeks, first first. */
+	async function occurrencesOf(actor: Actor, eventId: string): Promise<string[]> {
+		const { events } = await actor.call("calendar.list_events", {
+			time_min: "2026-12-01T00:00:00Z",
+			time_max: "2026-12-22T00:00:00Z",
+		});
+		return events.flatMap((item) => (item.id === eventId && item.occurrence_id ? [item.occurrence_id] : []));
+	}
+
+	// A change of one occurrence is a change of the series for a receiver: the record names the occurrence, and a
+	// refused, dry or empty call writes nothing. A private reminder is no change of the event.
+	it("records a move and a cancel of one occurrence with its id, and nothing for the other calls", async () => {
+		const { event } = await ada.call("calendar.create_event", weekly());
+		const [first, second] = await occurrencesOf(ada, event.id);
+		const start = await head(ada);
+		const later = {
+			kind: "timed",
+			start: "2026-12-09T18:00:00Z",
+			end: "2026-12-09T19:00:00Z",
+			time_zone: "UTC",
+		} as const;
+		await ada.call("calendar.update_occurrence", { occurrence_id: second ?? "", when: later });
+		await ada.call("calendar.update_occurrence", { occurrence_id: second ?? "", when: later });
+		await ada.call("calendar.cancel_occurrence", { occurrence_id: first ?? "", dry_run: true });
+		await ada.call("calendar.cancel_occurrence", { occurrence_id: first ?? "" });
+		expect(await codeOf(ada.call("calendar.cancel_occurrence", { occurrence_id: first ?? "" }))).toBe("not_found");
+		await ada.call("calendar.set_reminder", { event_id: event.id, minutes: 30 });
+		expect(
+			(await changesAfter(ada, start)).map(({ type, occurrence_id, revision }) => [type, occurrence_id, revision]),
+		).toEqual([
+			["calendar.event.updated", second, 2],
+			["calendar.event.updated", first, 3],
+		]);
+	});
+
+	// An attendee that follows the copy must see a moved or cancelled occurrence, and the new question for the
+	// moved one, without a change record of the whole series.
+	it("records a moved and a cancelled occurrence on a copy, with the reset of the response to it", async () => {
+		const { event } = await ada.call("calendar.create_event", weekly([grace.id]));
+		await settleCalendars(ada.id, grace.id);
+		await grace.call("calendar.respond_to_event", { event_id: event.id, response: "accepted" });
+		await settleCalendars(ada.id, grace.id);
+		const [first, second] = await occurrencesOf(ada, event.id);
+		const start = await head(grace);
+		const later = {
+			kind: "timed",
+			start: "2026-12-09T18:00:00Z",
+			end: "2026-12-09T19:00:00Z",
+			time_zone: "UTC",
+		} as const;
+		await ada.call("calendar.update_occurrence", { occurrence_id: second ?? "", when: later });
+		await settleCalendars(ada.id, grace.id);
+		await ada.call("calendar.cancel_occurrence", { occurrence_id: first ?? "" });
+		await settleCalendars(ada.id, grace.id);
+		expect(
+			(await changesAfter(grace, start)).map(({ type, occurrence_id, actor_id }) => [type, occurrence_id, actor_id]),
+		).toEqual([
+			["calendar.invitation.updated", second, ada.id],
+			["calendar.rsvp.changed", second, ada.id],
+			["calendar.invitation.updated", first, ada.id],
+		]);
+	});
+
+	// A response to one occurrence is a change of that occurrence on each calendar of the meeting. Its echo and a
+	// repeated response change nothing, and a response to the series names no occurrence.
+	it("records a response to one occurrence on each calendar, once", async () => {
+		const { event } = await ada.call("calendar.create_event", weekly([grace.id, owner.id]));
+		await settleCalendars(ada.id, grace.id, owner.id);
+		const [, second] = await occurrencesOf(ada, event.id);
+		const starts = [await head(ada), await head(grace), await head(owner)] as const;
+		await grace.call("calendar.respond_to_event", { event_id: event.id, occurrence_id: second, response: "declined" });
+		await grace.call("calendar.respond_to_event", { event_id: event.id, occurrence_id: second, response: "declined" });
+		await settleCalendars(ada.id, grace.id, owner.id);
+		for (const [actor, cursor] of [
+			[ada, starts[0]],
+			[grace, starts[1]],
+			[owner, starts[2]],
+		] as const) {
+			expect(
+				(await changesAfter(actor, cursor)).map(({ type, occurrence_id, actor_id }) => [type, occurrence_id, actor_id]),
+			).toEqual([["calendar.rsvp.changed", second, grace.id]]);
+		}
+		const graceNext = await head(grace);
+		await grace.call("calendar.respond_to_event", { event_id: event.id, response: "accepted" });
+		await settleCalendars(ada.id, grace.id, owner.id);
+		expect((await changesAfter(grace, graceNext)).map(({ type, occurrence_id }) => [type, occurrence_id])).toEqual([
+			["calendar.rsvp.changed", null],
+		]);
 	});
 });
 
@@ -356,7 +448,6 @@ describe("the publish of the change feed", () => {
 			eventId: changes[0]?.id,
 			occurredAt: Date.parse(changes[0]?.at ?? ""),
 			calendarEventId: changes[0]?.event_id,
-			uid: changes[0]?.uid,
 			occurrenceId: null,
 			revision: 1,
 			actorId: ada.id,

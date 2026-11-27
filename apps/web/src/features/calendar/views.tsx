@@ -5,8 +5,8 @@ import { calendarPath } from "../../routes.ts";
 import {
 	DAY_MINUTES,
 	type DaySegment,
+	eventKey,
 	eventLabel,
-	eventStateClass,
 	eventsByDay,
 	HOURS,
 	hourText,
@@ -55,9 +55,8 @@ function EventButton({
 	const { event } = segment;
 	const start = event.when.kind === "timed" ? Date.parse(event.when.start) : null;
 	const classes = ["cal-event"];
-	const state = eventStateClass(event);
-	if (state) classes.push(state);
 	if (segment.allDay) classes.push("cal-event-all-day");
+	if (event.my_response === "declined") classes.push("cal-event-declined");
 	// A short event has one line in the grid: the title, then the time. An event with no room for its place hides it.
 	else if (segment.end - segment.start < SHORT_EVENT_MINUTES) classes.push("cal-event-short");
 	else if (segment.end - segment.start < PLACE_MINUTES) classes.push("cal-event-brief");
@@ -72,7 +71,14 @@ function EventButton({
 			{!segment.allDay && start !== null && !segment.continued && (
 				<span className="cal-event-time">{timeText(start, zone)}</span>
 			)}
-			<span className="cal-event-title">{event.title}</span>
+			<span className="cal-event-title">
+				{event.recurrence && (
+					<span className="cal-event-repeat" aria-hidden="true">
+						↻{" "}
+					</span>
+				)}
+				{event.title}
+			</span>
 			{!compact && event.location && <span className="cal-event-location">{event.location}</span>}
 		</button>
 	);
@@ -126,7 +132,7 @@ export function WeekView({ days, events, zone, today, onOpen, onCreate }: ViewPr
 								{allDay.length > 0 && (
 									<ul className="cal-list">
 										{allDay.map((segment) => (
-											<li key={segment.event.id}>
+											<li key={eventKey(segment.event)}>
 												<EventButton segment={segment} zone={zone} onOpen={onOpen} compact />
 											</li>
 										))}
@@ -170,7 +176,7 @@ export function WeekView({ days, events, zone, today, onOpen, onCreate }: ViewPr
 								<ul className="cal-list">
 									{placed.map(({ segment, column, columns }) => (
 										<li
-											key={segment.event.id}
+											key={eventKey(segment.event)}
 											className="cal-timed"
 											style={{
 												top: segment.start * MINUTE_PX,
@@ -233,7 +239,7 @@ export function MonthView({ days, events, zone, today, month, onOpen, onCreate }
 							{shown.length > 0 && (
 								<ul className="cal-list">
 									{shown.map((segment) => (
-										<li key={segment.event.id}>
+										<li key={eventKey(segment.event)}>
 											<EventButton segment={segment} zone={zone} onOpen={onOpen} compact />
 										</li>
 									))}
@@ -270,7 +276,7 @@ export function AgendaList({ days, events, zone, today, onOpen }: Omit<ViewProps
 					<h2 className="cal-agenda-date">{longDate(day)}</h2>
 					<ul className="cal-list">
 						{(byDay.get(day) ?? []).map((segment) => (
-							<li key={segment.event.id}>
+							<li key={eventKey(segment.event)}>
 								<EventButton segment={segment} zone={zone} onOpen={onOpen} />
 							</li>
 						))}

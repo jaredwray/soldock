@@ -156,7 +156,6 @@ interface CalendarChangeFacts {
 	eventId: string;
 	occurredAt: number;
 	calendarEventId: string;
-	uid: string;
 	occurrenceId: string | null;
 	revision: number;
 	actorId: string | null;
@@ -221,7 +220,6 @@ function validCalendarJob(job: Record<string, unknown>): boolean {
 		typeof job.eventType === "string" &&
 		CALENDAR_EVENTS.has(job.eventType) &&
 		typeof job.calendarEventId === "string" &&
-		typeof job.uid === "string" &&
 		nullableString(job.occurrenceId) &&
 		typeof job.revision === "number" &&
 		Number.isSafeInteger(job.revision) &&
@@ -662,7 +660,6 @@ function calendarData(job: CalendarWebhookDeliveryJob): Record<string, string | 
 	return {
 		calendar_id: job.calendarId,
 		event_id: job.calendarEventId,
-		uid: job.uid,
 		change_id: job.eventId,
 		occurrence_id: job.occurrenceId,
 		revision: job.revision,
