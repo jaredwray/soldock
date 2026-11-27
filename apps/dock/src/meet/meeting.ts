@@ -5,6 +5,7 @@ import {
 	type IceServer,
 	type LobbyEntry,
 	MEET_LIMITS,
+	MEET_MID_PATTERN,
 	MEET_SOCKET_CLOSE,
 	MEET_SOCKET_PROTOCOL,
 	MEET_SOCKET_SUBPROTOCOL,
@@ -90,10 +91,13 @@ const PRUNE_AFTER_MS = 10 * 60_000;
 /** The row of each other guest goes this long after the guest left. Its token is of no use at that time. */
 const PRUNE_LEFT_MS = 24 * 60 * 60_000;
 /**
- * The mid of a row of `pending_closes` that is not one track: the object reads the session from the SFU, and
- * closes each track there that it has no row for. No real mid has this value.
+ * The kinds of a row of `pending_closes`. A `track` row is one mid to close. A `sweep` row is not one track: the
+ * object reads the session from the SFU, and closes each track there that it has no row for. The kind has its own
+ * column, so no mid of a browser or of the SFU can look like a sweep.
  */
-const SWEEP = "*";
+type CloseKind = "track" | "sweep";
+/** The `mid` column of a `sweep` row. The column has no meaning for that kind. */
+const NO_MID = "";
 /** The time window of the limits `MEET_LIMITS.guestJoinsPerMinute` and `MEET_LIMITS.memberJoinsPerMinute`. */
 const JOIN_WINDOW_MS = 60_000;
 
@@ -160,12 +164,13 @@ const SCHEMA: readonly string[] = [
 	// track is not open. No time limit deletes a row: the delete of the data of the meeting is the last limit.
 	`CREATE TABLE IF NOT EXISTS pending_closes (
 		session_id TEXT NOT NULL,
+		kind TEXT NOT NULL CHECK (kind IN ('track', 'sweep')),
 		mid TEXT NOT NULL,
 		owner_id TEXT NOT NULL,
 		attempts INTEGER NOT NULL DEFAULT 0,
 		next_at INTEGER NOT NULL,
 		created_at INTEGER NOT NULL,
-		PRIMARY KEY (session_id, mid)
+		PRIMARY KEY (session_id, kind, mid)
 	)`,
 ];
 
@@ -817,21 +822,36 @@ export class MeetingDO extends DurableObject<Env> {
 	 * `tracks` or `pulls`, or it is in `pending_closes`, also after a restart of the object.
 	 */
 	private queueCloses(ownerId: string, sessionId: string | null, mids: readonly string[]): void {
+		for (const mid of mids) this.queueClose(ownerId, sessionId, "track", mid);
+	}
+
+	/**
+	 * Records a read of one session from the SFU, and a close of each track there that has no row. Use it when the
+	 * session ends, and when the object does not know which tracks the SFU made.
+	 */
+	private queueSweep(ownerId: string, sessionId: string | null): void {
+		this.queueClose(ownerId, sessionId, "sweep", NO_MID);
+	}
+
+	private queueClose(ownerId: string, sessionId: string | null, kind: CloseKind, mid: string): void {
 		if (!sessionId) return;
 		const now = Date.now();
-		for (const mid of mids) {
-			this.sql.exec(
-				// A second request for the same mid starts its tries again: the caller wants the close now.
-				`INSERT INTO pending_closes (session_id, mid, owner_id, attempts, next_at, created_at)
-					VALUES (?, ?, ?, 0, ?, ?)
-					ON CONFLICT (session_id, mid) DO UPDATE SET attempts = 0, next_at = excluded.next_at`,
-				sessionId,
-				mid,
-				ownerId,
-				now + CLOSE_RETRY_MS,
-				now,
-			);
-		}
+		this.sql.exec(
+			// A second request for the same row starts its tries again: the caller wants the close now.
+			`INSERT INTO pending_closes (session_id, kind, mid, owner_id, attempts, next_at, created_at)
+				VALUES (?, ?, ?, ?, 0, ?, ?)
+				ON CONFLICT (session_id, kind, mid) DO UPDATE SET attempts = 0, next_at = excluded.next_at`,
+			sessionId,
+			kind,
+			mid,
+			ownerId,
+			now + CLOSE_RETRY_MS,
+			now,
+		);
+	}
+
+	private deleteClose(sessionId: string, kind: CloseKind, mid: string): void {
+		this.sql.exec("DELETE FROM pending_closes WHERE session_id = ? AND kind = ? AND mid = ?", sessionId, kind, mid);
 	}
 
 	/**
@@ -866,9 +886,10 @@ export class MeetingDO extends DurableObject<Env> {
 				.toArray()
 				.map((pull) => pull.mid as string),
 		];
-		// The session ends here. A push or a pull that got no answer can have a track without a row: the SWEEP row
+		// The session ends here. A push or a pull that got no answer can have a track without a row: the sweep row
 		// makes the object read the session from the SFU and close what it finds.
-		this.queueCloses(participantId, row.sfu_session_id, [...own, SWEEP]);
+		this.queueCloses(participantId, row.sfu_session_id, own);
+		this.queueSweep(participantId, row.sfu_session_id);
 		this.queuePullCloses("publisher_id", participantId);
 		this.sql.exec("DELETE FROM pulls WHERE publisher_id = ? OR subscriber_id = ?", participantId, participantId);
 		this.sql.exec("DELETE FROM tracks WHERE participant_id = ?", participantId);
@@ -887,23 +908,26 @@ export class MeetingDO extends DurableObject<Env> {
 		]);
 	}
 
-	private retryClose(sessionId: string, mid: string): void {
+	private retryClose(sessionId: string, kind: CloseKind, mid: string): void {
 		this.sql.exec(
 			`UPDATE pending_closes SET next_at = ? + MIN(?, ? * (1 << MIN(attempts, 10))), attempts = attempts + 1
-				WHERE session_id = ? AND mid = ?`,
+				WHERE session_id = ? AND kind = ? AND mid = ?`,
 			Date.now(),
 			CLOSE_RETRY_MAX_MS,
 			CLOSE_RETRY_MS,
 			sessionId,
+			kind,
 			mid,
 		);
 	}
 
-	private dueCloses(sessionId: string): string[] {
+	/** The mids of the rows of one kind whose try is due. A `sweep` kind gives at most one entry. */
+	private dueCloses(sessionId: string, kind: CloseKind): string[] {
 		return this.sql
 			.exec(
-				"SELECT mid FROM pending_closes WHERE session_id = ? AND (attempts = 0 OR next_at <= ?)",
+				"SELECT mid FROM pending_closes WHERE session_id = ? AND kind = ? AND (attempts = 0 OR next_at <= ?)",
 				sessionId,
+				kind,
 				Date.now(),
 			)
 			.toArray()
@@ -917,9 +941,9 @@ export class MeetingDO extends DurableObject<Env> {
 	private async checkStuckCloses(config: RealtimeConfig, sessionId: string): Promise<boolean> {
 		const stuck = this.sql
 			.exec(
-				"SELECT mid FROM pending_closes WHERE session_id = ? AND mid != ? AND attempts >= ? AND next_at <= ?",
+				`SELECT mid FROM pending_closes WHERE session_id = ? AND kind = 'track' AND attempts >= ?
+					AND next_at <= ?`,
 				sessionId,
-				SWEEP,
 				CLOSE_CHECK_TRIES,
 				Date.now(),
 			)
@@ -938,7 +962,7 @@ export class MeetingDO extends DurableObject<Env> {
 		for (const mid of stuck) {
 			if (!open.has(mid)) {
 				this.sql.exec(
-					"DELETE FROM pending_closes WHERE session_id = ? AND mid = ? AND attempts >= ?",
+					"DELETE FROM pending_closes WHERE session_id = ? AND kind = 'track' AND mid = ? AND attempts >= ?",
 					sessionId,
 					mid,
 					CLOSE_CHECK_TRIES,
@@ -955,13 +979,15 @@ export class MeetingDO extends DurableObject<Env> {
 	 */
 	private async closeSession(ownerId: string, sessionId: string): Promise<void> {
 		const config = realtimeConfig(this.env);
-		const due = this.dueCloses(sessionId);
-		if (due.length === 0) return;
+		const sweep = this.dueCloses(sessionId, "sweep").length > 0;
+		const due = this.dueCloses(sessionId, "track");
+		if (!sweep && due.length === 0) return;
 		if (!config) {
-			for (const mid of due) this.retryClose(sessionId, mid);
+			if (sweep) this.retryClose(sessionId, "sweep", NO_MID);
+			for (const mid of due) this.retryClose(sessionId, "track", mid);
 			return;
 		}
-		if (due.includes(SWEEP)) {
+		if (sweep) {
 			let onSfu: string[] | null | undefined;
 			try {
 				onSfu = await sessionState(config, sessionId);
@@ -973,7 +999,7 @@ export class MeetingDO extends DurableObject<Env> {
 			// The alarm can delete the data of an old meeting while the SFU call runs.
 			if (!this.exists()) return;
 			if (onSfu === undefined) {
-				this.retryClose(sessionId, SWEEP);
+				this.retryClose(sessionId, "sweep", NO_MID);
 			} else {
 				const live = this.liveMids(ownerId, sessionId);
 				this.queueCloses(
@@ -981,27 +1007,23 @@ export class MeetingDO extends DurableObject<Env> {
 					sessionId,
 					(onSfu ?? []).filter((mid) => !live.has(mid)),
 				);
-				this.sql.exec("DELETE FROM pending_closes WHERE session_id = ? AND mid = ?", sessionId, SWEEP);
+				this.deleteClose(sessionId, "sweep", NO_MID);
 			}
 		}
 		if (!(await this.checkStuckCloses(config, sessionId))) return;
 		// A mid with a row in `tracks` or `pulls` is in use again. Its close is not wanted now.
 		const live = this.liveMids(ownerId, sessionId);
 		const mids: string[] = [];
-		for (const mid of this.dueCloses(sessionId)) {
-			if (mid === SWEEP) continue;
-			if (live.has(mid)) this.sql.exec("DELETE FROM pending_closes WHERE session_id = ? AND mid = ?", sessionId, mid);
+		for (const mid of this.dueCloses(sessionId, "track")) {
+			if (live.has(mid)) this.deleteClose(sessionId, "track", mid);
 			else mids.push(mid);
 		}
 		if (mids.length === 0) return;
 		const closed = await closeTracks(config, sessionId, mids);
 		if (!this.exists()) return;
 		for (const mid of mids) {
-			if (closed.has(mid)) {
-				this.sql.exec("DELETE FROM pending_closes WHERE session_id = ? AND mid = ?", sessionId, mid);
-			} else {
-				this.retryClose(sessionId, mid);
-			}
+			if (closed.has(mid)) this.deleteClose(sessionId, "track", mid);
+			else this.retryClose(sessionId, "track", mid);
 		}
 	}
 
@@ -1070,6 +1092,13 @@ export class MeetingDO extends DurableObject<Env> {
 		if ("error" in config) return config;
 		const kinds = new Set(input.tracks.map((track) => track.kind));
 		if (kinds.size !== input.tracks.length) return refuse("invalid", "Send at most one audio and one video track.");
+		// The contract refuses such a mid too. The object does not trust that each caller used the contract.
+		if (input.tracks.some((track) => !MEET_MID_PATTERN.test(track.mid))) {
+			return refuse("invalid", "A mid has only letters, digits, and the characters _ . and -.");
+		}
+		if (new Set(input.tracks.map((track) => track.mid)).size !== input.tracks.length) {
+			return refuse("invalid", "Each track needs a different mid.");
+		}
 		return this.enqueue(first.id, async () => {
 			const row = this.admittedByToken(tokenHash);
 			if ("error" in row) return row;
@@ -1209,7 +1238,7 @@ export class MeetingDO extends DurableObject<Env> {
 				// Without an answer, the SFU can have pulls with mids that the object does not know. The object reads
 				// the session and closes each track without a row.
 				if (error instanceof RealtimeError && error.status === 0) {
-					this.queueCloses(row.id, row.sfu_session_id, [SWEEP]);
+					this.queueSweep(row.id, row.sfu_session_id);
 					this.kick();
 				}
 				return this.failure(error);

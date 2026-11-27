@@ -740,7 +740,7 @@ describe("meet", () => {
 			runInDurableObject(
 				stub,
 				(_instance, state) =>
-					state.storage.sql.exec("SELECT COUNT(*) AS n FROM pending_closes WHERE mid != '*'").one().n as number,
+					state.storage.sql.exec("SELECT COUNT(*) AS n FROM pending_closes WHERE kind = 'track'").one().n as number,
 			);
 
 		// The SFU refuses one of the two close calls of the removal. The removal itself still succeeds.
@@ -994,6 +994,50 @@ describe("meet", () => {
 		expect(sfu.openTracks(guestSession)).toHaveLength(3);
 		expect((await callRoute(meeting.code, "/leave", { token: guest.token, body: {} })).status).toBe(200);
 		expect(sfu.openTracks(guestSession)).toEqual([]);
+	});
+
+	it("refuses a mid that is not the form of a browser, and closes each track of a participant that sent one", async () => {
+		const meeting = await newMeeting();
+		await joinAsMember(meeting.code, await signIn("ada@dock.test"));
+		const guest = await joinAsGuest(meeting.code);
+		await ada.call("meet.admit_participant", { code: meeting.code, participant_id: guest.participant.id });
+		const started = await callRoute(meeting.code, "/media/session", { token: guest.token, body: {} });
+		const session = started.body.session as number;
+		const guestSession = sfu.sessions[0] as string;
+		const stub = env.MEETING.get(env.MEETING.idFromName(meeting.code));
+
+		// The mid `*` was the mark of a read of the session in `pending_closes`. The route refuses it, and each
+		// other mid that a browser does not make. The object refuses it too, for a caller that does not use the route.
+		for (const mid of ["*", "a b", "0/1", "x".repeat(33)]) {
+			const bad = { session, offer: { sdp: "v=0 offer" }, tracks: [{ mid, kind: "audio" }] };
+			expect((await callRoute(meeting.code, "/media/publish", { token: guest.token, body: bad })).status).toBe(400);
+		}
+		const direct = await runInDurableObject(stub, (instance, state) => {
+			const row = state.storage.sql
+				.exec("SELECT token_hash FROM participants WHERE id = ?", guest.participant.id)
+				.one();
+			return instance.publish(row.token_hash as string, {
+				session,
+				offer: "v=0 offer",
+				tracks: [{ mid: "*", kind: "audio" }],
+			});
+		});
+		expect(direct).toMatchObject({ error: { code: "invalid" } });
+		expect(sfu.callsTo("/tracks/new")).toEqual([]);
+
+		// The guest sends two tracks with usual mids. The host removes the guest, and the SFU closes each of them.
+		const sent = { session, offer: { sdp: "v=0 offer" }, tracks: [{ mid: "a_1.x-2", kind: "audio" }] };
+		expect((await callRoute(meeting.code, "/media/publish", { token: guest.token, body: sent })).status).toBe(200);
+		const video = { session, offer: { sdp: "v=0 offer" }, tracks: [{ mid: "1", kind: "video" }] };
+		expect((await callRoute(meeting.code, "/media/publish", { token: guest.token, body: video })).status).toBe(200);
+		expect(sfu.openTracks(guestSession)).toHaveLength(2);
+		await ada.call("meet.remove_participant", { code: meeting.code, participant_id: guest.participant.id });
+		expect(sfu.openTracks(guestSession)).toEqual([]);
+		const pending = await runInDurableObject(
+			stub,
+			(_instance, state) => state.storage.sql.exec("SELECT COUNT(*) AS n FROM pending_closes").one().n as number,
+		);
+		expect(pending).toBe(0);
 	});
 
 	it("sends the close of a pull to the SFU session that had it, also after a new session of the subscriber", async () => {

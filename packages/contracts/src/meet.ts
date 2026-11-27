@@ -398,6 +398,12 @@ export const IceServer = z.object({
 });
 export type IceServer = z.infer<typeof IceServer>;
 
+/**
+ * The form of the mid of a track that a browser sends: 1 to 32 letters, digits, and the characters `_`, `.` and
+ * `-`. Browsers make short numbers. The object uses the mid in its records of the SFU, so no other form is accepted.
+ */
+export const MEET_MID_PATTERN = /^[A-Za-z0-9_.-]{1,32}$/;
+
 const Sdp = z.string().min(1).max(MEET_LIMITS.sdpBytes);
 const SessionNumber = z.number().int().min(1);
 const TrackKind = z.enum(["audio", "video"]);
@@ -409,7 +415,7 @@ export const PublishRequest = z.strictObject({
 	session: SessionNumber,
 	offer: z.strictObject({ sdp: Sdp }),
 	tracks: z
-		.array(z.strictObject({ mid: z.string().min(1).max(32), kind: TrackKind }))
+		.array(z.strictObject({ mid: z.string().regex(MEET_MID_PATTERN), kind: TrackKind }))
 		.min(1)
 		.max(2),
 });
