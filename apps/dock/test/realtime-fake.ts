@@ -3,6 +3,10 @@ import { vi } from "vitest";
 // A stand-in for the Cloudflare Realtime API in the workerd tests. It replaces `fetch`, keeps the sessions and the
 // tracks in memory, and records each call. It checks the App Secret and the TURN key token, so a test proves that
 // the Worker sends them, and only to the Realtime API.
+//
+// Each stand-in puts a random tag in its session ids and its TURN user names. The meeting object of an earlier test
+// can still run its alarm, and that alarm can close tracks or revoke a credential. Such a call has the tag of a
+// different stand-in: it gets the answer for an unknown id, and it is not in `calls`.
 
 export const REALTIME_BASE = "https://rtc.live.cloudflare.com/v1";
 const APP_ID = "testrealtimeapp00000000000000001";
@@ -49,6 +53,11 @@ export function fakeRealtime(): RealtimeFake {
 	let failMatch = "";
 	let loseAnswer = false;
 	let counter = 0;
+	const tag = crypto.randomUUID().slice(0, 8);
+	const foreign = (path: string) => {
+		const made = /\/(?:sessions\/s|credentials\/user)([0-9a-f]{8})-\d+(?:\/|$)/.exec(path);
+		return made !== null && made[1] !== tag;
+	};
 	vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
 		const outgoing = new Request(input, init);
 		const url = new URL(outgoing.url);
@@ -56,6 +65,10 @@ export function fakeRealtime(): RealtimeFake {
 		const path = url.pathname.slice("/v1".length);
 		const text = await outgoing.text();
 		const body = text ? (JSON.parse(text) as Record<string, unknown>) : null;
+		if (foreign(path)) {
+			if (path.startsWith("/turn/")) return new Response("{}", { status: 404 });
+			return Response.json({ errorCode: "session_error" }, { status: 410 });
+		}
 		calls.push({ method: outgoing.method, path, body });
 		const auth = outgoing.headers.get("authorization");
 		if (path.startsWith("/turn/")) {
@@ -69,7 +82,7 @@ export function fakeRealtime(): RealtimeFake {
 						{ urls: ["stun:stun.cloudflare.com:3478", "stun:stun.cloudflare.com:53"] },
 						{
 							urls: ["turn:turn.cloudflare.com:3478?transport=udp", "turn:turn.cloudflare.com:53?transport=udp"],
-							username: `user${++counter}`,
+							username: `user${tag}-${++counter}`,
 							credential: "secret",
 						},
 					],
@@ -87,7 +100,7 @@ export function fakeRealtime(): RealtimeFake {
 		}
 		const rest = path.slice(`/apps/${APP_ID}`.length);
 		if (rest === "/sessions/new") {
-			const id = `s${String(++counter).padStart(31, "0")}`;
+			const id = `s${tag}-${String(++counter).padStart(22, "0")}`;
 			sessions.set(id, []);
 			order.push(id);
 			return Response.json({ sessionId: id }, { status: 201 });
