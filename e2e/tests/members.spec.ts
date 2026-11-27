@@ -184,7 +184,8 @@ test("an admin adds an alias on the page of a member, and removes it", async ({ 
 		await expect(aliases.getByText("This mailbox has no aliases.")).toBeVisible();
 
 		const field = aliases.getByLabel("New alias");
-		await field.fill("tomasz@example.com");
+		await expect(aliases.getByRole("combobox", { name: "Email domain of the alias" })).toHaveText("example.com");
+		await field.fill("tomasz");
 		await aliases.getByRole("button", { name: "Add alias" }).click();
 		await expect(aliases.getByRole("alert")).toHaveText(
 			"That address belongs to another principal, team mailbox or alias.",
@@ -192,7 +193,7 @@ test("an admin adds an alias on the page of a member, and removes it", async ({ 
 		await expect(field).toHaveAttribute("aria-invalid", "true");
 		await expect(field).toHaveAccessibleDescription(/That address belongs to another principal/);
 
-		await field.fill(alias);
+		await field.fill(`alma-alias-${local}`);
 		await aliases.getByRole("button", { name: "Add alias" }).click();
 		await expect(page.getByText(`${alias} now receives mail for ${person}.`)).toBeVisible();
 		await expect(aliases.getByRole("cell", { name: alias, exact: true })).toBeVisible();
