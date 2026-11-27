@@ -12,7 +12,7 @@
 | **Owns** | `CalendarDO`, one for each principal. |
 | **Depends on** | `platform`, `identity` (the Activity of a reminder in `PrincipalDO`, the hint `calendar.changed`), `chat` (the push queue `soldock-chat-push`), `webhooks` (the type of the queue job, and the subscription handlers), `mail` (`sendCalendarMail`, `readCalendarPart` and the outbound policy, for the invitations by mail). |
 | **Operations** | `calendar.list_events`, `calendar.get_event`, `calendar.create_event`, `calendar.update_event`, `calendar.delete_event`, `calendar.update_occurrence`, `calendar.cancel_occurrence`, `calendar.respond_to_event`, `calendar.set_reminder`, `calendar.query_free_busy`, `calendar.find_times`, `calendar.list_grants`, `calendar.set_grant`, `calendar.remove_grant`, `calendar.list_shared_calendars`, `calendar.list_changes`, `calendar.create_webhook_subscription`, `calendar.list_webhook_subscriptions`, `calendar.delete_webhook_subscription`, `calendar.get_mail_invitation`, `calendar.respond_to_mail_invitation` |
-| **Data inventory** | `CalendarDO` tables `events` (with `visibility` and `created_by` since schema 4), `grants` (principal, access, time; schema 4), `shared_with_me` (the calendars that other owners share with this owner: owner, access or null for a removed grant, version, time; schema 5; a hint that the grants of the other calendars can build again), `outbox` with the kind `grant` since schema 5, `meta.grant_seq`, since schema 6 the columns `events.uid` (the UID of a copy by mail) and `events.mail_json` (the organizer, the sender, the last `DTSTAMP` and the own address of a copy by mail), the tables `external_attendees` (event, address, name, answer, time of the answer, time and sequence of the invitation) and `mail_tombstones` (UID, organizer, sequence, state, time; kept 30 days), and `outbox` with the kind `mail`, `event_overrides`, `event_attendees`, `occurrence_responses`, `reminders`, `reminder_log`, `outbox`, `changes`, `idempotency` and `meta` (with, for the change feed, `change_feed`, `change_head`, `change_published`, `change_floor`, `publish_attempts`, `publish_at` and `webhook_events`). `PrincipalDO` column `chat_activity.event_json` (the reminders in the Activity). A message of Calendar in Sent is state of the mail module. No R2 object. D1: the subscriptions of MCP Events and of the calendar webhooks are rows of `webhook_endpoints` and `webhook_subscriptions` (domain `calendar`). D1 migration 0038 changes `principals.agent_scopes` only. D1 migration 0041 builds `webhook_subscriptions` again with the domain `calendar`, and gives `calendar.webhooks` to agents. Backups: not built yet. |
+| **Data inventory** | `CalendarDO` tables `events` (with `visibility` and `created_by` since schema 4), `grants` (principal, access, time; schema 4), `shared_with_me` (the calendars that other owners share with this owner: owner, access or null for a removed grant, version, time; schema 5; a hint that the grants of the other calendars can build again), `outbox` with the kind `grant` since schema 5, `meta.grant_seq`, since schema 6 the columns `events.uid` (the UID of a copy by mail) and `events.mail_json` (the organizer, the sender, the last `DTSTAMP` and the own address of a copy by mail), the tables `external_attendees` (event, address, name, answer, time of the answer, time of the invitation, sequence of the last question, and a flag for a sent REQUEST) and `mail_tombstones` (UID, organizer, sequence, state `cancelled`, `removed` or `no_copy`, time; kept 30 days), and `outbox` with the kind `mail`, `event_overrides`, `event_attendees`, `occurrence_responses`, `reminders`, `reminder_log`, `outbox`, `changes`, `idempotency` and `meta` (with, for the change feed, `change_feed`, `change_head`, `change_published`, `change_floor`, `publish_attempts`, `publish_at` and `webhook_events`). `PrincipalDO` column `chat_activity.event_json` (the reminders in the Activity). A message of Calendar in Sent is state of the mail module. No R2 object. D1: the subscriptions of MCP Events and of the calendar webhooks are rows of `webhook_endpoints` and `webhook_subscriptions` (domain `calendar`). D1 migration 0038 changes `principals.agent_scopes` only. D1 migration 0041 builds `webhook_subscriptions` again with the domain `calendar`, and gives `calendar.webhooks` to agents. Backups: not built yet. |
 
 Public surface: `index.ts` only. Other domains must not import files from this folder directly.
 
@@ -324,7 +324,8 @@ the check of the revision.
 - An attendee outside the organization has no calendar here. The organizer sends the invitation, each change,
   the removal and the cancellation by mail, as iTIP (RFC 5546). The `UID` is the event id.
 - `attendee_emails` of `calendar.create_event` and `calendar.update_event` holds the addresses. People and
-  addresses together are at most 50. An address of a mail domain of the organization gives `invalid`: invite
+  addresses together are at most 50. An update that gives only one of the two lists counts the current
+  other list. An address of a mail domain of the organization gives `invalid`: invite
   that person with `attendee_ids`. An event with attendees by mail cannot repeat (`invalid`).
 - The object queues one `mail` row for each address in its outbox (`mail:<event>:<address>`). The drain calls
   `sendCalendarMail` of the mail module, which stores the message in the Sent mail of the own mailbox of the
@@ -334,14 +335,16 @@ the check of the revision.
   | Change of the organizer | Mail to each attendee by mail |
   | --- | --- |
   | New event, or a new attendee by mail | `METHOD:REQUEST`, subject "Invitation: <title>" |
-  | A change of the title, the description, the place, the time or the attendees by mail | `METHOD:REQUEST` with a larger `SEQUENCE`, subject "Updated invitation: <title>" |
+  | A change of the title, the description, the place, the time or the attendees by mail | `METHOD:REQUEST` with a larger `SEQUENCE`, subject "Updated invitation: <title>". The subject stays "Invitation: <title>" until one REQUEST to that address left the outbox of the calendar |
   | The organizer removes the attendee by mail | `METHOD:CANCEL` to that address only, subject "Cancelled: <title>" |
   | The organizer deletes the event | `METHOD:CANCEL` to each address |
   | A change of the visibility, of the reminder or of the attendees of the organization, or a response | No mail |
 
-- `SEQUENCE` is the `sequence` of the event. It can skip numbers: each change of the organizer adds 1. A
-  new time sets the answer of each attendee by mail to `needs_action`, as for the attendees of the
-  organization. An answer by mail from before the new time is then old.
+- `SEQUENCE` is the `sequence` of the event. It can skip numbers: each change of the organizer adds 1, and
+  so does each response of an attendee of the organization, which sends no mail. A new time sets the answer
+  of each attendee by mail to `needs_action`, as for the attendees of the organization. The calendar keeps
+  the `sequence` of that question for each attendee by mail. A REPLY with a smaller `SEQUENCE` is an answer
+  for the old time: it is `stale`.
 - `DTSTAMP` is the time of the enqueue, so a retry writes the same bytes. A timed event is written in UTC
   (`…Z`), with no `VTIMEZONE`. An all-day event has `DTSTART;VALUE=DATE` and an exclusive `DTEND;VALUE=DATE`,
   the same as `end_date`. A REQUEST lists only the attendees by mail, each with its `PARTSTAT`, and
@@ -371,16 +374,18 @@ the check of the revision.
 
   | Method | Applied when each rule is true | Effect |
   | --- | --- | --- |
-  | `REPLY` | An event of the owner has the `UID` as its id. The reply has exactly one `ATTENDEE`, its address is the From address, and it is an attendee by mail of the event. The receiving server did not record a DMARC failure. `PARTSTAT` is ACCEPTED, TENTATIVE or DECLINED. The stamp (the `DTSTAMP`, at most the time of arrival) is newer than the last answer and not before the invitation of that attendee | The answer of that attendee. No new `sequence` and no mail |
+  | `REPLY` | An event of the owner has the `UID` as its id. The reply has exactly one `ATTENDEE`, its address is the From address, and it is an attendee by mail of the event. The receiving server did not record a DMARC failure. `PARTSTAT` is ACCEPTED, TENTATIVE or DECLINED. The `SEQUENCE` is not smaller than the `sequence` of the last question to that attendee: the invitation, or the last new time. The stamp (the `DTSTAMP`, at most the time of arrival) is newer than the last answer or the last new time. A `DTSTAMP` from before the invitation is not old, because the clock of a sender can be slow | The answer of that attendee. No new `sequence` and no mail |
   | `CANCEL` | A copy by mail has the `UID`. `ORGANIZER` is the organizer of the copy, the From address is the sender of the accepted invitation, the receiving server verified the sender (DMARC pass) or the mail is internal, and the version is not older: a larger `SEQUENCE`, or the same `SEQUENCE` with a `DTSTAMP` that is not before the `DTSTAMP` of the last applied change | The copy goes away. A tombstone stops the old invitation |
   | `REQUEST` | The same rules as `CANCEL`, and the version (`SEQUENCE`, then `DTSTAMP`) is newer | The fields of the copy change. A new time sets the answer of the owner to `needs_action` |
+  | `CANCEL` with no copy | No copy and no event has the `UID`. `ORGANIZER` is the From address, and the receiving server verified the sender or the mail is internal. No tombstone of a different organizer has the `UID`, and the calendar holds fewer than 200 of these tombstones | A `no_copy` tombstone stops the answer to the invitation of that organizer with this `SEQUENCE` or a smaller one. It does not stop an invitation of a different organizer |
   | Each other mail, or a rule that is not true | | Nothing. The mail stays in Mail, and its card tells the state |
 
 - A new invitation is not on the calendar until the owner answers it. `calendar.get_mail_invitation` reads
   the calendar part of a message, with its state: `new`, `on_calendar`, `outdated`, `cancelled`,
   `not_invited` (no address or alias of the caller is an attendee) or `unsupported` (a recurring meeting, or a
   time that Asterra cannot read). `can_respond` is true only for a REQUEST in the state `new` or
-  `on_calendar`, outside Spam and the Screener, with an organizer and a From address. A CANCEL that
+  `on_calendar`, outside Spam and the Screener, with an organizer and a From address. It is false for a
+  newer version of a copy from a sender that the receiving server did not verify. A CANCEL that
   `applyMail` did not apply has the state `on_calendar` or `outdated`, not `cancelled`: the meeting is on the
   calendar, and the card tells that.
 - `calendar.respond_to_mail_invitation` answers it with `accepted`, `tentative` or `declined`. Yes and Maybe
@@ -391,6 +396,10 @@ the check of the revision.
   or a newer one gives `conflict`. A copy of the same `UID` from a different organizer or sender gives
   `conflict`, and so does a tombstone of a different organizer, also for a larger `SEQUENCE`, and an event of
   the calendar with that id.
+- An answer on the card of a newer version of a copy applies that version first, when the receiving server
+  verified the sender or the mail is internal. Else `applyMail` refused that version, and the answer gives
+  `invalid`: it changes nothing and sends nothing. The owner read the fields of the mail, and an answer would
+  tell the organizer Yes for the fields of the copy. The owner answers the meeting on the calendar.
 - The answer goes from the address of the caller that the invitation names, also an alias, because the
   organizer matches the `ATTENDEE` of an answer with its From address.
 - `calendar.respond_to_event` on a copy by mail sets `accepted` or `declined`, and sends the new answer by
@@ -568,6 +577,7 @@ Invitations by mail use the same names:
 | Yes or Maybe adds a copy by mail | `calendar.invitation.received` | Null |
 | The owner changes the answer of a copy by mail | `calendar.rsvp.changed` | The owner |
 | A REQUEST by mail changes a copy | `calendar.invitation.updated`, and `calendar.rsvp.changed` when a new time reset the answer | Null |
+| An answer of the owner applies a newer REQUEST | `calendar.invitation.updated` with no actor, then one `calendar.rsvp.changed` for the answer, also when the new time reset the answer | The owner, for the response |
 | A CANCEL by mail removes a copy | `calendar.invitation.cancelled` | Null |
 | The owner removes a copy by mail | `calendar.invitation.cancelled` | The owner |
 
@@ -752,6 +762,11 @@ write no record.
 - The calendar applies a REPLY with no DMARC result, and the organizer cannot see that. It does not apply
   an update or a cancellation from a sender that the receiving server did not verify.
 - A CANCEL can reach an address before its invitation, when a delivery of the invitation fails.
+- A REPLY must have the `SEQUENCE` of the REQUEST that it answers. After a new time, the calendar does not
+  apply the answer of a client that always writes `SEQUENCE:0`.
+- One `UID` has one tombstone. A verified sender that names itself the organizer of a `UID` before the
+  organizer cancels it keeps the `no_copy` tombstone of that `UID`. The card of the invitation then stays
+  open for an answer, and the cancellation of the organizer does not close it.
 - Only the own mailbox of a principal gives invitations to a calendar.
 - The names of the attendees are a copy from the time of the invitation. A new name shows after the next
   change of the event.

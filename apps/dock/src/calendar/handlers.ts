@@ -46,17 +46,19 @@ import {
 	OperationError,
 	sha256Hex,
 } from "../platform/index.ts";
-import type {
-	BusyQuery,
-	CalendarCall,
-	EventFields,
-	EventTime,
-	EventView,
-	GrantRecord,
-	ListQuery,
-	OrganizerRef,
-	PrincipalRef,
-	Refusal,
+import {
+	type BusyQuery,
+	type CalendarCall,
+	type EventFields,
+	type EventTime,
+	type EventView,
+	type GrantRecord,
+	type ListQuery,
+	type OrganizerRef,
+	type PrincipalRef,
+	type Refusal,
+	trustedSender,
+	UNVERIFIED_CHANGE,
 } from "./calendar.ts";
 import { suggestTimes } from "./find-times.ts";
 import { type ICalInvite, parseICalendar } from "./ical.ts";
@@ -184,15 +186,21 @@ function assertMayMail(call: CallContext, addresses: readonly string[]): void {
 	}
 }
 
+/** Refuses more attendees than the limit: the people of the organization and the addresses by mail together. */
+function assertAttendeeCount(people: number, addresses: number): void {
+	if (people + addresses > CALENDAR_LIMITS.attendees) {
+		throw new OperationError("invalid", `An event can have at most ${CALENDAR_LIMITS.attendees} attendees.`);
+	}
+}
+
 /**
  * The attendees by mail of an event: addresses outside the organization, in lowercase, each one time. The organizer
- * must be a person. `internalCount` is the number of attendees of the organization, for the limit.
+ * must be a person.
  */
 async function resolveExternal(
 	call: CallContext,
 	owner: OrganizerRef,
 	emails: readonly string[] | undefined,
-	internalCount: number,
 ): Promise<string[] | undefined> {
 	if (emails === undefined) return undefined;
 	const unique = [...new Set(emails.map((email) => email.toLowerCase()))];
@@ -205,9 +213,6 @@ async function resolveExternal(
 			"invalid",
 			`${own} is an address of your organization. Invite a person of your organization with attendee_ids.`,
 		);
-	}
-	if (internalCount + unique.length > CALENDAR_LIMITS.attendees) {
-		throw new OperationError("invalid", `An event can have at most ${CALENDAR_LIMITS.attendees} attendees.`);
 	}
 	return unique;
 }
@@ -471,7 +476,8 @@ export const calendarHandlers: Pick<HandlerMap<CallContext>, CalendarOperation> 
 		const replayed = idempotency ? await stub.replay(ctx, idempotency) : null;
 		if (replayed) return { event: toEvent(accept(replayed)) };
 		const attendees = (await resolveAttendees(call, owner, input.attendee_ids)) ?? [];
-		const external = (await resolveExternal(call, owner, input.attendee_emails, attendees.length)) ?? [];
+		const external = (await resolveExternal(call, owner, input.attendee_emails)) ?? [];
+		assertAttendeeCount(attendees.length, external.length);
 		assertMayMail(call, external);
 		const id = newId("evt");
 		const record = accept(
@@ -503,10 +509,13 @@ export const calendarHandlers: Pick<HandlerMap<CallContext>, CalendarOperation> 
 		const current = "error" in read ? null : read;
 		const kept = input.attendee_ids === undefined ? [] : accept(read).attendees;
 		const attendees = await resolveAttendees(call, owner, input.attendee_ids, kept);
-		const internalCount = (attendees ?? current?.attendees ?? []).length;
-		const external = await resolveExternal(call, owner, input.attendee_emails, internalCount);
+		const external = await resolveExternal(call, owner, input.attendee_emails);
 		// The attendees by mail of now and of after the change can get mail: an update or a cancellation.
 		const mailed = current?.role === "organizer" ? current.external_attendees.map((guest) => guest.email) : [];
+		// The limit counts the two lists of after the change, also when the call gives only one of them.
+		if (attendees !== undefined || external !== undefined) {
+			assertAttendeeCount((attendees ?? current?.attendees ?? []).length, (external ?? mailed).length);
+		}
 		assertMayMail(call, [...mailed, ...(external ?? [])]);
 		const result = accept(
 			await stub.update(ctx, input.event_id, {
@@ -726,16 +735,18 @@ export const calendarHandlers: Pick<HandlerMap<CallContext>, CalendarOperation> 
 
 	async "calendar.get_mail_invitation"(call, input) {
 		const read = await readInvitation(call, input.message_id);
-		return { invitation: read.invite ? await invitationOf(call, read.part, read.invite) : null };
+		return { invitation: read.invite ? (await invitationOf(call, read.part, read.invite)).invitation : null };
 	},
 
 	async "calendar.respond_to_mail_invitation"(call, input) {
 		const read = await readInvitation(call, input.message_id);
 		if (!read.invite) throw new OperationError("invalid", "The message has no calendar part that Asterra can read.");
 		const invite = read.invite;
-		const before = await invitationOf(call, read.part, invite);
+		const { invitation: before, unverifiedChange } = await invitationOf(call, read.part, invite);
 		if (before.state === "cancelled") throw new OperationError("conflict", "The organizer cancelled this meeting.");
-		if (!before.can_respond) throw new OperationError("invalid", cannotRespond(before, read.part));
+		if (!before.can_respond) {
+			throw new OperationError("invalid", unverifiedChange ? UNVERIFIED_CHANGE : cannotRespond(before, read.part));
+		}
 		const organizer = invite.organizer as { email: string; name: string };
 		const myEmail = before.attendees.find((attendee) => attendee.self)?.email as string;
 		assertMayMail(call, [organizer.email]);
@@ -745,13 +756,14 @@ export const calendarHandlers: Pick<HandlerMap<CallContext>, CalendarOperation> 
 				invite,
 				time: timeOf(invite.when as EventWhenValue),
 				from: read.part.from as string,
+				verification: read.part.verification,
 				myEmail,
 				response: input.response,
 			}),
 		);
 		if (result.changed) auditOk(call, "calendar.respond_to_mail_invitation", input.message_id);
 		return {
-			invitation: await invitationOf(call, read.part, invite),
+			invitation: (await invitationOf(call, read.part, invite)).invitation,
 			event: result.event ? toEvent(result.event) : null,
 		};
 	},
@@ -776,8 +788,16 @@ const RESPONSE_OF_PARTSTAT = {
 	DECLINED: "declined",
 } as const;
 
-/** The invitation of a mail for the output, with its state on the calendar of the caller. */
-async function invitationOf(call: CallContext, part: CalendarPart, invite: ICalInvite): Promise<MailInvitation> {
+/**
+ * The invitation of a mail for the output, with its state on the calendar of the caller. `unverifiedChange` is true
+ * for a newer version of a copy by mail from a sender that the receiving server did not verify: `applyMail` did
+ * not apply it, so an answer cannot apply it.
+ */
+async function invitationOf(
+	call: CallContext,
+	part: CalendarPart,
+	invite: ICalInvite,
+): Promise<{ invitation: MailInvitation; unverifiedChange: boolean }> {
 	const { principal } = call.caller;
 	const mine = new Set([
 		principal.address.toLowerCase(),
@@ -786,7 +806,14 @@ async function invitationOf(call: CallContext, part: CalendarPart, invite: ICalI
 	const myEmail = invite.attendees.find((attendee) => mine.has(attendee.email))?.email ?? null;
 	const method = invite.method === "OTHER" ? "other" : (invite.method.toLowerCase() as "request" | "reply" | "cancel");
 	const { stub, ctx } = ownCalendar(call);
-	const onCalendar = accept(await stub.mailInvitationState(ctx, invite.uid, invite.sequence));
+	const onCalendar = accept(
+		await stub.mailInvitationState(ctx, invite.uid, {
+			sequence: invite.sequence,
+			stamp: invite.stamp,
+			organizer: invite.organizer?.email ?? null,
+		}),
+	);
+	const unverifiedChange = method === "request" && onCalendar.newer && !trustedSender(part.verification);
 	let state: MailInvitation["state"] = onCalendar.state;
 	// A cancellation that the calendar did not apply leaves the event: the state then tells that it is there.
 	const unapplied = method === "cancel" && onCalendar.event_id !== null;
@@ -801,8 +828,9 @@ async function invitationOf(call: CallContext, part: CalendarPart, invite: ICalI
 		part.from !== null &&
 		!part.spam &&
 		!part.held &&
-		part.verification !== "failed";
-	return {
+		part.verification !== "failed" &&
+		!unverifiedChange;
+	const invitation: MailInvitation = {
 		method,
 		uid: invite.uid,
 		sequence: invite.sequence,
@@ -826,6 +854,7 @@ async function invitationOf(call: CallContext, part: CalendarPart, invite: ICalI
 		event_id: onCalendar.event_id,
 		untrusted: part.origin === "external",
 	};
+	return { invitation, unverifiedChange };
 }
 
 /** Why a mail invitation cannot be answered. */

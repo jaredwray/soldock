@@ -2,7 +2,16 @@ import { runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import type { InputOf } from "@asterra/contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { type Actor, callTool, codeOf, createActor, PASSWORD, seedOrg, settleCalendars } from "./helpers.ts";
+import {
+	type Actor,
+	calendarOutbox,
+	callTool,
+	codeOf,
+	createActor,
+	PASSWORD,
+	seedOrg,
+	settleCalendars,
+} from "./helpers.ts";
 
 // Find a time, invitations from a delegate, and the story of the user: "My agent can find 30 minutes with a
 // teammate and send the invitation from my calendar, but only after I grant it access." Ada is the person, bot is
@@ -328,6 +337,11 @@ describe("a calendar from before grants", () => {
 			runInDurableObject(stub, (_instance, state) =>
 				state.blockConcurrencyWhile(async () => {
 					const sql = state.storage.sql;
+					// A message that waits. Schema 5 and schema 6 build the outbox again, and must keep it.
+					sql.exec(
+						`INSERT INTO outbox (id, kind, target_id, event_id, payload, version, attempts, next_attempt_at, created_at)
+						VALUES ('legacy-row', 'reminder', 'target', 'evt_legacy', '{}', 7, 2, 4102444800000, 1)`,
+					);
 					sql.exec("DROP INDEX events_uid");
 					sql.exec("ALTER TABLE events DROP COLUMN uid");
 					sql.exec("ALTER TABLE events DROP COLUMN mail_json");
@@ -347,6 +361,16 @@ describe("a calendar from before grants", () => {
 		expect(read).toEqual({ ...event });
 		expect(read).toMatchObject({ visibility: "default", created_by: null });
 		await ada.call("calendar.set_grant", { principal_id: grace.id, access: "free_busy" });
+		expect((await calendarOutbox(ada.id)).find((row) => row.id === "legacy-row")).toEqual({
+			id: "legacy-row",
+			kind: "reminder",
+			target_id: "target",
+			event_id: "evt_legacy",
+			version: 7,
+			attempts: 2,
+			next_attempt_at: 4102444800000,
+			payload: "{}",
+		});
 	});
 });
 
