@@ -8,6 +8,7 @@ import {
 	eventKey,
 	eventLabel,
 	eventsByDay,
+	eventTitle,
 	HOURS,
 	hourText,
 	longDate,
@@ -77,7 +78,7 @@ function EventButton({
 						↻{" "}
 					</span>
 				)}
-				{event.title}
+				{eventTitle(event)}
 			</span>
 			{!compact && event.location && <span className="cal-event-location">{event.location}</span>}
 		</button>
@@ -202,7 +203,20 @@ export function WeekView({ days, events, zone, today, onOpen, onCreate }: ViewPr
 }
 
 /** The month view: six weeks, each day with its first events and a link to the week for the others. */
-export function MonthView({ days, events, zone, today, month, onOpen, onCreate }: ViewProps & { month: string }) {
+export function MonthView({
+	days,
+	events,
+	zone,
+	today,
+	month,
+	onOpen,
+	onCreate,
+	calendarId = null,
+}: ViewProps & {
+	month: string;
+	/** The calendar of a person who lets the person schedule. The links to a week stay in that calendar. */
+	calendarId?: string | null;
+}) {
 	const byDay = useMemo(() => eventsByDay(events, days, zone), [events, days, zone]);
 	return (
 		<div className="cal-month">
@@ -233,7 +247,11 @@ export function MonthView({ days, events, zone, today, month, onOpen, onCreate }
 								className="cal-slot cal-month-slot"
 								onClick={() => onCreate(day)}
 							/>
-							<Link to={calendarPath("week", day)} className="cal-month-number" aria-label={`Week of ${longDate(day)}`}>
+							<Link
+								to={calendarPath("week", day, calendarId)}
+								className="cal-month-number"
+								aria-label={`Week of ${longDate(day)}`}
+							>
 								{Number(day.slice(8))}
 							</Link>
 							{shown.length > 0 && (
@@ -246,7 +264,7 @@ export function MonthView({ days, events, zone, today, month, onOpen, onCreate }
 								</ul>
 							)}
 							{hidden > 0 && (
-								<Link to={calendarPath("week", day)} className="cal-more">
+								<Link to={calendarPath("week", day, calendarId)} className="cal-more">
 									{hidden} more
 								</Link>
 							)}

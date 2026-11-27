@@ -141,6 +141,8 @@ describe("a biweekly meeting across a change of the clock", () => {
 			count: null,
 		});
 
+		// Ada shares her availability with the owner: free/busy needs a grant.
+		await ada.call("calendar.set_grant", { principal_id: owner.id, access: "free_busy" });
 		const { calendars } = await owner.call("calendar.query_free_busy", {
 			principal_ids: `${owner.id},${ada.id}`,
 			time_min: RANGE.time_min,
@@ -148,8 +150,8 @@ describe("a biweekly meeting across a change of the clock", () => {
 		});
 		const busy = expected.map((start) => ({ start, end: new Date(Date.parse(start) + 3_600_000).toISOString() }));
 		expect(calendars).toEqual([
-			{ principal_id: owner.id, busy },
-			{ principal_id: ada.id, busy },
+			{ principal_id: owner.id, availability: "known", busy },
+			{ principal_id: ada.id, availability: "known", busy },
 		]);
 	});
 
@@ -247,12 +249,13 @@ describe("a biweekly meeting across a change of the clock", () => {
 		// The organizer state comes back to Ada. Her own response stays.
 		expect((await ada.call("calendar.list_events", RANGE)).events[2]?.my_response).toBe("declined");
 
+		await ada.call("calendar.set_grant", { principal_id: owner.id, access: "free_busy" });
 		const { calendars } = await owner.call("calendar.query_free_busy", {
 			principal_ids: ada.id,
 			time_min: "2030-12-01T00:00:00Z",
 			time_max: "2030-12-05T00:00:00Z",
 		});
-		expect(calendars[0]?.busy).toEqual([]);
+		expect(calendars[0]).toEqual({ principal_id: ada.id, availability: "known", busy: [] });
 
 		await at("2030-12-03T16:50:00Z", owner.id, ada.id);
 		expect(await reminders(owner)).toContain("2030-12-03T17:00:00.000Z");
@@ -305,11 +308,13 @@ describe("a biweekly meeting across a change of the clock", () => {
 			["needs_action", "accepted"],
 			["needs_action", "accepted"],
 		]);
+		await ada.call("calendar.set_grant", { principal_id: owner.id, access: "free_busy" });
 		const { calendars } = await owner.call("calendar.query_free_busy", {
 			principal_ids: ada.id,
 			time_min: "2030-10-22T00:00:00Z",
 			time_max: "2030-10-23T00:00:00Z",
 		});
+		expect(calendars[0]?.availability).toBe("known");
 		expect(calendars[0]?.busy).toEqual([{ start: "2030-10-22T18:00:00.000Z", end: "2030-10-22T19:00:00.000Z" }]);
 		await at("2030-10-22T17:50:00Z", owner.id, ada.id);
 		expect(await reminders(ada)).toEqual(["2030-10-22T18:00:00.000Z"]);
@@ -565,13 +570,19 @@ describe("invitations and access", () => {
 		expect(await codeOf(owner.call("calendar.create_event", { ...meeting, attendee_ids: [bot.id] }))).toBe("invalid");
 	});
 
-	it("gives only busy times in free/busy, without titles", async () => {
+	it("gives only busy times in free/busy, without titles, and only with a grant", async () => {
 		await owner.call("calendar.create_event", { ...meeting, title: "Secret plan" });
-		const result = await bot.call("calendar.query_free_busy", {
+		const query = {
 			principal_ids: owner.id,
 			time_min: "2030-10-20T00:00:00Z",
 			time_max: "2030-10-30T00:00:00Z",
-		});
+		};
+		// Without a grant of the owner, the calendar is unknown: never free.
+		expect((await bot.call("calendar.query_free_busy", query)).calendars).toEqual([
+			{ principal_id: owner.id, availability: "unknown", busy: [] },
+		]);
+		await owner.call("calendar.set_grant", { principal_id: bot.id, access: "free_busy" });
+		const result = await bot.call("calendar.query_free_busy", query);
 		expect(JSON.stringify(result)).not.toContain("Secret");
 		expect(result.calendars[0]?.busy).toEqual([{ start: "2030-10-22T16:00:00.000Z", end: "2030-10-22T17:00:00.000Z" }]);
 	});
@@ -594,8 +605,16 @@ describe("invitations and access", () => {
 		const week = [Date.parse("2030-10-20T00:00:00Z"), Date.parse("2030-10-27T00:00:00Z")] as const;
 		// The calendar of Ada, opened for the owner of the organization.
 		const wrong = calendar(ada.id);
-		expect(await wrong.freeBusy(ada.id, ...week)).toHaveLength(1);
-		expect(await wrong.freeBusy(owner.id, ...week)).toEqual([]);
+		const query = {
+			min: week[0],
+			max: week[1],
+			minDate: "2030-10-20",
+			maxDate: "2030-10-27",
+			lowerBound: 0,
+			zone: "UTC",
+		};
+		expect(await wrong.freeBusy({ ownerId: ada.id, actorId: ada.id }, query)).toMatchObject({ busy: [{}] });
+		expect(await wrong.freeBusy({ ownerId: owner.id, actorId: owner.id }, query)).toEqual({ unknown: true });
 		const before = await starts(ada);
 		await wrong.applySnapshot(owner.id, { v: 1, event_id: series.id, sequence: 1_000, deleted: true });
 		expect(await starts(ada)).toEqual(before);

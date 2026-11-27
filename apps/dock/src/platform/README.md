@@ -24,7 +24,7 @@ Public surface: `index.ts` only. Other domains must not import files from this f
 - `http/public-fetch.ts`: the guard of a fetch of a web address from outside (link previews). The host is a DNS name. Each A and AAAA address from DNS over HTTPS at Cloudflare must be public, each redirect gets the same checks, and the fetch has a limit of time and of bytes. The caller adds its own checks of each address, such as the outbound policy of an agent.
 - `media/image.ts`: the type and the size in pixels of a PNG, JPEG, GIF or WebP file, from its bytes.
 - `media/sniff.ts`: the type of a file from its first 4 KiB, and the types that a page can show inline (`INLINE_TYPES`).
-- `log/log.ts`: structured JSON logs, and `audit()` lines (`audit: true`) until the audit log in R2 exists.
+- `log/log.ts`: structured JSON logs, and `audit()` lines (`audit: true`) until the audit log in R2 exists. A line of a change in a resource of a different principal names it: `mailbox`, `space` or `calendar`. `actor` is then the delegate or the member that acted.
 - `operations/errors.ts`: `OperationError`, an expected failure with a code from the error catalogue in `@asterra/contracts`.
 - `resources/watch.ts`: `ResourceWatcher` and `WatcherMap`, the change feed of each resource kind. A domain module implements it, and the MCP adapter uses it for `subscriptions/listen`. A feed can give the facts of a change (`ChangeFacts`): ids, a reason and a version, and never content.
 - `events/subscriptions.ts`: `EventSubscriptions`, the subscriptions of MCP Events, and `EventCallbackError`. The `webhooks` module implements it, and the MCP adapter uses it for `events/list`, `events/subscribe` and `events/unsubscribe`.

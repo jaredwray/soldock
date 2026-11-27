@@ -20,6 +20,14 @@ const ROOM = "rm_01JD0000000000000000000000";
 
 /** Each operation that a membership or a share can decide, in the order of the names. */
 const RESOURCE_DECIDED: string[] = [
+	"calendar.cancel_occurrence",
+	"calendar.create_event",
+	"calendar.delete_event",
+	"calendar.find_times",
+	"calendar.get_event",
+	"calendar.list_events",
+	"calendar.update_event",
+	"calendar.update_occurrence",
 	"chat.add_members",
 	"chat.add_reaction",
 	"chat.archive_room",
@@ -167,6 +175,29 @@ describe("the scopes that a resource decides", () => {
 		expect(resourceDecidedScopes(operations["drive.create_shared_drive"], { name: "x" }, ME)).toEqual([]);
 	});
 
+	// The calendar of a different person: only a grant of that person decides (`calendar.set_grant`). The own
+	// calendar, and a call without calendar_id, stay with the account scopes.
+	it("decides the calendar scopes for the calendar of a different principal, and none for the own calendar", () => {
+		const create = operations["calendar.create_event"];
+		expect(resourceDecidedScopes(create, { calendar_id: OTHER }, ME)).toEqual(["calendar.write"]);
+		expect(resourceDecidedScopes(operations["calendar.list_events"], { calendar_id: OTHER }, ME)).toEqual([
+			"calendar.read",
+		]);
+		expect(resourceDecidedScopes(operations["calendar.find_times"], { calendar_id: OTHER }, ME)).toEqual([
+			"calendar.read",
+		]);
+		expect(resourceDecidedScopes(create, {}, ME)).toEqual([]);
+		expect(resourceDecidedScopes(create, { calendar_id: ME }, ME)).toEqual([]);
+		// An id that is not the id of a principal, or a value that is not a string, names nothing.
+		expect(resourceDecidedScopes(create, { calendar_id: TEAM }, ME)).toEqual([]);
+		expect(resourceDecidedScopes(create, { calendar_id: [OTHER] }, ME)).toEqual([]);
+		// Attendees of find_times do not name the calendar of the call: the account scopes decide.
+		expect(resourceDecidedScopes(operations["calendar.find_times"], { attendee_ids: OTHER }, ME)).toEqual([]);
+		// Only a person manages the grants of the own calendar.
+		expect(canTargetSharedResource(operations["calendar.set_grant"])).toBe(false);
+		expect(canTargetSharedResource(operations["calendar.list_grants"])).toBe(false);
+	});
+
 	// A list of the resources of the caller shows only what its memberships give. The public view of the rooms
 	// and the list of each shared drive are lists of the organization.
 	it("decides the lists of the resources of the caller", () => {
@@ -209,6 +240,7 @@ describe("the scopes that a resource decides", () => {
 			target_space_id: DRIVE,
 			from_space_id: DRIVE,
 			drive_id: DRIVE,
+			calendar_id: OTHER,
 		};
 		const decided = operationList
 			.filter((operation) => resourceDecidedScopes(operation, everyTarget, ME).length > 0)
@@ -235,6 +267,7 @@ describe("the scopes that a resource decides", () => {
 					target_space_id: DRIVE,
 					from_space_id: DRIVE,
 					drive_id: DRIVE,
+					calendar_id: OTHER,
 				},
 				ME,
 			);
@@ -247,7 +280,7 @@ describe("the scopes that a resource decides", () => {
 				operation.name,
 			).toBe(true);
 			if (decided.length > 0) expect(canTargetSharedResource(operation), operation.name).toBe(true);
-			if (!/^(mail|chat|drive|docs|sheets)\./.test(operation.name)) {
+			if (!/^(mail|chat|drive|docs|sheets|calendar)\./.test(operation.name)) {
 				expect(canTargetSharedResource(operation), operation.name).toBe(false);
 			}
 		}

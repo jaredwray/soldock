@@ -2,16 +2,17 @@
 
 > Status: **started**. A personal calendar for each person, agent and service account exists, with
 > recurring events, changes and cancellations of single occurrences, invitations between people of the
-> organization, free/busy, and personal reminders. Keep this README current as the module grows. It is
+> organization, free/busy with grants and **Find a time**, scheduling by a delegate, and personal
+> reminders. Keep this README current as the module grows. It is
 > the module's contract.
 
 | | |
 | --- | --- |
-| **Purpose** | Calendar: the events of each principal, the time zones and all-day events, recurrence, attendees, free/busy and reminders, and later sharing. |
+| **Purpose** | Calendar: the events of each principal, the time zones and all-day events, recurrence, attendees, the grants of a calendar, free/busy, scheduling by a delegate and reminders. |
 | **Owns** | `CalendarDO`, one for each principal. |
 | **Depends on** | `platform`, `identity` (the Activity of a reminder in `PrincipalDO`, the hint `calendar.changed`), `chat` (the push queue `soldock-chat-push`), `webhooks` (the type of the queue job, and the subscription handlers). |
-| **Operations** | `calendar.list_events`, `calendar.get_event`, `calendar.create_event`, `calendar.update_event`, `calendar.delete_event`, `calendar.update_occurrence`, `calendar.cancel_occurrence`, `calendar.respond_to_event`, `calendar.set_reminder`, `calendar.query_free_busy`, `calendar.list_changes`, `calendar.create_webhook_subscription`, `calendar.list_webhook_subscriptions`, `calendar.delete_webhook_subscription` |
-| **Data inventory** | `CalendarDO` tables `events`, `event_overrides`, `event_attendees`, `occurrence_responses`, `reminders`, `reminder_log`, `outbox`, `changes`, `idempotency` and `meta` (with, for the change feed, `change_feed`, `change_head`, `change_published`, `change_floor`, `publish_attempts`, `publish_at` and `webhook_events`). `PrincipalDO` column `chat_activity.event_json` (the reminders in the Activity). No R2 object. D1: the subscriptions of MCP Events and of the calendar webhooks are rows of `webhook_endpoints` and `webhook_subscriptions` (domain `calendar`). D1 migration 0038 changes `principals.agent_scopes` only. D1 migration 0041 builds `webhook_subscriptions` again with the domain `calendar`, and gives `calendar.webhooks` to agents. Backups: not built yet. |
+| **Operations** | `calendar.list_events`, `calendar.get_event`, `calendar.create_event`, `calendar.update_event`, `calendar.delete_event`, `calendar.update_occurrence`, `calendar.cancel_occurrence`, `calendar.respond_to_event`, `calendar.set_reminder`, `calendar.query_free_busy`, `calendar.find_times`, `calendar.list_grants`, `calendar.set_grant`, `calendar.remove_grant`, `calendar.list_shared_calendars`, `calendar.list_changes`, `calendar.create_webhook_subscription`, `calendar.list_webhook_subscriptions`, `calendar.delete_webhook_subscription` |
+| **Data inventory** | `CalendarDO` tables `events` (with `visibility` and `created_by` since schema 4), `grants` (principal, access, time; schema 4), `shared_with_me` (the calendars that other owners share with this owner: owner, access or null for a removed grant, version, time; schema 5; a hint that the grants of the other calendars can build again), `outbox` with the kind `grant` since schema 5, `meta.grant_seq`, `event_overrides`, `event_attendees`, `occurrence_responses`, `reminders`, `reminder_log`, `outbox`, `changes`, `idempotency` and `meta` (with, for the change feed, `change_feed`, `change_head`, `change_published`, `change_floor`, `publish_attempts`, `publish_at` and `webhook_events`). `PrincipalDO` column `chat_activity.event_json` (the reminders in the Activity). No R2 object. D1: the subscriptions of MCP Events and of the calendar webhooks are rows of `webhook_endpoints` and `webhook_subscriptions` (domain `calendar`). D1 migration 0038 changes `principals.agent_scopes` only. D1 migration 0041 builds `webhook_subscriptions` again with the domain `calendar`, and gives `calendar.webhooks` to agents. Backups: not built yet. |
 
 Public surface: `index.ts` only. Other domains must not import files from this folder directly.
 
@@ -21,6 +22,7 @@ Public surface: `index.ts` only. Other domains must not import files from this f
 | --- | --- |
 | `calendar.ts` | `CalendarDO`: the SQLite tables of one calendar, the range query with the occurrences of each series, the overrides, the attendees, the outbox, free/busy, the reminders and the alarm |
 | `handlers.ts` | The operation handlers. They check the time of an event, change it to the stored form and back, find the attendees in the directory, and open the object of the caller |
+| `find-times.ts` | The suggestions of `calendar.find_times`, and the merge of busy intervals: pure functions |
 | `webhooks.ts` | `enableCalendarEvents` and the webhook subscription operations of Calendar: they turn on the queue jobs of the change feed before a subscription is stored |
 | `packages/contracts/src/recurrence.ts` | The recurrence engine. It is pure, so the server and the web app make the same occurrences |
 
@@ -28,9 +30,15 @@ Public surface: `index.ts` only. Other domains must not import files from this f
 
 - Each person, agent and service account has one calendar. Nobody creates it: the first call makes
   it. The name of its `CalendarDO` is the principal id.
-- A call reaches only the calendar of its caller. No input field names a different calendar, and the
-  strict input refuses an unknown field. The id of an event of a different calendar gives
-  `not_found`.
+- Without `calendar_id`, a call uses the calendar of its caller. The id of an event of a different
+  calendar gives `not_found`.
+- `calendar_id` names the calendar of a different person, for `list_events`, `get_event`,
+  `create_event`, `update_event`, `delete_event`, `update_occurrence`, `cancel_occurrence` and
+  `find_times`. Only a person who is not archived gives grants, so the handler gives `not_found` for the
+  calendar of an agent, a service account, an archived person or an unknown id. The object then checks
+  the grant of the caller (see [Grants](#grants)) before the handler reads more input. The other
+  operations take no `calendar_id`: the responses, the reminders, the change feed and the webhooks stay
+  with the owner.
 - The object keeps the id of its owner on the first call. A call for a different owner gets
   `not_found`, so a handler defect cannot show the events of a different principal.
 - An invitation and a response go to a different calendar through the `outbox` of the object (see
@@ -45,6 +53,9 @@ Public surface: `index.ts` only. Other domains must not import files from this f
 | `description` | At most 8000 characters of plain text. Tabs and line breaks stay |
 | `location` | At most 500 characters after a trim. No control characters |
 | `when` | A timed time or an all-day time (see [Time](#time)) |
+| `visibility` | `default` or `private`, for the entire series. A delegate sees only the time of a private event. A copy of an invitation takes the visibility of the organizer |
+| `created_by` | The delegate that added the event, or null when the owner added it. Null on a copy |
+| `redacted` | True when the caller sees only a part of the event (see [What a delegate sees](#what-a-delegate-sees)) |
 | `revision` | 1 for a new event. Each change adds 1 |
 | `created_at`, `updated_at` | UTC times |
 
@@ -166,12 +177,118 @@ Public surface: `index.ts` only. Other domains must not import files from this f
   each operation is the revision of the series. A response and a reminder do not change it.
 - A series can have at most 500 overrides.
 
+## Grants
+
+- The owner of a calendar gives a grant to a person, an agent or a service account with
+  `calendar.set_grant`, and removes it with `calendar.remove_grant`. Only a person calls these
+  operations, and only for the own calendar. An owner or an admin cannot do this for a different
+  person. Calendar grants are not in the settings of the members of the organization: the person
+  manages them in **Calendar › Sharing**.
+- A grant has one `access`:
+  - `free_busy`: the principal sees the merged busy intervals of the calendar through
+    `calendar.query_free_busy` and `calendar.find_times`. It gets `forbidden` from each event
+    operation.
+  - `schedule`: `free_busy`, and the principal also lists and reads the events (see
+    [What a delegate sees](#what-a-delegate-sees)), adds events and invites attendees from the
+    calendar, and changes and deletes the events and the occurrences that it added. The owner is the
+    organizer of these events.
+- The grants live in the `grants` table of the `CalendarDO` of the owner. `enterShared()` reads the
+  grant on each call, so a removed grant refuses the next call at once. `enter()` stays for the owner
+  only: the responses, the reminders, the change feed and the grants never pass a grant. A calendar has
+  at most 200 grants. Known limit: the grant of a deleted principal counts for this limit, but
+  `calendar.list_grants` does not show it.
+- `calendar.set_grant` needs `calendar.share`. The credential must also hold `calendar.read` to give
+  `free_busy`, and `calendar.read` and `calendar.write` to give `schedule`. `calendar.share` is in
+  `OWN_KEY_SCOPES`, as `mail.share` is: only the person makes a key that gives grants.
+- A call that changes nothing writes no audit line. `calendar.list_grants` leaves out a principal that
+  the directory no longer has. A grant writes no record in the change feed.
+
+## What a delegate sees
+
+| Caller | Event | What it gets | Change |
+| --- | --- | --- | --- |
+| Owner | Each event | Each field | An own event: yes. An invitation: respond and reminder only |
+| `schedule` delegate | An event or a series that it added | Each field | Update, delete, and change or cancel an occurrence |
+| `schedule` delegate | A different event that is not private | `id`, `when`, `title`, `visibility`, `revision`, `recurrence`, the fields of the occurrence, times. `description`, `location` and `attendees` are empty. `organizer`, `my_response`, `reminder_minutes` and `created_by` are null, also for an invitation: the delegate does not learn who the owner meets. `redacted` is true | `forbidden` |
+| `schedule` delegate | A different private event | The same, and `title` is empty. The web app shows "Busy" | `forbidden` |
+| `free_busy` grantee | — | `forbidden` from each event operation. Merged busy intervals from `calendar.query_free_busy` and `calendar.find_times` | — |
+| Each other caller | — | `forbidden`. `unknown` in free/busy | — |
+
+The object makes this view (`viewFor`) for each answer of a shared method: the list with the occurrences of
+each series, a retry with an idempotency key, a change that changes nothing, and `dry_run`. So a handler
+defect cannot show a hidden field. A delegate gets `forbidden` for a change of a different event before
+the check of the revision.
+
+## Find a time
+
+- `calendar.find_times` takes `attendee_ids` (comma-separated, at most 20), `time_min`, `time_max`
+  (at most 31 days of the wall clock of `time_zone`), `duration_minutes`, `time_zone`, and optional
+  `day_start` and `day_end` (default 09:00 and 17:00), and optional `ignore_unknown`. A GET input holds
+  only scalars, so the ids are one text. The web panel uses this operation (parity).
+- `calendar.find_times` and `calendar.query_free_busy` share one core (`readAvailability` and
+  `freeBusy`), so the rule for unknown has one implementation.
+- The calendar of the call is always the first entry of `calendars`. Each entry has `availability`
+  `known` or `unknown`, and `busy`: merged intervals in UTC. The answer has no id, no title and no
+  count of events. A private event and an invitation are busy time too. See [Free/busy](#freebusy) for
+  each rule of busy time.
+- A calendar is `known` to the viewer when the viewer is its owner, or holds a grant of its owner
+  (either access). An archived principal, a calendar with more than 2000 events or occurrences in the
+  range, and a calendar that does not answer are `unknown`. An unknown principal id gives `not_found`. The object
+  makes the same check for a range that can hold no event, so such a range shows no calendar as known.
+- **Unknown is never free.** `complete` is false when an entry is `unknown`, and `suggestions` is then
+  empty. With `ignore_unknown` `"true"`, the suggestions use only the known calendars. The web app
+  first calls without it. It then shows the warning and **Suggest times without them**, and tells that
+  the suggestions are free only for the other calendars.
+- The web app shows an answer only while the attendees and the fields of the panel are the ones of its
+  search.
+- **One step for a delegate.** With `calendar_id`, the caller must hold `schedule` on that calendar.
+  Each attendee calendar is then asked as the owner of `calendar_id`: the agent of Jared sees the busy
+  times that teammates share with Jared. A teammate does not grant each agent. This goes one step
+  only: a `free_busy` grantee gets `forbidden` with `calendar_id`, and a removed grant ends it at once.
+- A suggestion is in the hours of its day in `time_zone`, never in the past, and overlaps no known
+  busy interval. It starts on a step of 15 minutes from `day_start` (30 for a meeting of an hour or
+  more). Two suggestions do not overlap.
+
+## Calendars that people share with you
+
+- `calendar.list_shared_calendars` returns the calendars of the people who gave the caller `free_busy`
+  or `schedule`, with the name of the owner and the access. It needs `calendar.read` of the account,
+  because it takes no `calendar_id`.
+- Each change of a grant puts a row of the kind `grant` in the outbox of the owner. The alarm sends the
+  current grant to the calendar of the grantee (`applyGrant`), which keeps it in `shared_with_me`. A
+  grant has a version (`meta.grant_seq`), so an older state changes nothing. A removed grant is a row
+  with a null access.
+- **The hint is never the authority.** The handler asks the calendar of each owner for the grant of the
+  caller now (`accessOf`), and leaves out an entry without one. So a grant that ended does not show, also
+  before the outbox delivers the removal. An archived owner does not show. Each call with `calendar_id`
+  checks the grant again in `enterShared`.
+- A page can have fewer calendars than `limit`. The page size is at most 100, because each entry asks
+  one more object.
+- Grants made before schema 5 on this branch have no pointer. Grants were never on `main` before.
+
+## Audit
+
+- Each change that writes gets an `audit()` line with the event or the occurrence id. A change in the
+  calendar of a different person also has `calendar`: the id of the owner. `actor` is the delegate. A
+  line of the own calendar has no `calendar` field. A refused change of a delegate also names
+  `calendar` (`deniedCalendar` of the invoker).
+- The event keeps `created_by`, so the owner sees which delegate added it. The event dialog of the web
+  app shows it as **Added by** with the name of the delegate. The change feed of the owner records the
+  delegate as `actor_id`.
+
 ## Invitations
 
 - `attendee_ids` of `calendar.create_event` and `calendar.update_event` invites people of the
-  organization. Only a person invites, and only active people can be invited (at most 50). An agent or
-  a service account that sends `attendee_ids` gets `forbidden`. The rules for the invitations of agents
-  are not built yet.
+  organization (at most 50). The organizer is the owner of the calendar, and must be a person: an agent
+  or a service account that sends `attendee_ids` for its own calendar gets `forbidden`. A delegate with
+  `schedule` access invites from the calendar of the person, and that person is the organizer. Only
+  active people can be invited, so an agent never invites an agent (`invalid`). The approval flow for
+  that case is not built yet.
+- An update keeps the current attendees without a new check of the directory. So an attendee who left
+  the organization does not block a change, and only a new attendee is checked.
+- No mail goes out for an invitation: each attendee is a principal of the organization. So each
+  outbound mode of an agent allows it. Invitations by mail must check the outbound policy of the acting
+  agent (`deniedOutboundAddresses`) for each external address.
 - The organizer owns the event. Each attendee gets a copy with the same id in their own calendar, with
   `role: "attendee"`. Only the organizer changes the content. An attendee gets `forbidden` for a change
   or a delete, and responds with `calendar.respond_to_event`.
@@ -212,13 +329,20 @@ can come later without a change of the data:
 
 ## Free/busy
 
-- `calendar.query_free_busy` takes at most 20 principal ids and a range of at most 62 days. It returns
-  the busy intervals of each one, merged, without titles or other details. Each principal with
-  `calendar.read` can query each active principal of the organization.
-- A busy time is a timed event or occurrence. A cancelled occurrence is not busy. A moved occurrence is
+- `calendar.query_free_busy` takes at most 20 principal ids, a range of at most 62 days, and an optional
+  `time_zone` (default UTC). It returns the busy intervals of each one, merged, without titles or other
+  details, with `availability` `known` or `unknown`.
+- **A grant decides.** A caller sees the busy times of its own calendar, and of each person who gave it
+  `free_busy` or `schedule` access. Each other calendar is `unknown`, with no busy times. Never treat
+  unknown as free. An archived principal, a calendar with more than 2000 events or occurrences in the
+  range, and a calendar that does not answer are `unknown` too. A principal id that the directory does not have gives
+  `not_found`.
+- A busy time is an event or an occurrence. A cancelled occurrence is not busy. A moved occurrence is
   busy at its new time. An event or an occurrence that the principal declined is not busy. An all-day
-  event is not busy.
-- An unknown, deleted or archived principal gives `not_found`.
+  event is busy from 00:00 to 00:00 of its days in `time_zone` (`zonedDayStart`).
+- Before grants, each principal with `calendar.read` saw the busy times of each active principal. That
+  rule ended on purpose: a client that reads the busy times of a different principal without a grant now
+  gets `unknown`.
 
 ## Reminders
 
@@ -399,13 +523,25 @@ gives `not_found`.
   nothing.
 - The hint goes only to an events socket whose credential held `calendar.read` when it opened. It has the id
   of the calendar only. The socket checks its credential again before the event, as for each event.
-- **Free/busy.** `calendar.query_free_busy` reads only the busy times (`freeBusy`), which do not pass
-  `enter`. A free/busy read or a later free/busy grant must never reach the change feed: it must not pass
+- **Free/busy.** `calendar.query_free_busy` and `calendar.find_times` read only the busy times (`freeBusy`),
+  which do not pass `enter`. `freeBusy` checks the grant of the viewer itself. A free/busy read or a later free/busy grant must never reach the change feed: it must not pass
   `enter`, `listChanges`, `enableChangeEvents`, the calendar branch of `creatableTarget` or the calendar branch
   of `checkDelivery`. The feed has no free/busy form. A shared calendar later needs a check of the access of each receiver before each delivery, as a room
   of Chat does with `canNotifyWebhook`.
 
 ### The web app
+
+- **The calendar switcher.** The toolbar has a **Calendar** list when people let the person schedule:
+  **My calendar** and each `schedule` calendar of `calendar.list_shared_calendars`. The calendar of a
+  different person has the path `/calendar/person/<id>/<view>/<date>`, so a reload stays on it.
+- On that calendar, the page reads the range again each 30 seconds while it shows, and on focus: a
+  delegate has no change feed of the owner. **Sharing** does not show. A line tells whose calendar it is.
+- An event that the delegate sees only in part opens read-only: its time, and its title or "Busy". The
+  own events of the delegate open in the normal dialog, with `calendar_id` on each call. The dialog has
+  no reminder there, because the reminder belongs to the owner, and the server gives the owner the
+  default reminder of a new event. **Find a time** runs as the owner.
+- When the owner removes the grant, the next read gets `forbidden`, and the page shows "You cannot use
+  the calendar of …" with no events.
 
 - For each range (week or month), the web app gets the cursor of now first, then reads the range. A change after that cursor makes a catch-up
   read it, and the range loads again, so no change during the first read is lost.
@@ -420,9 +556,16 @@ gives `not_found`.
 
 ## Access
 
-- The scopes are `calendar.read` (list and get) and `calendar.write` (create, update and delete).
-  Both are in the ceiling of a person, of an agent and of a service account. They are not in
-  `OWN_KEY_SCOPES`, and not in the resource scopes: the calendar has no members.
+- The scopes are `calendar.read` (list, get and free/busy), `calendar.write` (create, update and
+  delete), and `calendar.share` (the grants). `calendar.read` and `calendar.write` are in the ceiling of
+  a person, of an agent and of a service account. `calendar.share` is for a person only, and is in
+  `OWN_KEY_SCOPES`.
+- `calendar.read` and `calendar.write` are resource scopes (`RESOURCE_SCOPES`). For an agent or a
+  service account, a `calendar_id` of a different principal makes the grant decide, not the account
+  scopes (`resourceDecidedScopes`). Without `calendar_id`, or with the own id, the account scopes decide.
+  `calendar.create_webhook_subscription` is account-decided: its `calendar_id` can only be the caller.
+- A key of a person keeps its scopes in the calendar of a different person. A key with only
+  `calendar.read` lists the events of the owner, and cannot schedule.
 - A session of the web app holds each scope. A key of a person holds the scopes that the person gave
   it. An agent and a service account use their account scopes: a new account holds both.
 - D1 migration 0038 gives an account from before Calendar `calendar.read` when it holds `mail.read`,
@@ -432,7 +575,7 @@ gives `not_found`.
   account scope of that account. So a key of a person from before Calendar cannot do this after the
   upgrade: the person makes a new key with the calendar scopes.
 - A mailbox delegate, the sponsor of an agent, and an owner or an admin get no access to a different
-  calendar.
+  calendar without a grant of its owner.
 - No content of a calendar comes from outside the organization in this layer, so the output marks
   nothing untrusted. An invitation comes from a person of the organization.
 - **Reminders and the Chat scopes.** A reminder has the title and the start of an event, and it shows in
@@ -447,6 +590,9 @@ gives `not_found`.
   the object.
 
 ## Known limits
+
+- The calendar of a different person in the web app updates each 30 seconds, not live. It uses the time
+  zone of the browser of the delegate.
 
 - An attendee follows a change of the organizer after the delivery of the outbox, normally at once.
   While the calendar of an attendee is not reachable, a reminder of the old time can fire there.
@@ -481,13 +627,16 @@ gives `not_found`.
 
 ## Not built yet
 
-1. Rules for the invitations of an agent (an agent invites an agent, a person approves).
+1. The approval flow for the invitations of an agent, the consent of an attendee, a limit, and a mark of
+   the delegate on a copy (jaredwray/soldock#242).
 2. "This and following occurrences", BYDAY and other parts of RRULE, and an undo of a cancel.
 3. More reminder times, and reminders of all-day events.
 4. A resource of Calendar for `subscriptions/listen`, and a page in the web app that creates a calendar
    webhook.
 5. An input `occurrence_id` for `calendar.get_event`, to read one changed occurrence without a range.
-6. Delegates of a calendar, with a `calendar.share` scope, and shared calendars of a team.
+6. Organization-wide free/busy, group grants, shared calendars of a team, and a live update of a calendar
+   that you schedule in. A Find a time that leaves out the event that a person moves
+   (jaredwray/soldock#243).
 7. The calendar of an agent for its sponsor, or for an owner or an admin.
 8. ICS export, and ICS import marked untrusted.
 9. Invitations by mail to addresses outside the organization, and **Add to calendar** on a message

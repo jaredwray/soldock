@@ -118,8 +118,13 @@ month view shows six weeks. An event has a title, a time, a location and a descr
 in a time zone, or all day. An all-day event is on the same days in each time zone. On a phone, the views
 become a list of the days that have events.
 
-An agent adds and reads the events of its own calendar with tools such as `calendar_create_event` and
-`calendar_list_events`. Invitations, recurring events and reminders come in later layers.
+An event can have attendees from the organization: each one gets the event on their calendar. **Find a
+time** in the event dialog shows the busy times of the attendees and suggests free times. A person who
+shares no availability shows as unknown, never as free. In **Calendar › Sharing**, a person lets a
+colleague or an agent see the busy times, or schedule on their behalf.
+
+An agent uses the same operations through MCP: `calendar_find_times`, then `calendar_create_event` with
+`calendar_id` and `attendee_ids`. The person is the organizer, and the audit names the agent.
 
 ![The week view of Calendar with the meetings of the studio director](docs/screenshots/calendar.png)
 

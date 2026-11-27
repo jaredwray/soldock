@@ -10,6 +10,15 @@ export interface Agent {
 	/** Calls the REST API as the agent, with its first API key. */
 	get: (path: string) => ReturnType<APIRequestContext["get"]>;
 	post: (path: string, data: unknown) => ReturnType<APIRequestContext["post"]>;
+	/** Calls one MCP tool as the agent, and returns the result of the call. */
+	callTool: (name: string, args: Record<string, unknown>) => Promise<McpToolResult>;
+}
+
+/** The result of one MCP tool call. */
+export interface McpToolResult {
+	isError?: boolean;
+	content: { type: string; text: string }[];
+	structuredContent?: Record<string, unknown>;
 }
 
 /** A new agent of the admin. The admin is its sponsor. Its memberships decide what it can do in a resource. */
@@ -27,6 +36,14 @@ export async function createAgent(admin: BrowserContext, request: APIRequestCont
 		id: created.principal.id,
 		get: (path) => request.get(path, { headers }),
 		post: (path, data) => request.post(path, { headers, data }),
+		callTool: async (name, args) => {
+			const response = await request.post("/mcp", {
+				headers: { ...headers, accept: "application/json, text/event-stream" },
+				data: { jsonrpc: "2.0", id: 1, method: "tools/call", params: { name, arguments: args } },
+			});
+			expect(response.ok(), `MCP ${name}: ${response.status()}`).toBe(true);
+			return ((await response.json()) as { result: McpToolResult }).result;
+		},
 	};
 }
 

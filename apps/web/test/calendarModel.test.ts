@@ -19,6 +19,7 @@ import {
 	weekDays,
 	whenOf,
 	whenText,
+	withSlot,
 	zoneOfEvent,
 } from "../src/features/calendar/model.ts";
 
@@ -43,6 +44,9 @@ function event(id: string, when: CalendarEvent["when"], title = id): CalendarEve
 		attendees: [],
 		my_response: null,
 		reminder_minutes: null,
+		visibility: "default",
+		created_by: null,
+		redacted: false,
 	};
 }
 
@@ -166,6 +170,24 @@ describe("the events of each day", () => {
 });
 
 describe("the form of an event", () => {
+	// Find a time can search in a different zone. A suggestion is two instants, so the form must show them on the
+	// clock of the dialog, and a save must send the same instants back.
+	it("fills the form with a suggestion of Find a time on the clock of the dialog zone", () => {
+		const allDay = { ...newEventForm("2026-12-01"), allDay: true, title: "Sync" };
+		// 09:00 in Berlin on 2026-12-02 is 03:00 in New York.
+		const start = Date.parse("2026-12-02T08:00:00Z");
+		const filled = withSlot(allDay, start, start + 30 * 60_000, NY);
+		expect(filled).toMatchObject({
+			title: "Sync",
+			allDay: false,
+			startDate: "2026-12-02",
+			startTime: "03:00",
+			endDate: "2026-12-02",
+			endTime: "03:30",
+		});
+		expect(whenOf(filled, NY)).toMatchObject({ start: "2026-12-02T08:00:00.000Z", end: "2026-12-02T08:30:00.000Z" });
+	});
+
 	it("keeps the last day of an all-day event in the form, and the day after it in the event", () => {
 		const form = { ...newEventForm("2026-12-01"), allDay: true, endDate: "2026-12-01" };
 		expect(whenOf(form, NY)).toEqual({ kind: "all_day", start_date: "2026-12-01", end_date: "2026-12-02" });

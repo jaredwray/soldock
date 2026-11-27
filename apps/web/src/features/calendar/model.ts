@@ -10,6 +10,7 @@ import {
 	DEFAULT_REMINDER_MINUTES,
 	dateToUtcMs,
 	daysBetween,
+	type EventVisibility,
 	type EventWhenValue,
 	type Recurrence,
 	type RecurrenceInput,
@@ -228,6 +229,8 @@ export interface EventForm {
 	count: string;
 	/** The own reminder, in minutes before the start, or "none". */
 	reminder: ReminderChoice;
+	/** private: a person or an agent that schedules for you sees only the time. */
+	visibility: EventVisibility;
 }
 
 export type RepeatChoice = "none" | "daily" | "weekly" | "biweekly" | "monthly";
@@ -312,6 +315,7 @@ export function newEventForm(date: string, hour = 9): EventForm {
 		description: "",
 		...REPEAT_DEFAULTS,
 		reminder: String(DEFAULT_REMINDER_MINUTES) as ReminderChoice,
+		visibility: "default",
 	};
 }
 
@@ -327,6 +331,7 @@ export function formOf(event: CalendarEvent, zone: string): EventForm {
 		until: rule?.until ?? "",
 		count: String(rule?.count ?? 10),
 		reminder: (event.reminder_minutes === null ? "none" : String(event.reminder_minutes)) as ReminderChoice,
+		visibility: event.visibility,
 	};
 	if (event.when.kind === "all_day") {
 		return {
@@ -537,10 +542,41 @@ export function whenText(event: CalendarEvent, zone: string): string {
 	return `${shortDate(zonedDate(start, zone))}, ${startText} – ${shortDate(zonedDate(end, zone))}, ${endText}`;
 }
 
+/**
+ * An interval of busy or free time in a time zone: "Mon, Mar 4, 10:00 AM – 12:30 PM", with the date of the end
+ * when it is on a different day.
+ */
+export function intervalText(start: number, end: number, zone: string): string {
+	const day = format(zone, { weekday: "short", month: "short", day: "numeric" });
+	const startText = `${day.format(start)}, ${timeText(start, zone)}`;
+	if (zonedDate(start, zone) === zonedDate(end - 1, zone)) return `${startText} – ${timeText(end, zone)}`;
+	return `${startText} – ${day.format(end)}, ${timeText(end, zone)}`;
+}
+
+/** The title of an event, or "Busy" for a private event of a different person that has no title for the caller. */
+export function eventTitle(event: CalendarEvent): string {
+	return event.title || "Busy";
+}
+
+/**
+ * The form with the time of a suggestion of Find a time. The start and the end are instants: the form shows them
+ * on the clock of the time zone of the dialog, which can differ from the zone of the search.
+ */
+export function withSlot(form: EventForm, start: number, end: number, zone: string): EventForm {
+	return {
+		...form,
+		allDay: false,
+		startDate: zonedDate(start, zone),
+		startTime: wallTime(start, zone),
+		endDate: zonedDate(end, zone),
+		endTime: wallTime(end, zone),
+	};
+}
+
 /** The accessible name of an event: its title, its time and its place. */
 export function eventLabel(event: CalendarEvent, zone: string): string {
 	return [
-		event.title,
+		eventTitle(event),
 		whenText(event, zone),
 		event.location,
 		event.recurrence ? repeatText(event.recurrence) : "",

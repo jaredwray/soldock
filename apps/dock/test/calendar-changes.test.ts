@@ -208,9 +208,20 @@ describe("the change feed of a calendar", () => {
 		await settleCalendars(ada.id, grace.id, owner.id);
 		const graceStart = await head(grace);
 
-		// The two states for grace merge in one row of the outbox, so the copy sees only the newest one.
+		// The two states for grace merge in one row of the outbox, so the copy sees only the newest one. The alarm of
+		// the organizer can run between the two changes, so the calendar of grace refuses each delivery until both
+		// changes are in: a failed delivery keeps the row, and the second change replaces its state.
+		const grace_ = calendarStub(grace.id);
+		const refuse = (on: boolean) =>
+			runInDurableObject(grace_, (_instance, state) => {
+				state.storage.sql.exec(
+					on ? "ALTER TABLE events RENAME TO events_off" : "ALTER TABLE events_off RENAME TO events",
+				);
+			});
+		await refuse(true);
 		await ada.call("calendar.update_event", { event_id: event.id, attendee_ids: [grace.id] });
 		await ada.call("calendar.update_event", { event_id: event.id, attendee_ids: [grace.id, owner.id] });
+		await refuse(false);
 		await settleCalendars(ada.id, grace.id, owner.id);
 		const responses = (await changesAfter(grace, graceStart)).filter(
 			(change) => change.type === "calendar.rsvp.changed",

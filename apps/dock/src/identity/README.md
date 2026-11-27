@@ -212,7 +212,7 @@ The directory stores these fields in `chat_status_json`. Each read checks the en
 - `directory.create_principal` gives a new human a first password, or an invite link (`invite`) when the call
   has no `password`, and no API key (`api_key` is null). [Invite links](#invite-links) has the rules. The
   person signs in, and creates keys in Settings with `account.create_api_key`. An owner
-  or an admin can also create a key for the person, but not a key with `mail.share`
+  or an admin can also create a key for the person, but not a key with `mail.share` or `calendar.share`
   ([Mailbox delegates](#mailbox-delegates)). A new agent needs `scopes`: the scopes of the
   agent, inside `AGENT_SCOPES`. The credential of the call must hold each one (`grantableScopes`). The
   agent also gets a first key, `First key`, with no scopes of its own. Its secret shows once. A human
@@ -880,7 +880,9 @@ This module owns the grants and the check of each call (`mailbox-delegates.ts`).
 - Only the owner of the mailbox writes its rows (`mail.set_delegate`, `mail.remove_delegate`). The
   operations accept people only and need `mail.share`. An agent holds no `mail.share`, so it cannot give
   access to its own mailbox. The role of an owner or an admin of the organization gives no right here.
-- Only the person gets a key of the person with `mail.share` (`OWN_KEY_SCOPES`). `account.create_api_key`
+- Only the person gets a key of the person with `mail.share` or `calendar.share` (`OWN_KEY_SCOPES`).
+  `calendar.share` gives the grants of the own calendar of the person (see the
+  [calendar module](../calendar/README.md#grants)). `account.create_api_key`
   and `account.rotate_api_key` refuse an owner or an admin who acts for a different person, when the key
   holds that scope (`requireOwnShareKey`). A grant stays after a key ends, so a key that an admin made must
   not make one. An owner or an admin can still set a new password for a person and sign in as that person:

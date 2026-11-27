@@ -2,11 +2,13 @@ import { DurableObject } from "cloudflare:workers";
 import {
 	anchorOf,
 	CALENDAR_LIMITS,
+	type CalendarAccess,
 	type CalendarWebhookEvent,
 	checkRecurrence,
 	DAY_MS,
 	DEFAULT_REMINDER_MINUTES,
 	type EventResponse,
+	type EventVisibility,
 	expandOccurrences,
 	firstOccurrenceAfter,
 	type Occurrence,
@@ -14,11 +16,13 @@ import {
 	occurrenceId,
 	type RecurrenceRule,
 	seriesEnd,
+	zonedDayStart,
 } from "@asterra/contracts";
 import { type CalendarPushJob, enqueueCalendarPush } from "../chat/index.ts";
 import type { CalendarReminderInput } from "../identity/index.ts";
 import { decodeCursor, encodeCursor, log, newId } from "../platform/index.ts";
 import type { CalendarWebhookEventJob } from "../webhooks/index.ts";
+import { mergeIntervals } from "./find-times.ts";
 
 // Each person, agent and service account has one CalendarDO. Its name is the principal id. It holds the
 // events of the calendar of that principal in its SQLite database.
@@ -32,6 +36,9 @@ import type { CalendarWebhookEventJob } from "../webhooks/index.ts";
 // - The object keeps the next reminder of each event in `reminders`. One alarm serves the reminders and the
 //   outbox. Each change computes the next reminder of the event again, so a reminder of a moved, cancelled or
 //   declined occurrence cannot stay.
+// - The owner gives grants (`grants`): `free_busy` shows the busy times, `schedule` also lets a delegate list the
+//   events and add, change and delete the events that it added. `enterShared` reads the grant on each call, and
+//   `viewFor` hides the details of the other events from a delegate.
 
 type Row = Record<string, SqlStorageValue>;
 
@@ -43,16 +50,51 @@ function refuse(code: Refusal["error"]["code"], message: string): Refusal {
 }
 
 const NOT_FOUND = "Your calendar has no event with that id.";
+const NO_GRANT = "The owner of this calendar gave you no access to it.";
+const FREE_BUSY_ONLY = "Your access to this calendar shows only busy times. The owner can let you schedule.";
+const OWN_EVENTS_ONLY = "You can change only the events that you added to this calendar.";
+
+/** The rows of a free/busy query. A calendar with more events in the range gives unknown, never a part. */
+const BUSY_ROWS = 2000;
 const NO_OCCURRENCE = "The event has no occurrence with that id.";
 const ORGANIZER_ONLY =
 	"Only the organizer can change this event. Use calendar.respond_to_event and calendar.set_reminder for an invitation.";
 
-/** The caller of the object. Only the owner reaches the calendar now: sharing comes in a later layer. */
+/** The caller of the object. */
 export interface CalendarCall {
 	/** The principal that owns the calendar. The handler opens the object of this principal. */
 	ownerId: string;
-	/** The principal of the call. */
+	/** The principal of the call: the owner, or a principal that holds a grant of the owner. */
 	actorId: string;
+}
+
+/** What the caller is in this calendar: the owner, or a principal with a `schedule` grant. */
+type Role = "owner" | "schedule";
+
+export interface GrantRecord {
+	principal_id: string;
+	access: CalendarAccess;
+	created_at: number;
+}
+
+/** The state of a grant that the outbox of an owner sends to the calendar of the grantee. Null: no grant now. */
+export interface GrantMessage {
+	v: 1;
+	owner_id: string;
+	access: CalendarAccess | null;
+	version: number;
+}
+
+/** A calendar that its owner shares with the owner of this object, as the hint `shared_with_me` keeps it. */
+export interface SharedPointer {
+	owner_id: string;
+	access: CalendarAccess;
+}
+
+/** An interval of busy time, in UTC ms. `end` is not in the interval. */
+export interface BusySpan {
+	start: number;
+	end: number;
 }
 
 /**
@@ -75,6 +117,7 @@ export interface EventFields extends EventTime {
 	title: string;
 	description: string;
 	location: string;
+	visibility: EventVisibility;
 }
 
 export interface PrincipalRef {
@@ -105,6 +148,8 @@ export interface EventRecord extends EventFields {
 	my_response: EventResponse | null;
 	my_responded_at: number;
 	reminder_minutes: number | null;
+	/** The delegate that added the event. Null when the owner added it, and on a copy. */
+	created_by: string | null;
 }
 
 /** One entry of a calendar: a one-off event, a series, or one occurrence of a series. */
@@ -125,6 +170,9 @@ export interface EventView extends EventFields {
 	attendees: AttendeeRecord[];
 	my_response: EventResponse | null;
 	reminder_minutes: number | null;
+	created_by: string | null;
+	/** True when a delegate sees only a part of the event (`viewFor`). */
+	redacted: boolean;
 }
 
 /** The range of a list. The handler computes the dates and the lower bound from the time zone of the call. */
@@ -142,6 +190,9 @@ export interface ListQuery {
 	after: { start_at: number; id: string } | null;
 	limit: number;
 }
+
+/** The range of a free/busy query, and the time zone of the days of all-day events. */
+export type BusyQuery = Pick<ListQuery, "min" | "max" | "minDate" | "maxDate" | "lowerBound"> & { zone: string };
 
 export interface CreateInput {
 	id: string;
@@ -426,11 +477,49 @@ const MIGRATIONS: readonly (readonly string[])[] = [
 		)`,
 		"INSERT OR IGNORE INTO meta (key, value) VALUES ('change_feed', lower(hex(randomblob(8))))",
 	],
+	// The grants of the owner (`calendar.set_grant`), the visibility of an event for a delegate, and the delegate
+	// that added an event.
+	[
+		"ALTER TABLE events ADD COLUMN visibility TEXT NOT NULL DEFAULT 'default' CHECK (visibility IN ('default', 'private'))",
+		"ALTER TABLE events ADD COLUMN created_by TEXT",
+		`CREATE TABLE grants (
+			principal_id TEXT PRIMARY KEY,
+			access TEXT NOT NULL CHECK (access IN ('free_busy', 'schedule')),
+			created_at INTEGER NOT NULL
+		) WITHOUT ROWID`,
+	],
+	// The calendars that people share with the owner (`calendar.list_shared_calendars`): a hint that the outbox of
+	// each owner writes with the kind `grant`. A null access is a removed grant. The CHECK of `outbox` cannot change,
+	// so the table is built again with the new kind.
+	[
+		`CREATE TABLE outbox_next (
+			id TEXT PRIMARY KEY,
+			kind TEXT NOT NULL CHECK (kind IN ('snapshot', 'response', 'reminder', 'grant')),
+			target_id TEXT NOT NULL,
+			event_id TEXT NOT NULL,
+			payload TEXT NOT NULL,
+			version INTEGER NOT NULL,
+			attempts INTEGER NOT NULL DEFAULT 0,
+			next_attempt_at INTEGER NOT NULL,
+			created_at INTEGER NOT NULL
+		) WITHOUT ROWID`,
+		`INSERT INTO outbox_next (id, kind, target_id, event_id, payload, version, attempts, next_attempt_at, created_at)
+			SELECT id, kind, target_id, event_id, payload, version, attempts, next_attempt_at, created_at FROM outbox`,
+		"DROP TABLE outbox",
+		"ALTER TABLE outbox_next RENAME TO outbox",
+		"CREATE INDEX outbox_due ON outbox (next_attempt_at)",
+		`CREATE TABLE shared_with_me (
+			owner_id TEXT PRIMARY KEY,
+			access TEXT CHECK (access IN ('free_busy', 'schedule')),
+			version INTEGER NOT NULL,
+			updated_at INTEGER NOT NULL
+		) WITHOUT ROWID`,
+	],
 ];
 
 const COLUMNS = `id, title, description, location, all_day, start_at, end_at, start_date, end_date, time_zone, revision,
 	created_at, updated_at, recurrence, series_end_at, role, organizer_json, sequence, my_response, my_responded_at,
-	reminder_minutes`;
+	reminder_minutes, visibility, created_by`;
 
 function toRecord(row: Row): EventRecord {
 	return {
@@ -455,6 +544,8 @@ function toRecord(row: Row): EventRecord {
 		my_response: (row.my_response as EventResponse | null) ?? null,
 		my_responded_at: (row.my_responded_at as number | null) ?? 0,
 		reminder_minutes: (row.reminder_minutes as number | null) ?? null,
+		visibility: row.visibility === "private" ? "private" : "default",
+		created_by: (row.created_by as string | null) ?? null,
 	};
 }
 
@@ -477,6 +568,7 @@ const FIELD_KEYS = [
 	"title",
 	"description",
 	"location",
+	"visibility",
 	"all_day",
 	"start_at",
 	"end_at",
@@ -525,6 +617,35 @@ function compareViews(a: EventView, b: EventView): number {
 	const ia = sortId(a);
 	const ib = sortId(b);
 	return ia < ib ? -1 : ia > ib ? 1 : 0;
+}
+
+/**
+ * The event as the caller sees it. The owner sees each field. A delegate sees each field of an event that it added.
+ * Of a different event it sees the time, and the title when the event is not private: never the description, the
+ * location, the attendees or the organizer.
+ */
+function viewFor(role: Role, actorId: string, view: EventView): EventView {
+	if (role === "owner" || (view.created_by === actorId && view.role === "organizer")) return view;
+	return {
+		...view,
+		title: view.visibility === "private" ? "" : view.title,
+		description: "",
+		location: "",
+		attendees: [],
+		organizer: null,
+		my_response: null,
+		reminder_minutes: null,
+		created_by: null,
+		redacted: true,
+	};
+}
+
+/** Refuses a change of a delegate to an event that it did not add. The owner can change each own event. */
+function changeRefusal(role: Role, actorId: string, event: EventRecord): Refusal | null {
+	if (role === "schedule" && (event.created_by !== actorId || event.role !== "organizer")) {
+		return refuse("forbidden", OWN_EVENTS_ONLY);
+	}
+	return null;
 }
 
 export class CalendarDO extends DurableObject<Env> {
@@ -579,6 +700,33 @@ export class CalendarDO extends DurableObject<Env> {
 		if (!this.pin(call.ownerId)) return refuse("not_found", NOT_FOUND);
 		if (call.actorId !== call.ownerId) return refuse("not_found", NOT_FOUND);
 		return null;
+	}
+
+	private grantOf(principalId: string): CalendarAccess | null {
+		const row = this.sql
+			.exec<{ access: string }>("SELECT access FROM grants WHERE principal_id = ?", principalId)
+			.toArray()[0];
+		return row?.access === "schedule" || row?.access === "free_busy" ? row.access : null;
+	}
+
+	/**
+	 * Checks the caller of an operation that a delegate can use. The owner can do each thing. A principal that
+	 * holds a `schedule` grant of the owner can enter too. The grant is read on each call, so a removed grant ends
+	 * the access at once.
+	 */
+	private enterShared(call: CalendarCall): Role | Refusal {
+		if (!this.pin(call.ownerId)) return refuse("not_found", NOT_FOUND);
+		if (call.actorId === call.ownerId) return "owner";
+		const access = this.grantOf(call.actorId);
+		if (access === null) return refuse("forbidden", NO_GRANT);
+		if (access === "free_busy") return refuse("forbidden", FREE_BUSY_ONLY);
+		return "schedule";
+	}
+
+	/** Confirms that the caller can schedule in this calendar, before the handler reads more input. */
+	authorize(call: CalendarCall): { ok: true } | Refusal {
+		const role = this.enterShared(call);
+		return typeof role === "string" ? { ok: true } : role;
 	}
 
 	/** True when the object belongs to `ownerId`. The first call keeps the owner. */
@@ -876,6 +1024,8 @@ export class CalendarDO extends DurableObject<Env> {
 			})),
 			my_response: event.role === "attendee" ? (event.my_response ?? "needs_action") : null,
 			reminder_minutes: event.all_day ? null : event.reminder_minutes,
+			created_by: event.created_by,
+			redacted: false,
 		};
 	}
 
@@ -976,8 +1126,8 @@ export class CalendarDO extends DurableObject<Env> {
 
 	/** The entries of a range, first start first, and true when more follow. */
 	list(call: CalendarCall, query: ListQuery): { events: EventView[]; more: boolean } | Refusal {
-		const refused = this.enter(call);
-		if (refused) return refused;
+		const role = this.enterShared(call);
+		if (typeof role !== "string") return role;
 		const bindings: SqlStorageValue[] = [query.max, query.lowerBound, query.min, query.maxDate, query.minDate];
 		let after = "";
 		if (query.after) {
@@ -1006,7 +1156,10 @@ export class CalendarDO extends DurableObject<Env> {
 				return sortId(view) > cursor.id;
 			})
 			.sort(compareViews);
-		return { events: page.slice(0, query.limit), more: page.length > query.limit };
+		return {
+			events: page.slice(0, query.limit).map((view) => viewFor(role, call.actorId, view)),
+			more: page.length > query.limit,
+		};
 	}
 
 	/**
@@ -1014,7 +1167,10 @@ export class CalendarDO extends DurableObject<Env> {
 	 * before the first start of its series or after `series_end_at`, so the query also reads each series with
 	 * a moved occurrence in the range.
 	 */
-	private seriesInRange(query: Pick<ListQuery, "min" | "max" | "minDate" | "maxDate">): EventView[] {
+	private seriesInRange(
+		query: Pick<ListQuery, "min" | "max" | "minDate" | "maxDate">,
+		budget = Number.POSITIVE_INFINITY,
+	): EventView[] {
 		const series = this.sql
 			.exec<Row>(
 				`SELECT ${COLUMNS} FROM events
@@ -1032,48 +1188,204 @@ export class CalendarDO extends DurableObject<Env> {
 			)
 			.toArray()
 			.map(toRecord);
-		return series.flatMap((event) =>
-			this.seriesViews(event, { min: query.min, max: query.max }, CALENDAR_LIMITS.occurrencesPerSeries, (view) =>
-				inRange(view, query),
-			),
-		);
+		// With a budget, the expansion stops between two series when it has more entries than the budget: the caller
+		// then knows that the range is too full. A series always expands with the full cap of main, so a cancelled
+		// occurrence never uses up the place of a later occurrence that is busy.
+		const views: EventView[] = [];
+		for (const event of series) {
+			if (views.length > budget) break;
+			views.push(
+				...this.seriesViews(event, { min: query.min, max: query.max }, CALENDAR_LIMITS.occurrencesPerSeries, (view) =>
+					inRange(view, query),
+				),
+			);
+		}
+		return views;
 	}
 
 	get(call: CalendarCall, eventId: string): EventView | Refusal {
-		const refused = this.enter(call);
-		if (refused) return refused;
+		const role = this.enterShared(call);
+		if (typeof role !== "string") return role;
 		const event = this.row(eventId);
-		return event ? this.masterView(event) : refuse("not_found", NOT_FOUND);
+		return event ? viewFor(role, call.actorId, this.masterView(event)) : refuse("not_found", NOT_FOUND);
 	}
 
 	/**
-	 * The busy times of the owner in a range: timed events and occurrences, without cancelled occurrences and
-	 * without the events and occurrences that the owner declined. The handler checks the access.
+	 * The busy times of a range, merged, for a viewer: events and occurrences, without cancelled occurrences and
+	 * without the events and occurrences that the owner declined. The viewer is the owner, or a principal with a
+	 * grant of the owner (either access). Each other viewer, and a range with too many events or occurrences, gives unknown. The
+	 * result has no id, no title and no count of events. A private event and an invitation are busy time too. An
+	 * all-day event is busy from 00:00 to 00:00 of its days in the zone of the query. A null query only checks the
+	 * access. This method does not keep the owner: only the handler of free/busy calls it.
 	 */
-	freeBusy(ownerId: string, min: number, max: number): { start: number; end: number }[] {
-		if (this.meta("owner_id") !== ownerId) return [];
-		const query = { min, max, minDate: "0000-00-00", maxDate: "0000-00-00" };
+	freeBusy(viewer: CalendarCall, query: BusyQuery | null): { busy: BusySpan[] } | { unknown: true } {
+		const owner = this.meta("owner_id");
+		if (owner !== null && owner !== viewer.ownerId) return { unknown: true };
+		if (viewer.actorId !== viewer.ownerId && (owner === null || this.grantOf(viewer.actorId) === null)) {
+			return { unknown: true };
+		}
+		if (query === null) return { busy: [] };
 		const single = this.sql
 			.exec<Row>(
 				`SELECT ${COLUMNS} FROM events
-				WHERE all_day = 0 AND recurrence IS NULL AND start_at < ? AND end_at > ? AND start_at >= ?`,
-				max,
-				min,
-				min - (CALENDAR_LIMITS.eventDays + 1) * 86_400_000,
+				WHERE start_at < ? AND start_at >= ? AND recurrence IS NULL
+					AND ((all_day = 0 AND end_at > ?) OR (all_day = 1 AND start_date < ? AND end_date > ?))
+				LIMIT ?`,
+				query.max,
+				query.lowerBound,
+				query.min,
+				query.maxDate,
+				query.minDate,
+				BUSY_ROWS + 1,
+			)
+			.toArray();
+		if (single.length > BUSY_ROWS) return { unknown: true };
+		// The limit counts the occurrences of each series too, not only the single events.
+		const views = [
+			...single.map((row) => this.masterView(toRecord(row))),
+			...this.seriesInRange(query, BUSY_ROWS - single.length),
+		];
+		if (views.length > BUSY_ROWS) return { unknown: true };
+		const intervals: [number, number][] = [];
+		for (const view of views) {
+			if (view.my_response === "declined") continue;
+			const [start, end] =
+				view.all_day && view.start_date !== null && view.end_date !== null
+					? [zonedDayStart(view.start_date, query.zone), zonedDayStart(view.end_date, query.zone)]
+					: [view.start_at, view.end_at];
+			const clipped: [number, number] = [Math.max(start, query.min), Math.min(end, query.max)];
+			if (clipped[0] < clipped[1]) intervals.push(clipped);
+		}
+		return { busy: mergeIntervals(intervals).map(([start, end]) => ({ start, end })) };
+	}
+
+	// --- Grants -------------------------------------------------------------------------------------
+
+	private grantRows(): GrantRecord[] {
+		return this.sql
+			.exec<{ principal_id: string; access: string; created_at: number }>(
+				"SELECT principal_id, access, created_at FROM grants ORDER BY created_at, principal_id",
 			)
 			.toArray()
-			.map((row) => this.masterView(toRecord(row)));
-		const busy = [...single, ...this.seriesInRange(query)]
-			.filter((view) => !view.all_day && view.my_response !== "declined")
-			.map((view) => ({ start: Math.max(view.start_at, min), end: Math.min(view.end_at, max) }))
-			.sort((a, b) => a.start - b.start);
-		const merged: { start: number; end: number }[] = [];
-		for (const interval of busy) {
-			const last = merged.at(-1);
-			if (last && interval.start <= last.end) last.end = Math.max(last.end, interval.end);
-			else merged.push({ ...interval });
+			.map((row) => ({
+				principal_id: row.principal_id,
+				access: row.access === "schedule" ? "schedule" : "free_busy",
+				created_at: row.created_at,
+			}));
+	}
+
+	grants(call: CalendarCall): { grants: GrantRecord[] } | Refusal {
+		const refused = this.enter(call);
+		if (refused) return refused;
+		return { grants: this.grantRows() };
+	}
+
+	/** Puts the current grant of a principal in the outbox, for the hint of the calendar of that principal. */
+	private noteGrant(principalId: string): void {
+		const seq = Number(this.meta("grant_seq") ?? 0) + 1;
+		this.setMeta("grant_seq", String(seq));
+		this.putOutbox(`grant:${principalId}`, "grant", principalId, "", "", seq);
+	}
+
+	/** Gives a principal a grant, or changes it. `changed` is false when the grant was the same. */
+	async setGrant(
+		call: CalendarCall,
+		principalId: string,
+		access: CalendarAccess,
+	): Promise<{ grants: GrantRecord[]; changed: boolean } | Refusal> {
+		const refused = this.enter(call);
+		if (refused) return refused;
+		if (principalId === call.ownerId) return refuse("invalid", "You use your own calendar without a grant.");
+		const before = this.grantOf(principalId);
+		if (before === access) return { grants: this.grantRows(), changed: false };
+		if (before === null) {
+			const count = this.sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM grants").one().n;
+			if (count >= CALENDAR_LIMITS.grants) {
+				return refuse("invalid", `A calendar can have at most ${CALENDAR_LIMITS.grants} grants.`);
+			}
 		}
-		return merged;
+		this.ctx.storage.transactionSync(() => {
+			if (before === null) {
+				this.sql.exec(
+					"INSERT INTO grants (principal_id, access, created_at) VALUES (?, ?, ?)",
+					principalId,
+					access,
+					Date.now(),
+				);
+			} else {
+				this.sql.exec("UPDATE grants SET access = ? WHERE principal_id = ?", access, principalId);
+			}
+			this.noteGrant(principalId);
+		});
+		await this.scheduleAlarm();
+		return { grants: this.grantRows(), changed: true };
+	}
+
+	/** Removes a grant. `changed` is false when the principal had no grant. */
+	async removeGrant(
+		call: CalendarCall,
+		principalId: string,
+	): Promise<{ grants: GrantRecord[]; changed: boolean } | Refusal> {
+		const refused = this.enter(call);
+		if (refused) return refused;
+		let changed = false;
+		this.ctx.storage.transactionSync(() => {
+			changed = this.sql.exec("DELETE FROM grants WHERE principal_id = ?", principalId).rowsWritten > 0;
+			if (changed) this.noteGrant(principalId);
+		});
+		if (changed) await this.scheduleAlarm();
+		return { grants: this.grantRows(), changed };
+	}
+
+	/**
+	 * The grant of the caller on this calendar, for the list of the calendars that people share with it. It does not
+	 * pass `enter`, and it gives only the own grant of the caller. Null for a calendar of a different owner.
+	 */
+	accessOf(call: CalendarCall): { access: CalendarAccess | null } {
+		if (this.meta("owner_id") !== call.ownerId) return { access: null };
+		return { access: call.actorId === call.ownerId ? null : this.grantOf(call.actorId) };
+	}
+
+	/**
+	 * Keeps the state of a grant of a different owner in the hint `shared_with_me`. An older version changes nothing,
+	 * so a late delivery is safe. Only the outbox of a CalendarDO calls it. It writes no change record.
+	 */
+	applyGrant(selfId: string, message: GrantMessage): void {
+		if (!this.pin(selfId) || message.owner_id === selfId) return;
+		this.sql.exec(
+			`INSERT INTO shared_with_me (owner_id, access, version, updated_at) VALUES (?, ?, ?, ?)
+			ON CONFLICT (owner_id) DO UPDATE SET access = excluded.access, version = excluded.version,
+				updated_at = excluded.updated_at
+			WHERE excluded.version > shared_with_me.version`,
+			message.owner_id,
+			message.access,
+			message.version,
+			Date.now(),
+		);
+	}
+
+	/** The hint of the calendars that people share with the owner, by owner id, after `after`. Owner only. */
+	sharedWithMe(
+		call: CalendarCall,
+		after: string | null,
+		limit: number,
+	): { pointers: SharedPointer[]; more: boolean } | Refusal {
+		const refused = this.enter(call);
+		if (refused) return refused;
+		const rows = this.sql
+			.exec<{ owner_id: string; access: string }>(
+				"SELECT owner_id, access FROM shared_with_me WHERE access IS NOT NULL AND owner_id > ? ORDER BY owner_id LIMIT ?",
+				after ?? "",
+				limit + 1,
+			)
+			.toArray();
+		return {
+			pointers: rows.slice(0, limit).map((row) => ({
+				owner_id: row.owner_id,
+				access: row.access === "schedule" ? "schedule" : "free_busy",
+			})),
+			more: rows.length > limit,
+		};
 	}
 
 	// --- Changes of the organizer ------------------------------------------------------------------
@@ -1084,8 +1396,8 @@ export class CalendarDO extends DurableObject<Env> {
 	 * event.
 	 */
 	async create(call: CalendarCall, input: CreateInput): Promise<EventView | Refusal> {
-		const refused = this.enter(call);
-		if (refused) return refused;
+		const role = this.enterShared(call);
+		if (typeof role !== "string") return role;
 		const now = Date.now();
 		if (input.idempotency) {
 			const earlier = this.sql
@@ -1101,7 +1413,7 @@ export class CalendarDO extends DurableObject<Env> {
 				}
 				const event = this.row(earlier.event_id);
 				return event
-					? this.masterView(event)
+					? viewFor(role, call.actorId, this.masterView(event))
 					: refuse("conflict", "The event of this idempotency key does not exist now.");
 			}
 		}
@@ -1122,7 +1434,7 @@ export class CalendarDO extends DurableObject<Env> {
 		}
 		this.ctx.storage.transactionSync(() => {
 			this.sql.exec(
-				`INSERT INTO events (${COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, 'organizer', ?, 0, NULL, 0, ?)`,
+				`INSERT INTO events (${COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, 'organizer', ?, 0, NULL, 0, ?, ?, ?)`,
 				input.id,
 				fields.title,
 				fields.description,
@@ -1139,6 +1451,8 @@ export class CalendarDO extends DurableObject<Env> {
 				seriesEndOf(fields, recurrence),
 				JSON.stringify(input.organizer),
 				fields.all_day ? null : input.reminderMinutes,
+				fields.visibility,
+				role === "owner" ? null : call.actorId,
 			);
 			this.addCount(1);
 			for (const attendee of input.attendees) {
@@ -1165,7 +1479,7 @@ export class CalendarDO extends DurableObject<Env> {
 			this.rearm(input.id);
 		});
 		await this.scheduleAlarm();
-		return this.masterView(this.row(input.id) as EventRecord);
+		return viewFor(role, call.actorId, this.masterView(this.row(input.id) as EventRecord));
 	}
 
 	private seriesCount(): number {
@@ -1192,10 +1506,12 @@ export class CalendarDO extends DurableObject<Env> {
 		eventId: string,
 		input: UpdateInput,
 	): Promise<{ event: EventView; changed: boolean } | Refusal> {
-		const refused = this.enter(call);
-		if (refused) return refused;
+		const role = this.enterShared(call);
+		if (typeof role !== "string") return role;
 		const event = this.row(eventId);
 		if (!event) return refuse("not_found", NOT_FOUND);
+		const refused = changeRefusal(role, call.actorId, event);
+		if (refused) return refused;
 		if (event.role !== "organizer") return refuse("forbidden", ORGANIZER_ONLY);
 		const conflict = this.checkRevision(event, input.baseRevision);
 		if (conflict) return conflict;
@@ -1220,15 +1536,16 @@ export class CalendarDO extends DurableObject<Env> {
 			wanted !== undefined &&
 			(wanted.length !== before.length ||
 				wanted.some((attendee) => !before.some((old) => old.principal_id === attendee.principal_id)));
-		if (!fieldsChanged && !timeChanged && !attendeesChanged) return { event: this.masterView(event), changed: false };
+		if (!fieldsChanged && !timeChanged && !attendeesChanged)
+			return { event: viewFor(role, call.actorId, this.masterView(event)), changed: false };
 		const now = Date.now();
 		const removed =
 			wanted === undefined ? [] : before.filter((old) => !wanted.some((a) => a.principal_id === old.principal_id));
 		this.ctx.storage.transactionSync(() => {
 			this.sql.exec(
 				`UPDATE events SET title = ?, description = ?, location = ?, all_day = ?, start_at = ?, end_at = ?,
-					start_date = ?, end_date = ?, time_zone = ?, recurrence = ?, series_end_at = ?, revision = revision + 1,
-					updated_at = ?
+					start_date = ?, end_date = ?, time_zone = ?, recurrence = ?, series_end_at = ?, visibility = ?,
+					revision = revision + 1, updated_at = ?
 				WHERE id = ?`,
 				next.title,
 				next.description,
@@ -1241,6 +1558,7 @@ export class CalendarDO extends DurableObject<Env> {
 				next.time_zone,
 				next.recurrence === null ? null : JSON.stringify(next.recurrence),
 				seriesEndOf(next, next.recurrence),
+				next.visibility,
 				now,
 				eventId,
 			);
@@ -1280,7 +1598,7 @@ export class CalendarDO extends DurableObject<Env> {
 			this.rearm(eventId);
 		});
 		await this.scheduleAlarm();
-		return { event: this.masterView(this.row(eventId) as EventRecord), changed: true };
+		return { event: viewFor(role, call.actorId, this.masterView(this.row(eventId) as EventRecord)), changed: true };
 	}
 
 	/** Deletes an event, or with `dryRun` returns it without a change. Each attendee loses the copy. */
@@ -1290,16 +1608,18 @@ export class CalendarDO extends DurableObject<Env> {
 		baseRevision: number | undefined,
 		dryRun: boolean,
 	): Promise<EventView | Refusal> {
-		const refused = this.enter(call);
-		if (refused) return refused;
+		const role = this.enterShared(call);
+		if (typeof role !== "string") return role;
 		const event = this.row(eventId);
 		if (!event) return refuse("not_found", NOT_FOUND);
+		const refused = changeRefusal(role, call.actorId, event);
+		if (refused) return refused;
 		if (event.role !== "organizer") {
 			return refuse("forbidden", "You cannot delete an invitation. Decline the event with calendar.respond_to_event.");
 		}
 		const conflict = this.checkRevision(event, baseRevision);
 		if (conflict) return conflict;
-		const view = this.masterView(event);
+		const view = viewFor(role, call.actorId, this.masterView(event));
 		if (dryRun) return view;
 		this.ctx.storage.transactionSync(() => {
 			const attendees = this.attendeesOf(eventId).map((attendee) => attendee.principal_id);
@@ -1332,10 +1652,12 @@ export class CalendarDO extends DurableObject<Env> {
 		patch: Partial<EventFields>,
 		baseRevision: number | undefined,
 	): Promise<{ event: EventView; changed: boolean } | Refusal> {
-		const refused = this.enter(call);
-		if (refused) return refused;
+		const role = this.enterShared(call);
+		if (typeof role !== "string") return role;
 		const event = this.row(eventId);
 		if (!event) return refuse("not_found", NOT_FOUND);
+		const refused = changeRefusal(role, call.actorId, event);
+		if (refused) return refused;
 		const current = this.occurrenceView(event, key);
 		if (!current || event.recurrence === null) return refuse("not_found", NO_OCCURRENCE);
 		if (event.role !== "organizer") return refuse("forbidden", ORGANIZER_ONLY);
@@ -1391,7 +1713,7 @@ export class CalendarDO extends DurableObject<Env> {
 				: (["title", "description", "location", "start_at", "end_at", "start_date", "end_date"] as const).every(
 						(field) => existing[field] === next[field],
 					);
-		if (same) return { event: current, changed: false };
+		if (same) return { event: viewFor(role, call.actorId, current), changed: false };
 		if (!existing && this.overridesOf(eventId).size >= CALENDAR_LIMITS.exceptions) {
 			return refuse(
 				"invalid",
@@ -1416,7 +1738,7 @@ export class CalendarDO extends DurableObject<Env> {
 		});
 		await this.scheduleAlarm();
 		const updated = this.row(eventId) as EventRecord;
-		return { event: this.occurrenceView(updated, key) as EventView, changed: true };
+		return { event: viewFor(role, call.actorId, this.occurrenceView(updated, key) as EventView), changed: true };
 	}
 
 	/**
@@ -1466,16 +1788,18 @@ export class CalendarDO extends DurableObject<Env> {
 		baseRevision: number | undefined,
 		dryRun: boolean,
 	): Promise<EventView | Refusal> {
-		const refused = this.enter(call);
-		if (refused) return refused;
+		const role = this.enterShared(call);
+		if (typeof role !== "string") return role;
 		const event = this.row(eventId);
 		if (!event) return refuse("not_found", NOT_FOUND);
+		const refused = changeRefusal(role, call.actorId, event);
+		if (refused) return refused;
 		const current = this.occurrenceView(event, key);
 		if (!current || event.recurrence === null) return refuse("not_found", NO_OCCURRENCE);
 		if (event.role !== "organizer") return refuse("forbidden", ORGANIZER_ONLY);
 		const conflict = this.checkRevision(event, baseRevision);
 		if (conflict) return conflict;
-		if (dryRun) return current;
+		if (dryRun) return viewFor(role, call.actorId, current);
 		const existing = this.overridesOf(eventId).get(key);
 		if (!existing && this.overridesOf(eventId).size >= CALENDAR_LIMITS.exceptions) {
 			return refuse(
@@ -1505,7 +1829,7 @@ export class CalendarDO extends DurableObject<Env> {
 			this.rearm(eventId);
 		});
 		await this.scheduleAlarm();
-		return current;
+		return viewFor(role, call.actorId, current);
 	}
 
 	// --- Changes of a participant ------------------------------------------------------------------
@@ -1650,7 +1974,7 @@ export class CalendarDO extends DurableObject<Env> {
 		this.ctx.storage.transactionSync(() => {
 			const reminder = existing ? existing.reminder_minutes : fields.all_day ? null : DEFAULT_REMINDER_MINUTES;
 			this.sql.exec(
-				`INSERT OR REPLACE INTO events (${COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'attendee', ?, ?, ?, ?, ?)`,
+				`INSERT OR REPLACE INTO events (${COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'attendee', ?, ?, ?, ?, ?, ?, NULL)`,
 				snapshot.event_id,
 				fields.title,
 				fields.description,
@@ -1671,6 +1995,8 @@ export class CalendarDO extends DurableObject<Env> {
 				mine.response,
 				mine.at,
 				reminder,
+				// A state from a Worker before visibility has no such field.
+				fields.visibility ?? "default",
 			);
 			if (!existing) this.addCount(1);
 			this.sql.exec("DELETE FROM event_overrides WHERE event_id = ?", snapshot.event_id);
@@ -1795,7 +2121,7 @@ export class CalendarDO extends DurableObject<Env> {
 
 	private putOutbox(
 		id: string,
-		kind: "snapshot" | "response" | "reminder",
+		kind: "snapshot" | "response" | "reminder" | "grant",
 		target: string,
 		eventId: string,
 		payload: string,
@@ -1866,6 +2192,17 @@ export class CalendarDO extends DurableObject<Env> {
 		if (row.kind === "response") {
 			const stub = this.env.CALENDAR.get(this.env.CALENDAR.idFromName(row.target_id));
 			await stub.applyResponse(row.target_id, JSON.parse(row.payload) as ResponseMessage);
+			return true;
+		}
+		if (row.kind === "grant") {
+			// The current grant, read at the delivery, as a snapshot reads the current event.
+			const stub = this.env.CALENDAR.get(this.env.CALENDAR.idFromName(row.target_id));
+			await stub.applyGrant(row.target_id, {
+				v: 1,
+				owner_id: owner,
+				access: this.grantOf(row.target_id),
+				version: row.version,
+			});
 			return true;
 		}
 		const item = JSON.parse(row.payload) as CalendarReminderItem;

@@ -436,6 +436,22 @@ export async function drainDrive(principalId: string): Promise<void> {
 	);
 }
 
+/** Runs the alarm of a calendar until its outbox is empty: each invitation reaches each attendee. */
+export async function drainCalendar(principalId: string): Promise<void> {
+	const stub = env.CALENDAR.get(env.CALENDAR.idFromName(principalId));
+	await vi.waitFor(
+		async () => {
+			await runDurableObjectAlarm(stub);
+			const waiting = await runInDurableObject(
+				stub,
+				(_instance, state) => state.storage.sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM outbox").one().n,
+			);
+			if (waiting > 0) throw new Error(`${waiting} calendar outbox rows wait`);
+		},
+		{ timeout: 5000, interval: 20 },
+	);
+}
+
 /** The keys of the R2 objects of one drive. */
 export async function driveBlobKeys(principalId: string): Promise<string[]> {
 	const listed = await env.BLOBS.list({ prefix: `drive/${principalId}/` });

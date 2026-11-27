@@ -95,7 +95,13 @@ export type Route =
 	 * Calendar. `date` is a day of the period to show, in YYYY-MM-DD form, or null for today. The week view
 	 * shows the week of the day, and the month view the month of the day.
 	 */
-	| { page: "calendar"; view: CalendarView; date: string | null }
+	| {
+			page: "calendar";
+			view: CalendarView;
+			date: string | null;
+			/** The id of the person whose calendar the page shows: a person who lets the person schedule. Null: own. */
+			calendarId: string | null;
+	  }
 	/** The profile of a person or an agent. It is a page of the workspace, not a part of a product. */
 	| { page: "profile"; principalId: string }
 	/**
@@ -234,9 +240,18 @@ export function parseRoute(location: string): Route {
 			: { page: "not-found" };
 	}
 	if (first === "calendar") {
-		if (parts.length === 1) return { page: "calendar", view: "week", date: null };
-		if (isCalendarView(second) && parts.length === 3 && isCalendarDate(third)) {
-			return { page: "calendar", view: second, date: third };
+		// The calendar of a person who lets the person schedule: /calendar/person/<id>[/<view>/<date>].
+		let calendarId: string | null = null;
+		let rest = parts.slice(1);
+		if (second === "person") {
+			if (!isPrincipalId(third)) return { page: "not-found" };
+			calendarId = third;
+			rest = parts.slice(3);
+		}
+		const [view, date] = rest;
+		if (rest.length === 0) return { page: "calendar", view: "week", date: null, calendarId };
+		if (rest.length === 2 && isCalendarView(view) && isCalendarDate(date)) {
+			return { page: "calendar", view, date, calendarId };
 		}
 		return { page: "not-found" };
 	}
@@ -405,8 +420,11 @@ export function itemPath(item: {
 }
 
 /** The path of a view of Calendar, for the period that holds `date` (YYYY-MM-DD). */
-export function calendarPath(view: CalendarView, date: string): string {
-	return `${CALENDAR_PATH}/${view}/${date}`;
+/** The path of a period of Calendar: of the own calendar, or with `calendarId` of the calendar of that person. */
+export function calendarPath(view: CalendarView, date: string, calendarId: string | null = null): string {
+	return calendarId === null
+		? `${CALENDAR_PATH}/${view}/${date}`
+		: `${CALENDAR_PATH}/person/${calendarId}/${view}/${date}`;
 }
 
 /** The path of a section of the admin page. */
