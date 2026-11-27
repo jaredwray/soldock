@@ -1802,6 +1802,14 @@ export class CalendarDO extends DurableObject<Env> {
 			wanted !== undefined &&
 			(wanted.length !== before.length ||
 				wanted.some((attendee) => !before.some((old) => old.principal_id === attendee.principal_id)));
+		// The handler checks the limit too, but against an earlier read. Here the check and the write are one step, so
+		// two calls at the same time cannot together pass the limit.
+		if (
+			(attendeesChanged || guestsChanged) &&
+			(wanted ?? before).length + (wantedGuests ?? guestsBefore).length > CALENDAR_LIMITS.attendees
+		) {
+			return refuse("invalid", `An event can have at most ${CALENDAR_LIMITS.attendees} attendees.`);
+		}
 		if (!fieldsChanged && !timeChanged && !attendeesChanged && !guestsChanged)
 			return { event: viewFor(role, call.actorId, this.masterView(event)), changed: false };
 		const removedGuests =

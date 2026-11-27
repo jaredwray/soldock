@@ -379,6 +379,20 @@ describe("invitations by mail to addresses outside the organization", () => {
 			"invalid",
 		);
 		expect((await ada.call("calendar.get_event", { event_id: full.id })).event.attendees).toEqual([]);
+
+		// Two updates at the same time: each handler read the event before the other wrote. The object checks the
+		// limit again in the step of the write, so the second one cannot pass it.
+		const { event: half } = await ada.call("calendar.create_event", meeting(many.slice(0, 30)));
+		const people = Array.from({ length: 21 }, (_, index) => ({ principal_id: `prn_ghost${index}`, display_name: "" }));
+		const refused = await runInDurableObject(calendarStub(ada.id), (instance) =>
+			(instance as unknown as CalendarDO).update({ ownerId: ada.id, actorId: ada.id }, half.id, {
+				patch: {},
+				attendees: people,
+				baseRevision: undefined,
+			}),
+		);
+		expect(refused).toMatchObject({ error: { code: "invalid" } });
+		expect((await ada.call("calendar.get_event", { event_id: half.id })).event.attendees).toEqual([]);
 	});
 
 	it("writes a late answer into the invitation that waits in the outbox", async () => {
