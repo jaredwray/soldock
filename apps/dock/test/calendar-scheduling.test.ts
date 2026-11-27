@@ -162,6 +162,43 @@ describe("busy times", () => {
 		]);
 	});
 
+	it("keeps a busy occurrence after cancelled ones, also near the limit of events", async () => {
+		// 1998 single events at the same evening hour of the range, and a series of five days whose first three days
+		// are cancelled. The limit of 2000 then leaves room for 2 entries: the two busy days must be in the answer.
+		const { event: seed } = await ada.call(
+			"calendar.create_event",
+			meeting("Seed", "2030-03-04T20:00:00Z", "2030-03-04T21:00:00Z"),
+		);
+		await runInDurableObject(calendarStub(ada.id), (_instance, state) => {
+			state.storage.sql.exec(
+				`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 1997)
+				INSERT INTO events SELECT printf('evt_COPY%018d', i), title, description, location, all_day, start_at, end_at,
+					start_date, end_date, time_zone, revision, created_at, updated_at, recurrence, series_end_at, role,
+					organizer_json, sequence, my_response, my_responded_at, reminder_minutes, visibility, created_by
+				FROM events, n WHERE id = ?`,
+				seed.id,
+			);
+		});
+		const { event: series } = await ada.call("calendar.create_event", {
+			...meeting("Daily", "2030-03-04T10:00:00Z", "2030-03-04T10:30:00Z"),
+			recurrence: { frequency: "daily", interval: 1, count: 5 },
+		});
+		const week = { time_min: "2030-03-04T00:00:00Z", time_max: "2030-03-09T00:00:00Z" };
+		for (const day of ["04", "05", "06"]) {
+			await ada.call("calendar.cancel_occurrence", { occurrence_id: `${series.id}_203003${day}T100000Z` });
+		}
+		const { calendars } = await ada.call("calendar.query_free_busy", { principal_ids: ada.id, ...week });
+		expect(calendars[0]).toEqual({
+			principal_id: ada.id,
+			availability: "known",
+			busy: [
+				{ start: "2030-03-04T20:00:00.000Z", end: "2030-03-04T21:00:00.000Z" },
+				{ start: "2030-03-07T10:00:00.000Z", end: "2030-03-07T10:30:00.000Z" },
+				{ start: "2030-03-08T10:00:00.000Z", end: "2030-03-08T10:30:00.000Z" },
+			],
+		});
+	});
+
 	it("asks the attendees as the owner of calendar_id, only for a principal with schedule access", async () => {
 		await grace.call("calendar.set_grant", { principal_id: ada.id, access: "free_busy" });
 		await grace.call("calendar.create_event", meeting("Design", "2030-03-04T10:00:00Z", "2030-03-04T11:00:00Z"));

@@ -1147,13 +1147,17 @@ export class CalendarDO extends DurableObject<Env> {
 			)
 			.toArray()
 			.map(toRecord);
-		// With a budget, the expansion stops as soon as it has more entries than the budget: the caller then knows
-		// that the range is too full, without the work of each series.
+		// With a budget, the expansion stops between two series when it has more entries than the budget: the caller
+		// then knows that the range is too full. A series always expands with the full cap of main, so a cancelled
+		// occurrence never uses up the place of a later occurrence that is busy.
 		const views: EventView[] = [];
 		for (const event of series) {
-			const cap = Math.min(CALENDAR_LIMITS.occurrencesPerSeries, budget - views.length + 1);
-			if (cap <= 0) break;
-			views.push(...this.seriesViews(event, { min: query.min, max: query.max }, cap, (view) => inRange(view, query)));
+			if (views.length > budget) break;
+			views.push(
+				...this.seriesViews(event, { min: query.min, max: query.max }, CALENDAR_LIMITS.occurrencesPerSeries, (view) =>
+					inRange(view, query),
+				),
+			);
 		}
 		return views;
 	}
