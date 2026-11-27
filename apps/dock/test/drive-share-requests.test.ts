@@ -789,9 +789,10 @@ describe("a request of an agent to share an item with an agent", () => {
 		const before = await ada.call("chat.list_activity");
 		expect(before.items[0]).toMatchObject({ kind: "mention", message_id: mention.id, item: null });
 
-		// Back to schema 11: the table has no `item_json`.
+		// Back to schema 11: the table has no `item_json`, and no `event_json` of a later schema.
 		const principal = env.PRINCIPAL.get(env.PRINCIPAL.idFromName(ada.id));
 		await runInDurableObject(principal, (_instance, state) => {
+			state.storage.sql.exec("ALTER TABLE chat_activity DROP COLUMN event_json");
 			state.storage.sql.exec("ALTER TABLE chat_activity DROP COLUMN item_json");
 			state.storage.sql.exec("UPDATE meta SET value = '11' WHERE key = 'schema_version'");
 		});

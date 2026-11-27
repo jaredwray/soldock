@@ -1020,3 +1020,81 @@ export async function consumeAutoLabels(
 	await handlers.queue(batch, { ...env, ...overrides } as Env, ctx);
 	return getQueueResult(batch, ctx);
 }
+
+/** The CalendarDO of a principal. */
+export const calendarStub = (principalId: string) => env.CALENDAR.get(env.CALENDAR.idFromName(principalId));
+
+/**
+ * Delivers the outbox of each calendar until each one is empty. A row that waits for its next attempt is made due
+ * first. A delivery can queue messages in a different calendar of the list, so this runs in rounds. The runtime
+ * also fires the alarm by itself, so this waits for a drain in flight.
+ */
+export async function settleCalendars(...principalIds: string[]): Promise<void> {
+	await vi.waitFor(
+		async () => {
+			let waiting = 0;
+			for (const id of principalIds) {
+				const stub = calendarStub(id);
+				await runInDurableObject(stub, async (_instance, state) => {
+					if (state.storage.sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM outbox").one().n === 0) return;
+					state.storage.sql.exec("UPDATE outbox SET next_attempt_at = 0");
+					await state.storage.setAlarm(Date.now());
+				});
+				await runDurableObjectAlarm(stub);
+			}
+			for (const id of principalIds) {
+				waiting += await runInDurableObject(
+					calendarStub(id),
+					(_instance, state) => state.storage.sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM outbox").one().n,
+				);
+			}
+			if (waiting > 0) throw new Error(`${waiting} calendar outbox rows wait`);
+		},
+		{ timeout: 5000, interval: 20 },
+	);
+}
+
+/** A meta value of the calendar object of a principal, or null. */
+export const calendarMeta = (principalId: string, key: string) =>
+	runInDurableObject(
+		calendarStub(principalId),
+		(_instance, state) =>
+			state.storage.sql.exec<{ value: string }>("SELECT value FROM meta WHERE key = ?", key).toArray()[0]?.value ??
+			null,
+	);
+
+/**
+ * Publishes the change feed of each calendar: makes a round that waits for its backoff due, and runs the alarm
+ * until `change_published` is `change_head`. The runtime also fires the alarm by itself.
+ */
+export async function publishCalendarChanges(...principalIds: string[]): Promise<void> {
+	await vi.waitFor(
+		async () => {
+			for (const id of principalIds) {
+				const stub = calendarStub(id);
+				await runInDurableObject(stub, async (_instance, state) => {
+					state.storage.sql.exec("DELETE FROM meta WHERE key = 'publish_at'");
+					await state.storage.setAlarm(Date.now());
+				});
+				await runDurableObjectAlarm(stub);
+				const published = Number((await calendarMeta(id, "change_published")) ?? 0);
+				const head = Number((await calendarMeta(id, "change_head")) ?? 0);
+				if (published !== head) throw new Error(`calendar ${id} published ${published} of ${head} changes`);
+			}
+		},
+		{ timeout: 5000, interval: 20 },
+	);
+}
+
+/** Replaces the webhook queue of one calendar object with a recorder, and returns the jobs that it sends. */
+export async function captureCalendarJobs(principalId: string): Promise<unknown[]> {
+	const jobs: unknown[] = [];
+	await runInDurableObject(calendarStub(principalId), (instance) => {
+		const target = instance as unknown as { env: Env };
+		target.env = {
+			...target.env,
+			WEBHOOKS: { send: async (body: unknown) => void jobs.push(body) } as unknown as Queue,
+		};
+	});
+	return jobs;
+}

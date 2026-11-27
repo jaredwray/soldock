@@ -169,6 +169,7 @@ export interface ActiveSubscription {
 	target_id: string;
 	created_by: string;
 	sequence: number;
+	created_at: string;
 }
 
 /**
@@ -207,7 +208,7 @@ export async function activeSubscriptions(
 ): Promise<ActiveSubscription[]> {
 	const { results } = await db
 		.prepare(
-			`SELECT s.id, s.target_id, s.sequence, e.created_by FROM webhook_subscriptions s
+			`SELECT s.id, s.target_id, s.sequence, s.created_at, e.created_by FROM webhook_subscriptions s
 			JOIN webhook_endpoints e ON e.id = s.endpoint_id
 			WHERE s.event_type = ? AND s.target_id = ? AND s.status = 'active' AND e.status = 'active'
 			AND (s.expires_at IS NULL OR s.expires_at > ?)`,

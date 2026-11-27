@@ -1,14 +1,20 @@
 import {
 	addDays,
+	allDayBounds,
 	CALENDAR_LIMITS,
 	type CalendarEvent,
 	type CalendarGrant,
 	canonicalTimeZone,
 	checkWhen,
 	DAY_MS,
+	DEFAULT_REMINDER_MINUTES,
 	dateToUtcMs,
 	type EventWhenValue,
 	type OperationName,
+	occurrenceId,
+	parseOccurrenceId,
+	type RecurrenceInput,
+	type RecurrenceRule,
 	type Scope,
 	splitIds,
 	zonedDate,
@@ -33,15 +39,15 @@ import type {
 	EventView,
 	GrantRecord,
 	ListQuery,
+	OrganizerRef,
+	PrincipalRef,
 	Refusal,
 } from "./calendar.ts";
 import { suggestTimes } from "./find-times.ts";
+import { calendarWebhookHandlers } from "./webhooks.ts";
 
 type CalendarOperation = Extract<OperationName, `calendar.${string}`>;
 
-/** The bounds of the days of an all-day event in each time zone: from UTC+14 to UTC-12. */
-const EARLIEST_ZONE_MS = 14 * 60 * 60 * 1000;
-const LATEST_ZONE_MS = 12 * 60 * 60 * 1000;
 /**
  * No event in a range starts more than this before the range: the longest event, and the widest day of an
  * all-day event in each time zone, with a margin.
@@ -55,46 +61,45 @@ const LOOK_BACK_MS = (CALENDAR_LIMITS.eventDays + 3) * DAY_MS;
 const WINDOW_START_MS = dateToUtcMs(CALENDAR_LIMITS.firstDate) - DAY_MS;
 const WINDOW_END_MS = dateToUtcMs(CALENDAR_LIMITS.lastDate) + 2 * DAY_MS;
 
-const NO_CALENDAR = "No calendar has that id. Only a person who is not archived can give access to a calendar.";
-const ZONE_PROBLEM = "time_zone must be an IANA time zone, such as America/New_York.";
-
 function calendarStub(env: Pick<Env, "CALENDAR">, principalId: string) {
 	return env.CALENDAR.get(env.CALENDAR.idFromName(principalId));
+}
+
+const NO_CALENDAR = "No calendar has that id. Only a person who is not archived can give access to a calendar.";
+
+/** The own calendar of the caller, for the operations that only the owner uses. */
+function ownCalendar(call: CallContext): { stub: ReturnType<typeof calendarStub>; ctx: CalendarCall } {
+	const id = call.caller.principal.id;
+	return { stub: calendarStub(call.env, id), ctx: { ownerId: id, actorId: id } };
 }
 
 /**
  * The calendar of a call: the own calendar of the caller, or with `calendarId` the calendar of a different
  * person. Only a person who is not archived gives grants, so only that calendar can be the target. The object
- * checks the grant of the caller here, before the handler reads the directory for the input, so a caller with
- * no grant learns nothing from a different refusal. The object checks the grant again on each call.
+ * checks the grant before the handler reads more input, so a caller without access learns nothing from a
+ * refusal of its attendees or its time. `owner` is the organizer of a new event.
  */
-async function openCalendar(call: CallContext, calendarId: string | undefined) {
-	const actorId = call.caller.principal.id;
-	const ownerId = calendarId ?? actorId;
-	if (ownerId !== actorId) {
-		const owner = await getPrincipal(call.env.DIRECTORY, ownerId);
-		if (owner?.kind !== "human" || owner.archived_at !== null) {
-			throw new OperationError("not_found", NO_CALENDAR);
-		}
+async function openCalendar(
+	call: CallContext,
+	calendarId: string | undefined,
+): Promise<{ stub: ReturnType<typeof calendarStub>; ctx: CalendarCall; owner: OrganizerRef }> {
+	const { principal } = call.caller;
+	if (calendarId === undefined || calendarId === principal.id) {
+		return { ...ownCalendar(call), owner: organizerOf(principal) };
 	}
-	const ctx: CalendarCall = { ownerId, actorId };
-	const stub = calendarStub(call.env, ownerId);
-	if (ownerId !== actorId) accept(await stub.authorize(ctx));
-	return { stub, ctx };
-}
-
-/** Turns a refusal from the object into an OperationError, and returns any other result. */
-function accept<T extends object>(value: T): Exclude<T, Refusal> {
-	if ("error" in value) {
-		const { error } = value as unknown as Refusal;
-		throw new OperationError(error.code, error.message);
+	const target = await getPrincipal(call.env.DIRECTORY, calendarId);
+	if (target?.kind !== "human" || target.service || target.archived_at !== null) {
+		throw new OperationError("not_found", NO_CALENDAR);
 	}
-	return value as Exclude<T, Refusal>;
+	const ctx: CalendarCall = { ownerId: target.id, actorId: principal.id };
+	const stub = calendarStub(call.env, target.id);
+	accept(await stub.authorize(ctx));
+	return { stub, ctx, owner: organizerOf(target) };
 }
 
 /**
- * The audit line of a change. In the calendar of a different person, the line names that person in
- * `calendar`, and the actor is the delegate. A line of the own calendar has no `calendar` field.
+ * The audit line of a change. In the calendar of a different person, the line names that person in `calendar`,
+ * and the actor is the delegate. A line of the own calendar has no `calendar` field.
  */
 function auditCalendar(call: CallContext, ctx: CalendarCall, op: string, target: string): void {
 	if (ctx.ownerId === ctx.actorId) {
@@ -113,13 +118,22 @@ function auditCalendar(call: CallContext, ctx: CalendarCall, op: string, target:
 	});
 }
 
+/** Turns a refusal from the object into an OperationError, and returns any other result. */
+function accept<T extends object>(value: T): Exclude<T, Refusal> {
+	if ("error" in value) {
+		const { error } = value as unknown as Refusal;
+		throw new OperationError(error.code, error.message);
+	}
+	return value as Exclude<T, Refusal>;
+}
+
 /** The stored time of an event. Refuses a time that `checkWhen` refuses, with its text. */
 function timeOf(when: EventWhenValue): EventTime {
 	const problem = checkWhen(when);
 	if (problem) throw new OperationError("invalid", problem);
 	if (when.kind === "timed") {
 		const zone = canonicalTimeZone(when.time_zone);
-		if (!zone) throw new OperationError("invalid", ZONE_PROBLEM);
+		if (!zone) throw new OperationError("invalid", "time_zone must be an IANA time zone, such as America/New_York.");
 		return {
 			all_day: false,
 			start_at: Date.parse(when.start),
@@ -131,57 +145,29 @@ function timeOf(when: EventWhenValue): EventTime {
 	}
 	return {
 		all_day: true,
-		start_at: dateToUtcMs(when.start_date) - EARLIEST_ZONE_MS,
-		end_at: dateToUtcMs(when.end_date) + LATEST_ZONE_MS,
+		...allDayBounds(when.start_date, when.end_date),
 		start_date: when.start_date,
 		end_date: when.end_date,
 		time_zone: null,
 	};
 }
 
-/**
- * The attendees of an event: each id once, without the owner of the calendar. Each new one must be a principal
- * of the organization that is not archived. An agent or a service account cannot invite an agent or a service
- * account: a person adds it. `kept` holds the attendees that the event has before an update. They pass with no
- * check, so an attendee that was archived after the invitation does not stop each later change of the event.
- */
-async function checkAttendees(
-	call: CallContext,
-	ownerId: string,
-	ids: readonly string[],
-	kept: readonly string[] = [],
-): Promise<string[]> {
-	const wanted = [...new Set(ids)].filter((id) => id !== ownerId);
-	const added = wanted.filter((id) => !kept.includes(id));
-	if (added.length === 0) return wanted;
-	const found = new Map(
-		(await getPrincipals(call.env.DIRECTORY, added)).map((principal) => [principal.id, principal] as const),
-	);
-	for (const id of added) {
-		const principal = found.get(id);
-		if (!principal || principal.archived_at !== null) {
-			throw new OperationError("not_found", `No principal of the organization has the id ${id}.`);
-		}
-		if (call.caller.kind !== "human" && principal.kind !== "human") {
-			throw new OperationError(
-				"forbidden",
-				"An agent or a service account cannot invite an agent or a service account. A person adds it to the event.",
-			);
-		}
-	}
-	return wanted;
+function ruleOf(input: RecurrenceInput): RecurrenceRule {
+	return {
+		frequency: input.frequency,
+		interval: input.interval,
+		until: input.until ?? null,
+		count: input.count ?? null,
+	};
 }
 
 function iso(ms: number): string {
 	return new Date(ms).toISOString();
 }
 
-function toEvent(view: EventView, ownerId: string): CalendarEvent {
+function toEvent(view: EventView): CalendarEvent {
 	return {
 		id: view.id,
-		calendar_id: ownerId,
-		organizer_id: view.organizer_id ?? ownerId,
-		created_by: view.created_by ?? view.organizer_id ?? ownerId,
 		title: view.title,
 		description: view.description,
 		location: view.location,
@@ -194,23 +180,98 @@ function toEvent(view: EventView, ownerId: string): CalendarEvent {
 						end: iso(view.end_at),
 						time_zone: view.time_zone ?? "UTC",
 					},
-		visibility: view.visibility,
-		attendees: view.attendees.map((principal_id) => ({ principal_id, response: "needs_action" })),
-		redacted: view.redacted,
 		revision: view.revision,
 		created_at: iso(view.created_at),
 		updated_at: iso(view.updated_at),
+		recurrence: view.recurrence,
+		occurrence_id: view.occurrence_key === null ? null : occurrenceId(view.id, view.occurrence_key),
+		original_start:
+			view.occurrence_key === null
+				? null
+				: (view.original_date ?? (view.original_start_at === null ? null : iso(view.original_start_at))),
+		is_exception: view.is_exception,
+		role: view.role,
+		organizer:
+			view.organizer === null
+				? null
+				: { principal_id: view.organizer.principal_id, display_name: view.organizer.display_name },
+		attendees: view.attendees.map(({ principal_id, display_name, response }) => ({
+			principal_id,
+			display_name,
+			response,
+		})),
+		my_response: view.my_response,
+		reminder_minutes: view.reminder_minutes,
+		visibility: view.visibility,
+		created_by: view.created_by,
+		redacted: view.redacted,
 	};
-}
-
-function toGrant(record: GrantRecord): CalendarGrant {
-	return { principal_id: record.principal_id, access: record.access, created_at: iso(record.created_at) };
 }
 
 /** The first date that starts at `ms` or later in a time zone. */
 function firstDateFrom(ms: number, zone: string): string {
 	const date = zonedDate(ms, zone);
 	return zonedDayStart(date, zone) >= ms ? date : addDays(date, 1);
+}
+
+/** The organizer of a new event: the owner of the calendar. */
+function organizerOf(principal: { id: string; display_name: string; kind: string }): OrganizerRef {
+	return {
+		principal_id: principal.id,
+		display_name: principal.display_name,
+		kind: principal.kind === "human" ? "human" : "agent",
+	};
+}
+
+/**
+ * The attendees of an event. The organizer (the owner of the calendar) must be a person, and only active people of
+ * the organization can be invited. So an agent invites only from the calendar of a person who gave it schedule
+ * access, and never invites an agent. `kept` holds the current attendees of an update: they stay without a new
+ * check, so an attendee who left the organization does not block a change.
+ */
+async function resolveAttendees(
+	call: CallContext,
+	owner: OrganizerRef,
+	ids: readonly string[] | undefined,
+	kept: readonly PrincipalRef[] = [],
+): Promise<PrincipalRef[] | undefined> {
+	if (ids === undefined) return undefined;
+	const unique = [...new Set(ids)];
+	if (unique.length === 0) return [];
+	if (owner.kind !== "human") {
+		throw new OperationError(
+			"forbidden",
+			"Only a person can be the organizer of an event with attendees. An agent can invite from the calendar of a person who gave it schedule access.",
+		);
+	}
+	if (unique.includes(owner.principal_id)) {
+		throw new OperationError(
+			"invalid",
+			"The owner of the calendar is the organizer of the event. Do not put the owner in attendee_ids.",
+		);
+	}
+	const known = new Map(kept.map((attendee) => [attendee.principal_id, attendee]));
+	const fresh = unique.filter((id) => !known.has(id));
+	const found = fresh.length === 0 ? [] : await getPrincipals(call.env.DIRECTORY, fresh);
+	const byId = new Map(found.map((principal) => [principal.id, principal]));
+	return unique.map((id) => {
+		const stay = known.get(id);
+		if (stay) return { principal_id: stay.principal_id, display_name: stay.display_name };
+		const principal = byId.get(id);
+		if (!principal || principal.archived_at !== null) {
+			throw new OperationError("invalid", `No active principal of your organization has the id ${id}.`);
+		}
+		if (principal.kind !== "human" || principal.service) {
+			throw new OperationError("invalid", `${principal.display_name} is not a person. Only people can be invited now.`);
+		}
+		return { principal_id: principal.id, display_name: principal.display_name };
+	});
+}
+
+function occurrenceOf(id: string): { eventId: string; key: string } {
+	const parsed = parseOccurrenceId(id);
+	if (!parsed) throw new OperationError("not_found", "The event has no occurrence with that id.");
+	return parsed;
 }
 
 /** The range of a query in the window of events, with the dates of all-day events in the zone. Null when empty. */
@@ -222,26 +283,82 @@ function rangeOf(timeMin: string, timeMax: string, zone: string): Omit<ListQuery
 	return { min, max, minDate: zonedDate(min, zone), maxDate: firstDateFrom(max, zone), lowerBound: min - LOOK_BACK_MS };
 }
 
+const ZONE_PROBLEM = "time_zone must be an IANA time zone, such as America/New_York.";
+
+interface Availability {
+	principal_id: string;
+	availability: "known" | "unknown";
+	busy: { start: string; end: string }[];
+	/** The busy intervals in ms, for the suggestions. Null when unknown. */
+	intervals: [number, number][] | null;
+}
+
+/**
+ * The busy times of each principal, as `viewerId` sees them. A principal id that the directory does not have gives
+ * not_found. An archived principal, a calendar without a grant for the viewer, too many events, and a calendar
+ * that does not answer give unknown: never free.
+ */
+async function readAvailability(
+	call: CallContext,
+	viewerId: string,
+	ids: readonly string[],
+	range: Omit<ListQuery, "after" | "limit"> | null,
+	zone: string,
+): Promise<Availability[]> {
+	const found = new Map((await getPrincipals(call.env.DIRECTORY, ids)).map((principal) => [principal.id, principal]));
+	const missing = ids.find((id) => !found.has(id));
+	if (missing) throw new OperationError("not_found", `No principal of your organization has the id ${missing}.`);
+	const query: BusyQuery | null = range ? { ...range, zone } : null;
+	return Promise.all(
+		ids.map(async (id): Promise<Availability> => {
+			const unknown: Availability = { principal_id: id, availability: "unknown", busy: [], intervals: null };
+			if (found.get(id)?.archived_at !== null) return unknown;
+			try {
+				const result = await calendarStub(call.env, id).freeBusy({ ownerId: id, actorId: viewerId }, query);
+				if ("unknown" in result) return unknown;
+				return {
+					principal_id: id,
+					availability: "known",
+					busy: result.busy.map(({ start, end }) => ({ start: iso(start), end: iso(end) })),
+					intervals: result.busy.map(({ start, end }): [number, number] => [start, end]),
+				};
+			} catch (error) {
+				log("warn", "calendar free/busy failed", { error: error instanceof Error ? error.message : String(error) });
+				return unknown;
+			}
+		}),
+	);
+}
+
+function toGrant(record: GrantRecord): CalendarGrant {
+	return { principal_id: record.principal_id, access: record.access, created_at: iso(record.created_at) };
+}
+
 /** The grants of the own calendar of the caller, without the principals that the directory no longer has. */
 async function ownGrants(call: CallContext, records: readonly GrantRecord[]): Promise<{ grants: CalendarGrant[] }> {
-	const live = new Set(
-		(
-			await getPrincipals(
-				call.env.DIRECTORY,
-				records.map((record) => record.principal_id),
-			)
-		).map((principal) => principal.id),
-	);
+	const ids = records.map((record) => record.principal_id);
+	const live = new Set((await getPrincipals(call.env.DIRECTORY, ids)).map((principal) => principal.id));
 	return { grants: records.filter((record) => live.has(record.principal_id)).map(toGrant) };
 }
 
-function ownCalendar(call: CallContext): { stub: ReturnType<typeof calendarStub>; ctx: CalendarCall } {
-	const id = call.caller.principal.id;
-	return { stub: calendarStub(call.env, id), ctx: { ownerId: id, actorId: id } };
+function contentPatch(input: {
+	title?: string | undefined;
+	description?: string | undefined;
+	location?: string | undefined;
+	when?: EventWhenValue | undefined;
+}): Partial<EventFields> {
+	return {
+		...(input.title !== undefined ? { title: input.title } : {}),
+		...(input.description !== undefined ? { description: input.description } : {}),
+		...(input.location !== undefined ? { location: input.location } : {}),
+		...(input.when !== undefined ? timeOf(input.when) : {}),
+	};
 }
 
 export const calendarHandlers: Pick<HandlerMap<CallContext>, CalendarOperation> = {
 	async "calendar.list_events"(call, input) {
+		// The grant comes first, so an empty range or a bad cursor does not skip it.
+		const { stub, ctx } = await openCalendar(call, input.calendar_id);
 		const zone = canonicalTimeZone(input.time_zone ?? "UTC");
 		if (!zone) throw new OperationError("invalid", ZONE_PROBLEM);
 		let after: { start_at: number; id: string } | null = null;
@@ -250,34 +367,33 @@ export const calendarHandlers: Pick<HandlerMap<CallContext>, CalendarOperation> 
 			if (!values) throw new OperationError("invalid", "The cursor is not valid. Start again without a cursor.");
 			after = { start_at: values[0], id: values[1] };
 		}
-		const { stub, ctx } = await openCalendar(call, input.calendar_id);
 		const range = rangeOf(input.time_min, input.time_max, zone);
-		// `openCalendar` checked the access, so an empty range does not skip the grant.
 		if (!range) return { events: [], next_cursor: null };
 		const limit = input.limit ?? CALENDAR_LIMITS.defaultPageSize;
 		const page = accept(await stub.list(ctx, { ...range, after, limit }));
 		const last = page.events.at(-1);
+		const lastId = last && (last.occurrence_key === null ? last.id : occurrenceId(last.id, last.occurrence_key));
 		return {
-			events: page.events.map((view) => toEvent(view, ctx.ownerId)),
-			next_cursor: page.more && last ? encodeCursor([last.start_at, last.id]) : null,
+			events: page.events.map(toEvent),
+			next_cursor: page.more && last && lastId ? encodeCursor([last.start_at, lastId]) : null,
 		};
 	},
 
 	async "calendar.get_event"(call, input) {
 		const { stub, ctx } = await openCalendar(call, input.calendar_id);
-		return { event: toEvent(accept(await stub.get(ctx, input.event_id)), ctx.ownerId) };
+		return { event: toEvent(accept(await stub.get(ctx, input.event_id))) };
 	},
 
 	async "calendar.create_event"(call, input) {
-		const { stub, ctx } = await openCalendar(call, input.calendar_id);
+		const { stub, ctx, owner } = await openCalendar(call, input.calendar_id);
 		const fields: EventFields = {
 			title: input.title,
 			description: input.description,
 			location: input.location,
 			visibility: input.visibility,
-			attendees: await checkAttendees(call, ctx.ownerId, input.attendees),
 			...timeOf(input.when),
 		};
+		const attendees = (await resolveAttendees(call, owner, input.attendee_ids)) ?? [];
 		const { idempotency_key: key, ...request } = input;
 		const idempotency =
 			key === undefined
@@ -287,87 +403,119 @@ export const calendarHandlers: Pick<HandlerMap<CallContext>, CalendarOperation> 
 						requestHash: await sha256Hex(JSON.stringify(["calendar.create_event", request])),
 					};
 		const id = newId("evt");
-		const record = accept(await stub.create(ctx, { id, fields, idempotency }));
+		const record = accept(
+			await stub.create(ctx, {
+				id,
+				fields,
+				recurrence: input.recurrence === undefined ? null : ruleOf(input.recurrence),
+				organizer: owner,
+				attendees,
+				reminderMinutes: input.reminder_minutes === undefined ? DEFAULT_REMINDER_MINUTES : input.reminder_minutes,
+				idempotency,
+			}),
+		);
 		// A retry with the key returns the first event: only the call that added it audits.
 		if (record.id === id) auditCalendar(call, ctx, "calendar.create_event", id);
-		return { event: toEvent(record, ctx.ownerId) };
+		return { event: toEvent(record) };
 	},
 
 	async "calendar.update_event"(call, input) {
-		const { stub, ctx } = await openCalendar(call, input.calendar_id);
-		let attendees: string[] | undefined;
-		if (input.attendees !== undefined) {
-			// The check is only for the ids that the event does not have now. A delegate gets no attendees of an
-			// event that it did not add, and the object then refuses its change.
-			const current = accept(await stub.get(ctx, input.event_id));
-			attendees = await checkAttendees(call, ctx.ownerId, input.attendees, current.attendees);
-		}
+		const { stub, ctx, owner } = await openCalendar(call, input.calendar_id);
 		const patch: Partial<EventFields> = {
-			...(input.title !== undefined ? { title: input.title } : {}),
-			...(input.description !== undefined ? { description: input.description } : {}),
-			...(input.location !== undefined ? { location: input.location } : {}),
+			...contentPatch(input),
 			...(input.visibility !== undefined ? { visibility: input.visibility } : {}),
-			...(attendees !== undefined ? { attendees } : {}),
-			...(input.when !== undefined ? timeOf(input.when) : {}),
 		};
-		const result = accept(await stub.update(ctx, input.event_id, patch, input.base_revision));
+		// The current attendees stay without a new check of the directory.
+		const kept = input.attendee_ids === undefined ? [] : accept(await stub.get(ctx, input.event_id)).attendees;
+		const attendees = await resolveAttendees(call, owner, input.attendee_ids, kept);
+		const result = accept(
+			await stub.update(ctx, input.event_id, {
+				patch,
+				recurrence:
+					input.recurrence === undefined ? undefined : input.recurrence === null ? null : ruleOf(input.recurrence),
+				attendees,
+				baseRevision: input.base_revision,
+			}),
+		);
 		if (result.changed) auditCalendar(call, ctx, "calendar.update_event", input.event_id);
-		return { event: toEvent(result.event, ctx.ownerId) };
+		return { event: toEvent(result.event) };
 	},
 
 	async "calendar.delete_event"(call, input) {
 		const { stub, ctx } = await openCalendar(call, input.calendar_id);
 		const record = accept(await stub.remove(ctx, input.event_id, input.base_revision, input.dry_run));
 		if (!input.dry_run) auditCalendar(call, ctx, "calendar.delete_event", input.event_id);
-		return { event: toEvent(record, ctx.ownerId), dry_run: input.dry_run };
+		return { event: toEvent(record), dry_run: input.dry_run };
+	},
+
+	async "calendar.update_occurrence"(call, input) {
+		const { stub, ctx } = await openCalendar(call, input.calendar_id);
+		const { eventId, key } = occurrenceOf(input.occurrence_id);
+		const result = accept(await stub.updateOccurrence(ctx, eventId, key, contentPatch(input), input.base_revision));
+		if (result.changed) auditCalendar(call, ctx, "calendar.update_occurrence", input.occurrence_id);
+		return { event: toEvent(result.event) };
+	},
+
+	async "calendar.cancel_occurrence"(call, input) {
+		const { stub, ctx } = await openCalendar(call, input.calendar_id);
+		const { eventId, key } = occurrenceOf(input.occurrence_id);
+		const record = accept(await stub.cancelOccurrence(ctx, eventId, key, input.base_revision, input.dry_run));
+		if (!input.dry_run) auditCalendar(call, ctx, "calendar.cancel_occurrence", input.occurrence_id);
+		return { event: toEvent(record), dry_run: input.dry_run };
+	},
+
+	async "calendar.respond_to_event"(call, input) {
+		let key: string | null = null;
+		if (input.occurrence_id !== undefined) {
+			const parsed = occurrenceOf(input.occurrence_id);
+			if (parsed.eventId !== input.event_id) {
+				throw new OperationError("invalid", "occurrence_id must be an occurrence of event_id.");
+			}
+			key = parsed.key;
+		}
+		const { stub, ctx } = ownCalendar(call);
+		const record = accept(await stub.respond(ctx, input.event_id, key, input.response));
+		auditOk(call, "calendar.respond_to_event", input.occurrence_id ?? input.event_id);
+		return { event: toEvent(record) };
+	},
+
+	async "calendar.set_reminder"(call, input) {
+		const { stub, ctx } = ownCalendar(call);
+		const record = accept(await stub.setReminder(ctx, input.event_id, input.minutes));
+		return { event: toEvent(record) };
+	},
+
+	async "calendar.query_free_busy"(call, input) {
+		const zone = canonicalTimeZone(input.time_zone ?? "UTC");
+		if (!zone) throw new OperationError("invalid", ZONE_PROBLEM);
+		const ids = [...new Set(splitIds(input.principal_ids))];
+		const calendars = await readAvailability(
+			call,
+			call.caller.principal.id,
+			ids,
+			rangeOf(input.time_min, input.time_max, zone),
+			zone,
+		);
+		return { calendars: calendars.map(({ intervals: _intervals, ...calendar }) => calendar) };
 	},
 
 	async "calendar.find_times"(call, input) {
-		const zone = canonicalTimeZone(input.time_zone);
-		if (!zone) throw new OperationError("invalid", ZONE_PROBLEM);
 		// The calendar of the call. With calendar_id, the caller must hold schedule access to it, and each attendee
 		// calendar is asked as its owner: the caller sees what the attendees share with that person.
 		const viewer = input.calendar_id ?? call.caller.principal.id;
 		if (viewer !== call.caller.principal.id) await openCalendar(call, viewer);
+		const zone = canonicalTimeZone(input.time_zone);
+		if (!zone) throw new OperationError("invalid", ZONE_PROBLEM);
 		const targets = [...new Set([viewer, ...splitIds(input.attendee_ids)])];
-		const principals = new Map(
-			(await getPrincipals(call.env.DIRECTORY, targets)).map((principal) => [principal.id, principal] as const),
-		);
-		const missing = targets.find((id) => !principals.has(id));
-		if (missing) throw new OperationError("not_found", `No principal of the organization has the id ${missing}.`);
 		const range = rangeOf(input.time_min, input.time_max, zone);
-		const query: BusyQuery | null = range ? { ...range, zone } : null;
-		const calendars = await Promise.all(
-			targets.map(async (principalId) => {
-				const unknown = { principal_id: principalId, availability: "unknown" as const, busy: [] };
-				// An archived principal shares nothing now.
-				if (principals.get(principalId)?.archived_at !== null) return { ...unknown, intervals: null };
-				try {
-					const result = await calendarStub(call.env, principalId).freeBusy(
-						{ ownerId: principalId, actorId: viewer },
-						query,
-					);
-					if ("unknown" in result) return { ...unknown, intervals: null };
-					return {
-						principal_id: principalId,
-						availability: "known" as const,
-						busy: result.busy.map(({ start, end }) => ({ start: iso(start), end: iso(end) })),
-						intervals: result.busy.map(({ start, end }): [number, number] => [start, end]),
-					};
-				} catch (error) {
-					// A calendar that does not answer is unknown, never free.
-					log("warn", "calendar free/busy failed", { error: error instanceof Error ? error.message : String(error) });
-					return { ...unknown, intervals: null };
-				}
-			}),
-		);
+		const calendars = await readAvailability(call, viewer, targets, range, zone);
 		const complete = calendars.every((calendar) => calendar.availability === "known");
-		const known = calendars.flatMap((calendar) => calendar.intervals ?? []);
-		// Unknown is never free: with an unknown calendar, the answer has suggestions only when the caller asks
-		// for the times of the known calendars.
-		const suggestions =
-			range && (complete || input.ignore_unknown === "true")
-				? suggestTimes(known, {
+		// Unknown is never free: without ignore_unknown, a calendar with unknown availability gives no suggestion.
+		const suggest = range !== null && (complete || input.ignore_unknown === "true");
+		const suggestions = suggest
+			? suggestTimes(
+					calendars.flatMap((calendar) => calendar.intervals ?? []),
+					{
 						min: range.min,
 						max: range.max,
 						zone,
@@ -376,8 +524,9 @@ export const calendarHandlers: Pick<HandlerMap<CallContext>, CalendarOperation> 
 						durationMinutes: input.duration_minutes,
 						now: Date.now(),
 						limit: input.limit ?? CALENDAR_LIMITS.defaultSuggestions,
-					})
-				: [];
+					},
+				)
+			: [];
 		return {
 			time_zone: zone,
 			calendars: calendars.map(({ intervals: _intervals, ...calendar }) => calendar),
@@ -386,8 +535,8 @@ export const calendarHandlers: Pick<HandlerMap<CallContext>, CalendarOperation> 
 		};
 	},
 
-	// The grants of the own calendar of a person. The operations take no calendar_id: only the owner of a
-	// calendar reads and changes its grants, never an owner or an admin for a different person.
+	// The grants of the own calendar of a person. The operations take no calendar_id: only the owner of a calendar
+	// reads and changes its grants, never an owner or an admin for a different person.
 	async "calendar.list_grants"(call) {
 		const { stub, ctx } = ownCalendar(call);
 		return ownGrants(call, accept(await stub.grants(ctx)).grants);
@@ -428,4 +577,19 @@ export const calendarHandlers: Pick<HandlerMap<CallContext>, CalendarOperation> 
 		}
 		return ownGrants(call, result.grants);
 	},
+
+	async "calendar.list_changes"(call, input) {
+		const { stub, ctx } = ownCalendar(call);
+		const page = accept(
+			await stub.listChanges(ctx, input.cursor ?? null, input.limit ?? CALENDAR_LIMITS.changesPageSize),
+		);
+		return {
+			changes: page.changes.map((change) => ({ ...change, at: iso(change.at) })),
+			cursor: page.cursor,
+			has_more: page.has_more,
+			expired: page.expired,
+		};
+	},
+
+	...calendarWebhookHandlers,
 };

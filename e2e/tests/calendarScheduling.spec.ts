@@ -25,7 +25,7 @@ async function principalId(context: BrowserContext): Promise<string> {
 interface ApiEvent {
 	id: string;
 	title: string;
-	organizer_id: string;
+	organizer: { principal_id: string } | null;
 }
 
 /** The events of one day in New York with this title, from the server. */
@@ -129,7 +129,7 @@ test("a person finds a time with a teammate, and an agent schedules for the pers
 
 		// Ingrid gets one invitation, with Rafael as the organizer.
 		await expect
-			.poll(async () => (await eventsOn(ingrid, day, title)).map((event) => event.organizer_id))
+			.poll(async () => (await eventsOn(ingrid, day, title)).map((event) => event.organizer?.principal_id))
 			.toEqual([rafaelId]);
 
 		// Rafael lets an agent schedule for him.
@@ -152,11 +152,11 @@ test("a person finds a time with a teammate, and an agent schedules for the pers
 			calendar_id: rafaelId,
 			title: agentTitle,
 			when: { kind: "timed", start: slot?.start, end: slot?.end, time_zone: "America/New_York" },
-			attendees: [ingridId],
+			attendee_ids: [ingridId],
 		});
 		expect(created.isError).toBeUndefined();
 		await expect
-			.poll(async () => (await eventsOn(ingrid, day, agentTitle)).map((event) => event.organizer_id))
+			.poll(async () => (await eventsOn(ingrid, day, agentTitle)).map((event) => event.organizer?.principal_id))
 			.toEqual([rafaelId]);
 
 		// Rafael removes the grant: the next attempt of the agent is refused.

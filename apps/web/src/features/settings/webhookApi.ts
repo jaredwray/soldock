@@ -1,4 +1,5 @@
 import {
+	type CalendarWebhookEvent,
 	type ChatWebhookEvent,
 	type DriveWebhookEvent,
 	type MAIL_WEBHOOK_EVENTS,
@@ -41,6 +42,18 @@ export async function listSubscriptions(domain: WebhookDomain, targetId?: string
 			endpoint: row.endpoint,
 		}));
 	}
+	if (domain === "calendar") {
+		const result = await api.call("calendar.list_webhook_subscriptions", targetId ? { calendar_id: targetId } : {});
+		return result.subscriptions.map((row) => ({
+			id: row.id,
+			domain,
+			event: row.event,
+			targetId: row.calendar_id,
+			status: row.status,
+			disabledReason: row.disabled_reason,
+			endpoint: row.endpoint,
+		}));
+	}
 	const result = await api.call("drive.list_webhook_subscriptions", targetId ? { space_id: targetId } : {});
 	return result.subscriptions.map((row) => ({
 		id: row.id,
@@ -80,11 +93,17 @@ async function createSubscription(endpoint: WebhookEndpoint, choice: EventChoice
 					event: choice.event as MailWebhookEvent,
 					mailbox_id: choice.targetId,
 				})
-			: await api.call("drive.create_webhook_subscription", {
-					...input,
-					event: choice.event as DriveWebhookEvent,
-					space_id: choice.targetId,
-				});
+			: domain === "calendar"
+				? await api.call("calendar.create_webhook_subscription", {
+						...input,
+						event: choice.event as CalendarWebhookEvent,
+						calendar_id: choice.targetId,
+					})
+				: await api.call("drive.create_webhook_subscription", {
+						...input,
+						event: choice.event as DriveWebhookEvent,
+						space_id: choice.targetId,
+					});
 	const { id, event, status, disabled_reason } = created.subscription;
 	return listed({ id, event, status, disabledReason: disabled_reason });
 }
@@ -93,6 +112,7 @@ async function deleteSubscription(subscription: ListedSubscription): Promise<voi
 	const input = { subscription_id: subscription.id };
 	if (subscription.domain === "mail") await api.call("mail.delete_webhook_subscription", input);
 	else if (subscription.domain === "chat") await api.call("chat.delete_webhook_subscription", input);
+	else if (subscription.domain === "calendar") await api.call("calendar.delete_webhook_subscription", input);
 	else await api.call("drive.delete_webhook_subscription", input);
 }
 

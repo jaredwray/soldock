@@ -1,6 +1,16 @@
 import { type InputOf, OWN_KEY_SCOPES } from "@asterra/contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { type Actor, api, codeOf, createActor, drainCalendar, PASSWORD, seedOrg, setLegacyScopes } from "./helpers.ts";
+import {
+	type Actor,
+	api,
+	codeOf,
+	createActor,
+	PASSWORD,
+	publishCalendarChanges,
+	seedOrg,
+	setLegacyScopes,
+	settleCalendars,
+} from "./helpers.ts";
 
 // The grants of a calendar: the owner lets a person, an agent or a service account see the busy times
 // (free_busy) or schedule (schedule). The object of the calendar checks the grant on each call, so a removed
@@ -141,7 +151,7 @@ describe("who schedules in the calendar of a different person", () => {
 			expect(await codeOf(list()), `${label} with free_busy`).toBe("forbidden");
 			await ada.call("calendar.set_grant", { principal_id: id, access: "schedule" });
 			const { event } = await create();
-			expect(event, label).toMatchObject({ calendar_id: ada.id, organizer_id: ada.id, created_by: id });
+			expect(event, label).toMatchObject({ organizer: { principal_id: ada.id }, created_by: id });
 			await call("calendar.update_event", { event_id: event.id, calendar_id: ada.id, location: "Room 4" });
 			await call("calendar.delete_event", { event_id: event.id, calendar_id: ada.id });
 		}
@@ -186,11 +196,11 @@ describe("who schedules in the calendar of a different person", () => {
 		const ghost = "prn_01JD0000000000000000000099";
 		const input = meeting("Probe", "2030-03-04T10:00:00Z", "2030-03-04T11:00:00Z", {
 			calendar_id: ada.id,
-			attendees: [ghost],
+			attendee_ids: [ghost],
 		});
 		expect(await codeOf(grace.call("calendar.create_event", input))).toBe("forbidden");
 		await ada.call("calendar.set_grant", { principal_id: grace.id, access: "schedule" });
-		expect(await codeOf(grace.call("calendar.create_event", input))).toBe("not_found");
+		expect(await codeOf(grace.call("calendar.create_event", input))).toBe("invalid");
 	});
 
 	it("lets the grant alone decide for an agent, as for a mailbox delegate", async () => {
@@ -213,7 +223,7 @@ describe("what a delegate sees", () => {
 			...meeting("Board review", "2030-03-04T09:00:00Z", "2030-03-04T10:00:00Z"),
 			description: "Numbers for Q1",
 			location: "Room 1",
-			attendees: [grace.id],
+			attendee_ids: [grace.id],
 		});
 		await ada.call("calendar.create_event", {
 			...meeting("Doctor", "2030-03-04T12:00:00Z", "2030-03-04T13:00:00Z"),
@@ -224,10 +234,10 @@ describe("what a delegate sees", () => {
 		// An invitation on the calendar of Ada: the delegate must not learn who the private event is with.
 		await grace.call("calendar.create_event", {
 			...meeting("Salary talk", "2030-03-04T13:00:00Z", "2030-03-04T14:00:00Z"),
-			attendees: [ada.id],
+			attendee_ids: [ada.id],
 			visibility: "private",
 		});
-		await drainCalendar(grace.id);
+		await settleCalendars(grace.id, ada.id);
 		await ada.call("calendar.set_grant", { principal_id: bot.id, access: "schedule" });
 		const { event: own } = await bot.call("calendar.create_event", {
 			...meeting("Planning", "2030-03-04T15:00:00Z", "2030-03-04T16:00:00Z"),
@@ -245,7 +255,8 @@ describe("what a delegate sees", () => {
 			["", "", "", [], true],
 			["Planning", "Agenda", "", [], false],
 		]);
-		expect(events.map((event) => event.organizer_id)).toEqual([ada.id, ada.id, ada.id, ada.id]);
+		// The organizer of an event that the delegate did not add stays hidden: it can name a private meeting.
+		expect(events.map((event) => event.organizer?.principal_id ?? null)).toEqual([null, null, null, ada.id]);
 		const text = JSON.stringify(events);
 		for (const secret of ["Numbers for Q1", "Room 1", grace.id, "Doctor", "Second visit", "Clinic", "Salary talk"]) {
 			expect(text).not.toContain(secret);
@@ -274,8 +285,58 @@ describe("what a delegate sees", () => {
 			["Salary talk", false],
 			["Planning", false],
 		]);
-		expect(mine.events[2]?.organizer_id).toBe(grace.id);
+		expect(mine.events[2]?.organizer?.principal_id).toBe(grace.id);
 		expect(mine.events.find((event) => event.id === own.id)?.created_by).toBe(bot.id);
+	});
+});
+
+describe("a series in the calendar of a different person", () => {
+	it("hides the occurrences of the owner, lets the delegate manage its own series, and records it in the changes", async () => {
+		const weekly = { frequency: "weekly", interval: 1, count: 3 } as const;
+		await ada.call("calendar.create_event", {
+			...meeting("Therapy", "2030-03-04T09:00:00Z", "2030-03-04T10:00:00Z"),
+			recurrence: weekly,
+			visibility: "private",
+		});
+		// The cursors of now: list_changes without a cursor gives the head of the feed.
+		const adaHead = (await ada.call("calendar.list_changes", {})).cursor;
+		const botHead = (await bot.call("calendar.list_changes", {})).cursor;
+		await ada.call("calendar.set_grant", { principal_id: bot.id, access: "schedule" });
+		const { event: series } = await bot.call("calendar.create_event", {
+			...meeting("Standup", "2030-03-04T11:00:00Z", "2030-03-04T11:15:00Z"),
+			recurrence: weekly,
+			calendar_id: ada.id,
+		});
+		const weeks = { time_min: "2030-03-04T00:00:00Z", time_max: "2030-03-25T00:00:00Z", calendar_id: ada.id };
+		const { events } = await bot.call("calendar.list_events", weeks);
+		expect(events.map((event) => [event.title, event.redacted])).toEqual([
+			["", true],
+			["Standup", false],
+			["", true],
+			["Standup", false],
+			["", true],
+			["Standup", false],
+		]);
+		expect(JSON.stringify(events)).not.toContain("Therapy");
+		// The delegate cancels one occurrence of its own series, and none of the owner.
+		const [therapy, standup] = events;
+		await bot.call("calendar.cancel_occurrence", { occurrence_id: standup?.occurrence_id ?? "", calendar_id: ada.id });
+		expect(
+			await codeOf(
+				bot.call("calendar.cancel_occurrence", { occurrence_id: therapy?.occurrence_id ?? "", calendar_id: ada.id }),
+			),
+		).toBe("forbidden");
+		// The change feed of the owner names the delegate as the actor. A grant writes no change.
+		await publishCalendarChanges(ada.id, bot.id);
+		const { changes } = await ada.call("calendar.list_changes", { cursor: adaHead });
+		expect(changes.filter((change) => change.event_id === series.id).map((change) => change.actor_id)).toEqual([
+			bot.id,
+			bot.id,
+		]);
+		expect(changes.every((change) => change.event_id === series.id)).toBe(true);
+		// The delegate has no change feed of the owner: calendar_list_changes takes no calendar_id.
+		const own = await bot.call("calendar.list_changes", { cursor: botHead });
+		expect(own.changes.filter((change) => change.event_id === series.id)).toEqual([]);
 	});
 });
 

@@ -14,6 +14,7 @@ import { AdminSidebar, defaultSection, isAdminOnly, sectionIcon, sectionTitle } 
 import { AiSection } from "./AiSection.tsx";
 import { ChatAdminSection } from "./ChatAdminSection.tsx";
 import { ChatPushCard } from "./ChatPushCard.tsx";
+import { FeedbackSettingsCard } from "./FeedbackSettingsCard.tsx";
 import { MailDomainsCard } from "./MailDomainsCard.tsx";
 import { MailSettingsCard } from "./MailSettingsCard.tsx";
 import { memberIcon } from "./MemberIdentity.tsx";
@@ -189,6 +190,8 @@ export function AdminPage({ section: routeSection, memberId: routeMemberId, navO
 			);
 		}
 		switch (section) {
+			case "general":
+				return <FeedbackSettingsCard />;
 			case "members":
 				if (memberId !== null) {
 					if (!member) {

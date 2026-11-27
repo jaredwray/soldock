@@ -1,7 +1,6 @@
 import type { CalendarEvent } from "@asterra/contracts";
 import { describe, expect, it } from "vitest";
 import {
-	changedSharing,
 	clampDay,
 	eventsByDay,
 	formOf,
@@ -11,13 +10,17 @@ import {
 	periodOf,
 	periodTitle,
 	placeSegments,
+	recurrenceOf,
+	repeatText,
 	sameTimeFields,
+	seriesWhen,
 	shiftPeriod,
 	shiftTarget,
 	weekDays,
 	whenOf,
 	whenText,
 	withSlot,
+	zoneOfEvent,
 } from "../src/features/calendar/model.ts";
 
 const NY = "America/New_York";
@@ -25,19 +28,25 @@ const NY = "America/New_York";
 function event(id: string, when: CalendarEvent["when"], title = id): CalendarEvent {
 	return {
 		id,
-		calendar_id: "prn_me",
-		organizer_id: "prn_me",
-		created_by: "prn_me",
 		title,
 		description: "",
 		location: "",
 		when,
-		visibility: "default",
-		attendees: [],
-		redacted: false,
 		revision: 1,
 		created_at: "2026-11-01T00:00:00.000Z",
 		updated_at: "2026-11-01T00:00:00.000Z",
+		recurrence: null,
+		occurrence_id: null,
+		original_start: null,
+		is_exception: false,
+		role: "organizer",
+		organizer: null,
+		attendees: [],
+		my_response: null,
+		reminder_minutes: null,
+		visibility: "default",
+		created_by: null,
+		redacted: false,
 	};
 }
 
@@ -161,6 +170,24 @@ describe("the events of each day", () => {
 });
 
 describe("the form of an event", () => {
+	// Find a time can search in a different zone. A suggestion is two instants, so the form must show them on the
+	// clock of the dialog, and a save must send the same instants back.
+	it("fills the form with a suggestion of Find a time on the clock of the dialog zone", () => {
+		const allDay = { ...newEventForm("2026-12-01"), allDay: true, title: "Sync" };
+		// 09:00 in Berlin on 2026-12-02 is 03:00 in New York.
+		const start = Date.parse("2026-12-02T08:00:00Z");
+		const filled = withSlot(allDay, start, start + 30 * 60_000, NY);
+		expect(filled).toMatchObject({
+			title: "Sync",
+			allDay: false,
+			startDate: "2026-12-02",
+			startTime: "03:00",
+			endDate: "2026-12-02",
+			endTime: "03:30",
+		});
+		expect(whenOf(filled, NY)).toMatchObject({ start: "2026-12-02T08:00:00.000Z", end: "2026-12-02T08:30:00.000Z" });
+	});
+
 	it("keeps the last day of an all-day event in the form, and the day after it in the event", () => {
 		const form = { ...newEventForm("2026-12-01"), allDay: true, endDate: "2026-12-01" };
 		expect(whenOf(form, NY)).toEqual({ kind: "all_day", start_date: "2026-12-01", end_date: "2026-12-02" });
@@ -203,34 +230,89 @@ describe("the form of an event", () => {
 		}
 		expect(newEventForm("2026-12-01", 23)).toMatchObject({ endDate: "2026-12-02", endTime: "00:00" });
 	});
+});
 
-	// The server checks each attendee that a save sends. A save of a different field must not send them.
-	it("sends the attendees and the visibility of a save only when the person changed them", () => {
-		const opened = { ...newEventForm("2026-12-01"), title: "Sync", attendees: ["prn_a", "prn_b"] };
-		expect(changedSharing({ ...opened, title: "New title" }, opened)).toEqual({});
-		expect(changedSharing({ ...opened, attendees: ["prn_a"] }, opened)).toEqual({ attendees: ["prn_a"] });
-		expect(changedSharing({ ...opened, attendees: ["prn_a", "prn_c"] }, opened)).toEqual({
-			attendees: ["prn_a", "prn_c"],
+describe("the repeat of the form", () => {
+	const LA = "America/Los_Angeles";
+
+	it("makes the rule of each choice, with its end", () => {
+		const form = { ...newEventForm("2030-10-22"), repeat: "biweekly" as const };
+		expect(recurrenceOf(form)).toEqual({ frequency: "weekly", interval: 2 });
+		expect(recurrenceOf({ ...form, ends: "until", until: "2030-12-31" })).toEqual({
+			frequency: "weekly",
+			interval: 2,
+			until: "2030-12-31",
 		});
-		expect(changedSharing({ ...opened, visibility: "private" }, opened)).toEqual({ visibility: "private" });
+		expect(recurrenceOf({ ...form, repeat: "monthly", ends: "count", count: "6" })).toEqual({
+			frequency: "monthly",
+			interval: 1,
+			count: 6,
+		});
+		expect(recurrenceOf({ ...form, repeat: "none" })).toBeNull();
+		expect(repeatText({ frequency: "weekly", interval: 2, until: null, count: 5 })).toBe("Every 2 weeks, 5 times");
+		// The dialog and the server use the same check.
+		expect(formProblem({ ...form, ends: "until", until: "2030-10-01" }, LA)).toMatch(/before the first day/);
+		expect(formProblem({ ...form, ends: "until", until: "" }, LA)).toBe("Give the last day of the repeat.");
 	});
 
-	// Find a time can search in a different zone. A suggestion is two instants, so the form must show them on the
-	// clock of the dialog, and a save must send the same instants back.
-	it("fills the form with a suggestion of Find a time on the clock of the dialog zone", () => {
-		const allDay = { ...newEventForm("2026-12-01"), allDay: true, title: "Sync", attendees: ["prn_a"] };
-		// 09:00 in Berlin on 2026-12-02 is 03:00 in New York.
-		const start = Date.parse("2026-12-02T08:00:00Z");
-		const filled = withSlot(allDay, start, start + 30 * 60_000, NY);
-		expect(filled).toMatchObject({
-			title: "Sync",
-			attendees: ["prn_a"],
-			allDay: false,
-			startDate: "2026-12-02",
-			startTime: "03:00",
-			endDate: "2026-12-02",
-			endTime: "03:30",
+	it("moves the first occurrence of the series as the edited occurrence moved, in wall clock time", () => {
+		// The series starts at 09:00 PDT. The person opens the occurrence after the change of the clock and moves it
+		// from 09:00 to 10:00 on the next day, for all events.
+		const master = {
+			...timed("evt", "2030-10-22T16:00:00Z", "2030-10-22T17:00:00Z"),
+			when: { kind: "timed" as const, start: "2030-10-22T16:00:00Z", end: "2030-10-22T17:00:00Z", time_zone: LA },
+		};
+		const opened = { ...newEventForm("2030-11-05"), startTime: "09:00", endTime: "10:00" };
+		const moved = { ...opened, startDate: "2030-11-06", endDate: "2030-11-06", startTime: "10:00", endTime: "11:00" };
+		expect(seriesWhen(master, opened, moved, LA)).toEqual({
+			kind: "timed",
+			start: "2030-10-23T17:00:00.000Z", // 10:00 PDT
+			end: "2030-10-23T18:00:00.000Z",
+			time_zone: LA,
 		});
-		expect(whenOf(filled, NY)).toMatchObject({ start: "2026-12-02T08:00:00.000Z", end: "2026-12-02T08:30:00.000Z" });
+	});
+
+	it("keeps the time zone of the series when the person is in a different zone", () => {
+		const TOKYO = "Asia/Tokyo";
+		const master = {
+			...timed("evt", "2030-10-22T16:00:00Z", "2030-10-22T17:00:00Z"),
+			when: { kind: "timed" as const, start: "2030-10-22T16:00:00Z", end: "2030-10-22T17:00:00Z", time_zone: LA },
+		};
+		// The occurrence at 09:00 PST on 2030-11-05 is at 02:00 on 2030-11-06 in Tokyo.
+		const occurrence = {
+			...master,
+			when: { ...master.when, start: "2030-11-05T17:00:00.000Z", end: "2030-11-05T18:00:00.000Z" },
+		};
+		const opened = formOf(occurrence, TOKYO);
+		expect(opened).toMatchObject({ startDate: "2030-11-06", startTime: "02:00" });
+		const moved = { ...opened, startTime: "03:00", endTime: "04:00" };
+		// For this occurrence: the instants come from the clock of the person, and the zone stays.
+		expect(whenOf(moved, TOKYO, zoneOfEvent(occurrence, TOKYO))).toEqual({
+			kind: "timed",
+			start: "2030-11-05T18:00:00.000Z",
+			end: "2030-11-05T19:00:00.000Z",
+			time_zone: LA,
+		});
+		// For all events: the series moves from 09:00 to 10:00 on its own clock, on the same day.
+		expect(seriesWhen(master, opened, moved, TOKYO)).toEqual({
+			kind: "timed",
+			start: "2030-10-22T17:00:00.000Z", // 10:00 PDT
+			end: "2030-10-22T18:00:00.000Z",
+			time_zone: LA,
+		});
+		expect(zoneOfEvent(null, TOKYO)).toBe(TOKYO);
+	});
+
+	it("does not check the rule for a form of one occurrence whose rule stays", () => {
+		// The last occurrence of a series that ends on 2030-11-05 moves to the next day.
+		const form = {
+			...newEventForm("2030-11-06"),
+			repeat: "biweekly" as const,
+			ends: "until" as const,
+			until: "2030-11-05",
+		};
+		expect(formProblem(form, LA)).toMatch(/before the first day/);
+		expect(formProblem(form, LA, { ruleStays: true })).toBeNull();
+		expect(formProblem({ ...form, endTime: "08:00" }, LA, { ruleStays: true })).toMatch(/after its start/);
 	});
 });

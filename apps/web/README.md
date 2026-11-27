@@ -108,6 +108,8 @@ MCP clients. The app has no UI-only path.
     bottom, the rail has **Settings** and the account button. For a member, the rail asks for one
     agent of that sponsor (`directory.list_principals` with `sponsor_id`, the kind `agent` and a limit
     of 1), not for the directory. The sponsor of only a service account gets no **Admin**.
+  - When an owner or an admin turns on feedback in Admin › General, the rail has **Feedback** above
+    **Settings** (see [Feedback](#feedback)). Feedback is off by default, so the rail has no button then.
   - The account button opens a panel with the name, the address and the role of the person, the
     **Appearance** choice, **Profile and status**, and **Sign out**. **Profile and status** opens the
     profile page of the person (`/people/<own id>`). Escape closes the panel, and the focus goes back
@@ -446,6 +448,12 @@ MCP clients. The app has no UI-only path.
   screened out or in, with who decided and when, a button for the other decision, and a form that screens
   out an address that did not write yet. Without `mail.modify`, the view has no buttons and says why. When
   the Screener is off, a notice says so. Each list has loading, empty and error states, and **Load more**.
+- **Admin › General** (`/admin/general`, [`FeedbackSettingsCard.tsx`](src/features/admin/FeedbackSettingsCard.tsx)).
+  The **Feedback** card. An owner or an admin turns feedback on or off, sets the GitHub repository (the default is
+  `jaredwray/soldock`) and saves a GitHub token (`feedback.update_settings`). The token field is write-only, as
+  in Admin › AI. A status line tells if people can send feedback. After a save, the card sends the
+  `asterra:feedback-changed` event, and the shell asks for `feedback.get_status` again. A member has no General
+  section.
 - **Admin › Chat** (`/admin/chat`, [`ChatPushCard.tsx`](src/features/admin/ChatPushCard.tsx)). The first
   card, **Device notifications**, turns Web Push on or off for the organization (`chat.update_push_settings`).
   To turn it on, an owner or an admin enters a contact address (`mailto:` or `https:`) and selects **Turn on
@@ -504,13 +512,19 @@ MCP clients. The app has no UI-only path.
     signature again when the window gets the focus. While the field has text that is not saved, the
     browser asks before it closes or reloads the tab. A link in the app does not ask.
 - **Shared mailboxes.** The UI name of a team mailbox, on the Admin page.
-  - The card of a shared mailbox has **Aliases** (`MailboxAliases.tsx`) under the name: a list of the
-    extra addresses of the mailbox, a **Remove** button for each one (with a confirmation), and a field to
-    add one (`directory.list_mailbox_aliases`, `directory.add_mailbox_alias`,
-    `directory.remove_mailbox_alias`). The field checks the address with `AliasAddress` before the call. An
-    error of the add shows in the form and the field refers to it (`aria-invalid`, `aria-describedby`). An
-    error of the load shows above the list with **Try again**. At the limit, the field and the button are
-    disabled.
+  - The card of a shared mailbox has **Aliases** (`MailboxAliases.tsx`) under the name. A box shows the
+    extra addresses of the mailbox. Each address has a **Remove** button (with a confirmation). A form to
+    add an address is in the same box, under a line (`panel-form-divided`, as in the member editor). The
+    part uses `directory.list_mailbox_aliases`, `directory.add_mailbox_alias` and
+    `directory.remove_mailbox_alias`. As in the New member form, the admin types the part before `@` and
+    selects a saved domain from a list (`directory.list_mail_domains`). The list selects the domain of the
+    primary address of the mailbox first (`defaultMailDomain`). With no saved domain, the form is disabled,
+    and a hint tells the admin to add a domain in Admin › Email domains. The form checks the address with
+    `AliasAddress` before the call. An error of the add shows in the form. The field and the list refer to
+    it (`aria-describedby`), and the field has `aria-invalid`. An error of the load shows above the list
+    with **Try again**. If only the domains do not load, the aliases show, and the form shows the error as
+    an alert with its own **Try again**. The list and the button stay disabled until the domains load. At
+    the limit, the field, the list and the button are disabled.
   - A team mailbox has its own paths (`/mail/team/<tmb_id>/…`), so a deep link and a reload stay in
     it. Each mail call of its views sends `mailbox_id`. Search, labels and the composer use the
     same mailbox.
@@ -694,6 +708,8 @@ MCP clients. The app has no UI-only path.
       **Webhooks of …** shows one row for each webhook that gets an event of the agent.
       The rows come from `mail.list_webhook_subscriptions`, `chat.list_webhook_subscriptions` and `drive.list_webhook_subscriptions`.
       **Edit events** opens a dialog with a check box for each mail, chat and drive event.
+      The page does not offer Calendar (`AGENT_WEBHOOK_DOMAINS`): a calendar subscription is for the calendar of its creator only.
+      The page reads `calendar.list_webhook_subscriptions` only to know which webhooks of the sponsor have an event (`webhookApi.ts`).
       A save calls the create operation for each new check mark and the delete operation for each removed one.
       The **Messages** menu of Chat starts with **Direct messages, mentions and followed threads** for an agent.
       An owner or an admin who is not the sponsor cannot change it, because a different filter adds a subscription.
@@ -809,7 +825,7 @@ MCP clients. The app has no UI-only path.
     (`shell/SectionSidebar.tsx`).
   - Settings does not list webhooks. A new password
   (`account.set_password`) ends your sessions on other browsers. A new key can hold only the scopes
-  of the session. A new key does not get `account.keys`, `directory.write`, `mail.share`, `mail.webhooks`, `chat.webhooks` or `drive.webhooks`
+  of the session. A new key does not get `account.keys`, `directory.write`, `mail.share`, `mail.webhooks`, `chat.webhooks`, `drive.webhooks` or `calendar.webhooks`
   unless the person selects them. A new key has a label, an optional description and a lifetime: 1, 7,
   30, 90 or 180 days, a custom last day (from tomorrow to 729 days), or Never (`settings/ttl.ts`).
   The list shows the end of each key, and **Expired** or **Revoked**. The secret dialog shows the end.
@@ -1217,9 +1233,33 @@ MCP clients. The app has no UI-only path.
     dialog, so a second click on **Save** adds one event. A change sends `base_revision`, and sends
     `when` only when the time changed. On `conflict`, the dialog says that the event changed in a
     different place. **Delete** asks first, and **Cancel** goes back to the form.
-  - The page gets the events of the period with `calendar.list_events` and each page of it. It gets
-    them again every 30 seconds while the tab is visible, on window focus, and after each change. A
-    failed load shows the error with **Try again**. A screen reader hears "Loading events…" and "No
+  - **Repeats** offers each day, each week, each 2 weeks and each month, and **Ends** offers never, a
+    date or a number of times. The dialog checks the rule with `checkRecurrence` from the contracts. A
+    rule that the dialog does not offer shows as text. **Reminder** offers none, 5, 10 and 30 minutes
+    before, for a timed event. It calls `calendar.set_reminder`, which does not change the revision.
+    **Attendees** adds people of the organization.
+  - **An occurrence of a series.** A save or a delete first asks "This event" or "All events". "This
+    event" calls `calendar.update_occurrence` or `calendar.cancel_occurrence`. "All events" reads the
+    series with `calendar.get_event`, and calls `calendar.update_event` or `calendar.delete_event`. A move
+    of the occurrence moves the first occurrence by the same days and to the same wall clock time
+    (`seriesWhen`). A change of the rule or of the attendees is for all events, with no question.
+  - **An invitation.** The dialog of a copy of an attendee shows the organizer and the rule, with
+    **Accept**, **Decline** (`calendar.respond_to_event`, with the same question for an occurrence) and the
+    reminder. The fields do not change.
+  - An occurrence of a series has the repeat mark before its title. A declined event has its title
+    struck through. The key of an entry is its occurrence id.
+  - **Reminders.** Each page of the app shows a toast for the `calendar.reminder` event of the events
+    socket (`useCalendarReminders`), with **Open**. The Activity of Chat has the chip **Event reminders**.
+    A click on such an item opens the week of the event.
+  - The page gets the events of the period with `calendar.list_events` and each page of it. It keeps
+    them current from the change feed (`sync.ts`): for each period, it gets the cursor of now with
+    `calendar.list_changes` first, then the events. On `calendar.changed` of the events socket, on
+    `hello` after each connect, and on window focus, it reads the changes after its cursor. A change, or
+    an expired cursor, loads the period again. While the socket is down, it reads the changes every 30
+    seconds when the tab is visible. The cursor moves only after the period loaded (`createSync`): after
+    a failed load, the next read of the feed gives the same changes, and the period loads again. A failed
+    load after the first one keeps the events on screen. It also loads the period after each change of
+    the person. A failed first load shows the error with **Try again**. A screen reader hears "Loading events…" and "No
     events this week".
   - Each day is a region with the full date as its name, and today has `aria-current="date"`. The name
     of an event has its title, its time and its location. The hour and day slots are hidden from
@@ -2119,7 +2159,7 @@ dock Worker serves `index.html` for each app path, so a deep link works on reloa
 | `/mail/person/<prn_id>/…` | The same views, threads, settings and Screener, in the mailbox of a person who lets the person use it. `/mail/person/<prn_id>` goes to its inbox |
 | `/mail/agent/<prn_id>/…` | The same views, threads and settings, read only, in the mailbox of an agent, for an owner or an admin. `/mail/agent/<prn_id>` goes to its inbox |
 | `/admin` | Goes to the first section of Admin that the person can use |
-| `/admin/<section>` | One section of Admin: `members`, `shared-mailboxes`, `shared-drives`, `chat`, `mail`, `domains` or `ai` |
+| `/admin/<section>` | One section of Admin: `general`, `members`, `shared-mailboxes`, `shared-drives`, `chat`, `mail`, `domains` or `ai` |
 | `/admin/members/<prn_id>` | The page of one person, agent or service account in Admin › Members |
 | `/connect/<oar_id>` | The approval page of an OAuth request from an MCP client |
 | `/drive` | The root of the own drive |
@@ -2161,7 +2201,7 @@ Sent `in:sent`, Spam `in:spam`, Trash `in:trash`, All mail an empty string, and 
 | [`src/features/drive/`](src/features/drive/) | Drive: the sidebar, the item list, the menus and dialogs (new folder, rename, move, share, versions, preview), the data hooks, the pure rules in `model.ts`, the upload queue in `uploadQueue.ts`, and the document header that the editors share |
 | [`src/features/docs/`](src/features/docs/) | Docs: the schema, the commands, the autosave, the paste of Markdown (`markdownPaste.ts`), the editor and the page. For images: the store of the images of a doc (`images.ts`), the geometry (`imageModel.ts`), the commands (`imageCommands.ts`), the view of an image (`imageView.ts`), the plugin for a drop and a paste (`imagePlugin.ts`), the toolbar and the dialogs |
 | [`src/features/sheets/`](src/features/sheets/) | Sheets: the store with the tabs and the save queue, the toolbar, the grid, the formula bar, the tab bar, and the pure modules for cell names, the selection, clipboard text, the cells of the grid, the formats of cells and the formulas of the Σ menu |
-| [`src/features/calendar/`](src/features/calendar/) | Calendar: the page and its toolbar (`CalendarApp.tsx`), the week, month and agenda views (`views.tsx`), the event dialog (`EventDialog.tsx`), the load of a period with its poll (`data.ts`), and the pure rules for the days of a period, the parts of an event on each day, the columns of overlaps and the form of an event (`model.ts`) |
+| [`src/features/calendar/`](src/features/calendar/) | Calendar: the page and its toolbar (`CalendarApp.tsx`), the week, month and agenda views (`views.tsx`), the event dialog (`EventDialog.tsx`), the load of a period and its live update (`data.ts`), the catch-up from the cursor of the change feed (`sync.ts`), and the pure rules for the days of a period, the parts of an event on each day, the columns of overlaps and the form of an event (`model.ts`) |
 | [`src/features/chat/`](src/features/chat/) | Chat: the sidebar, the room view, the dialogs (new room, public rooms, new direct message, members, name and topic), the message box with its toolbar, Markdown shortcuts and suggestions of a mention (`ChatComposer.tsx`, `composerSchema.ts`, `composerCommands.ts`), the files of a new message (`attachments.ts`, `ComposerFiles.tsx`, the drop in `fileDrop.ts`), the files and the link previews of a message (`MessageFiles.tsx`), the focus after the X of a chip (`focusAfterRemove.ts`), the data hooks, the pure rules in `model.ts`, the rules of mentions in `mentions.ts`, the part of the history that the page keeps in `history.ts`, the page reads in `pager.ts`, the last list of each room in `roomCache.ts`, the drafts in `drafts.ts`, the sends whose message the room has in `settle.ts`, the sync of the open room in `sync.ts`, and the texts and the buttons of a member request and of a share request (`memberRequests.ts`, `shareRequests.ts`, `RequestActions.tsx`) |
 | [`src/features/people/`](src/features/people/) | The profile page of a person or an agent |
 | [`src/features/settings/`](src/features/settings/) | Settings, its side navigation, the password and two-step verification cards, the TOTP setup panel, the API key manager with the lifetime of a key (`ttl.ts`), the event check boxes, the webhook list of one target, and the one-time secret dialog |
@@ -2237,11 +2277,52 @@ Start `pnpm --filter @asterra/dock dev` in a second terminal for the API.
   no external font or CDN. `connect-src 'self'` keeps each call on the dock host. `media-src 'self'
   blob:` lets the browser load a video file that the person selected (a `blob:` address), to draw the
   small picture of the video before the upload.
+- **Screen capture is for this origin only.** `getDisplayMedia` needs the `display-capture` permission, and its
+  default is `self`. The headers do not change it. A screenshot and a recording show in the feedback dialog as
+  `blob:` addresses, which `img-src` and `media-src` allow.
 - **Zod runs without `eval`.** `@asterra/contracts` turns on Zod's `jitless` mode before it makes a
   schema ([`packages/contracts/src/zod.ts`](../../packages/contracts/src/zod.ts)), so Zod never tests
   `new Function`, and the CSP reports no violation.
 - **The app never sees a credential after sign-in.** The session cookie is HttpOnly. The app does
   not keep the password or the TOTP code after the sign-in.
+
+## Feedback
+
+The feedback dialog ([`src/features/feedback/`](src/features/feedback/)) lets a person report a bug or send an
+idea. Each report becomes a public GitHub issue ([`feedback`](../dock/src/feedback/README.md)).
+
+- The shell calls `feedback.get_status` one time ([`useFeedbackStatus.ts`](src/features/feedback/useFeedbackStatus.ts)).
+  The rail shows **Feedback** only when the answer has `can_submit: true`.
+- The dialog is a separate chunk. It loads when the person opens it the first time. The draft stays while the
+  dialog is closed, also after a capture.
+- The dialog has the kind (Bug or Idea), a title, a description, attachments, the identity choices, a preview of
+  the issue, and a confirmation. A warning names the public repository.
+- **Screenshot** asks the browser for a screen, a window or a tab (`getDisplayMedia`, no audio), closes the dialog,
+  takes one frame, and opens the dialog again. A frame wider than 1,920 pixels is made smaller. The file is a PNG,
+  or a JPEG when the PNG is over 10 MiB.
+- **Record screen** records with `MediaRecorder` (WebM, or MP4 in Safari, 1 Mbit/s, no audio). The dialog closes,
+  and a small indicator at the bottom right shows the time and a **Stop** button. The recording stops at 60
+  seconds, before 9 MiB, at **Stop**, or when the person stops the share in the browser. A screen reader gets one
+  status text that does not change, not the clock.
+- When the widget goes (a sign-out, or an admin turns feedback off), the recording and the share of the screen
+  stop. An error at the start of a recording also stops the share.
+- **Add a file**, a paste and a drop add PNG, JPEG and WebP images, and WebM and MP4 videos. The draft gets each
+  file before its upload starts, so many files in one drop stop at the limit of 5 (`withAttachment`).
+- A browser without `getDisplayMedia`, such as most phones, shows no capture buttons. A file and a paste still
+  work. A cancelled share picker shows no error.
+- Each attachment uploads at once (`feedback.upload_attachment`). **Remove** deletes it on the server
+  (`feedback.delete_attachment`), so its public address stops. If the person removes an attachment or discards the
+  draft during an upload, the dialog deletes the file when the upload ends.
+- The issue shows the name of the person by default, and the address only when the person selects it. The
+  browser line is on by default. The role, the host and the page kind are always in the issue.
+- The preview uses `buildFeedbackIssue` of `packages/contracts`, the function of the server, so it is the exact
+  text. **Send** stays off until the person confirms that the report shows no private data. A new attachment
+  clears the confirmation. While **Send** is off, a line above the buttons gives the reason, and the button names
+  that line with `aria-describedby`.
+- One idempotency key for each draft makes one issue after a second click or a retry. After the send, the
+  dialog shows a link to the issue.
+- [`model.ts`](src/features/feedback/model.ts) has the pure parts, which `test/feedback.test.ts` checks.
+  [`capture.ts`](src/features/feedback/capture.ts) has the browser calls.
 
 ## Data inventory
 

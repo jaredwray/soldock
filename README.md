@@ -124,8 +124,7 @@ shares no availability shows as unknown, never as free. In **Calendar › Sharin
 colleague or an agent see the busy times, or schedule on their behalf.
 
 An agent uses the same operations through MCP: `calendar_find_times`, then `calendar_create_event` with
-`calendar_id` and `attendees`. The person is the organizer, and the audit names the agent. Recurring
-events and reminders come in later layers.
+`calendar_id` and `attendee_ids`. The person is the organizer, and the audit names the agent.
 
 ![The week view of Calendar with the meetings of the studio director](docs/screenshots/calendar.png)
 

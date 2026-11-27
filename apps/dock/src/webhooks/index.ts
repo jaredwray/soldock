@@ -1,6 +1,7 @@
-// Shared webhook storage, URL rules and delivery for Mail, Chat and Drive.
+// Shared webhook storage, URL rules and delivery for Mail, Chat, Drive and Calendar.
 
 export {
+	type CalendarWebhookEventJob,
 	type ChatWebhookEventJob,
 	type DriveWebhookEventJob,
 	handleWebhookBatch,

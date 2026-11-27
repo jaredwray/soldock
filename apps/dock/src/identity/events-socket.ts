@@ -10,7 +10,8 @@ type SocketEnv = { Bindings: Env; Variables: RequestIdVariables };
 
 /**
  * The socket carries the rooms as `chat.list_rooms` returns them, so a credential gets a socket only
- * when it can call that operation. A later event type that is not Chat needs its own check.
+ * when it can call that operation. A later event type that is not Chat needs its own check: the hint
+ * `calendar.changed` goes only to a socket whose credential holds `calendar.read` (`EventsSocketOpen.calendar`).
  */
 const READ_OPERATION = operations["chat.list_rooms"];
 
@@ -24,7 +25,11 @@ export async function openEventsSocket(
 	caller: AuthContext,
 	options: { feed: boolean },
 ): Promise<Response> {
-	const open: EventsSocketOpen = { credential: credentialRef(caller), feed: options.feed };
+	const open: EventsSocketOpen = {
+		credential: credentialRef(caller),
+		feed: options.feed,
+		calendar: caller.scopes.has("calendar.read"),
+	};
 	const principal = env.PRINCIPAL.get(env.PRINCIPAL.idFromName(caller.principal.id));
 	const response = await principal.fetch("https://principal.internal/events", {
 		headers: { upgrade: "websocket", [EVENTS_SOCKET_HEADER]: encodeURIComponent(JSON.stringify(open)) },

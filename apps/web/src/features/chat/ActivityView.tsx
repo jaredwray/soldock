@@ -1,4 +1,4 @@
-import type { ChatActivityItem, ChatActivityKind } from "@asterra/contracts";
+import { type ChatActivityItem, type ChatActivityKind, canonicalTimeZone, zonedDate } from "@asterra/contracts";
 import { useCallback, useEffect, useState } from "react";
 import { api, errorMessage } from "../../lib/api.ts";
 import { shortDate } from "../../lib/format.ts";
@@ -6,7 +6,7 @@ import { Icon } from "../../lib/icons.tsx";
 import { setPageTitle } from "../../lib/pageTitle.ts";
 import { navigate } from "../../lib/router.tsx";
 import { useToast } from "../../lib/toast.tsx";
-import { chatPath } from "../../routes.ts";
+import { calendarPath, chatPath } from "../../routes.ts";
 import { PageHeader } from "../../shell/PageHeader.tsx";
 import { EmojiGlyph } from "./customEmoji.tsx";
 import { requestOfActivity, requestRoomText } from "./memberRequests.ts";
@@ -25,7 +25,12 @@ const FILTERS: { value: ActivityFilter; label: string }[] = [
 	{ value: "card_action", label: "Card actions" },
 	{ value: "member_request", label: "Member requests" },
 	{ value: "share_request", label: "Share requests" },
+	{ value: "calendar_reminder", label: "Event reminders" },
 ];
+
+function browserZone(): string {
+	return canonicalTimeZone(Intl.DateTimeFormat().resolvedOptions().timeZone) ?? "UTC";
+}
 
 function describeKind(item: ChatActivityItem): string {
 	switch (item.kind) {
@@ -43,6 +48,10 @@ function describeKind(item: ChatActivityItem): string {
 			return "asks to add";
 		case "share_request":
 			return "asks to share";
+		case "calendar_reminder":
+			return item.event
+				? `event starts at ${new Date(item.event.start).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" })}`
+				: "event starts soon";
 	}
 }
 
@@ -116,7 +125,9 @@ export function ActivityView({ tick, onReadChange }: { tick: number; onReadChang
 				// Proceed to navigation even if mark read fails.
 			}
 		}
-		if (item.parent_seq !== null) {
+		if (item.kind === "calendar_reminder" && item.event) {
+			navigate(calendarPath("week", zonedDate(Date.parse(item.event.start), browserZone())));
+		} else if (item.parent_seq !== null) {
 			navigate(chatPath(item.room_id, item.parent_seq, item.seq));
 		} else {
 			navigate(chatPath(item.room_id, item.seq));
@@ -185,7 +196,9 @@ export function ActivityView({ tick, onReadChange }: { tick: number; onReadChang
 							) : (
 								<button type="button" className="chat-feed-button" onClick={() => void openItem(item)}>
 									<div className="chat-feed-head">
-										<span className="chat-feed-actor">{item.actor.display_name}</span>{" "}
+										<span className="chat-feed-actor">
+											{item.kind === "calendar_reminder" ? "Calendar" : item.actor.display_name}
+										</span>{" "}
 										<span className="chat-feed-action">{describeKind(item)}</span>
 										{item.emoji && (
 											<span className="chat-feed-emoji">

@@ -75,6 +75,8 @@ const ACCOUNT_DECIDED: ReadonlySet<string> = new Set([
 	"chat.join_room",
 	// The stars of the caller are in its own drive, also for an item of a different drive.
 	"drive.star_items",
+	// The calendar_id of a calendar webhook can only be the id of the caller: no grant decides it.
+	"calendar.create_webhook_subscription",
 ]);
 
 /**

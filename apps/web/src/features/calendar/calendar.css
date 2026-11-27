@@ -492,35 +492,51 @@
 	}
 }
 
-/* The event dialog groups its fields, so an invitation can turn them all off at once. */
-.cal-fields {
-	display: contents;
-	border: 0;
+/* A declined event stays in the calendar, with its title struck through. */
+.cal-event-declined {
+	opacity: 0.6;
+}
+
+.cal-event-declined .cal-event-title {
+	text-decoration: line-through;
+}
+
+.cal-event-repeat {
+	font-weight: normal;
+}
+
+.cal-repeat-ends {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
+	align-items: center;
+}
+
+.cal-scope {
+	display: grid;
+	gap: 8px;
+	margin-block: 12px;
+}
+
+.cal-people {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 4px;
 	margin: 0;
 	padding: 0;
+	list-style: none;
 }
 
-.cal-attendees {
-	margin-bottom: 6px;
-}
-
-.cal-attendee {
+.cal-person {
+	display: inline-flex;
+	align-items: center;
 	gap: 4px;
 }
 
-.cal-attendee-remove {
-	display: inline-flex;
+.cal-rsvp {
+	display: flex;
+	gap: 8px;
 	align-items: center;
-	padding: 0;
-	border: 0;
-	background: none;
-	color: var(--muted-foreground);
-	cursor: pointer;
-}
-
-.cal-attendee-remove svg {
-	width: 12px;
-	height: 12px;
 }
 
 /* Find a time: the search fields, the busy times of each calendar, and the suggestions. */

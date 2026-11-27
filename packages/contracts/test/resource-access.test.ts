@@ -20,12 +20,14 @@ const ROOM = "rm_01JD0000000000000000000000";
 
 /** Each operation that a membership or a share can decide, in the order of the names. */
 const RESOURCE_DECIDED: string[] = [
+	"calendar.cancel_occurrence",
 	"calendar.create_event",
 	"calendar.delete_event",
 	"calendar.find_times",
 	"calendar.get_event",
 	"calendar.list_events",
 	"calendar.update_event",
+	"calendar.update_occurrence",
 	"chat.add_members",
 	"chat.add_reaction",
 	"chat.archive_room",
