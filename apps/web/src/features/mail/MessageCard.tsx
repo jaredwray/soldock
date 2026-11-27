@@ -6,7 +6,9 @@ import { addressName, formatBytes, fullDate, initials, sameAddress, shortDate } 
 import { Icon } from "../../lib/icons.tsx";
 import { useToast } from "../../lib/toast.tsx";
 import { isAgentMailbox } from "../../routes.ts";
+import { hasCalendarPart } from "../calendar/model.ts";
 import { AUTO_MARK_TEXT, AUTO_MARK_TITLE } from "./autoLabels.ts";
+import { InvitationCard } from "./InvitationCard.tsx";
 import { MessageBody } from "./MessageBody.tsx";
 import { mailboxInput, useMailboxId, useMailboxRights } from "./mailbox.tsx";
 import { messageNotices, senderChecks, senderDomain } from "./senderCheck.ts";
@@ -193,6 +195,10 @@ export function MessageCard({
 						)}
 						{notices.spamNotice && <SpamNotice />}
 						{notices.sender && <SenderNotice message={message} verdict={notices.sender} inSpam={notices.inSpam} />}
+						{/* Only the own mailbox has a calendar. */}
+						{mailboxId === null && message.origin !== "sent" && hasCalendarPart(message.attachments) && (
+							<InvitationCard messageId={message.id} />
+						)}
 						{body ? (
 							<MessageBody body={body} subject={message.subject} />
 						) : full.status === "error" ? (

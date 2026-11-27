@@ -1,8 +1,9 @@
 import { autoLabelActive } from "../ai/index.ts";
-import { addressTag, getMailbox, mailboxOwnerKind } from "../identity/index.ts";
+import { addressTag, getMailbox, isTeamMailboxId, mailboxOwnerKind } from "../identity/index.ts";
 import { sha256Hex } from "../platform/index.ts";
+import { calendarPartIndex, senderCheck } from "./calendar-part.ts";
 import { composeMessage } from "./mime/compose.ts";
-import { parseMail, senderVerification } from "./mime/parse.ts";
+import { type ParsedMail, parseMail, readAttachment, senderVerification } from "./mime/parse.ts";
 import { screenerDefault } from "./org-settings.ts";
 
 /**
@@ -69,7 +70,7 @@ export async function deliverStoredRaw(
 		]);
 		screener = { orgDefault, eligible: kind === "human" || kind === "team" };
 	}
-	return mailboxStub(env, input.mailboxId).deliver({
+	const delivered = await mailboxStub(env, input.mailboxId).deliver({
 		contentHash: input.contentHash,
 		rawKey: input.rawKey,
 		size: input.bytes.byteLength,
@@ -80,6 +81,35 @@ export async function deliverStoredRaw(
 		tag: input.tag,
 		autoLabel: owner ? { ownerAddress: owner.address } : null,
 		screener,
+	});
+	// Also for a second copy, so a retry after a failed hand-off completes it. Calendar drops what it applied.
+	if (!spam && delivered.screened === null) await handOffCalendarPart(env, input, parsed);
+	return delivered;
+}
+
+/**
+ * Gives the calendar part of a stored message to the calendar of the owner of the mailbox: the answer of an
+ * attendee, or a change or a cancellation of a meeting by mail on that calendar. Only the own mailbox of a
+ * principal has a calendar. Spam and mail that the Screener holds never reach it. The content is untrusted:
+ * Calendar applies it only by its rules (`CalendarDO.applyMail`). An error of the call fails the delivery job, so
+ * the queue tries again.
+ */
+async function handOffCalendarPart(
+	env: Env,
+	input: { mailboxId: string; bytes: Uint8Array; origin: "external" | "internal"; receivedAt: number },
+	parsed: ParsedMail,
+): Promise<void> {
+	if (isTeamMailboxId(input.mailboxId) || !parsed.signals.hasCalendar) return;
+	const index = calendarPartIndex(parsed.attachments);
+	if (index < 0) return;
+	const part = await readAttachment(input.bytes, index);
+	if (!part) return;
+	const from = parsed.from?.address.toLowerCase() ?? null;
+	await env.CALENDAR.get(env.CALENDAR.idFromName(input.mailboxId)).applyMail(input.mailboxId, {
+		ics: new TextDecoder().decode(part.content),
+		from,
+		verification: senderCheck(input.origin, parsed.authentication, from),
+		receivedAt: input.receivedAt,
 	});
 }
 

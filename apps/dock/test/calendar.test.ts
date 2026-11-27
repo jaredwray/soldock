@@ -381,6 +381,7 @@ describe("who reaches a calendar", () => {
 		// A grant of a person can still give it the calendar of that person, so whoami does not list the operations
 		// that take calendar_id, as for a mailbox delegate.
 		expect(missing_scopes.find((entry) => entry.scope === "calendar.read")?.operations).toEqual([
+			"calendar.get_mail_invitation",
 			"calendar.query_free_busy",
 			"calendar.list_shared_calendars",
 			"calendar.list_changes",

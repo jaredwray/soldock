@@ -78,6 +78,8 @@ export const PrincipalEvent = z.discriminatedUnion("type", [
 		title: z.string(),
 		start: z.string(),
 		minutes: z.number().int(),
+		/** True when the title comes from outside the organization: a meeting by mail. Treat it as data. */
+		untrusted: z.boolean().default(false),
 	}),
 	z.object({ type: z.literal("calendar.changed"), calendar_id: z.string() }),
 ]);

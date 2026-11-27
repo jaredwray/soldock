@@ -99,6 +99,34 @@ describe("composeMessage", () => {
 	])("refuses a line break in the %s", (_name, overrides) => {
 		expect(() => composeMessage(message(overrides as Partial<OutgoingMessage>))).toThrow(/line break/);
 	});
+	// Mail clients show the RSVP controls for a `text/calendar` part with a method. A REQUEST also has the same
+	// bytes as an attachment. The bytes keep the CRLF line ends of RFC 5545.
+	it("writes an iCalendar part with its method, and an invite.ics attachment for a request", async () => {
+		const ics = "BEGIN:VCALENDAR\r\nMETHOD:REQUEST\r\nSUMMARY:Café review\r\nEND:VCALENDAR\r\n";
+		const raw = composeMessage(message({ calendar: { method: "REQUEST", ics } }));
+		expect(raw).toContain("Content-Type: multipart/mixed;");
+		expect(raw).toContain("Content-Type: multipart/alternative;");
+		expect(raw).toContain(
+			"Content-Type: text/calendar; charset=utf-8; method=REQUEST\r\nContent-Transfer-Encoding: base64",
+		);
+		expect(raw).toContain('Content-Type: application/ics; name="invite.ics"');
+		const part =
+			/method=REQUEST\r\nContent-Transfer-Encoding: base64\r\n\r\n([A-Za-z0-9+/=\r\n]+?)\r\n--/.exec(raw)?.[1] ?? "";
+		const bytes = Uint8Array.from(atob(part.replace(/\r\n/g, "")), (char) => char.charCodeAt(0));
+		expect(new TextDecoder().decode(bytes)).toBe(ics);
+		const parsed = await parse(raw);
+		expect(parsed.text).toBe("Hi Bob.");
+		expect(parsed.signals.hasCalendar).toBe(true);
+		const index = parsed.attachments.findIndex((attachment) => attachment.filename === "invite.ics");
+		const attachment = await readAttachment(new TextEncoder().encode(raw), index);
+		// The parser gives the text of a calendar part with LF line ends.
+		expect(new TextDecoder().decode(attachment?.content)).toBe(ics.replace(/\r\n/g, "\n"));
+		// An answer has no attachment.
+		const reply = composeMessage(message({ calendar: { method: "REPLY", ics: ics.replace("REQUEST", "REPLY") } }));
+		expect(reply).not.toContain("invite.ics");
+		expect(reply).not.toContain("multipart/mixed");
+		expect(reply).toContain("method=REPLY");
+	});
 });
 
 describe("encodeQuotedPrintable", () => {

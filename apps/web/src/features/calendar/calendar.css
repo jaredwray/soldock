@@ -642,3 +642,15 @@
 		grid-template-columns: 1fr;
 	}
 }
+
+/* The address field and its button: one row, the button wraps on a narrow screen. */
+.cal-by-mail {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 0.5rem;
+}
+
+.cal-by-mail .input {
+	flex: 1 1 14rem;
+	min-width: 0;
+}

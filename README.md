@@ -126,6 +126,10 @@ colleague or an agent see the busy times, or schedule on their behalf.
 An agent uses the same operations through MCP: `calendar_find_times`, then `calendar_create_event` with
 `calendar_id` and `attendee_ids`. The person is the organizer, and the audit names the agent.
 
+An event can also invite addresses outside the organization: each one gets a standard iCalendar invitation
+by mail, and its answer by mail updates the event. An invitation by mail from outside shows a card in Mail
+with Yes, Maybe and No. Yes and Maybe put the meeting on your calendar.
+
 ![The week view of Calendar with the meetings of the studio director](docs/screenshots/calendar.png)
 
 ### Agents

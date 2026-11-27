@@ -179,6 +179,11 @@ MCP clients. The app has no UI-only path.
 
     "Details" opens the SPF, DKIM and DMARC results (`senderCheck.ts`). Each result has a name and one
     sentence. A result that is not a pass and not a failure is muted, not red.
+  - A message of the own mailbox with a calendar part gets the card **Invitation** (`InvitationCard.tsx`, from
+    `calendar.get_mail_invitation`). It shows the title, the time in the zone of the browser, the place, the
+    organizer and the state on the calendar. For an invitation that can be answered, **Yes**, **Maybe** and
+    **No** call `calendar.respond_to_mail_invitation`. **Open in Calendar** opens the week of the meeting.
+    An answer by mail shows who answered what. Each text comes from the sender and shows as text only.
   - A message with the SPAM label gets a "This message is in Spam" notice, because it can be in a
     thread with other messages. The notice of a failed sender tells it, so such a message gets one notice.
   - The last message and each unread message are open. Each other message is collapsed: one line
@@ -1248,6 +1253,15 @@ MCP clients. The app has no UI-only path.
   - **An invitation.** The dialog of a copy of an attendee shows the organizer and the rule, with
     **Accept**, **Decline** (`calendar.respond_to_event`, with the same question for an occurrence) and the
     reminder. The fields do not change.
+  - **Invitations by mail.** **Invite by mail** under the attendees takes an address outside the
+    organization. Enter or the button adds it as a chip "<address> (by mail)", with the answer. The address
+    of a person of the organization adds that person. A repeated event cannot have such an address, and the
+    field tells that. The save sends `attendee_emails`. The delete question tells that each address gets a
+    cancellation by mail.
+  - **A meeting by mail.** Its dialog shows the organizer with the address and a note that the meeting came
+    by mail from outside the organization. Each text shows as text only. **Accept** and **Decline** send the
+    answer by mail. **Remove from my calendar** asks first, then calls `calendar.delete_event`: the
+    organizer gets no mail.
   - An occurrence of a series has the repeat mark before its title. A declined event has its title
     struck through. The key of an entry is its occurrence id.
   - **Reminders.** Each page of the app shows a toast for the `calendar.reminder` event of the events

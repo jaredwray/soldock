@@ -67,6 +67,8 @@ export interface CalendarReminderInput {
 	minutes: number;
 	/** The organizer of the event. */
 	actor: ActivityActor;
+	/** True when the title comes from outside the organization: a meeting by mail. */
+	untrusted?: boolean | undefined;
 }
 
 // Each person, agent and service account has one PrincipalDO. It holds their room state, notification
@@ -876,6 +878,7 @@ export class PrincipalDO extends DurableObject<Env> {
 				actor: item.actor,
 				emoji: null,
 				preview: item.title,
+				untrusted: item.untrusted === true,
 				event: {
 					event_id: item.event_id,
 					occurrence_id: item.occurrence_id,
@@ -894,6 +897,7 @@ export class PrincipalDO extends DurableObject<Env> {
 				title: item.title,
 				start: new Date(item.start_at).toISOString(),
 				minutes: item.minutes,
+				untrusted: item.untrusted === true,
 			};
 			// The reminder has content of the calendar. A socket of a credential without `calendar.read` does not get it.
 			this.ctx.waitUntil(this.enqueue([JSON.stringify(reminder)], undefined, (state) => state.calendar === true));

@@ -20,6 +20,12 @@ export interface OutgoingMessage {
 	attachments: OutgoingAttachment[];
 	/** Extra headers, for example `X-Asterra-Agent`. Names must be header tokens. */
 	headers?: [string, string][] | undefined;
+	/**
+	 * An iCalendar invitation, answer or cancellation (iTIP). The body is then `multipart/alternative` of the text
+	 * and a `text/calendar` part with the method. A REQUEST and a CANCEL also have the same bytes as an
+	 * `invite.ics` attachment, for clients that read only attachments.
+	 */
+	calendar?: { method: "REQUEST" | "REPLY" | "CANCEL"; ics: string } | undefined;
 }
 
 const encoder = new TextEncoder();
@@ -131,6 +137,17 @@ function textPart(subtype: "plain" | "html", content: string): string {
 	].join("\r\n");
 }
 
+/** The `text/calendar` part of an iTIP message. Base64 keeps the CRLF line ends and the folds of the text. */
+function calendarPart(method: string, ics: string): string {
+	assertSafe("method", method);
+	return [
+		`Content-Type: text/calendar; charset=utf-8; method=${method}`,
+		"Content-Transfer-Encoding: base64",
+		"",
+		base64Lines(encoder.encode(ics)),
+	].join("\r\n");
+}
+
 function multipart(subtype: "alternative" | "mixed", parts: string[]): string {
 	const boundary = `=_asterra_${randomToken(12)}`;
 	return [
@@ -224,13 +241,19 @@ export function composeMessage(message: OutgoingMessage): string {
 	}
 	add("MIME-Version", "1.0");
 
-	const bodyPart =
-		message.html === undefined
-			? textPart("plain", message.text)
-			: multipart("alternative", [textPart("plain", message.text), textPart("html", message.html)]);
+	const alternatives = [textPart("plain", message.text)];
+	if (message.html !== undefined) alternatives.push(textPart("html", message.html));
+	if (message.calendar) alternatives.push(calendarPart(message.calendar.method, message.calendar.ics));
+	const bodyPart = alternatives.length === 1 ? (alternatives[0] as string) : multipart("alternative", alternatives);
+	const attachments = [...message.attachments];
+	if (message.calendar && message.calendar.method !== "REPLY") {
+		attachments.push({
+			filename: "invite.ics",
+			mimeType: "application/ics",
+			content: encoder.encode(message.calendar.ics),
+		});
+	}
 	const entity =
-		message.attachments.length === 0
-			? bodyPart
-			: multipart("mixed", [bodyPart, ...message.attachments.map(attachmentPart)]);
+		attachments.length === 0 ? bodyPart : multipart("mixed", [bodyPart, ...attachments.map(attachmentPart)]);
 	return `${headers.join("\r\n")}\r\n${entity}${entity.endsWith("\r\n") ? "" : "\r\n"}`;
 }

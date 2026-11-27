@@ -20,9 +20,12 @@ import {
 } from "@asterra/contracts";
 import { type CalendarPushJob, enqueueCalendarPush } from "../chat/index.ts";
 import type { CalendarReminderInput } from "../identity/index.ts";
+import { type CalendarSenderCheck, sendCalendarMail } from "../mail/index.ts";
 import { decodeCursor, encodeCursor, log, newId } from "../platform/index.ts";
 import type { CalendarWebhookEventJob } from "../webhooks/index.ts";
 import { mergeIntervals } from "./find-times.ts";
+import { buildICalendar, type ICalInvite, type ICalOutput, type PartStat, parseICalendar } from "./ical.ts";
+import { storedTime } from "./time.ts";
 
 // Each person, agent and service account has one CalendarDO. Its name is the principal id. It holds the
 // events of the calendar of that principal in its SQLite database.
@@ -66,6 +69,8 @@ export interface CalendarCall {
 	ownerId: string;
 	/** The principal of the call: the owner, or a principal that holds a grant of the owner. */
 	actorId: string;
+	/** The address and the name of the owner: the organizer of an invitation by mail. The handler sets it. */
+	ownerMail?: { email: string; name: string } | undefined;
 }
 
 /** What the caller is in this calendar: the owner, or a principal with a `schedule` grant. */
@@ -134,6 +139,24 @@ export interface AttendeeRecord extends PrincipalRef {
 	response: EventResponse;
 }
 
+/** An attendee by mail, outside the organization: of an own event, or an ATTENDEE line of a meeting by mail. */
+export interface ExternalAttendeeRecord {
+	email: string;
+	display_name: string;
+	response: EventResponse;
+}
+
+/**
+ * The facts of a copy of a meeting by mail: the ORGANIZER and the From address of the accepted mail, the DTSTAMP of
+ * the last applied change, and the address of the owner that the invitation names.
+ */
+export interface MailCopy {
+	organizer: { email: string; name: string };
+	sender: string;
+	stamp: number;
+	my_email: string;
+}
+
 /** The row of an event. For a series, the time is the time of the first occurrence. */
 export interface EventRecord extends EventFields {
 	id: string;
@@ -150,6 +173,10 @@ export interface EventRecord extends EventFields {
 	reminder_minutes: number | null;
 	/** The delegate that added the event. Null when the owner added it, and on a copy. */
 	created_by: string | null;
+	/** The UID of a meeting by mail. Null for each other event: its UID is its id. */
+	uid: string | null;
+	/** The facts of a copy of a meeting by mail. Null for each other event. */
+	mail: MailCopy | null;
 }
 
 /** One entry of a calendar: a one-off event, a series, or one occurrence of a series. */
@@ -173,6 +200,10 @@ export interface EventView extends EventFields {
 	created_by: string | null;
 	/** True when a delegate sees only a part of the event (`viewFor`). */
 	redacted: boolean;
+	external_attendees: ExternalAttendeeRecord[];
+	external_organizer: { email: string; display_name: string } | null;
+	/** True for a copy of a meeting by mail from outside the organization. */
+	untrusted: boolean;
 }
 
 /** The range of a list. The handler computes the dates and the lower bound from the time zone of the call. */
@@ -200,6 +231,8 @@ export interface CreateInput {
 	recurrence: RecurrenceRule | null;
 	organizer: OrganizerRef;
 	attendees: PrincipalRef[];
+	/** The attendees by mail: addresses in lowercase, each one time. */
+	externalAttendees: string[];
 	reminderMinutes: number | null;
 	idempotency?: { key: string; requestHash: string } | undefined;
 }
@@ -210,7 +243,117 @@ export interface UpdateInput {
 	recurrence?: RecurrenceRule | null | undefined;
 	/** Undefined keeps the attendees. */
 	attendees?: PrincipalRef[] | undefined;
+	/** The attendees by mail, in lowercase. Undefined keeps them. */
+	externalAttendees?: string[] | undefined;
 	baseRevision: number | undefined;
+}
+
+/** The answer to an invitation by mail. */
+export type Answer = "accepted" | "tentative" | "declined";
+
+/** The result of a message from a different object or from a mail. A refusal is a value, never an error. */
+export type ApplyResult =
+	| { applied: true }
+	| {
+			applied: false;
+			reason:
+				| "stale"
+				| "not_organizer"
+				| "not_attendee"
+				| "unknown"
+				| "full"
+				| "wrong_calendar"
+				| "unreadable"
+				| "unsupported"
+				| "unverified";
+	  };
+
+/** A message by mail: an invitation, a change or a cancellation to an attendee, or an answer to an organizer. */
+export interface MailPayload {
+	method: ICalOutput["method"];
+	ical: ICalOutput;
+	subject: string;
+	text: string;
+	/** The idempotency key of the send. The same message has the same key, so a retry sends it one time. */
+	key: string;
+	/** The principal that made the change: the send checks its outbound policy again. */
+	actor?: string | undefined;
+	/** For an answer: the address of the owner that the invitation names, also an alias. It sends the answer. */
+	from?: string | undefined;
+}
+
+/** A calendar part of a mail that the mailbox of the owner received. Each value comes from the sender. */
+export interface IncomingMail {
+	ics: string;
+	/** The From address, in lowercase. */
+	from: string | null;
+	verification: CalendarSenderCheck;
+	receivedAt: number;
+}
+
+/** The answer of the owner to an invitation by mail. The handler read the mail and its sender. */
+export interface MailAnswer {
+	invite: ICalInvite;
+	/** The stored time of the invitation. */
+	time: EventTime;
+	/** The From address of the mail, in lowercase. */
+	from: string;
+	/** The check of the sender of the mail. Only a verified or an internal sender changes a copy that exists. */
+	verification: CalendarSenderCheck;
+	/** The address of the owner that the invitation names. */
+	myEmail: string;
+	response: Answer;
+}
+
+const PARTSTAT: Record<EventResponse, PartStat> = {
+	needs_action: "NEEDS-ACTION",
+	accepted: "ACCEPTED",
+	tentative: "TENTATIVE",
+	declined: "DECLINED",
+};
+
+const RESPONSE_OF: Record<PartStat, EventResponse> = {
+	"NEEDS-ACTION": "needs_action",
+	ACCEPTED: "accepted",
+	TENTATIVE: "tentative",
+	DECLINED: "declined",
+};
+
+/** A tombstone of a copy by mail stops an old invitation for this time. */
+const TOMBSTONE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+
+/** The most tombstones of cancellations for a meeting with no copy. Each sender can cause such a tombstone. */
+const NO_COPY_TOMBSTONES = 200;
+
+export const UNVERIFIED_CHANGE =
+	"The server did not verify the sender of this change of the meeting. Answer the meeting on your calendar, or ask the organizer to send the change again.";
+
+/** True when the receiving server verified the sender of a mail, or the mail is from the organization. */
+export function trustedSender(verification: CalendarSenderCheck): boolean {
+	return verification === "internal" || verification === "verified";
+}
+
+const BY_MAIL_NO_REPEAT =
+	"An event with attendees by mail cannot repeat. Remove the repeat, or remove the addresses outside your organization.";
+
+/** The plain text of a message by mail. It holds the facts of the meeting, and no HTML. */
+function mailText(intro: string, ical: ICalOutput): string {
+	const { fields } = ical;
+	const stamp = (ms: number) => new Date(ms).toISOString().replace("T", " ").slice(0, 16);
+	const when =
+		fields.all_day && fields.start_date && fields.end_date
+			? `All day, from ${fields.start_date} until ${fields.end_date} (the day after the last day)`
+			: `${stamp(fields.start_at)} to ${stamp(fields.end_at)} UTC`;
+	const lines = [intro, "", fields.title, `When: ${when}`];
+	if (fields.location) lines.push(`Where: ${fields.location}`);
+	lines.push(
+		`Organizer: ${ical.organizer.name ? `${ical.organizer.name} <${ical.organizer.email}>` : ical.organizer.email}`,
+	);
+	if (ical.method === "REQUEST" && ical.attendees.length > 0) {
+		lines.push(`Attendees: ${ical.attendees.map((attendee) => attendee.email).join(", ")}`);
+	}
+	if (fields.description && ical.method !== "REPLY") lines.push("", fields.description);
+	return lines.join("\n");
 }
 
 /** The full state of an event that an organizer sends to an attendee. */
@@ -515,11 +658,56 @@ const MIGRATIONS: readonly (readonly string[])[] = [
 			updated_at INTEGER NOT NULL
 		) WITHOUT ROWID`,
 	],
+	// Invitations by mail: the UID and the facts of a copy that came by mail, the attendees outside the
+	// organization, the tombstones of copies by mail, and the outbox kind `mail`. The CHECK of `outbox` cannot
+	// change, so the table is built again.
+	[
+		"ALTER TABLE events ADD COLUMN uid TEXT",
+		"ALTER TABLE events ADD COLUMN mail_json TEXT",
+		"CREATE UNIQUE INDEX events_uid ON events (uid) WHERE uid IS NOT NULL",
+		`CREATE TABLE external_attendees (
+			event_id TEXT NOT NULL,
+			email TEXT NOT NULL,
+			display_name TEXT NOT NULL,
+			response TEXT NOT NULL DEFAULT 'needs_action',
+			responded_at INTEGER NOT NULL DEFAULT 0,
+			invited_at INTEGER NOT NULL,
+			invited_sequence INTEGER NOT NULL DEFAULT 0,
+			request_sent INTEGER NOT NULL DEFAULT 0 CHECK (request_sent IN (0, 1)),
+			PRIMARY KEY (event_id, email)
+		) WITHOUT ROWID`,
+		`CREATE TABLE mail_tombstones (
+			uid TEXT PRIMARY KEY,
+			organizer TEXT NOT NULL,
+			sequence INTEGER NOT NULL,
+			state TEXT NOT NULL CHECK (state IN ('cancelled', 'removed', 'no_copy')),
+			at INTEGER NOT NULL
+		) WITHOUT ROWID`,
+		`CREATE TABLE outbox_next (
+			id TEXT PRIMARY KEY,
+			kind TEXT NOT NULL CHECK (kind IN ('snapshot', 'response', 'reminder', 'grant', 'mail')),
+			target_id TEXT NOT NULL,
+			event_id TEXT NOT NULL,
+			payload TEXT NOT NULL,
+			version INTEGER NOT NULL,
+			attempts INTEGER NOT NULL DEFAULT 0,
+			next_attempt_at INTEGER NOT NULL,
+			created_at INTEGER NOT NULL
+		) WITHOUT ROWID`,
+		`INSERT INTO outbox_next (id, kind, target_id, event_id, payload, version, attempts, next_attempt_at, created_at)
+			SELECT id, kind, target_id, event_id, payload, version, attempts, next_attempt_at, created_at FROM outbox`,
+		"DROP TABLE outbox",
+		"ALTER TABLE outbox_next RENAME TO outbox",
+		"CREATE INDEX outbox_due ON outbox (next_attempt_at)",
+	],
 ];
 
 const COLUMNS = `id, title, description, location, all_day, start_at, end_at, start_date, end_date, time_zone, revision,
 	created_at, updated_at, recurrence, series_end_at, role, organizer_json, sequence, my_response, my_responded_at,
 	reminder_minutes, visibility, created_by`;
+
+/** The columns that a read takes: `COLUMNS`, and the UID and the facts of a copy by mail. */
+const READ_COLUMNS = `${COLUMNS}, uid, mail_json`;
 
 function toRecord(row: Row): EventRecord {
 	return {
@@ -546,6 +734,8 @@ function toRecord(row: Row): EventRecord {
 		reminder_minutes: (row.reminder_minutes as number | null) ?? null,
 		visibility: row.visibility === "private" ? "private" : "default",
 		created_by: (row.created_by as string | null) ?? null,
+		uid: (row.uid as string | null | undefined) ?? null,
+		mail: row.mail_json == null ? null : (JSON.parse(row.mail_json as string) as MailCopy),
 	};
 }
 
@@ -637,6 +827,8 @@ function viewFor(role: Role, actorId: string, view: EventView): EventView {
 		reminder_minutes: null,
 		created_by: null,
 		redacted: true,
+		external_attendees: [],
+		external_organizer: null,
 	};
 }
 
@@ -737,7 +929,7 @@ export class CalendarDO extends DurableObject<Env> {
 	}
 
 	private row(id: string): EventRecord | null {
-		const row = this.sql.exec<Row>(`SELECT ${COLUMNS} FROM events WHERE id = ?`, id).toArray()[0];
+		const row = this.sql.exec<Row>(`SELECT ${READ_COLUMNS} FROM events WHERE id = ?`, id).toArray()[0];
 		return row ? toRecord(row) : null;
 	}
 
@@ -1026,7 +1218,47 @@ export class CalendarDO extends DurableObject<Env> {
 			reminder_minutes: event.all_day ? null : event.reminder_minutes,
 			created_by: event.created_by,
 			redacted: false,
+			// On a copy by mail, the line of the owner shows the own answer, which can be newer than the mail.
+			external_attendees: this.externalOf(event.id).map(({ email, display_name, response }) => ({
+				email,
+				display_name,
+				response: event.mail?.my_email === email ? (event.my_response ?? "needs_action") : response,
+			})),
+			external_organizer: event.mail
+				? { email: event.mail.organizer.email, display_name: event.mail.organizer.name }
+				: null,
+			untrusted: event.mail !== null,
 		};
+	}
+
+	/** The attendees by mail of an event, in the order of their addresses. */
+	private externalOf(eventId: string): {
+		email: string;
+		display_name: string;
+		response: EventResponse;
+		responded_at: number;
+		invited_at: number;
+		/** The sequence of the last question to this attendee: the invitation, or the last new time. */
+		invited_sequence: number;
+		/** 1 after a REQUEST to this address left the outbox. */
+		request_sent: number;
+	}[] {
+		return this.sql
+			.exec<{
+				email: string;
+				display_name: string;
+				response: EventResponse;
+				responded_at: number;
+				invited_at: number;
+				invited_sequence: number;
+				request_sent: number;
+			}>(
+				`SELECT email, display_name, response, responded_at, invited_at, invited_sequence, request_sent
+				FROM external_attendees WHERE event_id = ? ORDER BY email`,
+				eventId,
+			)
+			.toArray()
+			.map((row) => ({ ...row }));
 	}
 
 	private fieldsOf(event: EventFields): EventFields {
@@ -1137,7 +1369,7 @@ export class CalendarDO extends DurableObject<Env> {
 		bindings.push(query.limit + 1);
 		const single = this.sql
 			.exec<Row>(
-				`SELECT ${COLUMNS} FROM events
+				`SELECT ${READ_COLUMNS} FROM events
 				WHERE start_at < ? AND start_at >= ? AND recurrence IS NULL
 					AND ((all_day = 0 AND end_at > ?) OR (all_day = 1 AND start_date < ? AND end_date > ?))
 					${after}
@@ -1173,7 +1405,7 @@ export class CalendarDO extends DurableObject<Env> {
 	): EventView[] {
 		const series = this.sql
 			.exec<Row>(
-				`SELECT ${COLUMNS} FROM events
+				`SELECT ${READ_COLUMNS} FROM events
 				WHERE recurrence IS NOT NULL AND (
 					(start_at < ? AND (series_end_at IS NULL OR series_end_at > ?))
 					OR EXISTS (
@@ -1227,7 +1459,7 @@ export class CalendarDO extends DurableObject<Env> {
 		if (query === null) return { busy: [] };
 		const single = this.sql
 			.exec<Row>(
-				`SELECT ${COLUMNS} FROM events
+				`SELECT ${READ_COLUMNS} FROM events
 				WHERE start_at < ? AND start_at >= ? AND recurrence IS NULL
 					AND ((all_day = 0 AND end_at > ?) OR (all_day = 1 AND start_date < ? AND end_date > ?))
 				LIMIT ?`,
@@ -1391,6 +1623,40 @@ export class CalendarDO extends DurableObject<Env> {
 	// --- Changes of the organizer ------------------------------------------------------------------
 
 	/**
+	 * The event of an idempotency key that a call of `calendar.create_event` used, or null for a new key. The
+	 * handler asks first, so a retry returns the first event before the checks of the directory and of the mail
+	 * policy of now. The same key with a different request gives `conflict`.
+	 */
+	replay(call: CalendarCall, idempotency: { key: string; requestHash: string }): EventView | Refusal | null {
+		const role = this.enterShared(call);
+		if (typeof role !== "string") return role;
+		return this.replayOf(role, call, idempotency, Date.now());
+	}
+
+	private replayOf(
+		role: Role,
+		call: CalendarCall,
+		idempotency: { key: string; requestHash: string },
+		now: number,
+	): EventView | Refusal | null {
+		const earlier = this.sql
+			.exec<{ request_hash: string; event_id: string }>(
+				"SELECT request_hash, event_id FROM idempotency WHERE key = ? AND created_at > ?",
+				idempotency.key,
+				now - IDEMPOTENCY_TTL_MS,
+			)
+			.toArray()[0];
+		if (!earlier) return null;
+		if (earlier.request_hash !== idempotency.requestHash) {
+			return refuse("conflict", "The idempotency key was used with a different request.");
+		}
+		const event = this.row(earlier.event_id);
+		return event
+			? viewFor(role, call.actorId, this.masterView(event))
+			: refuse("conflict", "The event of this idempotency key does not exist now.");
+	}
+
+	/**
 	 * Adds an event. With an idempotency key that a call with the same request used, it returns that event and
 	 * adds nothing. The check and the write run with no await between them, so two calls with one key add one
 	 * event.
@@ -1400,28 +1666,15 @@ export class CalendarDO extends DurableObject<Env> {
 		if (typeof role !== "string") return role;
 		const now = Date.now();
 		if (input.idempotency) {
-			const earlier = this.sql
-				.exec<{ request_hash: string; event_id: string }>(
-					"SELECT request_hash, event_id FROM idempotency WHERE key = ? AND created_at > ?",
-					input.idempotency.key,
-					now - IDEMPOTENCY_TTL_MS,
-				)
-				.toArray()[0];
-			if (earlier) {
-				if (earlier.request_hash !== input.idempotency.requestHash) {
-					return refuse("conflict", "The idempotency key was used with a different request.");
-				}
-				const event = this.row(earlier.event_id);
-				return event
-					? viewFor(role, call.actorId, this.masterView(event))
-					: refuse("conflict", "The event of this idempotency key does not exist now.");
-			}
+			const earlier = this.replayOf(role, call, input.idempotency, now);
+			if (earlier) return earlier;
 		}
 		const count = Number(this.meta("event_count") ?? 0);
 		if (count >= CALENDAR_LIMITS.events) {
 			return refuse("invalid", `A calendar can have at most ${CALENDAR_LIMITS.events} events. Delete events first.`);
 		}
 		const { fields, recurrence } = input;
+		if (recurrence !== null && input.externalAttendees.length > 0) return refuse("invalid", BY_MAIL_NO_REPEAT);
 		if (recurrence !== null) {
 			const problem = checkRecurrence(fields, recurrence);
 			if (problem) return refuse("invalid", problem);
@@ -1475,6 +1728,11 @@ export class CalendarDO extends DurableObject<Env> {
 				);
 			}
 			if (input.attendees.length > 0) this.fanOut(input.id, []);
+			if (input.externalAttendees.length > 0) {
+				const sequence = (this.row(input.id) as EventRecord).sequence;
+				for (const email of input.externalAttendees) this.insertExternal(input.id, email, email, sequence, now);
+				this.queueRequests(call, this.row(input.id) as EventRecord);
+			}
 			this.noteChange("calendar.event.created", input.id, 1, call.actorId);
 			this.rearm(input.id);
 		});
@@ -1527,6 +1785,14 @@ export class CalendarDO extends DurableObject<Env> {
 				return refuse("invalid", `A calendar can have at most ${CALENDAR_LIMITS.recurringEvents} repeated events.`);
 			}
 		}
+		const guestsBefore = this.externalOf(eventId).map((guest) => guest.email);
+		const wantedGuests = input.externalAttendees;
+		const guestsChanged =
+			wantedGuests !== undefined &&
+			(wantedGuests.length !== guestsBefore.length || wantedGuests.some((email) => !guestsBefore.includes(email)));
+		if (next.recurrence !== null && (wantedGuests ?? guestsBefore).length > 0) {
+			return refuse("invalid", BY_MAIL_NO_REPEAT);
+		}
 		const before = this.attendeesOf(eventId);
 		const timeChanged =
 			TIME_KEYS.some((key) => next[key] !== event[key]) || !sameRule(next.recurrence, event.recurrence);
@@ -1536,8 +1802,27 @@ export class CalendarDO extends DurableObject<Env> {
 			wanted !== undefined &&
 			(wanted.length !== before.length ||
 				wanted.some((attendee) => !before.some((old) => old.principal_id === attendee.principal_id)));
-		if (!fieldsChanged && !timeChanged && !attendeesChanged)
+		// The handler checks the limit too, but against an earlier read. Here the check and the write are one step, so
+		// two calls at the same time cannot together pass the limit.
+		if (
+			(attendeesChanged || guestsChanged) &&
+			(wanted ?? before).length + (wantedGuests ?? guestsBefore).length > CALENDAR_LIMITS.attendees
+		) {
+			return refuse("invalid", `An event can have at most ${CALENDAR_LIMITS.attendees} attendees.`);
+		}
+		if (!fieldsChanged && !timeChanged && !attendeesChanged && !guestsChanged)
 			return { event: viewFor(role, call.actorId, this.masterView(event)), changed: false };
+		const removedGuests =
+			wantedGuests === undefined ? [] : guestsBefore.filter((email) => !wantedGuests.includes(email));
+		const addedGuests = wantedGuests === undefined ? [] : wantedGuests.filter((email) => !guestsBefore.includes(email));
+		// The attendees by mail get mail only for what they see: the title, the description, the place, the time
+		// and the list of the attendees by mail.
+		const mailChanged =
+			guestsChanged ||
+			timeChanged ||
+			next.title !== event.title ||
+			next.description !== event.description ||
+			next.location !== event.location;
 		const now = Date.now();
 		const removed =
 			wanted === undefined ? [] : before.filter((old) => !wanted.some((a) => a.principal_id === old.principal_id));
@@ -1590,10 +1875,31 @@ export class CalendarDO extends DurableObject<Env> {
 					now,
 				);
 			}
+			if (timeChanged) {
+				// A new time asks each attendee by mail again, as it asks the attendees of the organization. The question
+				// has the new sequence, so a REPLY with an older SEQUENCE is an answer for the old time.
+				this.sql.exec(
+					`UPDATE external_attendees SET response = 'needs_action', responded_at = MAX(responded_at + 1, ?),
+						invited_sequence = ?
+					WHERE event_id = ?`,
+					now,
+					event.sequence + 1,
+					eventId,
+				);
+			}
+			for (const email of removedGuests) {
+				this.sql.exec("DELETE FROM external_attendees WHERE event_id = ? AND email = ?", eventId, email);
+			}
 			this.fanOut(
 				eventId,
 				removed.map((old) => old.principal_id),
 			);
+			for (const email of addedGuests) this.insertExternal(eventId, email, email, event.sequence + 1, now);
+			if (mailChanged) {
+				const current = this.row(eventId) as EventRecord;
+				this.queueRequests(call, current);
+				for (const email of removedGuests) this.queueCancel(call, current, current.sequence, email, "removed");
+			}
 			this.noteChange("calendar.event.updated", eventId, event.revision + 1, call.actorId);
 			this.rearm(eventId);
 		});
@@ -1614,16 +1920,31 @@ export class CalendarDO extends DurableObject<Env> {
 		if (!event) return refuse("not_found", NOT_FOUND);
 		const refused = changeRefusal(role, call.actorId, event);
 		if (refused) return refused;
-		if (event.role !== "organizer") {
+		const mail = event.mail;
+		if (event.role !== "organizer" && mail === null) {
 			return refuse("forbidden", "You cannot delete an invitation. Decline the event with calendar.respond_to_event.");
 		}
 		const conflict = this.checkRevision(event, baseRevision);
 		if (conflict) return conflict;
 		const view = viewFor(role, call.actorId, this.masterView(event));
 		if (dryRun) return view;
+		if (mail !== null) {
+			// A meeting by mail: the owner removes it from the own calendar only, with no mail. An answer that waits
+			// goes with it. A tombstone stops the same invitation. A newer invitation can be accepted again.
+			this.ctx.storage.transactionSync(() => {
+				this.noteChange("calendar.invitation.cancelled", eventId, event.revision, call.actorId);
+				this.sql.exec("DELETE FROM outbox WHERE kind = 'mail' AND event_id = ?", eventId);
+				this.writeTombstone(event.uid ?? eventId, mail.organizer.email, event.sequence, "removed");
+				this.deleteEventRows(eventId);
+			});
+			await this.scheduleAlarm();
+			return view;
+		}
 		this.ctx.storage.transactionSync(() => {
+			const guests = this.externalOf(eventId).map((guest) => guest.email);
 			const attendees = this.attendeesOf(eventId).map((attendee) => attendee.principal_id);
 			this.fanOut(eventId, attendees);
+			for (const email of guests) this.queueCancel(call, event, event.sequence + 1, email, "cancelled");
 			this.noteChange("calendar.event.deleted", eventId, event.revision, call.actorId);
 			this.deleteEventRows(eventId);
 		});
@@ -1635,6 +1956,7 @@ export class CalendarDO extends DurableObject<Env> {
 		this.sql.exec("DELETE FROM events WHERE id = ?", eventId);
 		this.sql.exec("DELETE FROM event_overrides WHERE event_id = ?", eventId);
 		this.sql.exec("DELETE FROM event_attendees WHERE event_id = ?", eventId);
+		this.sql.exec("DELETE FROM external_attendees WHERE event_id = ?", eventId);
 		this.sql.exec("DELETE FROM occurrence_responses WHERE event_id = ?", eventId);
 		this.sql.exec("DELETE FROM reminders WHERE event_id = ?", eventId);
 		this.sql.exec("DELETE FROM outbox WHERE event_id = ? AND kind = 'reminder'", eventId);
@@ -1849,6 +2171,7 @@ export class CalendarDO extends DurableObject<Env> {
 		const event = this.row(eventId);
 		if (!event) return refuse("not_found", NOT_FOUND);
 		if (key !== null && !this.occurrenceView(event, key)) return refuse("not_found", NO_OCCURRENCE);
+		if (event.mail !== null) return this.respondByMail(call, event, response);
 		if (event.role !== "attendee" || event.organizer === null) {
 			return refuse("invalid", "You are the organizer of this event. Only an attendee responds to an invitation.");
 		}
@@ -2121,7 +2444,7 @@ export class CalendarDO extends DurableObject<Env> {
 
 	private putOutbox(
 		id: string,
-		kind: "snapshot" | "response" | "reminder" | "grant",
+		kind: "snapshot" | "response" | "reminder" | "grant" | "mail",
 		target: string,
 		eventId: string,
 		payload: string,
@@ -2131,7 +2454,8 @@ export class CalendarDO extends DurableObject<Env> {
 		this.sql.exec(
 			`INSERT INTO outbox (id, kind, target_id, event_id, payload, version, attempts, next_attempt_at, created_at)
 			VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?)
-			ON CONFLICT (id) DO UPDATE SET payload = excluded.payload, version = excluded.version, attempts = 0,
+			ON CONFLICT (id) DO UPDATE SET target_id = excluded.target_id, event_id = excluded.event_id,
+				payload = excluded.payload, version = excluded.version, attempts = 0,
 				next_attempt_at = excluded.next_attempt_at`,
 			id,
 			kind,
@@ -2205,6 +2529,32 @@ export class CalendarDO extends DurableObject<Env> {
 			});
 			return true;
 		}
+		if (row.kind === "mail") {
+			const payload = JSON.parse(row.payload) as MailPayload;
+			const sent = await sendCalendarMail(this.env, {
+				senderId: owner,
+				actorId: payload.actor,
+				to: row.target_id,
+				subject: payload.subject,
+				text: payload.text,
+				method: payload.method,
+				ics: buildICalendar(payload.ical),
+				idempotencyKey: payload.key,
+				fromAddress: payload.from,
+			});
+			// A paused mailbox waits for a directory reset that can stop. The row tries again with the backoff.
+			if (sent.status === "refused" && sent.reason === "paused") throw new Error("the mailbox is paused");
+			if (sent.status === "refused") log("info", "calendar mail not sent", { reason: sent.reason });
+			else if (payload.method === "REQUEST") {
+				// The attendee has the invitation now. The next REQUEST to this address is a change.
+				this.sql.exec(
+					"UPDATE external_attendees SET request_sent = 1 WHERE event_id = ? AND email = ? AND request_sent = 0",
+					row.event_id,
+					row.target_id,
+				);
+			}
+			return true;
+		}
 		const item = JSON.parse(row.payload) as CalendarReminderItem;
 		// A reminder after the start helps nobody. A reminder that the current state does not give is dropped.
 		if (item.start_at <= Date.now() || !this.reminderIsCurrent(item)) return true;
@@ -2225,6 +2575,633 @@ export class CalendarDO extends DurableObject<Env> {
 			await enqueueCalendarPush(this.env, jobs);
 		}
 		return true;
+	}
+
+	// --- Invitations by mail ------------------------------------------------------------------------
+
+	private insertExternal(eventId: string, email: string, name: string, sequence: number, now: number): void {
+		this.sql.exec(
+			`INSERT INTO external_attendees (event_id, email, display_name, response, responded_at, invited_at, invited_sequence)
+			VALUES (?, ?, ?, 'needs_action', 0, ?, ?) ON CONFLICT (event_id, email) DO NOTHING`,
+			eventId,
+			email,
+			name,
+			now,
+			sequence,
+		);
+	}
+
+	/** The iCalendar of an own event, for a message by mail. Null when the handler gave no organizer address. */
+	private icalOf(
+		call: CalendarCall,
+		event: EventRecord,
+		method: ICalOutput["method"],
+		sequence: number,
+		attendees: ICalOutput["attendees"],
+	): ICalOutput | null {
+		if (!call.ownerMail) {
+			log("warn", "calendar mail without the address of the organizer");
+			return null;
+		}
+		return {
+			method,
+			uid: event.uid ?? event.id,
+			sequence,
+			stamp: Date.now(),
+			fields: this.fieldsOf(event),
+			organizer: call.ownerMail,
+			attendees,
+		};
+	}
+
+	/**
+	 * Queues the invitation or the change of an own event for each attendee by mail, with the current sequence. The
+	 * REQUEST lists the attendees by mail: the object has no address of the attendees of the organization.
+	 */
+	private queueRequests(call: CalendarCall, event: EventRecord): void {
+		const guests = this.externalOf(event.id);
+		const everyone = guests.map((guest) => ({
+			email: guest.email,
+			name: guest.display_name === guest.email ? "" : guest.display_name,
+			partstat: PARTSTAT[guest.response],
+		}));
+		for (const guest of guests) {
+			const ical = this.icalOf(call, event, "REQUEST", event.sequence, everyone);
+			if (!ical) return;
+			// The first message is an invitation. It stays one until a REQUEST to this address left the outbox, also
+			// when a later change replaces the row that waits.
+			const first = !guest.request_sent;
+			const payload: MailPayload = {
+				method: "REQUEST",
+				ical,
+				subject: `${first ? "Invitation" : "Updated invitation"}: ${event.title}`,
+				text: mailText(first ? "You are invited to this meeting." : "The organizer changed this meeting.", ical),
+				key: `asterra-calendar:${event.id}:REQUEST:${event.sequence}:${guest.email}`,
+				actor: call.actorId,
+			};
+			this.putOutbox(
+				`mail:${event.id}:${guest.email}`,
+				"mail",
+				guest.email,
+				event.id,
+				JSON.stringify(payload),
+				event.sequence,
+			);
+		}
+	}
+
+	/** Queues a cancellation for one address: the organizer deleted the event, or removed the attendee. */
+	private queueCancel(
+		call: CalendarCall,
+		event: EventRecord,
+		sequence: number,
+		email: string,
+		reason: "cancelled" | "removed",
+	): void {
+		const ical = this.icalOf(call, event, "CANCEL", sequence, [{ email, name: "", partstat: "NEEDS-ACTION" }]);
+		if (!ical) return;
+		const payload: MailPayload = {
+			method: "CANCEL",
+			ical,
+			subject: `Cancelled: ${event.title}`,
+			text: mailText(
+				reason === "cancelled"
+					? "The organizer cancelled this meeting."
+					: "The organizer removed you from this meeting.",
+				ical,
+			),
+			key: `asterra-calendar:${event.id}:CANCEL:${sequence}:${email}`,
+			actor: call.actorId,
+		};
+		this.putOutbox(`mail:${event.id}:${email}`, "mail", email, event.id, JSON.stringify(payload), sequence);
+	}
+
+	/**
+	 * Queues the answer of the owner to the organizer of a meeting by mail. `outboxId` and `eventId` name the copy,
+	 * or the UID when No adds no copy.
+	 */
+	private queueReply(
+		reply: {
+			uid: string;
+			sequence: number;
+			fields: ICalOutput["fields"];
+			title: string;
+			organizer: { email: string; name: string };
+			myEmail: string;
+			myName: string;
+		},
+		response: Answer,
+		stamp: number,
+		key: string,
+		outbox: { id: string; eventId: string },
+	): void {
+		const ical: ICalOutput = {
+			method: "REPLY",
+			uid: reply.uid,
+			sequence: reply.sequence,
+			stamp,
+			fields: reply.fields,
+			organizer: reply.organizer,
+			attendees: [{ email: reply.myEmail, name: reply.myName, partstat: PARTSTAT[response] }],
+		};
+		const label = response === "accepted" ? "Accepted" : response === "tentative" ? "Maybe" : "Declined";
+		const payload: MailPayload = {
+			method: "REPLY",
+			ical,
+			subject: `${label}: ${reply.title}`,
+			text: mailText(`${reply.myEmail} answered: ${label}.`, ical),
+			key,
+			actor: this.meta("owner_id") ?? undefined,
+			from: reply.myEmail,
+		};
+		this.putOutbox(outbox.id, "mail", reply.organizer.email, outbox.eventId, JSON.stringify(payload), stamp);
+	}
+
+	/** The facts of a copy for its answer by mail. */
+	private replyOf(call: CalendarCall, event: EventRecord, mail: MailCopy) {
+		return {
+			uid: event.uid ?? event.id,
+			sequence: event.sequence,
+			fields: this.fieldsOf(event),
+			title: event.title,
+			organizer: mail.organizer,
+			myEmail: mail.my_email,
+			myName: call.ownerMail?.name ?? "",
+		};
+	}
+
+	/** The answer of the owner to a copy by mail, from calendar.respond_to_event. It goes to the organizer by mail. */
+	private async respondByMail(call: CalendarCall, event: EventRecord, response: Answer): Promise<EventView> {
+		const mail = event.mail as MailCopy;
+		if (event.my_response === response) return this.masterView(event);
+		const stamp = Math.max(Date.now(), event.my_responded_at + 1);
+		this.ctx.storage.transactionSync(() => {
+			this.sql.exec("UPDATE events SET my_response = ?, my_responded_at = ? WHERE id = ?", response, stamp, event.id);
+			this.noteChange("calendar.rsvp.changed", event.id, event.revision, call.actorId);
+			this.queueReply(
+				this.replyOf(call, event, mail),
+				response,
+				stamp,
+				`asterra-calendar:${event.uid ?? event.id}:REPLY:${stamp}:${mail.my_email}`,
+				{ id: `mail:${event.id}:${mail.organizer.email}`, eventId: event.id },
+			);
+			this.rearm(event.id);
+		});
+		await this.scheduleAlarm();
+		return this.masterView(this.row(event.id) as EventRecord);
+	}
+
+	/** The copy of a meeting by mail with this UID, or null. */
+	private mailCopy(uid: string): EventRecord | null {
+		const row = this.sql.exec<Row>(`SELECT ${READ_COLUMNS} FROM events WHERE uid = ?`, uid).toArray()[0];
+		return row ? toRecord(row) : null;
+	}
+
+	/** Writes the tombstone of a copy by mail, so an older invitation cannot bring it back. */
+	private writeTombstone(
+		uid: string,
+		organizer: string,
+		sequence: number,
+		state: "cancelled" | "removed" | "no_copy",
+	): void {
+		const now = Date.now();
+		this.sql.exec("DELETE FROM mail_tombstones WHERE at < ?", now - TOMBSTONE_TTL_MS);
+		this.sql.exec(
+			`INSERT INTO mail_tombstones (uid, organizer, sequence, state, at) VALUES (?, ?, ?, ?, ?)
+			ON CONFLICT (uid) DO UPDATE SET organizer = excluded.organizer, sequence = excluded.sequence,
+				state = excluded.state, at = excluded.at`,
+			uid,
+			organizer,
+			sequence,
+			state,
+			now,
+		);
+	}
+
+	/**
+	 * The tombstone of a UID that counts for an invitation of this organizer, or null. A `no_copy` tombstone comes
+	 * from a mail only, so it counts only for its own organizer: a different sender cannot stop an invitation.
+	 */
+	private tombstone(uid: string, organizer: string | null): { organizer: string; sequence: number } | null {
+		const row = this.sql
+			.exec<{ organizer: string; sequence: number; state: string; at: number }>(
+				"SELECT organizer, sequence, state, at FROM mail_tombstones WHERE uid = ?",
+				uid,
+			)
+			.toArray()[0];
+		if (!row || row.at < Date.now() - TOMBSTONE_TTL_MS) return null;
+		if (row.state === "no_copy" && row.organizer !== organizer) return null;
+		return { organizer: row.organizer, sequence: row.sequence };
+	}
+
+	/**
+	 * A verified cancellation of a meeting that has no copy: the owner did not answer the invitation. A tombstone
+	 * stops the answer to that invitation. The organizer of the cancellation must be its sender. The tombstone of a
+	 * different organizer stays, and the number of these tombstones has a limit.
+	 */
+	private cancelWithoutCopy(invite: ICalInvite, mail: IncomingMail): ApplyResult {
+		const unknown: ApplyResult = { applied: false, reason: "unknown" };
+		const organizer = invite.organizer?.email;
+		if (!organizer || organizer !== mail.from || this.row(invite.uid)) return unknown;
+		if (!trustedSender(mail.verification)) return { applied: false, reason: "unverified" };
+		const old = this.sql
+			.exec<{ organizer: string; sequence: number; state: string }>(
+				"SELECT organizer, sequence, state FROM mail_tombstones WHERE uid = ? AND at >= ?",
+				invite.uid,
+				Date.now() - TOMBSTONE_TTL_MS,
+			)
+			.toArray()[0];
+		if (old) {
+			if (old.organizer !== organizer) return unknown;
+			if (old.sequence >= invite.sequence) return { applied: false, reason: "stale" };
+			// A tombstone of a copy keeps its state: it also counts for a different organizer.
+			this.writeTombstone(invite.uid, organizer, invite.sequence, old.state as "cancelled" | "removed" | "no_copy");
+			return { applied: true };
+		}
+		const count = this.sql
+			.exec<{ n: number }>(
+				"SELECT COUNT(*) AS n FROM mail_tombstones WHERE state = 'no_copy' AND at >= ?",
+				Date.now() - TOMBSTONE_TTL_MS,
+			)
+			.one().n;
+		if (count >= NO_COPY_TOMBSTONES) return { applied: false, reason: "full" };
+		this.writeTombstone(invite.uid, organizer, invite.sequence, "no_copy");
+		return { applied: true };
+	}
+
+	/** Writes the ATTENDEE lines of a mail as the attendees by mail of a copy. */
+	private replaceMailAttendees(eventId: string, invite: ICalInvite, now: number): void {
+		this.sql.exec("DELETE FROM external_attendees WHERE event_id = ?", eventId);
+		for (const attendee of invite.attendees) {
+			this.sql.exec(
+				`INSERT INTO external_attendees (event_id, email, display_name, response, responded_at, invited_at, invited_sequence)
+				VALUES (?, ?, ?, ?, 0, ?, ?) ON CONFLICT (event_id, email) DO NOTHING`,
+				eventId,
+				attendee.email,
+				attendee.name || attendee.email,
+				RESPONSE_OF[attendee.partstat],
+				now,
+				invite.sequence,
+			);
+		}
+	}
+
+	/**
+	 * Writes a newer version of a meeting by mail into its copy. A new time asks the owner again: the answer goes back
+	 * to `needs_action`, with a `calendar.rsvp.changed` record. `answers` is true when the owner answers in the same
+	 * transaction: the caller then writes the one record of the answer.
+	 */
+	private updateMailCopy(event: EventRecord, invite: ICalInvite, time: EventTime, answers = false): void {
+		const mail = event.mail as MailCopy;
+		const now = Date.now();
+		const timeChanged = TIME_KEYS.some((key) => time[key] !== event[key]);
+		const reset = timeChanged && (event.my_response ?? "needs_action") !== "needs_action";
+		const nextMail: MailCopy = {
+			...mail,
+			organizer: { email: mail.organizer.email, name: invite.organizer?.name ?? mail.organizer.name },
+			stamp: invite.stamp,
+		};
+		this.sql.exec(
+			`UPDATE events SET title = ?, description = ?, location = ?, all_day = ?, start_at = ?, end_at = ?,
+				start_date = ?, end_date = ?, time_zone = ?, sequence = ?, mail_json = ?, revision = revision + 1,
+				updated_at = ?, my_response = ?, my_responded_at = ?
+			WHERE id = ?`,
+			invite.title,
+			invite.description,
+			invite.location,
+			time.all_day ? 1 : 0,
+			time.start_at,
+			time.end_at,
+			time.start_date,
+			time.end_date,
+			time.time_zone,
+			invite.sequence,
+			JSON.stringify(nextMail),
+			now,
+			timeChanged ? "needs_action" : event.my_response,
+			timeChanged ? Math.max(event.my_responded_at + 1, now) : event.my_responded_at,
+			event.id,
+		);
+		this.replaceMailAttendees(event.id, invite, now);
+		this.noteChange("calendar.invitation.updated", event.id, event.revision + 1, null);
+		if (reset && !answers) this.noteChange("calendar.rsvp.changed", event.id, event.revision + 1, null);
+		this.rearm(event.id);
+	}
+
+	/**
+	 * From the mailbox of the owner: the calendar part of a mail that it received. Only a rule against a row that the
+	 * calendar holds applies a change. A new invitation changes nothing: the owner answers it (`respondToMail`). Bad
+	 * content gives a refusal, never an error.
+	 *
+	 * - REPLY: the answer of an attendee by mail to an own event. The From address must be the one attendee of the
+	 *   reply and an attendee of the event. An older answer changes nothing.
+	 * - REQUEST and CANCEL: a change or a cancellation of a copy by mail. The organizer and the From address must be
+	 *   the ones of the accepted invitation, and the receiving server must have verified the sender, or the mail is
+	 *   internal.
+	 */
+	async applyMail(ownerId: string, mail: IncomingMail): Promise<ApplyResult> {
+		const invite = parseICalendar(mail.ics);
+		if (!invite) return { applied: false, reason: "unreadable" };
+		if (invite.recurring) return { applied: false, reason: "unsupported" };
+		let result: ApplyResult = { applied: false, reason: "unknown" };
+		this.ctx.storage.transactionSync(() => {
+			if (!this.pin(ownerId)) {
+				result = { applied: false, reason: "wrong_calendar" };
+				return;
+			}
+			if (invite.method === "REPLY") {
+				result = this.applyMailReply(invite, mail);
+				return;
+			}
+			if (invite.method !== "REQUEST" && invite.method !== "CANCEL") return;
+			const copy = this.mailCopy(invite.uid);
+			const copyMail = copy?.mail;
+			if (!copy || !copyMail) {
+				if (invite.method === "CANCEL") result = this.cancelWithoutCopy(invite, mail);
+				return;
+			}
+			if (invite.organizer?.email !== copyMail.organizer.email || mail.from === null || mail.from !== copyMail.sender) {
+				result = { applied: false, reason: "not_organizer" };
+				return;
+			}
+			if (!trustedSender(mail.verification)) {
+				result = { applied: false, reason: "unverified" };
+				return;
+			}
+			if (invite.method === "CANCEL") {
+				// The rule of a change, but a cancellation with the stamp of the last change also counts.
+				const current =
+					invite.sequence > copy.sequence || (invite.sequence === copy.sequence && invite.stamp >= copyMail.stamp);
+				if (!current) {
+					result = { applied: false, reason: "stale" };
+					return;
+				}
+				this.noteChange("calendar.invitation.cancelled", copy.id, copy.revision, null);
+				// An answer that waits is for a cancelled meeting, so it does not go.
+				this.sql.exec("DELETE FROM outbox WHERE kind = 'mail' AND event_id = ?", copy.id);
+				this.writeTombstone(invite.uid, copyMail.organizer.email, invite.sequence, "cancelled");
+				this.deleteEventRows(copy.id);
+				result = { applied: true };
+				return;
+			}
+			if (!invite.when) {
+				result = { applied: false, reason: "unsupported" };
+				return;
+			}
+			const time = storedTime(invite.when);
+			if ("problem" in time) {
+				result = { applied: false, reason: "unsupported" };
+				return;
+			}
+			const newer =
+				invite.sequence > copy.sequence || (invite.sequence === copy.sequence && invite.stamp > copyMail.stamp);
+			if (!newer) {
+				result = { applied: false, reason: "stale" };
+				return;
+			}
+			this.updateMailCopy(copy, invite, time);
+			result = { applied: true };
+		});
+		if (result.applied) await this.scheduleAlarm();
+		return result;
+	}
+
+	private applyMailReply(invite: ICalInvite, mail: IncomingMail): ApplyResult {
+		const event = this.row(invite.uid);
+		if (event?.role !== "organizer") return { applied: false, reason: "unknown" };
+		const [answer] = invite.attendees;
+		if (invite.attendees.length !== 1 || !answer || mail.from === null || answer.email !== mail.from) {
+			return { applied: false, reason: "not_attendee" };
+		}
+		if (mail.verification === "failed" || answer.partstat === "NEEDS-ACTION") {
+			return { applied: false, reason: "unverified" };
+		}
+		const row = this.externalOf(event.id).find((guest) => guest.email === mail.from);
+		if (!row) return { applied: false, reason: "not_attendee" };
+		// A REPLY has the SEQUENCE of the REQUEST that it answers. An answer to a question from before the last new
+		// time, or from before a removal of the attendee, is not an answer for this time.
+		if (invite.sequence < row.invited_sequence) return { applied: false, reason: "stale" };
+		// A sender can write each DTSTAMP. A stamp after the arrival counts as the arrival. The stamp puts the answers
+		// to one question in order. The clock of the sender can be slow, so the time of the invitation is no limit.
+		const stamp = Math.min(invite.stamp || mail.receivedAt, mail.receivedAt);
+		if (stamp <= row.responded_at) return { applied: false, reason: "stale" };
+		const response = RESPONSE_OF[answer.partstat];
+		this.sql.exec(
+			"UPDATE external_attendees SET response = ?, responded_at = ? WHERE event_id = ? AND email = ?",
+			response,
+			stamp,
+			event.id,
+			row.email,
+		);
+		if (response !== row.response) this.noteChange("calendar.rsvp.changed", event.id, event.revision, null);
+		this.refreshQueuedRequests(event.id, row.email, response);
+		return { applied: true };
+	}
+
+	/**
+	 * Writes a new answer of an attendee by mail into each REQUEST of the event that waits in the outbox. Else a
+	 * REQUEST that the organizer queued before the answer arrived says NEEDS-ACTION for that attendee, and a client
+	 * can take it as a new question. The bytes of a row change only before its send: a row that sends now keeps
+	 * its version, and the drain removes it.
+	 *
+	 * The row keeps its idempotency key. A send of the old bytes can be stored when the retry has the new bytes.
+	 * That is safe: `sendCalendarMail` gives `duplicate` for a key with different bytes, and sends no second mail.
+	 */
+	private refreshQueuedRequests(eventId: string, email: string, response: EventResponse): void {
+		const rows = this.sql
+			.exec<{ id: string; payload: string }>(
+				"SELECT id, payload FROM outbox WHERE kind = 'mail' AND event_id = ?",
+				eventId,
+			)
+			.toArray();
+		for (const row of rows) {
+			const payload = JSON.parse(row.payload) as MailPayload;
+			if (payload.method !== "REQUEST") continue;
+			const attendee = payload.ical.attendees.find((item) => item.email === email);
+			if (!attendee || attendee.partstat === PARTSTAT[response]) continue;
+			attendee.partstat = PARTSTAT[response];
+			this.sql.exec("UPDATE outbox SET payload = ? WHERE id = ?", JSON.stringify(payload), row.id);
+		}
+	}
+
+	/**
+	 * The answer of the owner to an invitation by mail. Yes and Maybe put the meeting on the calendar, or change the
+	 * answer of the copy. No without a copy adds nothing. Each new answer goes to the organizer by mail. The same
+	 * answer again changes nothing and sends nothing. A copy of the same UID from a different organizer or sender, an
+	 * event of this calendar with that id, or a tombstone of this version or a newer one, gives `conflict`.
+	 */
+	async respondToMail(
+		call: CalendarCall,
+		input: MailAnswer,
+	): Promise<{ event: EventView | null; changed: boolean } | Refusal> {
+		const refused = this.enter(call);
+		if (refused) return refused;
+		const { invite } = input;
+		const organizer = invite.organizer;
+		if (!organizer) return refuse("invalid", "The invitation names no organizer.");
+		const copy = this.mailCopy(invite.uid);
+		if (!copy) {
+			if (this.row(invite.uid)) {
+				return refuse("conflict", "A different organizer made the event with this id on your calendar.");
+			}
+			const tomb = this.tombstone(invite.uid, organizer.email);
+			if (tomb && tomb.sequence >= invite.sequence) {
+				return refuse("conflict", "The organizer cancelled this meeting, or you removed it from your calendar.");
+			}
+			// A UID is the identity of one meeting of one organizer. A different organizer cannot reuse it while the
+			// tombstone stays, also with a larger SEQUENCE.
+			if (tomb && tomb.organizer !== organizer.email) {
+				return refuse("conflict", "A different organizer made the meeting with this id on your calendar.");
+			}
+		}
+		const now = Date.now();
+		const reply = {
+			uid: invite.uid,
+			sequence: invite.sequence,
+			fields: { ...input.time, title: invite.title, description: invite.description, location: invite.location },
+			title: invite.title,
+			organizer: { email: organizer.email, name: organizer.name },
+			myEmail: input.myEmail,
+			myName: call.ownerMail?.name ?? "",
+		};
+		if (copy) {
+			const mail = copy.mail;
+			if (!mail || mail.organizer.email !== organizer.email || mail.sender !== input.from) {
+				return refuse("conflict", "A different organizer made the event with this id on your calendar.");
+			}
+			const newer = invite.sequence > copy.sequence || (invite.sequence === copy.sequence && invite.stamp > mail.stamp);
+			// `applyMail` refused this change of the copy. An answer does not apply it, and does not go for it: the
+			// owner read the fields of the mail, and the answer would be for the fields of the copy.
+			if (newer && !trustedSender(input.verification)) return refuse("invalid", UNVERIFIED_CHANGE);
+			if (copy.my_response === input.response && !newer) return { event: this.masterView(copy), changed: false };
+			let changed = false;
+			this.ctx.storage.transactionSync(() => {
+				// The answer below writes the one record of the response, also when a new time reset it.
+				if (newer) this.updateMailCopy(copy, invite, input.time, true);
+				const current = this.row(copy.id) as EventRecord;
+				if (current.my_response === input.response) return;
+				changed = true;
+				const stamp = Math.max(now, current.my_responded_at + 1);
+				this.sql.exec(
+					"UPDATE events SET my_response = ?, my_responded_at = ?, mail_json = ? WHERE id = ?",
+					input.response,
+					stamp,
+					JSON.stringify({ ...(current.mail as MailCopy), my_email: input.myEmail }),
+					copy.id,
+				);
+				this.noteChange("calendar.rsvp.changed", copy.id, current.revision, call.actorId);
+				this.queueReply(
+					{ ...reply, sequence: current.sequence },
+					input.response,
+					stamp,
+					`asterra-calendar:${invite.uid}:REPLY:${stamp}:${input.myEmail}`,
+					{ id: `mail:${copy.id}:${organizer.email}`, eventId: copy.id },
+				);
+				this.rearm(copy.id);
+			});
+			await this.scheduleAlarm();
+			return { event: this.masterView(this.row(copy.id) as EventRecord), changed: changed || newer };
+		}
+		if (input.response === "declined") {
+			// No adds nothing to the calendar. The key has no time, so the same No again sends no second mail.
+			this.ctx.storage.transactionSync(() =>
+				this.queueReply(
+					reply,
+					"declined",
+					now,
+					`asterra-calendar:${invite.uid}:REPLY:${invite.sequence}:declined:${input.myEmail}`,
+					{ id: `mail:uid:${invite.uid}`, eventId: "" },
+				),
+			);
+			await this.scheduleAlarm();
+			return { event: null, changed: true };
+		}
+		if (Number(this.meta("event_count") ?? 0) >= CALENDAR_LIMITS.events) {
+			return refuse("invalid", `A calendar can have at most ${CALENDAR_LIMITS.events} events. Delete events first.`);
+		}
+		const id = newId("evt");
+		const time = input.time;
+		const mail: MailCopy = {
+			organizer: { email: organizer.email, name: organizer.name },
+			sender: input.from,
+			stamp: invite.stamp,
+			my_email: input.myEmail,
+		};
+		this.ctx.storage.transactionSync(() => {
+			this.sql.exec(
+				`INSERT INTO events (id, title, description, location, all_day, start_at, end_at, start_date, end_date,
+					time_zone, revision, created_at, updated_at, recurrence, series_end_at, role, organizer_json, sequence,
+					my_response, my_responded_at, reminder_minutes, visibility, created_by, uid, mail_json)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, NULL, NULL, 'attendee', NULL, ?, ?, ?, ?, 'default', NULL, ?, ?)`,
+				id,
+				invite.title,
+				invite.description,
+				invite.location,
+				time.all_day ? 1 : 0,
+				time.start_at,
+				time.end_at,
+				time.start_date,
+				time.end_date,
+				time.time_zone,
+				now,
+				now,
+				invite.sequence,
+				input.response,
+				now,
+				time.all_day ? null : DEFAULT_REMINDER_MINUTES,
+				invite.uid,
+				JSON.stringify(mail),
+			);
+			this.addCount(1);
+			this.replaceMailAttendees(id, invite, now);
+			this.sql.exec("DELETE FROM mail_tombstones WHERE uid = ?", invite.uid);
+			this.noteChange("calendar.invitation.received", id, 1, null);
+			this.queueReply(reply, input.response, now, `asterra-calendar:${invite.uid}:REPLY:${now}:${input.myEmail}`, {
+				id: `mail:${id}:${organizer.email}`,
+				eventId: id,
+			});
+			this.rearm(id);
+		});
+		await this.scheduleAlarm();
+		return { event: this.masterView(this.row(id) as EventRecord), changed: true };
+	}
+
+	/**
+	 * The state of an invitation by mail on the calendar of the owner: the copy or the event of this UID, or its
+	 * tombstone. `version` holds the SEQUENCE, the DTSTAMP and the organizer of the mail. `newer` is true when the
+	 * mail is a newer version than the copy by mail.
+	 */
+	mailInvitationState(
+		call: CalendarCall,
+		uid: string,
+		version: { sequence: number; stamp: number; organizer: string | null },
+	):
+		| {
+				state: "new" | "on_calendar" | "outdated" | "cancelled";
+				my_response: EventResponse | null;
+				event_id: string | null;
+				newer: boolean;
+		  }
+		| Refusal {
+		const refused = this.enter(call);
+		if (refused) return refused;
+		const { sequence } = version;
+		const event = this.mailCopy(uid) ?? this.row(uid);
+		if (event) {
+			const stamp = event.mail?.stamp;
+			return {
+				state: event.sequence > sequence ? "outdated" : "on_calendar",
+				my_response: event.role === "attendee" ? (event.my_response ?? "needs_action") : null,
+				event_id: event.id,
+				newer:
+					stamp !== undefined && (sequence > event.sequence || (sequence === event.sequence && version.stamp > stamp)),
+			};
+		}
+		const tomb = this.tombstone(uid, version.organizer);
+		if (tomb && tomb.sequence >= sequence) {
+			return { state: "cancelled", my_response: null, event_id: null, newer: false };
+		}
+		return { state: "new", my_response: null, event_id: null, newer: false };
 	}
 
 	// --- Reminders ----------------------------------------------------------------------------------
@@ -2372,6 +3349,8 @@ export class CalendarDO extends DurableObject<Env> {
 						start_at: reminder.start_at,
 						minutes: event.reminder_minutes,
 						actor: organizer,
+						// The title of a copy by mail comes from outside the organization.
+						untrusted: event.mail !== null,
 					};
 					this.sql.exec(
 						`INSERT OR IGNORE INTO outbox (id, kind, target_id, event_id, payload, version, attempts, next_attempt_at, created_at)

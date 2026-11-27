@@ -737,7 +737,7 @@ describe("a credential without calendar.read", () => {
 		const wide = await open(both);
 		await drain(ada.id);
 
-		expect(await wide.next()).toMatchObject({ type: "calendar.reminder", title: "Secret plan" });
+		expect(await wide.next()).toMatchObject({ type: "calendar.reminder", title: "Secret plan", untrusted: false });
 		expect(await wide.next()).toEqual({ type: "chat.activity", unread_count: 1 });
 		// The count of a socket without calendar.read does not tell that a reminder came.
 		expect(await narrow.next()).toEqual({ type: "chat.activity", unread_count: 0 });
@@ -817,8 +817,9 @@ describe("device notifications", () => {
 			posts.push(req);
 			return new Response(null, { status: 201 });
 		});
+		// The name of a real queue has a prefix: the consumer matches the queue by its suffix.
 		const batch = createMessageBatch(
-			CHAT_PUSH_QUEUE,
+			`soldock-${CHAT_PUSH_QUEUE}`,
 			jobs.map((body, index) => ({ id: String(index), timestamp: new Date(), attempts: 1, body })),
 		);
 		const context = createExecutionContext();
@@ -828,7 +829,7 @@ describe("device notifications", () => {
 
 		// After the start, a late job sends nothing.
 		vi.setSystemTime(new Date("2030-10-22T16:00:00Z"));
-		const late = createMessageBatch(CHAT_PUSH_QUEUE, [
+		const late = createMessageBatch(`soldock-${CHAT_PUSH_QUEUE}`, [
 			{ id: "late", timestamp: new Date(), attempts: 1, body: jobs[0] },
 		]);
 		await worker.queue(late, env);

@@ -5,6 +5,9 @@ import {
 	eventsByDay,
 	formOf,
 	formProblem,
+	hasCalendarPart,
+	invitationStateText,
+	invitationWhenText,
 	monthGrid,
 	newEventForm,
 	periodOf,
@@ -12,10 +15,12 @@ import {
 	placeSegments,
 	recurrenceOf,
 	repeatText,
+	replyText,
 	sameTimeFields,
 	seriesWhen,
 	shiftPeriod,
 	shiftTarget,
+	typedAddress,
 	weekDays,
 	whenOf,
 	whenText,
@@ -47,6 +52,9 @@ function event(id: string, when: CalendarEvent["when"], title = id): CalendarEve
 		visibility: "default",
 		created_by: null,
 		redacted: false,
+		external_attendees: [],
+		external_organizer: null,
+		untrusted: false,
 	};
 }
 
@@ -314,5 +322,47 @@ describe("the repeat of the form", () => {
 		expect(formProblem(form, LA)).toMatch(/before the first day/);
 		expect(formProblem(form, LA, { ruleStays: true })).toBeNull();
 		expect(formProblem({ ...form, endTime: "08:00" }, LA, { ruleStays: true })).toMatch(/after its start/);
+	});
+});
+
+describe("an invitation by mail", () => {
+	it("finds a calendar part by its type or by the name .ics", () => {
+		expect(hasCalendarPart([{ filename: "invite.ics", mime_type: "application/octet-stream" }])).toBe(true);
+		expect(hasCalendarPart([{ filename: "part", mime_type: "text/calendar; method=REQUEST" }])).toBe(true);
+		expect(hasCalendarPart([{ filename: "a.pdf", mime_type: "application/pdf" }])).toBe(false);
+	});
+
+	it("tells where the meeting is, and what an attendee answered", () => {
+		expect(invitationStateText({ method: "request", state: "new" })).toBeNull();
+		expect(invitationStateText({ method: "request", state: "on_calendar" })).toBe("This meeting is on your calendar.");
+		expect(invitationStateText({ method: "cancel", state: "cancelled" })).toBe("The organizer cancelled this meeting.");
+		// A cancellation that the server did not apply: the meeting is there, so the card does not tell "cancelled".
+		expect(invitationStateText({ method: "cancel", state: "on_calendar" })).toBe(
+			"Asterra did not apply this cancellation. The meeting is on your calendar.",
+		);
+		expect(invitationStateText({ method: "reply", state: "on_calendar" })).toBeNull();
+		expect(
+			replyText({ attendees: [{ name: "Priya", email: "p@x.example", response: "tentative", self: false }] }),
+		).toBe("Priya answered Maybe.");
+		expect(
+			replyText({ attendees: [{ name: "", email: "p@x.example", response: "needs_action", self: false }] }),
+		).toBeNull();
+	});
+
+	it("gives the day with the time, in the time zone of the person", () => {
+		expect(
+			invitationWhenText(
+				{ kind: "timed", start: "2026-12-03T15:00:00Z", end: "2026-12-03T16:00:00Z", time_zone: "UTC" },
+				NY,
+			),
+		).toBe("Thursday, December 3, 2026, 10:00 AM – 11:00 AM");
+		expect(invitationWhenText({ kind: "all_day", start_date: "2026-12-10", end_date: "2026-12-11" }, NY)).toBe(
+			"All day, Thursday, December 10, 2026",
+		);
+	});
+
+	it("takes a typed address in lowercase, and refuses text that is not an address", () => {
+		expect(typedAddress(" Guest@Partner.example ")).toBe("guest@partner.example");
+		expect(typedAddress("Guest")).toBeNull();
 	});
 });

@@ -2,7 +2,16 @@ import { runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import type { InputOf } from "@asterra/contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { type Actor, callTool, codeOf, createActor, PASSWORD, seedOrg, settleCalendars } from "./helpers.ts";
+import {
+	type Actor,
+	calendarOutbox,
+	callTool,
+	codeOf,
+	createActor,
+	PASSWORD,
+	seedOrg,
+	settleCalendars,
+} from "./helpers.ts";
 
 // Find a time, invitations from a delegate, and the story of the user: "My agent can find 30 minutes with a
 // teammate and send the invitation from my calendar, but only after I grant it access." Ada is the person, bot is
@@ -174,7 +183,7 @@ describe("busy times", () => {
 				`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 1997)
 				INSERT INTO events SELECT printf('evt_COPY%018d', i), title, description, location, all_day, start_at, end_at,
 					start_date, end_date, time_zone, revision, created_at, updated_at, recurrence, series_end_at, role,
-					organizer_json, sequence, my_response, my_responded_at, reminder_minutes, visibility, created_by
+					organizer_json, sequence, my_response, my_responded_at, reminder_minutes, visibility, created_by, uid, mail_json
 				FROM events, n WHERE id = ?`,
 				seed.id,
 			);
@@ -323,11 +332,21 @@ describe("a calendar from before grants", () => {
 			meeting("Old", "2030-03-04T10:00:00Z", "2030-03-04T11:00:00Z"),
 		);
 		const stub = calendarStub(ada.id);
-		// Back to schema 3: no grants, no visibility and no created_by.
+		// Back to schema 3: no grants, no visibility, no created_by, and nothing of the invitations by mail.
 		await expect(
 			runInDurableObject(stub, (_instance, state) =>
 				state.blockConcurrencyWhile(async () => {
 					const sql = state.storage.sql;
+					// A message that waits. Schema 5 and schema 6 build the outbox again, and must keep it.
+					sql.exec(
+						`INSERT INTO outbox (id, kind, target_id, event_id, payload, version, attempts, next_attempt_at, created_at)
+						VALUES ('legacy-row', 'reminder', 'target', 'evt_legacy', '{}', 7, 2, 4102444800000, 1)`,
+					);
+					sql.exec("DROP INDEX events_uid");
+					sql.exec("ALTER TABLE events DROP COLUMN uid");
+					sql.exec("ALTER TABLE events DROP COLUMN mail_json");
+					sql.exec("DROP TABLE external_attendees");
+					sql.exec("DROP TABLE mail_tombstones");
 					sql.exec("DROP TABLE grants");
 					sql.exec("DROP TABLE shared_with_me");
 					sql.exec("ALTER TABLE events DROP COLUMN visibility");
@@ -342,6 +361,16 @@ describe("a calendar from before grants", () => {
 		expect(read).toEqual({ ...event });
 		expect(read).toMatchObject({ visibility: "default", created_by: null });
 		await ada.call("calendar.set_grant", { principal_id: grace.id, access: "free_busy" });
+		expect((await calendarOutbox(ada.id)).find((row) => row.id === "legacy-row")).toEqual({
+			id: "legacy-row",
+			kind: "reminder",
+			target_id: "target",
+			event_id: "evt_legacy",
+			version: 7,
+			attempts: 2,
+			next_attempt_at: 4102444800000,
+			payload: "{}",
+		});
 	});
 });
 

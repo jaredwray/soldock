@@ -2,6 +2,7 @@ import {
 	ApiError,
 	CALENDAR_LIMITS,
 	type CalendarEvent,
+	type EventAnswer,
 	type InputOf,
 	type OutputOf,
 	type SharedCalendar,
@@ -279,4 +280,12 @@ export function useSharedCalendars(): SharedCalendar[] {
 		};
 	}, []);
 	return calendars;
+}
+
+export function getMailInvitation(messageId: string) {
+	return api.call("calendar.get_mail_invitation", { message_id: messageId });
+}
+
+export function respondToMailInvitation(messageId: string, response: EventAnswer) {
+	return api.call("calendar.respond_to_mail_invitation", { message_id: messageId, response });
 }

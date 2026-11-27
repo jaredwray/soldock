@@ -1054,6 +1054,24 @@ export async function settleCalendars(...principalIds: string[]): Promise<void> 
 	);
 }
 
+/** The rows of the outbox of a calendar, in the order of their ids. */
+export const calendarOutbox = (principalId: string) =>
+	runInDurableObject(calendarStub(principalId), (_instance, state) =>
+		state.storage.sql
+			.exec<{
+				id: string;
+				kind: string;
+				target_id: string;
+				event_id: string;
+				version: number;
+				attempts: number;
+				next_attempt_at: number;
+				payload: string;
+			}>("SELECT id, kind, target_id, event_id, version, attempts, next_attempt_at, payload FROM outbox ORDER BY id")
+			.toArray()
+			.map((row) => ({ ...row })),
+	);
+
 /** A meta value of the calendar object of a principal, or null. */
 export const calendarMeta = (principalId: string, key: string) =>
 	runInDurableObject(

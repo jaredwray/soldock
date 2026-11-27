@@ -10,8 +10,10 @@ import {
 	DEFAULT_REMINDER_MINUTES,
 	dateToUtcMs,
 	daysBetween,
+	type EventResponse,
 	type EventVisibility,
 	type EventWhenValue,
+	type MailInvitation,
 	type Recurrence,
 	type RecurrenceInput,
 	type SeriesTime,
@@ -526,7 +528,7 @@ export function periodTitle(view: CalendarView, date: string, firstDay: FirstDay
  * The time of an event as text, in the time zone of the person: "All day", "All day, Dec 1 – Dec 3", or
  * "9:00 AM – 10:00 AM".
  */
-export function whenText(event: CalendarEvent, zone: string): string {
+export function whenText(event: Pick<CalendarEvent, "when">, zone: string): string {
 	if (event.when.kind === "all_day") {
 		const last = addDays(event.when.end_date, -1);
 		return last === event.when.start_date
@@ -540,6 +542,81 @@ export function whenText(event: CalendarEvent, zone: string): string {
 	const endText = timeText(end, zone);
 	if (sameDay) return `${startText} – ${endText}`;
 	return `${shortDate(zonedDate(start, zone))}, ${startText} – ${shortDate(zonedDate(end, zone))}, ${endText}`;
+}
+
+/** The text of an answer to an invitation. */
+export function responseLabel(response: EventResponse): string {
+	switch (response) {
+		case "accepted":
+			return "Yes";
+		case "tentative":
+			return "Maybe";
+		case "declined":
+			return "No";
+		default:
+			return "No answer";
+	}
+}
+
+/** The time of an invitation by mail with its day: "Thu, Dec 3, 9:00 AM – 10:00 AM", or "All day, Dec 10". */
+export function invitationWhenText(when: CalendarEvent["when"], zone: string): string {
+	const day = invitationDay(when, zone);
+	const text = whenText({ when }, zone);
+	if (when.kind === "all_day") return text === "All day" ? `All day, ${longDate(day)}` : text;
+	return text.includes(",") ? text : `${longDate(day)}, ${text}`;
+}
+
+/** The first day of an invitation by mail on the clock of the person, for the link to its week. */
+export function invitationDay(when: CalendarEvent["when"], zone: string): string {
+	return when.kind === "all_day" ? when.start_date : zonedDate(Date.parse(when.start), zone);
+}
+
+/** True for the attachments of a message with a calendar part. The card of the invitation shows only then. */
+export function hasCalendarPart(attachments: readonly { filename: string; mime_type: string }[]): boolean {
+	return attachments.some(
+		(attachment) =>
+			/^(text\/calendar|application\/ics)\b/i.test(attachment.mime_type) || /\.ics$/i.test(attachment.filename),
+	);
+}
+
+/** The line of the card of an invitation by mail that tells where the meeting is now. Null for no line. */
+export function invitationStateText(invitation: Pick<MailInvitation, "method" | "state">): string | null {
+	if (invitation.method === "reply") return null;
+	// A cancellation changes the calendar only when it comes from the verified sender of the invitation.
+	if (invitation.method === "cancel" && (invitation.state === "on_calendar" || invitation.state === "outdated")) {
+		return "Asterra did not apply this cancellation. The meeting is on your calendar.";
+	}
+	switch (invitation.state) {
+		case "on_calendar":
+			return "This meeting is on your calendar.";
+		case "outdated":
+			return "A newer version is on your calendar.";
+		case "cancelled":
+			return "The organizer cancelled this meeting.";
+		case "not_invited":
+			return "This invitation is for a different address.";
+		case "unsupported":
+			return "Asterra cannot read this invitation: it is a recurring meeting, or it has a time that Asterra cannot read.";
+		default:
+			return null;
+	}
+}
+
+/** The line of the card of an answer by mail: "Priya Natarajan answered Yes." */
+export function replyText(invitation: Pick<MailInvitation, "attendees">): string | null {
+	const [attendee] = invitation.attendees;
+	if (!attendee || attendee.response === "needs_action") return null;
+	return `${attendee.name || attendee.email} answered ${responseLabel(attendee.response)}.`;
+}
+
+/** The address outside the organization that the person types, in lowercase, or null. */
+export function typedAddress(text: string): string | null {
+	const address = text.trim().toLowerCase();
+	return /^[a-z0-9.!#$%&'*+/=?^_`{|}~-]{1,64}@[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$/.test(
+		address,
+	)
+		? address
+		: null;
 }
 
 /**
