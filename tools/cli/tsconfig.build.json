@@ -1,0 +1,14 @@
+{
+	"$schema": "https://json.schemastore.org/tsconfig",
+	"extends": "../../tsconfig.base.json",
+	// The published package is JavaScript: Node does not strip types in node_modules.
+	// The root tsconfig.json type checks the same files. This file only emits them.
+	"compilerOptions": {
+		"noEmit": false,
+		"rewriteRelativeImportExtensions": true,
+		"rootDir": "src",
+		"outDir": "dist",
+		"types": ["node"]
+	},
+	"include": ["src/**/*.ts"]
+}

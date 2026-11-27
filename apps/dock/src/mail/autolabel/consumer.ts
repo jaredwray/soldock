@@ -4,8 +4,8 @@ import { log } from "../../platform/index.ts";
 import { mailboxStub } from "../delivery.ts";
 import { ANSWER_TOKENS, buildMessages, newNonce, outputSchema, parseModelOutput } from "./prompt.ts";
 
-/** The queue that carries messages from the mailbox to the classifier of auto labels. */
-export const MAIL_AUTOLABEL_QUEUE = "soldock-mail-autolabel";
+/** The queue that carries messages from the mailbox to the classifier of auto labels. A suffix: see `queues.ts`. */
+export const MAIL_AUTOLABEL_QUEUE = "mail-autolabel";
 
 /** One message for the classifier. Ids only: the consumer reads the message from its mailbox. Version 1. */
 export interface AutoLabelJob {
@@ -26,7 +26,7 @@ function isAutoLabelJob(body: unknown): body is AutoLabelJob {
 }
 
 /**
- * The consumer of `soldock-mail-autolabel`. For each job it reads the message and the candidate labels
+ * The consumer of `<prefix>-mail-autolabel`. For each job it reads the message and the candidate labels
  * from the mailbox, calls the classifier through AI Gateway, and gives the picks back to the mailbox. The
  * mailbox does the work only while the message is in its outbox, so a second delivery of a job does
  * nothing. A transient failure of the gateway retries the job. When AI cannot take the call (off, not

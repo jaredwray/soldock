@@ -10,61 +10,7 @@ interface WranglerConfig {
 	name: string;
 	workers_dev?: boolean;
 	preview_urls?: boolean;
-	env: {
-		development: Record<string, unknown> & {
-			name: string;
-			workers_dev?: boolean;
-			preview_urls?: boolean;
-			routes?: Array<{ pattern: string; custom_domain?: boolean }>;
-		};
-	};
 	[key: string]: unknown;
-}
-
-// Keys that a named env inherits from the top level (wrangler 4.149.0). Every other top-level key is
-// a binding or vars, which a named env does not inherit.
-const INHERITED = new Set([
-	"$schema",
-	"env",
-	"name",
-	"main",
-	"compatibility_date",
-	"compatibility_flags",
-	"observability",
-	"assets",
-	"workers_dev",
-	"preview_urls",
-	"routes",
-	"route",
-	"migrations",
-	"exports",
-	"limits",
-	"placement",
-	"build",
-	"rules",
-	"no_bundle",
-	"minify",
-	"keep_names",
-	"find_additional_modules",
-	"base_dir",
-	"preserve_file_names",
-	"tsconfig",
-	"triggers",
-	"usage_model",
-	"logpush",
-	"upload_source_maps",
-	"keep_vars",
-	"send_metrics",
-	"dev",
-]);
-
-// The binding names of a config value. Resource IDs and other values differ between the two
-// environments, so they become "*". The names that the code reads must be the same.
-const NAME_KEYS = new Set(["binding", "name", "class_name"]);
-function names(value: unknown): unknown {
-	if (Array.isArray(value)) return value.map(names);
-	if (value === null || typeof value !== "object") return "*";
-	return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, NAME_KEYS.has(key) ? item : names(item)]));
 }
 
 // wrangler.jsonc only uses whole-line comments, so dropping them leaves plain JSON.
@@ -86,7 +32,7 @@ describe("wrangler.jsonc", () => {
 	});
 
 	// `runScheduled` does each job of one hourly run. A second cron would run each job twice in its hour.
-	it("declares one hourly cron, which each env inherits", () => {
+	it("declares one hourly cron", () => {
 		expect((config as { triggers?: { crons?: string[] } }).triggers?.crons).toEqual(["23 * * * *"]);
 	});
 
@@ -96,34 +42,13 @@ describe("wrangler.jsonc", () => {
 		expect(config.observability.enabled).toBe(true);
 	});
 
-	// A binding that only production declares passes `wrangler deploy --dry-run` with a warning, and
-	// then fails on development after the merge.
-	it("declares each production binding and var in env.development, with the same names", () => {
-		const development = config.env.development;
-		for (const key of new Set([...Object.keys(config), ...Object.keys(development)])) {
-			if (INHERITED.has(key)) continue;
-			expect(names(development[key]), `env.development.${key}`).toEqual(names(config[key]));
-		}
-	});
-
-	it("keeps each Worker on one origin, and the development Worker apart from production", () => {
-		// Each Worker serves only its custom domain. A workers.dev host or a Preview URL is a second
-		// origin with the same data. A named env inherits preview_urls.
+	// The CLI makes the config of each instance from this file (tools/cli/test/config.test.ts checks
+	// it). An env, a route or an account here would reach each instance, or stop the release build.
+	it("names no instance, and keeps the Worker on one origin", () => {
+		// A workers.dev host or a Preview URL is a second origin with the same data.
 		expect(config.workers_dev).toBe(false);
 		expect(config.preview_urls).toBe(false);
-		expect(config.env.development.workers_dev).toBe(false);
-		expect(config.env.development.preview_urls ?? config.preview_urls).toBe(false);
-		// deploy-development.yaml smoke checks the one custom domain in the deploy output.
-		const routes = config.env.development.routes ?? [];
-		expect(routes).toHaveLength(1);
-		expect(routes[0]?.custom_domain).toBe(true);
-		expect(config.env.development.name).not.toBe(config.name);
-		// Routes are inherited. Development must never claim production's routes.
-		for (const key of ["routes", "route"]) {
-			if (key in config) expect(config.env.development, `env.development.${key}`).toHaveProperty(key);
-		}
-		// The account comes from the environment's CLOUDFLARE_ACCOUNT_ID secret, so a deploy
-		// can't reach the other environment's account through the config.
+		for (const key of ["env", "routes", "route"]) expect(config, key).not.toHaveProperty(key);
 		expect(wranglerConfig).not.toMatch(/"account_id"/);
 	});
 });

@@ -42,8 +42,8 @@ import {
 } from "./store.ts";
 import { outboundHostAllowed } from "./url.ts";
 
-/** The queue that carries webhook events, and one POST for each subscription. */
-export const WEBHOOK_QUEUE = "soldock-webhooks";
+/** The queue that carries webhook events, and one POST for each subscription. A suffix: see `queues.ts`. */
+export const WEBHOOK_QUEUE = "webhooks";
 
 /** The result of a delivery when a sealed value of the endpoint does not open. No POST goes out. */
 const SECRET_UNREADABLE = "secret_unreadable";

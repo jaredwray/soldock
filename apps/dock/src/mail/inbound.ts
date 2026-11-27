@@ -3,8 +3,8 @@ import { addressTag, resolveMailboxAddress } from "../identity/index.ts";
 import { log } from "../platform/index.ts";
 import { deliverStoredRaw, storeRaw } from "./delivery.ts";
 
-/** The queue that carries inbound mail from `email()` to the parser. */
-export const MAIL_INBOUND_QUEUE = "soldock-mail-inbound";
+/** The queue that carries inbound mail from `email()` to the parser. A suffix: see `queues.ts`. */
+export const MAIL_INBOUND_QUEUE = "mail-inbound";
 
 /** One message for one mailbox. The raw bytes are in R2. Version 1. */
 export interface InboundJob {
@@ -72,7 +72,7 @@ export async function handleEmail(message: ForwardableEmailMessage, env: Env): P
 }
 
 /**
- * The consumer of `soldock-mail-inbound`. Queues deliver at least once, and the mailbox drops a
+ * The consumer of `<prefix>-mail-inbound`. Queues deliver at least once, and the mailbox drops a
  * second copy of the same content, so a redelivery is safe. A job that cannot be read, or that
  * fails `MAX_ATTEMPTS` times, goes to the dead-letter queue for an operator.
  */

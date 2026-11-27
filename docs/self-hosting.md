@@ -2,53 +2,184 @@
 
 > Status: **first draft**. It grows as features are added. Later, it becomes part of the docs site.
 
-Asterra runs only on Cloudflare.
-The dock Worker has two deployment environments, `development` and `production`, and no others.
-GitHub Actions deploys both. No developer machine or agent session holds a Cloudflare token.
+Asterra runs only on Cloudflare. An instance is one dock Worker, with its own D1 database, R2 bucket and
+queues, in a Cloudflare account. The operator CLI ([`tools/cli`](../tools/cli/README.md)) installs an
+instance and upgrades it:
 
-| Environment | Worker | Host | Deployed by |
+```sh
+npx asterra install
+npx asterra upgrade
+```
+
+Until the first release is on npm, run the CLI from a clone of this repository: `pnpm install`,
+`pnpm build` and `pnpm release:build`, then `node tools/cli/src/bin.ts install` in place of
+`npx asterra install`.
+
+One Cloudflare account can hold more than one instance. Each instance has a name. The Cloudflare name of
+each of its resources starts with `asterra-<name>`.
+
+This project runs one instance of its own, the development instance. GitHub Actions upgrades it with the
+same CLI. No developer computer or agent session holds its Cloudflare token.
+
+| Instance | Worker | Host | Upgraded by |
 | --- | --- | --- | --- |
-| `development` | `soldock-dock-dev` (`env.development` in `apps/dock/wrangler.jsonc`) | `work.soldock.org` | [`deploy-development.yaml`](../.github/workflows/deploy-development.yaml), on each push to `main` |
-| `production` | `soldock-dock` (the top level of `apps/dock/wrangler.jsonc`) | `dock.jaredwray.com` | A production deploy workflow (not built yet) |
+| `development` | `soldock-dock-dev` | `work.soldock.org` | [`deploy-development.yaml`](../.github/workflows/deploy-development.yaml), on each push to `main` |
 
-Asterra keeps the original Cloudflare resource names so upgrades reach the same mailboxes, files, and queues.
+The development instance is older than the CLI. It keeps the resource names `soldock-directory`,
+`soldock-blobs` and `soldock-*` for the queues, so upgrades reach the same mailboxes, files, and queues.
 Existing session cookies and browser storage keys still work after the upgrade.
 
 The domains in this document are the domains of this instance. On your own instance, use your own
 domains.
 
-The development environment is also the project's own Asterra instance: the team uses it for its mail on
+The development instance is also the project's own Asterra instance: the team uses it for its mail on
 `soldock.org`. So its data stays from one deploy to the next. A D1 migration removes only a column that
 the old Worker and the new Worker do not use, and a deploy never deletes a mailbox. Each Worker serves only
 its custom domain. `workers.dev` and Preview URLs are off, because each one is a second origin with the
 same data.
 
-## Prerequisites
+## Install with the CLI
 
-- One Cloudflare account for each environment. Use two accounts, because the API permissions for
-  Workers, D1, R2, KV and Queues apply to the whole account. A leaked development token must not
-  reach production.
-- The Workers Paid plan on each account.
-- The mail domain of each environment as an apex zone in that account:
-  - development: `soldock.org`. It is also the public domain of the project, so the development
-    account controls its DNS. When inbound mail is added, the development token can edit that DNS.
-    So a blocklist entry or a spam complaint from a test affects the public domain. To decrease
-    this risk:
-    - Publish DMARC `p=quarantine` or stricter before the first send.
-    - Turn on DNSSEC in the development account.
-    - Turn on Cloudflare notifications for DNS and Worker route changes in the development account.
-    - Send test mail only to seed accounts, inside the Email Service quota.
-  - production: `soldock.org`
-- No DNS record for `work.soldock.org`. The development deploy attaches this custom domain to the
-  Worker and makes its DNS record and certificate. In GitHub Actions, the deploy replaces a DNS record
-  that conflicts. So do not use this name for a different service.
-- A `workers.dev` subdomain on the development account, for the Email Service spike only. Set it on
-  the **Workers & Pages** page of the dashboard. The dock Worker does not use `workers.dev`.
+### Prerequisites
+
+- A Cloudflare account with the Workers Paid plan.
+- The domain of the instance as a zone in that account. The host of the instance (for example
+  `work.example.com`) must have no DNS record. The deploy makes its DNS record and its certificate, and
+  replaces a record that conflicts. So do not use this name for a different service. `install` looks up
+  the host in DNS, and refuses a host that has records. `--replace-dns` permits such a host.
+- Node.js 22 or later, on a trusted computer. Do not run the CLI in an agent session: it signs in to your
+  Cloudflare account.
+- wrangler 4. The CLI uses a compatible wrangler on `PATH`. If it finds none, it offers to install the
+  tested version into its cache folder (about 130 MB). It does not install wrangler globally. On Windows,
+  the CLI uses only the copy in its cache folder.
+
+### Steps
+
+1. Run `npx asterra install`.
+2. Sign in. If wrangler has no login, the CLI offers `wrangler login`, which opens your browser. Over SSH,
+   it uses `wrangler login --device`, which shows a code to enter on any device. If the login has more
+   than one account, choose the account. The CLI shows the account name before it changes anything.
+3. Enter the host of the instance, for example `work.example.com`.
+4. Enter the name of the instance. The CLI suggests the name of the domain (`work.rivus.com` gives
+   `rivus`). A name has lowercase letters, digits and hyphens, and 30 characters or fewer.
+5. Read the plan, and confirm it. The CLI then does these steps:
+   - It deploys the Worker. The deploy makes the D1 database, the R2 bucket and the queues, and attaches
+     the custom domain.
+   - It applies the D1 migrations.
+   - It sets the Worker secrets `SETUP_TOKEN` and `ENCRYPTION_KEY`, and shows `ENCRYPTION_KEY`.
+   - It runs the smoke check. A new host can take some minutes to answer, so the first request waits up
+     to five minutes.
+6. Keep `ENCRYPTION_KEY` in a password manager. Cloudflare does not show a secret again, and a restore
+   needs the key. The Worker uses the key to encrypt the secrets that it keeps in D1
+   ([Encryption of stored secrets](#encryption-of-stored-secrets)).
+7. Create the owner. The CLI asks where:
+   - In the browser: the CLI shows `SETUP_TOKEN` and waits. Open the host, enter the token, and create
+     the owner.
+   - In the terminal: the CLI asks for the name, the address and the password of the owner, and shows
+     the first API key of the owner one time. The domain of the address is the first mail domain.
+
+   When the owner exists, the CLI deletes `SETUP_TOKEN`, because a valid token turns on **Start fresh**,
+   which deletes the directory.
+8. Do the [Mail](#mail) steps.
+
+The names of an instance:
+
+| Resource | Name |
+| --- | --- |
+| Worker | `asterra-<name>` |
+| D1 database | `asterra-<name>-directory` |
+| R2 bucket | `asterra-<name>-blobs` |
+| Queues | `asterra-<name>-mail-inbound`, `-mail-inbound-dlq`, `-webhooks`, `-webhooks-dlq`, `-chat-previews`, `-chat-push`, `-mail-autolabel` |
+| Durable Objects | No name. They belong to the Worker, so each instance has its own. |
+
+`install` refuses a name whose D1 database or Worker exists in the account. No flag changes that. Use
+`upgrade` for that instance.
+
+### Install without questions
+
+With `--yes`, or without a terminal, the CLI asks nothing. Give each answer with a flag. New secrets go
+to a new file (mode 0600), never to the log. The CLI makes the file before it changes anything, so the
+file must not exist.
+
+The CLI reads `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID` and `ASTERRA_OWNER_PASSWORD` from the
+environment. Do not write a secret value in a command: the shell keeps a history of commands. In CI, set
+the variables from the secret store of the CI system. On a computer, read each value without an echo:
+
+```sh
+read -rs CLOUDFLARE_API_TOKEN && export CLOUDFLARE_API_TOKEN
+read -rs ASTERRA_OWNER_PASSWORD && export ASTERRA_OWNER_PASSWORD
+export CLOUDFLARE_ACCOUNT_ID=<account id>    # an identifier, not a secret
+
+npx asterra install --yes --name rivus --hostname work.rivus.com --secrets-out ./rivus-secrets.env \
+  --owner-name "Your Name" --owner-address you@rivus.com
+
+unset CLOUDFLARE_API_TOKEN ASTERRA_OWNER_PASSWORD
+```
+
+The file then holds `ENCRYPTION_KEY` and `OWNER_API_KEY`, the first API key of the owner. Move the two
+values to a password manager, and delete the file.
+
+Without `--owner-name` and `--owner-address`, the file holds `ENCRYPTION_KEY` and `SETUP_TOKEN`. Create
+the owner in the browser, then delete the token with `npx asterra secrets clear-setup-token --name rivus`.
+
+## Upgrade
+
+Run `npx asterra upgrade`. To install a specific release, run `npx asterra@<version> upgrade`. The CLI
+does these steps:
+
+1. It finds the instances of the account by their D1 database, and asks which one. `--name` gives the
+   answer.
+2. It reads the host of the instance from the running version. Each deploy of the CLI stores the host. An
+   instance without a stored host needs `--hostname`. A `--hostname` that is not the stored host needs
+   `--change-hostname`, also with `--yes`: the deploy takes the new host from the Worker that has it.
+3. It shows the release notes from GitHub Releases, for each release after the running release. A run
+   without questions shows only the link.
+4. It compares the migrations of the database with the release. It refuses a database with a migration
+   that the release does not know: that is a downgrade. It also refuses a database that is older than the
+   release allows, and names the release to install first.
+5. It applies the new migrations before the deploy. A migration only adds, or removes what the running
+   Worker does not use, so the running Worker keeps working on the new schema.
+6. It deploys, and runs the smoke check. If the check fails, it rolls back to the version from before the
+   upgrade. `--no-rollback` keeps the new version. A rollback never reverts a migration: the earlier
+   Worker works on the new schema.
+7. It checks that `ENCRYPTION_KEY` exists. On a terminal, it offers to make the key. Without a terminal,
+   it shows a warning.
+
+In GitHub Actions, `upgrade` writes `url`, `version` and `result` to `GITHUB_OUTPUT`. `result` is `passed`,
+`rolled_back`, or `failed` (the CLI did not roll back).
+
+More commands:
+
+| Command | What it does |
+| --- | --- |
+| `npx asterra status` | Shows the running release, the host, the migrations, the upgrade of this CLI, and the secret names |
+| `npx asterra rollback` | Sends the traffic back to the newest version of the release before the running release |
+| `npx asterra secrets setup-token` | Makes a new `SETUP_TOKEN`, for example for **Start fresh** |
+| `npx asterra secrets clear-setup-token` | Deletes `SETUP_TOKEN` |
+| `npx asterra smoke <url>` | Runs the smoke check against a host |
+
+A secret change makes a new Worker version with the same code. So `rollback` does not go to the version
+before the running version: that version can be the same release with an earlier `SETUP_TOKEN`, or without
+`ENCRYPTION_KEY`. It goes to the newest version from before the deploy of the running release, and shows
+the two versions with their releases. A Worker version holds its secrets. If the secret names of the two
+versions are different, `rollback` tells the difference and asks. A run without questions then refuses.
+
+An instance from before the CLI needs its prefix and its Worker name, for example
+`--prefix soldock --worker-name soldock-dock-dev`. Give the two flags together, and not with `--name`.
+For an instance of the CLI, give only `--name`: its Worker is always `asterra-<name>`.
+
+## Several instances in one account
+
+- Each instance has its own Worker, database, bucket and queues, so the data stays apart.
+- Each instance needs its own mail domain, because Email Routing has one catch-all for each zone.
+- A token or a login for the account can change each instance in it. To keep instances apart from each
+  other, use one account for each instance.
 
 ## GitHub setup
 
-Do these steps in this order. Do steps 1 and 2 before you merge a workflow that names the
-environment. A run that names a missing environment makes GitHub create it with no rules.
+This section is for the repository of this project. Do these steps in this order. Do steps 1 to 3 before
+you merge a workflow that names an environment. A run that names a missing environment makes GitHub
+create it with no rules.
 
 1. Protect `main` with a branch ruleset named `Pull requests required`:
    - pull requests required, with force-push and deletion blocked
@@ -58,17 +189,21 @@ environment. A run that names a missing environment makes GitHub create it with 
    to `main` only. If it exists already, set the branch rule before you add a secret. If a
    `staging` environment exists, move its secrets and variables to `development`, then delete
    `staging`. No environment may hold a token that no workflow uses.
-3. Read each workflow on `main` against the [workflow rules](#workflow-rules).
-4. Add these **environment** secrets to `development`. Do not add them as repository secrets.
+3. Create the `release` environment. Set its deployment branches to `main` only.
+4. Read each workflow on `main` against the [workflow rules](#workflow-rules).
+5. Add these **environment** secrets to `development`. Do not add them as repository secrets.
    - `CLOUDFLARE_API_TOKEN`: see [Token permissions](#token-permissions).
    - `CLOUDFLARE_ACCOUNT_ID`: the development account ID. Find it on the account home page of the
      dashboard, or in the dashboard URL after `dash.cloudflare.com/`.
-5. For the Email Service spike only, add the environment variable `SPIKE_EMAIL_ZONE_ID`: the zone ID of
+6. For the Email Service spike only, add the environment variable `SPIKE_EMAIL_ZONE_ID`: the zone ID of
    `soldock.org`. Find it on the zone's **Overview** page, in the **API** section. A zone ID has 32
    hex characters. It is an identifier, not a secret.
-
-The production deploy work adds the `production` environment, with a required reviewer,
-self-review prevented and no administrator bypass.
+7. For [Releases](#releases), set up npm trusted publishing. npm can set it up only for a package that
+   exists, so publish the first version of `asterra` by hand. Then, on npmjs.com, open the package
+   **Settings › Trusted publishing**, and add GitHub Actions with the repository `jaredwray/soldock`, the
+   workflow `release.yaml` and the environment `release`. The release workflow then needs no npm token.
+   Then run the release workflow one time: it finds that version on npm, and makes its tag and its GitHub
+   Release.
 
 ## Workflow rules
 
@@ -92,37 +227,85 @@ Read each change to such a workflow against these rules before you merge it.
 
 ## Token permissions
 
-Make one API token for each environment (**My Profile › API Tokens › Create Token**). Limit it to
-the account and the zone of that environment. The `development` token has the permissions of each
-row whose workflow exists on `main`.
+A person signs in with `wrangler login`. A token is for CI and for runs without a login. Make one API
+token for each account (**My Profile › API Tokens › Create Token**). Limit it to the account and the zone
+of the instance.
 
-| Workflow | Permissions |
+| Use | Permissions |
 | --- | --- |
-| `deploy-development.yaml` | Account › Workers Scripts: Edit, Account › Account Settings: Read, Account › D1: Edit, Account › Workers R2 Storage: Edit and Account › Queues: Edit (the deploy provisions the D1 database, the R2 bucket and the queues, and applies the D1 migrations). Zone › Workers Routes: Edit on `soldock.org` (the deploy attaches the custom domain `work.soldock.org`). The Cloudflare API reference names only Workers Scripts for custom domains. If the deploy fails on the custom domain with an authentication error, add Zone › DNS: Edit on `soldock.org` and record it here. If the deploy of the `send_email` binding needs an Email Service permission, add it and record it here |
+| `asterra install` and `asterra upgrade` (and `deploy-development.yaml`) | Account › Workers Scripts: Edit, Account › Account Settings: Read, Account › D1: Edit, Account › Workers R2 Storage: Edit and Account › Queues: Edit (the deploy makes the D1 database, the R2 bucket and the queues, and the CLI applies the D1 migrations). Zone › Workers Routes: Edit on the zone of the host (the deploy attaches the custom domain). The Cloudflare API reference names only Workers Scripts for custom domains. If the deploy fails on the custom domain with an authentication error, add Zone › DNS: Edit on the zone and record it here. If the deploy of the `send_email` binding needs an Email Service permission, add it and record it here |
+| `asterra status`, `asterra rollback` and `asterra secrets` | A part of the permissions of `upgrade`. Use the same token |
 | `spike-email-service.yaml` | Also event subscriptions edit, and Email Service sending on `soldock.org`. Record the exact names in the spike findings |
-| The `provision` workflow (not built yet) | Also Workers KV Storage edit |
 | Inbound mail routing through the API (not built yet) | Also DNS edit and Email Routing rules edit on the mail zone |
 
 Use a custom token, not a template: the templates give more than these permissions. If a run
 shows that wrangler needs one more permission, add it to the token and to this table. When a change
 adds a binding, it adds the permission to this table too.
 
+The default scopes of `wrangler login` include Workers, Workers routes, D1, Queues, zone read, Email
+Routing and Email Sending. The list has no separate R2 scope. If a login cannot make the R2 bucket, record
+it here.
+
 ## The development deploy
 
-- Each push to `main` runs `deploy-development.yaml`. To run it again, open **Actions ›
-  deploy-development › Run workflow** and select `main`.
+The development instance has its own Cloudflare account, with the Workers Paid plan. Keep it apart from
+each other instance, because the API permissions for Workers, D1, R2, KV and Queues apply to the whole
+account. A leaked development token must not reach a different instance.
+
+- The mail domain `soldock.org` is an apex zone in the development account. It is also the public
+  domain of the project, so the development account controls its DNS. When inbound mail is added, the
+  development token can edit that DNS. So a blocklist entry or a spam complaint from a test affects the
+  public domain. To decrease this risk:
+  - Publish DMARC `p=quarantine` or stricter before the first send.
+  - Turn on DNSSEC in the development account.
+  - Turn on Cloudflare notifications for DNS and Worker route changes in the development account.
+  - Send test mail only to seed accounts, inside the Email Service quota.
+- `work.soldock.org` has no DNS record of its own. The deploy attaches this custom domain to the Worker
+  and makes its DNS record and certificate. So do not use this name for a different service.
+- The development account has a `workers.dev` subdomain, for the Email Service spike only. Set it on
+  the **Workers & Pages** page of the dashboard. The dock Worker does not use `workers.dev`.
+
+The workflow:
+
+- Each push to `main` runs `deploy-development.yaml`. It builds the release bundle and runs
+  `asterra upgrade --yes --prefix soldock --worker-name soldock-dock-dev --hostname work.soldock.org`.
+  To run it again, open **Actions › deploy-development › Run workflow** and select `main`.
 - Until the secrets exist, the run stops at its first step, and the error names each missing secret.
-- After the deploy, the run sends a smoke check to the development host, `https://work.soldock.org`
-  ([`scripts/smoke-check.sh`](../scripts/smoke-check.sh)). The job summary and the `development`
-  environment page show the host. The run reads the host from the custom domain in the deploy output.
-- On the first deploy with the custom domain, the host can take some minutes to answer, because
-  Cloudflare makes its DNS record and its certificate. The smoke check waits up to five minutes.
+- The CLI runs the smoke check against `https://work.soldock.org`. If it fails, the CLI rolls back to
+  the earlier version, and the run fails. The job summary shows the result that the CLI wrote: `passed`,
+  `rolled_back` or `failed`. The job summary and the `development` environment page show the host.
+- With the token and the account id of the environment, the CLI does not call `wrangler whoami`. So the
+  token needs no permission to read its user.
+- A run without questions does not make `ENCRYPTION_KEY`, because nobody would see the key. Make it one
+  time on a trusted computer, for example with `openssl rand -base64 32 | tr '+/' '-_' | tr -d '='`.
+  Add it as the secret `ENCRYPTION_KEY` of `soldock-dock-dev` in the dashboard (**Workers & Pages ›**
+  the Worker **› Settings › Variables and Secrets**), and keep a copy in your secret store.
 - To run the same smoke check against the built Worker on your computer:
 
   ```sh
-  pnpm --filter @asterra/dock dev            # wrangler dev, on http://localhost:8787
-  scripts/smoke-check.sh http://localhost:8787
+  pnpm --filter @asterra/dock dev                          # wrangler dev, on http://localhost:8787
+  node tools/cli/src/bin.ts smoke http://localhost:8787
   ```
+
+## Releases
+
+A release is the npm package `asterra`: the CLI and a prebuilt bundle of the Worker, the web app, the
+migrations and the config template. The CLI version is the Asterra version.
+
+1. Merge a pull request that changes `version` in `tools/cli/package.json`.
+2. Open **Actions › release › Run workflow**, and select `main`. The `build` job runs `pnpm verify`,
+   builds the bundle, and makes the package file. It has no publish rights. The `publish` job installs
+   nothing: it publishes that file with provenance. Then it makes the tag `v<version>` and the GitHub
+   Release.
+3. Edit the notes of the GitHub Release. `asterra upgrade` shows them before an upgrade.
+
+The workflow refuses the version `0.0.0`. If a run publishes to npm and then fails, run the workflow
+again. It finds the version on npm without the tag, does not publish again, and makes the tag and the
+GitHub Release. If the version is on npm and the tag exists, the run stops: change the version.
+
+Set `min_applied_migration` in `tools/cli/release.json` when the Worker of an earlier release cannot run
+on the new migrations. An example is a migration that removes a column that an earlier Worker still uses.
+Then an instance must install the release before it first, and `upgrade` refuses to skip that release.
 
 ## Encryption of stored secrets
 
@@ -143,8 +326,8 @@ To turn on the encryption:
 
 1. Make a random value of 32 characters or more, for example with `openssl rand -base64 48`.
 2. Keep a copy of the value in a safe place, such as a password manager. Do not keep it with a backup of D1.
-3. Set the value as a Worker secret: `wrangler secret put ENCRYPTION_KEY`, and again with `--env development`.
-   Use a different value for each environment.
+3. Set the value as a Worker secret: `wrangler secret put ENCRYPTION_KEY --name <worker>`. Use a different
+   value for each instance. `npx asterra install` makes the value and sets it for you.
 
 - The cipher is AES-256-GCM. The Worker derives the AES key from `ENCRYPTION_KEY` with HKDF-SHA-256. Each
   stored value has its own random IV, and it opens only in its own column. A sealed value starts with
@@ -223,7 +406,7 @@ seals the private key in that column, so set `ENCRYPTION_KEY` before you select 
 [Encryption of stored secrets](#encryption-of-stored-secrets)). Without it, the column is plaintext: keep a
 backup of D1 as a secret.
 
-The deploy creates the queue `soldock-chat-push`. The room sends its recipients in groups of up to ten.
+The deploy creates the queue `<prefix>-chat-push`. The room sends its recipients in groups of up to ten.
 Each eligible device then gets a separate delivery job.
 The consumer checks the subscription, room membership and notification settings before each attempt.
 It encrypts the message location and the unread count for the device.
@@ -250,8 +433,8 @@ is inbox auto labels. AI is off until an owner or an admin turns it on in **Admi
   [Encryption of stored secrets](#encryption-of-stored-secrets)). No API answer and no log contains it. Admin › AI shows only that a token is saved, with **Replace** and
   **Remove**. Without a token, AI makes no calls, and auto labels use their rules only.
 - To keep the token out of D1, set it as the Worker secret `AI_GATEWAY_TOKEN` instead
-  (`wrangler secret put AI_GATEWAY_TOKEN`, and again with `--env development`). A token saved in
-  Admin › AI wins over the secret.
+  (`wrangler secret put AI_GATEWAY_TOKEN --name <worker>`). A token saved in Admin › AI wins over the
+  secret.
 - Only Workers AI models are on the list, so the AI stays in Cloudflare.
 - AI stops when the estimated cost of the month (UTC) reaches the budget. The estimate uses the
   published Workers AI prices. The AI Gateway dashboard is the source for billing.
@@ -304,16 +487,16 @@ GitHub repository. Feedback is off until an owner or an admin turns it on in **A
 ## Mail
 
 The dock Worker receives mail through Email Routing and sends mail through Email Service. Do these
-steps once for each environment, in its Cloudflare account. Do them after the first deploy, because
-Email Routing can route only to a Worker that exists.
+steps once for each instance, in its Cloudflare account. Do them after the install, because Email
+Routing can route only to a Worker that exists.
 
-| Environment | Mail domain | Dock host | Worker |
+| Instance | Mail domain | Dock host | Worker |
 | --- | --- | --- | --- |
 | `development` | `soldock.org` | `work.soldock.org` | `soldock-dock-dev` |
-| `production` | `soldock.org` | `dock.jaredwray.com` | `soldock-dock` |
+| An instance of `npx asterra install` | your domain | your host | `asterra-<name>` |
 
 The Email Routing rule is a dashboard step. The wrangler `addresses` key can make it, but that key is
-top-level only and applies to each environment. So it cannot hold a rule for one environment.
+top-level only and applies to each instance. So it cannot hold a rule for one instance.
 
 1. Choose a domain you own for email. Enter it during first-run setup below.
    The directory database stores mail domains. Owners and admins manage them under **Admin › Email domains**.
@@ -322,18 +505,19 @@ top-level only and applies to each environment. So it cannot hold a rule for one
    - Turn on Email Routing. It adds the MX and SPF records. Remove MX records that point to other
      providers.
    - Under **Routing rules**, set the **Catch-all address** action to **Send to a Worker** and select
-     the dock Worker (`soldock-dock-dev` or `soldock-dock`). Catch-all works only on an apex domain.
+     the dock Worker (`asterra-<name>`, or `soldock-dock-dev`). Catch-all works only on an apex domain.
    - The Worker rejects mail for unknown addresses during the SMTP session, so a catch-all does not
      accept mail for addresses that do not exist.
 3. Send: onboard the mail domain to Email Service (**Email › Email Service**). Publish the DKIM,
    SPF and DMARC records that it shows, and wait until each one is verified. Publish DMARC
    `p=quarantine` or stricter before the first send.
 4. Confirm `MAIL_AUTHSERV_ID`: send a message from an external account, and read the topmost
-   `Authentication-Results` header of the raw message in R2 (`soldock-blobs`, key
+   `Authentication-Results` header of the raw message in R2 (`<prefix>-blobs`, key
    `mail/raw/<mailbox id>/<sha256>`). Its first token must equal `MAIL_AUTHSERV_ID`. If it does not,
    change the var: the mailbox ignores results from any other server.
-5. First-run setup (once). Until setup runs, the dock host shows a setup page, and the deploy job
-   summary shows "First-run setup: not done".
+5. First-run setup (once). `npx asterra install` does this step: do it by hand only for an instance
+   without the CLI. Until setup runs, the dock host shows a setup page, and the deploy job summary shows
+   "First-run setup: not done".
    1. Make a random token with at least 32 characters, for example with `openssl rand -hex 32`. A
       shorter token keeps setup off.
    2. In the dashboard, open **Workers & Pages ›** the dock Worker **› Settings › Variables and
@@ -355,12 +539,17 @@ top-level only and applies to each environment. So it cannot hold a rule for one
       person gets no API key. The person creates keys in **Settings**.
 
    `curl` does the same setup without a browser. The response holds the key (`api_key.secret`),
-   and gives no session:
+   and gives no session. Do not write the token or the password in the command: the shell keeps a
+   history of commands, and other users of the computer can see the arguments of a process. Put the
+   header and the body in two files that only you can read, and delete the files after the call:
 
    ```sh
+   umask 077
+   "${EDITOR:-vi}" setup-header.txt   # one line: authorization: Bearer <SETUP_TOKEN>
+   "${EDITOR:-vi}" setup-body.json    # {"mail_domain":"example.com","display_name":"Your Name","address":"you@example.com","password":"<a password of at least 12 characters>"}
    curl -X POST "https://<dock-host>/auth/setup" \
-     -H "authorization: Bearer <SETUP_TOKEN>" -H "content-type: application/json" \
-     -d '{"mail_domain":"example.com","display_name":"Your Name","address":"you@example.com","password":"<a password of at least 12 characters>"}'
+     -H @setup-header.txt -H "content-type: application/json" --data @setup-body.json
+   rm setup-header.txt setup-body.json
    ```
 
    To turn on two-step verification without a browser, call `account.create_totp_secret` with the
