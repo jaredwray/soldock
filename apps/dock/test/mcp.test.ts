@@ -311,6 +311,15 @@ describe("the MCP endpoint", () => {
 		};
 		const send = tools.find((tool) => tool.name === "mail_send");
 		expect(send?.annotations).toMatchObject({ readOnlyHint: false, openWorldHint: true });
+		// A calendar tool that can send an invitation, a cancellation or an answer by mail is open-world too.
+		for (const name of [
+			"calendar_create_event",
+			"calendar_update_event",
+			"calendar_delete_event",
+			"calendar_respond_to_event",
+		]) {
+			expect(tools.find((tool) => tool.name === name)?.annotations, name).toMatchObject({ openWorldHint: true });
+		}
 		expect(send?.inputSchema).toMatchObject({ type: "object", properties: { to: { type: "array" } } });
 	});
 

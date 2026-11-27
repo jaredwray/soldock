@@ -597,7 +597,7 @@ export const createEvent = defineOperation({
 	http: { method: "POST", path: "/api/v1/calendar/events" },
 	scopes: ["calendar.write"],
 	callers: ["human", "agent", "service"],
-	annotations: { readOnly: false, destructive: false, idempotent: false, openWorld: false },
+	annotations: { readOnly: false, destructive: false, idempotent: false, openWorld: true },
 	input: z.strictObject({
 		title: Title,
 		when: EventWhenInput,
@@ -643,7 +643,7 @@ export const updateEvent = defineOperation({
 	http: { method: "POST", path: "/api/v1/calendar/events/{event_id}" },
 	scopes: ["calendar.write"],
 	callers: ["human", "agent", "service"],
-	annotations: { readOnly: false, destructive: true, idempotent: true, openWorld: false },
+	annotations: { readOnly: false, destructive: true, idempotent: true, openWorld: true },
 	input: z.strictObject({
 		event_id: EventId,
 		title: Title.optional(),
@@ -677,7 +677,7 @@ export const deleteEvent = defineOperation({
 	http: { method: "DELETE", path: "/api/v1/calendar/events/{event_id}" },
 	scopes: ["calendar.write"],
 	callers: ["human", "agent", "service"],
-	annotations: { readOnly: false, destructive: true, idempotent: false, openWorld: false },
+	annotations: { readOnly: false, destructive: true, idempotent: false, openWorld: true },
 	input: z.strictObject({
 		event_id: EventId,
 		calendar_id: CALENDAR_ID,
@@ -761,7 +761,7 @@ export const respondToEvent = defineOperation({
 	http: { method: "POST", path: "/api/v1/calendar/events/{event_id}/response" },
 	scopes: ["calendar.write"],
 	callers: ["human", "agent", "service"],
-	annotations: { readOnly: false, destructive: false, idempotent: true, openWorld: false },
+	annotations: { readOnly: false, destructive: false, idempotent: true, openWorld: true },
 	input: z.strictObject({
 		event_id: EventId,
 		occurrence_id: OccurrenceId.optional(),
