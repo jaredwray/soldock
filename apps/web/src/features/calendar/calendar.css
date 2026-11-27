@@ -491,3 +491,50 @@
 		border-radius: 0;
 	}
 }
+
+/* A declined event stays in the calendar, with its title struck through. */
+.cal-event-declined {
+	opacity: 0.6;
+}
+
+.cal-event-declined .cal-event-title {
+	text-decoration: line-through;
+}
+
+.cal-event-repeat {
+	font-weight: normal;
+}
+
+.cal-repeat-ends {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
+	align-items: center;
+}
+
+.cal-scope {
+	display: grid;
+	gap: 8px;
+	margin-block: 12px;
+}
+
+.cal-people {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 4px;
+	margin: 0;
+	padding: 0;
+	list-style: none;
+}
+
+.cal-person {
+	display: inline-flex;
+	align-items: center;
+	gap: 4px;
+}
+
+.cal-rsvp {
+	display: flex;
+	gap: 8px;
+	align-items: center;
+}

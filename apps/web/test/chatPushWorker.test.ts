@@ -7,6 +7,17 @@ const script = readFileSync(new URL("../public/chat-push.js", import.meta.url), 
 const origin = "https://chat.example";
 const message = { principal_id: "prn_one", room_id: "rm_one", seq: 12, parent_seq: 8, unread_count: 7, sound: false };
 
+const reminder = {
+	kind: "calendar_reminder",
+	principal_id: "prn_one",
+	reminder_id: "calrem:evt_01HZZZZZZZZZZZZZZZZZZZZZZZ:20301105T190000Z:1920049200000",
+	event_id: "evt_01HZZZZZZZZZZZZZZZZZZZZZZZ",
+	occurrence_id: "evt_01HZZZZZZZZZZZZZZZZZZZZZZZ_20301105T170000Z",
+	start: "2030-11-05T19:00:00.000Z",
+	minutes: 10,
+	sound: true,
+};
+
 function worker() {
 	const handlers = new Map<string, (event: object) => void>();
 	const show = vi.fn(async (_title: string, _options: NotificationOptions) => {});
@@ -78,5 +89,26 @@ it("a device ignores a push for a different account", async () => {
 	const sw = worker();
 	await sw.push({ ...message, principal_id: "prn_other" });
 	expect(sw.setAppBadge).not.toHaveBeenCalled();
+	expect(sw.show).not.toHaveBeenCalled();
+});
+
+it("shows a calendar reminder with its id as the tag, and opens the week of the event", async () => {
+	const sw = worker();
+	await sw.push(reminder);
+	await sw.push(reminder);
+	const [title, options] = sw.show.mock.calls[0] ?? [];
+	expect(title).toBe("Event reminder");
+	expect(options?.tag).toBe(reminder.reminder_id);
+	// A second delivery has the same tag, so the device replaces the first notification.
+	expect(sw.show.mock.calls.map(([, shown]) => shown.tag)).toEqual([reminder.reminder_id, reminder.reminder_id]);
+	expect(sw.setAppBadge).not.toHaveBeenCalled();
+	if (!options) throw new Error("The worker did not show the reminder.");
+	await sw.click(options);
+	expect(sw.openWindow.mock.calls[0]?.[0]).toMatch(new RegExp(`^${origin}/calendar/week/2030-11-0[45]$`));
+});
+
+it("ignores a calendar reminder for a different account", async () => {
+	const sw = worker();
+	await sw.push({ ...reminder, principal_id: "prn_other" });
 	expect(sw.show).not.toHaveBeenCalled();
 });

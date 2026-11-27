@@ -9,6 +9,17 @@ function messagePath(data) {
 	return data.parent_seq === null ? `${path}/${data.seq}` : `${path}/${data.parent_seq}/${data.seq}`;
 }
 
+// A calendar reminder has no title: it tells the time of the start and opens the week of the event.
+function reminderPath(data) {
+	if (!data || data.kind !== "calendar_reminder" || !/^evt_[A-Z0-9]{26}$/.test(data.event_id)) return null;
+	const scope = new URL(self.registration.scope);
+	if (scope.pathname !== `/chat-push/${encodeURIComponent(data.principal_id)}/`) return null;
+	const start = Date.parse(data.start);
+	if (Number.isNaN(start)) return null;
+	const date = new Intl.DateTimeFormat("en-CA", { year: "numeric", month: "2-digit", day: "2-digit" }).format(start);
+	return `/calendar/week/${date}`;
+}
+
 self.addEventListener("push", (event) => {
 	if (!event.data) return;
 	let message;
@@ -17,10 +28,27 @@ self.addEventListener("push", (event) => {
 	} catch {
 		return;
 	}
+	const reminder = reminderPath(message);
+	if (reminder) {
+		event.waitUntil(showReminder(message));
+		return;
+	}
 	const path = messagePath(message);
 	if (!path) return;
 	event.waitUntil(showMessage(message, path));
 });
+
+async function showReminder(message) {
+	const time = new Date(message.start).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+	await self.registration.showNotification("Event reminder", {
+		body: `An event starts at ${time}.`,
+		icon: "/icon-192.png",
+		// The tag is the id of the reminder, so a second delivery replaces the first.
+		tag: typeof message.reminder_id === "string" ? message.reminder_id : message.event_id,
+		silent: !message.sound,
+		data: message,
+	});
+}
 
 async function showMessage(message, path) {
 	const windows = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
@@ -44,7 +72,7 @@ async function showMessage(message, path) {
 
 self.addEventListener("notificationclick", (event) => {
 	event.notification.close();
-	const path = messagePath(event.notification.data);
+	const path = reminderPath(event.notification.data) ?? messagePath(event.notification.data);
 	if (!path) return;
 	event.waitUntil(
 		(async () => {
