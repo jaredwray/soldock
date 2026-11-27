@@ -120,7 +120,7 @@ become a list of the days that have events.
 
 An event can have attendees from the organization: each one gets the event on their calendar. **Find a
 time** in the event dialog shows the busy times of the attendees and suggests free times. A person who
-shares no availability shows as unknown, never as free. In **Calendar › Sharing**, a person lets a
+shares no availability shows as unknown, never as free. In **Calendar › Settings › Sharing**, a person lets a
 colleague or an agent see the busy times, or schedule on their behalf.
 
 An agent uses the same operations through MCP: `calendar_find_times`, then `calendar_create_event` with

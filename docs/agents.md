@@ -736,7 +736,7 @@ calendar of the agent.
 | `calendar_list_webhook_subscriptions` | `calendar.webhooks` | The calendar subscriptions of your endpoints |
 | `calendar_delete_webhook_subscription` | `calendar.webhooks` | Delete a calendar subscription that you created |
 
-Only a person gives access to a calendar (`calendar_set_grant` and **Calendar › Sharing** in the web
+Only a person gives access to a calendar (`calendar_set_grant` and **Calendar › Settings › Sharing** in the web
 app). An agent never gets these tools, so it cannot change its own access.
 
 - **Find the calendars.** `calendar_list_shared_calendars` lists the people who gave you access, with

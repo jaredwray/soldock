@@ -1217,7 +1217,9 @@ MCP clients. The app has no UI-only path.
 - **Calendar** (`/calendar`, `/calendar/week/<date>`, `/calendar/month/<date>`). The own calendar of
   the person, in the time zone of the browser. The rail has **Calendar** after Chat. The calendar of a
   person who lets the person schedule is at `/calendar/person/<id>/<view>/<date>`: the **Calendar** list
-  of the toolbar opens it. **Calendar › Sharing** gives and removes access to the own calendar.
+  of the toolbar opens it. **Calendar › Settings › Sharing** gives and removes access to the own calendar.
+  - The header row has **New event** and, at its right, the gear of the calendar settings. The gear
+    opens a menu. Now the menu has only **Sharing**. A settings view comes later.
   - The toolbar has **Today**, **Previous** and **Next**, the title of the period, and the **Week** and
     **Month** views. Each period has its own path, so a reload or a link opens the same week or month.
     A week starts on Sunday.

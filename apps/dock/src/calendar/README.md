@@ -183,7 +183,7 @@ Public surface: `index.ts` only. Other domains must not import files from this f
   `calendar.set_grant`, and removes it with `calendar.remove_grant`. Only a person calls these
   operations, and only for the own calendar. An owner or an admin cannot do this for a different
   person. Calendar grants are not in the settings of the members of the organization: the person
-  manages them in **Calendar › Sharing**.
+  manages them in **Calendar › Settings › Sharing**.
 - A grant has one `access`:
   - `free_busy`: the principal sees the merged busy intervals of the calendar through
     `calendar.query_free_busy` and `calendar.find_times`. It gets `forbidden` from each event
@@ -535,7 +535,7 @@ gives `not_found`.
   **My calendar** and each `schedule` calendar of `calendar.list_shared_calendars`. The calendar of a
   different person has the path `/calendar/person/<id>/<view>/<date>`, so a reload stays on it.
 - On that calendar, the page reads the range again each 30 seconds while it shows, and on focus: a
-  delegate has no change feed of the owner. **Sharing** does not show. A line tells whose calendar it is.
+  delegate has no change feed of the owner. The gear of the calendar settings does not show. A line tells whose calendar it is.
 - An event that the delegate sees only in part opens read-only: its time, and its title or "Busy". The
   own events of the delegate open in the normal dialog, with `calendar_id` on each call. The dialog has
   no reminder there, because the reminder belongs to the owner, and the server gives the owner the

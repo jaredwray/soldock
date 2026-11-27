@@ -1,3 +1,4 @@
+import "../drive/drive.css";
 import "./calendar.css";
 import { ApiError, type CalendarEvent, canonicalTimeZone, zonedDate } from "@asterra/contracts";
 import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from "react";
@@ -9,6 +10,7 @@ import { Select, type SelectOption } from "../../lib/Select.tsx";
 import { usePrincipals } from "../../lib/usePrincipals.ts";
 import { type CalendarView, calendarPath, isCalendarDate } from "../../routes.ts";
 import { PageHeader } from "../../shell/PageHeader.tsx";
+import { Menu } from "../drive/Menu.tsx";
 import { CalendarSharing } from "./CalendarSharing.tsx";
 import { useEvents, useSharedCalendars } from "./data.ts";
 import { EventDialog } from "./EventDialog.tsx";
@@ -115,15 +117,20 @@ export function CalendarApp({ view, date, calendarId }: CalendarAppProps) {
 	return (
 		<main id="main" className="page-main cal-main" tabIndex={-1}>
 			<PageHeader title="Calendar" icon="calendar">
-				{calendarId === null && (
-					<button type="button" className="button" onClick={() => setSharing(true)}>
-						Sharing
-					</button>
-				)}
 				<button type="button" className="button button-primary" onClick={() => createAt(newEventDay)}>
 					<Icon name="plus" />
 					New event
 				</button>
+				{/* The settings of the own calendar. Only the person gives access to it, so a delegate does not see them. */}
+				{calendarId === null && (
+					<Menu
+						label="Calendar settings"
+						className="icon-button"
+						items={[{ key: "sharing", label: "Sharing", icon: "share", onSelect: () => setSharing(true) }]}
+					>
+						<Icon name="settings" />
+					</Menu>
+				)}
 			</PageHeader>
 			<div className="toolbar cal-toolbar">
 				{calendarOptions.length > 1 && (
