@@ -41,10 +41,11 @@ async function eventsOn(context: BrowserContext, day: string, title: string): Pr
 	return ((await response.json()) as { events: ApiEvent[] }).events.filter((event) => event.title === title);
 }
 
-/** Opens Calendar › Sharing and gives a principal access. */
+/** Opens Calendar › settings › Sharing and gives a principal access. */
 async function giveAccess(page: Page, name: RegExp, access: "See when I am busy" | "Schedule for me") {
 	await page.goto("/calendar");
-	await page.getByRole("button", { name: "Sharing" }).click();
+	await page.getByRole("button", { name: "Calendar settings" }).click();
+	await page.getByRole("menuitem", { name: "Sharing" }).click();
 	const dialog = page.getByRole("dialog", { name: "Share your calendar" });
 	await dialog.getByRole("combobox", { name: "Person or agent" }).click();
 	await page.getByRole("option", { name }).click();
