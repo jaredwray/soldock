@@ -44,16 +44,21 @@ Public surface: `index.ts` only. Other domains must not import files from this f
   in memory, and `awaiting_answer` refuses a new change while an SFU offer waits for the answer of the browser.
 - `pending_closes` holds each track that the SFU must close: the SFU session, the mid and the participant of the
   session. The object writes these rows in the same synchronous block that deletes the rows of `tracks` and `pulls`.
+  A row goes only when the SFU confirms the close. `close_track_error` (closed before) and `410` (the SFU has no
+  such session) count as confirmed.
 - A row of `pending_closes` has a kind. A `track` row is one mid to close. A `sweep` row is a read of the session.
   The kind has its own column, so no mid can look like a sweep.
 - The mid of a push has 1 to 32 letters, digits, and the characters `_`, `.` and `-` (`MEET_MID_PATTERN`). The
   contract and the object each refuse a different mid, and the object refuses two tracks with the same mid.
-  A row goes only when the SFU confirms the close. `close_track_error` (closed before) and `410` (the SFU has no
-  such session) count as confirmed.
-- A push or a pull can get no answer in 10 seconds. The object then does not know if the SFU made tracks. For a
-  push it records a close of each mid of the request. For a pull it records a read of the session (a `sweep` row):
-  the object asks the SFU for the tracks of the session and closes each track that has no row. Each teardown and
-  each new media session records the same read for the session that ends.
+- The object does not always know if the SFU made the tracks of a push or a pull. `RealtimeError.uncertain` marks
+  these failures: no answer in 10 seconds, a body that stops before its end, an answer that is not JSON, and a 2xx
+  answer with the wrong shape. A 2xx answer has the wrong shape when it has no SDP answer (push), no offer (pull),
+  or no result for each track of the request.
+- After an uncertain failure of a push, the object records a close of each mid of the request. After an uncertain
+  failure of a pull, it records a read of the session (a `sweep` row): the object asks the SFU for the tracks of
+  the session and closes each track that has no row. Each teardown and each new media session records the same
+  read for the session that ends.
+- A close counts as confirmed only for a mid that the answer of the SFU names.
 - A new try does not close a mid that has a row in `tracks` or `pulls` again.
 - A close that fails waits for the alarm. The first new try comes after 5 seconds, and each later try waits two
   times longer, at most 5 minutes.

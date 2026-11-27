@@ -996,6 +996,60 @@ describe("meet", () => {
 		expect(sfu.openTracks(guestSession)).toEqual([]);
 	});
 
+	it("closes the tracks of a push or a pull whose 200 answer the object cannot use", async () => {
+		const meeting = await newMeeting();
+		const host = await joinAsMember(meeting.code, await signIn("ada@dock.test"));
+		const guest = await joinAsGuest(meeting.code);
+		await ada.call("meet.admit_participant", { code: meeting.code, participant_id: guest.participant.id });
+		const hostMedia = await sendMedia(meeting.code, host.token);
+		const started = await callRoute(meeting.code, "/media/session", { token: guest.token, body: {} });
+		const session = started.body.session as number;
+		const guestSession = sfu.sessions[1] as string;
+		const openMids = () => sfu.openTracks(guestSession).map((track) => track.mid);
+		const audio = { session, offer: { sdp: "v=0 offer" }, tracks: [{ mid: "0", kind: "audio" }] };
+		const push = () => callRoute(meeting.code, "/media/publish", { token: guest.token, body: audio });
+
+		// In each case the SFU makes the track of the push and answers 200. The object cannot use the answer, so it
+		// refuses the push and closes the mid of the request.
+		const unusable: ((usual: Record<string, unknown>) => Response)[] = [
+			// No SDP answer.
+			({ sessionDescription: _answer, ...rest }) => Response.json(rest),
+			// No result for the track.
+			(usual) => Response.json({ ...usual, tracks: [] }),
+			// A body that stops before its end.
+			() => new Response(new ReadableStream({ start: (controller) => controller.error(new Error("cut")) })),
+		];
+		for (const make of unusable) {
+			sfu.replaceNextAnswer(make);
+			expect((await push()).status).toBe(503);
+			await expect.poll(openMids).toEqual([]);
+		}
+
+		// The guest sends a track with a row. Then the SFU makes two pulls and answers 200 without their results. The
+		// object does not know the mids, so it reads the session and closes each track without a row.
+		const video = { session, offer: { sdp: "v=0 offer" }, tracks: [{ mid: "1", kind: "video" }] };
+		expect((await callRoute(meeting.code, "/media/publish", { token: guest.token, body: video })).status).toBe(200);
+		const pull = { session, track_ids: hostMedia.tracks.map((track) => track.id) };
+		sfu.replaceNextAnswer(({ tracks: _tracks, ...rest }) => Response.json(rest));
+		expect((await callRoute(meeting.code, "/media/subscribe", { token: guest.token, body: pull })).status).toBe(503);
+		await expect.poll(openMids).toEqual(["1"]);
+
+		// The alarm finds nothing more to close, and no record stays.
+		const stub = env.MEETING.get(env.MEETING.idFromName(meeting.code));
+		await runInDurableObject(stub, (_instance, state) => {
+			state.storage.sql.exec("UPDATE pending_closes SET next_at = 0");
+		});
+		await runDurableObjectAlarm(stub);
+		expect(openMids()).toEqual(["1"]);
+		const pending = await runInDurableObject(
+			stub,
+			(_instance, state) => state.storage.sql.exec("SELECT COUNT(*) AS n FROM pending_closes").one().n as number,
+		);
+		expect(pending).toBe(0);
+		// The refused pull left no offer to answer: the guest can pull again.
+		expect((await receive(meeting.code, guest.token, session, pull.track_ids)).tracks).toHaveLength(2);
+	});
+
 	it("refuses a mid that is not the form of a browser, and closes each track of a participant that sent one", async () => {
 		const meeting = await newMeeting();
 		await joinAsMember(meeting.code, await signIn("ada@dock.test"));

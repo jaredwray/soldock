@@ -42,6 +42,11 @@ export interface RealtimeFake {
 	failNext(status: number, match?: string): void;
 	/** The next push or pull makes its tracks, and then gives no answer, as a request that timed out. */
 	loseNextAnswer(): void;
+	/**
+	 * The next push or pull makes its tracks, and then gives the answer of `make` in place of the usual one. `make`
+	 * gets the usual body.
+	 */
+	replaceNextAnswer(make: (usual: Record<string, unknown>) => Response): void;
 	/** The SFU no longer has this session, as after its life ended. Each later call for it gets 410. */
 	endSession(sessionId: string): void;
 }
@@ -54,6 +59,7 @@ export function fakeRealtime(): RealtimeFake {
 	let failStatus: number | null = null;
 	let failMatch = "";
 	let loseAnswer = false;
+	let replaceAnswer: ((usual: Record<string, unknown>) => Response) | null = null;
 	let counter = 0;
 	const tag = crypto.randomUUID().slice(0, 8);
 	const foreign = (path: string) => {
@@ -116,12 +122,15 @@ export function fakeRealtime(): RealtimeFake {
 			const local = items.filter((item) => item.location === "local");
 			const lose = loseAnswer;
 			loseAnswer = false;
+			const replace = replaceAnswer;
+			replaceAnswer = null;
+			const respond = (usual: Record<string, unknown>) => (replace ? replace(usual) : Response.json(usual));
 			if (local.length > 0) {
 				for (const item of local) {
 					tracks.push({ trackName: item.trackName as string, mid: item.mid as string, location: "local", open: true });
 				}
 				if (lose) throw new Error("no answer");
-				return Response.json({
+				return respond({
 					requiresImmediateRenegotiation: false,
 					tracks: local.map((item) => ({ mid: item.mid, trackName: item.trackName })),
 					sessionDescription: { type: "answer", sdp: "v=0 answer" },
@@ -143,7 +152,7 @@ export function fakeRealtime(): RealtimeFake {
 				return { mid, trackName: item.trackName, sessionId: item.sessionId };
 			});
 			if (lose) throw new Error("no answer");
-			return Response.json({
+			return respond({
 				requiresImmediateRenegotiation: true,
 				tracks: out,
 				sessionDescription: { type: "offer", sdp: "v=0 offer" },
@@ -184,6 +193,9 @@ export function fakeRealtime(): RealtimeFake {
 		},
 		loseNextAnswer() {
 			loseAnswer = true;
+		},
+		replaceNextAnswer(make) {
+			replaceAnswer = make;
 		},
 		endSession(sessionId) {
 			sessions.delete(sessionId);

@@ -21,15 +21,36 @@ export interface RealtimeConfig {
 	turn: { keyId: string; token: string } | null;
 }
 
-/** A failure of the SFU or of TURN. `status` is the HTTP status, or 0 when no answer came. */
+/**
+ * A failure of the SFU or of TURN. `status` is the HTTP status, or 0 when no answer came.
+ *
+ * `uncertain` is true when the caller does not know if the SFU applied the request: no answer came, the body of
+ * the answer did not arrive, the answer is not JSON, or a 2xx answer does not have the expected shape. After such a
+ * failure of a call that makes tracks, the caller must close what the SFU possibly made.
+ */
 export class RealtimeError extends Error {
 	readonly status: number;
 	readonly code: string | null;
-	constructor(message: string, status: number, code: string | null) {
+	readonly uncertain: boolean;
+	constructor(message: string, status: number, code: string | null, uncertain = false) {
 		super(message);
 		this.status = status;
 		this.code = code;
+		this.uncertain = uncertain;
 	}
+}
+
+/** A 2xx answer that does not have the expected shape. */
+function malformed(what: string, status = 200): RealtimeError {
+	return new RealtimeError(`The media service gave an answer with the wrong shape: ${what}.`, status, null, true);
+}
+
+/** The `tracks` of an answer, or null when the answer does not have a list of objects there. */
+function trackList(answer: { tracks?: unknown }): TrackResult[] | null {
+	const tracks = answer.tracks;
+	if (!Array.isArray(tracks)) return null;
+	if (tracks.some((track) => typeof track !== "object" || track === null)) return null;
+	return tracks as TrackResult[];
 }
 
 /** True for a base that may get the App Secret: https, or a loopback host for the tests on one machine. */
@@ -93,20 +114,44 @@ async function call<T>(config: RealtimeConfig, method: string, path: string, bod
 			signal: AbortSignal.timeout(TIMEOUT_MS),
 		});
 	} catch (error) {
-		throw new RealtimeError(`The media service did not answer: ${String(error)}`, 0, null);
+		throw new RealtimeError(`The media service did not answer: ${String(error)}`, 0, null, true);
 	}
-	const text = await response.text();
+	let text: string;
+	try {
+		text = await response.text();
+	} catch (error) {
+		// The headers came, and the body did not. The SFU possibly applied the request.
+		throw new RealtimeError(
+			`The answer of the media service stopped before its end (${response.status}): ${String(error)}`,
+			response.status,
+			null,
+			true,
+		);
+	}
 	let parsed: Record<string, unknown> = {};
 	if (text.trim() !== "") {
+		let value: unknown;
 		try {
-			parsed = JSON.parse(text) as Record<string, unknown>;
+			value = JSON.parse(text);
 		} catch {
+			// The SFU answers with JSON. A different answer comes from a system between, which knows nothing of the
+			// state of the SFU.
 			throw new RealtimeError(
 				`The media service gave an answer that is not JSON (${response.status}).`,
 				response.status,
 				null,
+				true,
 			);
 		}
+		if (typeof value !== "object" || value === null || Array.isArray(value)) {
+			throw new RealtimeError(
+				`The media service gave an answer that is not a JSON object (${response.status}).`,
+				response.status,
+				null,
+				true,
+			);
+		}
+		parsed = value as Record<string, unknown>;
 	}
 	const code = typeof parsed.errorCode === "string" ? parsed.errorCode : null;
 	if (!response.ok || code) {
@@ -124,12 +169,15 @@ async function call<T>(config: RealtimeConfig, method: string, path: string, bod
 export async function newSession(config: RealtimeConfig): Promise<string> {
 	const answer = await call<{ sessionId?: string }>(config, "POST", "/sessions/new");
 	if (typeof answer.sessionId !== "string" || answer.sessionId === "") {
-		throw new RealtimeError("The media service gave no session id.", 200, null);
+		throw malformed("no session id");
 	}
 	return answer.sessionId;
 }
 
-/** Pushes the local tracks of an offer. Returns the answer of the SFU and the result of each track. */
+/**
+ * Pushes the local tracks of an offer. Returns the answer of the SFU and one result for each track of the request.
+ * An answer without an SDP answer, or without a result for each track, is an uncertain failure.
+ */
 export async function pushTracks(
 	config: RealtimeConfig,
 	sessionId: string,
@@ -140,13 +188,26 @@ export async function pushTracks(
 		sessionDescription: { type: "offer", sdp: offer },
 		tracks: tracks.map((track) => ({ location: "local", mid: track.mid, trackName: track.trackName })),
 	});
-	if (answer.sessionDescription?.type !== "answer") {
-		throw new RealtimeError("The media service gave no answer to the offer.", 200, null);
+	const description = answer.sessionDescription;
+	if (description?.type !== "answer" || typeof description.sdp !== "string") {
+		throw malformed("no answer to the offer");
 	}
-	return { answer: answer.sessionDescription.sdp, tracks: answer.tracks ?? [] };
+	const results = trackList(answer);
+	if (!results || results.length !== tracks.length) throw malformed("no result for each pushed track");
+	for (const track of tracks) {
+		const result = results.find((item) => item.trackName === track.trackName);
+		// The object records the mid of the request, so the SFU must not name a different mid.
+		if (!result || (!result.errorCode && result.mid !== undefined && result.mid !== track.mid)) {
+			throw malformed("no result for each pushed track");
+		}
+	}
+	return { answer: description.sdp, tracks: results };
 }
 
-/** Pulls the tracks of other sessions into a session. The SFU then sends an offer that the browser answers. */
+/**
+ * Pulls the tracks of other sessions into a session. The SFU then sends an offer that the browser answers. Returns
+ * one result for each track of the request: a mid or an error. A different answer is an uncertain failure.
+ */
 export async function pullTracks(
 	config: RealtimeConfig,
 	sessionId: string,
@@ -155,8 +216,19 @@ export async function pullTracks(
 	const answer = await call<TracksAnswer>(config, "POST", `/sessions/${encodeURIComponent(sessionId)}/tracks/new`, {
 		tracks: tracks.map((track) => ({ location: "remote", sessionId: track.sessionId, trackName: track.trackName })),
 	});
-	const offer = answer.sessionDescription?.type === "offer" ? answer.sessionDescription.sdp : null;
-	return { offer, renegotiate: answer.requiresImmediateRenegotiation === true, tracks: answer.tracks ?? [] };
+	const results = trackList(answer);
+	if (!results || results.length !== tracks.length) throw malformed("no result for each pulled track");
+	for (const track of tracks) {
+		const result = results.find((item) => item.trackName === track.trackName && item.sessionId === track.sessionId);
+		if (!result || (!result.errorCode && (typeof result.mid !== "string" || result.mid === ""))) {
+			throw malformed("no result for each pulled track");
+		}
+	}
+	const description = answer.sessionDescription;
+	const offer = description?.type === "offer" && typeof description.sdp === "string" ? description.sdp : null;
+	// Without an offer, the browser cannot receive the new pulls, and the object does not keep them.
+	if (offer === null && results.some((result) => !result.errorCode)) throw malformed("no offer for the pulled tracks");
+	return { offer, renegotiate: answer.requiresImmediateRenegotiation === true, tracks: results };
 }
 
 /** Gives the SFU the answer of the browser to its offer. */
@@ -178,8 +250,12 @@ export async function sessionState(config: RealtimeConfig, sessionId: string): P
 		if (error instanceof RealtimeError && (error.status === 410 || error.status === 404)) return null;
 		throw error;
 	}
+	// A session without tracks can have no `tracks` key. A value there that is not a list of objects does not show
+	// that the session has no open track.
+	const tracks: (TrackResult & { status?: string })[] | null = answer.tracks === undefined ? [] : trackList(answer);
+	if (!tracks) throw malformed("no list of tracks");
 	const mids: string[] = [];
-	for (const track of answer.tracks ?? []) {
+	for (const track of tracks) {
 		if (typeof track.mid === "string" && track.status !== "inactive") mids.push(track.mid);
 	}
 	return mids;
@@ -189,7 +265,8 @@ export async function sessionState(config: RealtimeConfig, sessionId: string): P
  * Closes tracks of a session with `force`, without an SDP exchange: the SFU stops the media of each mid at once.
  * Returns the mids that the SFU confirmed as closed. A mid that was closed before counts as closed
  * (`close_track_error`). A session that the SFU no longer has (410) has no open track. Each other failure leaves
- * the mid out of the result, and the caller tries again later.
+ * the mid out of the result, and the caller tries again later. An answer without a result for a mid is such a
+ * failure.
  */
 export async function closeTracks(
 	config: RealtimeConfig,
@@ -209,12 +286,17 @@ export async function closeTracks(
 					force: true,
 				},
 			);
-			const failed = new Set<string>();
-			for (const track of answer.tracks ?? []) {
-				if (track.mid && track.errorCode && track.errorCode !== "close_track_error") failed.add(track.mid);
+			const confirmed = new Set<string>();
+			for (const track of trackList(answer) ?? []) {
+				if (typeof track.mid !== "string") continue;
+				if (!track.errorCode || track.errorCode === "close_track_error") confirmed.add(track.mid);
 			}
-			for (const mid of batch) if (!failed.has(mid)) closed.add(mid);
-			if (failed.size > 0) log("warn", "meet: the media service did not close tracks", { count: failed.size });
+			let failed = 0;
+			for (const mid of batch) {
+				if (confirmed.has(mid)) closed.add(mid);
+				else failed += 1;
+			}
+			if (failed > 0) log("warn", "meet: the media service did not close tracks", { count: failed });
 		} catch (error) {
 			if (error instanceof RealtimeError && error.status === 410) {
 				for (const mid of batch) closed.add(mid);

@@ -271,6 +271,14 @@ function socketTag(participantId: string): string {
 	return `p:${participantId}`;
 }
 
+/**
+ * True when the SFU possibly applied the change of a call that failed. Each error that is not a `RealtimeError`
+ * counts too: the object does not know where it came from.
+ */
+function uncertain(error: unknown): boolean {
+	return !(error instanceof RealtimeError) || error.uncertain;
+}
+
 function isLive(state: ParticipantState): boolean {
 	return state === "waiting" || state === "admitted";
 }
@@ -1117,8 +1125,9 @@ export class MeetingDO extends DurableObject<Env> {
 			try {
 				result = await pushTracks(config, row.sfu_session_id, input.offer, planned);
 			} catch (error) {
-				// Without an answer, the object does not know if the SFU made the tracks. So it closes their mids.
-				if (error instanceof RealtimeError && error.status === 0) {
+				// Without an answer that the object can use, it does not know if the SFU made the tracks. So it closes
+				// their mids.
+				if (uncertain(error)) {
 					this.queueCloses(
 						row.id,
 						row.sfu_session_id,
@@ -1129,7 +1138,9 @@ export class MeetingDO extends DurableObject<Env> {
 				return this.failure(error);
 			}
 			const after = this.participantRow("id", row.id);
-			const made = result.tracks.filter((track) => !track.errorCode && track.mid).map((track) => track.mid as string);
+			// `pushTracks` gives one result for each track of the request. The SFU made each track without an error.
+			const refused = new Set(result.tracks.filter((track) => track.errorCode).map((track) => track.trackName));
+			const made = planned.filter((track) => !refused.has(track.trackName)).map((track) => track.mid);
 			if (after?.state !== "admitted" || after.session_epoch !== row.session_epoch) {
 				this.queueCloses(row.id, row.sfu_session_id, made);
 				this.kick();
@@ -1235,9 +1246,9 @@ export class MeetingDO extends DurableObject<Env> {
 					wanted.map((item) => ({ sessionId: item.sessionId, trackName: item.track.track_name })),
 				);
 			} catch (error) {
-				// Without an answer, the SFU can have pulls with mids that the object does not know. The object reads
-				// the session and closes each track without a row.
-				if (error instanceof RealtimeError && error.status === 0) {
+				// Without an answer that the object can use, the SFU can have pulls with mids that the object does not
+				// know. The object reads the session and closes each track without a row.
+				if (uncertain(error)) {
 					this.queueSweep(row.id, row.sfu_session_id);
 					this.kick();
 				}
