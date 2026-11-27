@@ -505,8 +505,8 @@ MCP clients. The app has no UI-only path.
     browser asks before it closes or reloads the tab. A link in the app does not ask.
 - **Shared mailboxes.** The UI name of a team mailbox, on the Admin page.
   - The card of a shared mailbox has **Aliases** (`MailboxAliases.tsx`) under the name: a list of the
-    extra addresses of the mailbox, a **Remove** button for each one (with a confirmation), and a form to
-    add one (`directory.list_mailbox_aliases`, `directory.add_mailbox_alias`,
+    extra addresses of the mailbox, a **Remove** button for each one (with a confirmation), and, in the same
+    box under a line (`panel-form-divided`, as in the member editor), a form to add one (`directory.list_mailbox_aliases`, `directory.add_mailbox_alias`,
     `directory.remove_mailbox_alias`). As in the New member form, the admin types the part before `@` and
     selects a saved domain from a list (`directory.list_mail_domains`). The list selects the domain of the
     primary address of the mailbox first (`defaultMailDomain`). With no saved domain, the form is disabled,
