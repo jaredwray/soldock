@@ -1126,7 +1126,10 @@ export class CalendarDO extends DurableObject<Env> {
 	 * before the first start of its series or after `series_end_at`, so the query also reads each series with
 	 * a moved occurrence in the range.
 	 */
-	private seriesInRange(query: Pick<ListQuery, "min" | "max" | "minDate" | "maxDate">): EventView[] {
+	private seriesInRange(
+		query: Pick<ListQuery, "min" | "max" | "minDate" | "maxDate">,
+		budget = Number.POSITIVE_INFINITY,
+	): EventView[] {
 		const series = this.sql
 			.exec<Row>(
 				`SELECT ${COLUMNS} FROM events
@@ -1144,11 +1147,15 @@ export class CalendarDO extends DurableObject<Env> {
 			)
 			.toArray()
 			.map(toRecord);
-		return series.flatMap((event) =>
-			this.seriesViews(event, { min: query.min, max: query.max }, CALENDAR_LIMITS.occurrencesPerSeries, (view) =>
-				inRange(view, query),
-			),
-		);
+		// With a budget, the expansion stops as soon as it has more entries than the budget: the caller then knows
+		// that the range is too full, without the work of each series.
+		const views: EventView[] = [];
+		for (const event of series) {
+			const cap = Math.min(CALENDAR_LIMITS.occurrencesPerSeries, budget - views.length + 1);
+			if (cap <= 0) break;
+			views.push(...this.seriesViews(event, { min: query.min, max: query.max }, cap, (view) => inRange(view, query)));
+		}
+		return views;
 	}
 
 	get(call: CalendarCall, eventId: string): EventView | Refusal {
@@ -1189,7 +1196,10 @@ export class CalendarDO extends DurableObject<Env> {
 			.toArray();
 		if (single.length > BUSY_ROWS) return { unknown: true };
 		// The limit counts the occurrences of each series too, not only the single events.
-		const views = [...single.map((row) => this.masterView(toRecord(row))), ...this.seriesInRange(query)];
+		const views = [
+			...single.map((row) => this.masterView(toRecord(row))),
+			...this.seriesInRange(query, BUSY_ROWS - single.length),
+		];
 		if (views.length > BUSY_ROWS) return { unknown: true };
 		const intervals: [number, number][] = [];
 		for (const view of views) {
