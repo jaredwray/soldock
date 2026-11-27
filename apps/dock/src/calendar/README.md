@@ -728,9 +728,12 @@ write no record.
   own events of the delegate open in the normal dialog, with `calendar_id` on each call. The dialog has
   no reminder there, because the reminder belongs to the owner, and the server gives the owner the
   default reminder of a new event. **Find a time** runs as the owner.
-- When the owner removes the grant, the next read gets `forbidden`, and the page shows "You cannot use
-  the calendar of …" with no events.
-
+- When the person has no `schedule` grant, or the owner removes it, the read gets `forbidden`. The page
+  shows "You cannot use the calendar of …" with no events, and **New event** is not available.
+- One read of that calendar runs at a time. The interval, focus and `online` start no read while a read
+  runs, so a slow read shows its answer.
+- A path with the own id of the person, `/calendar/person/<own id>/…`, shows the own calendar and goes to
+  its normal path.
 - For each range (week or month), the web app gets the cursor of now first, then reads the range. A change after that cursor makes a catch-up
   read it, and the range loads again, so no change during the first read is lost.
 - It catches up on `calendar.changed`, on `hello` after each connect of the events socket, and on focus. While
@@ -780,15 +783,21 @@ write no record.
   event of its socket. `chat.mark_activity_read` of that credential does not mark a reminder read, so it
   cannot stop the push of a reminder. The events socket sends `calendar.reminder` only to a socket whose
   credential held `calendar.read` at the open.
-- `applySnapshot`, `applyResponse` and `freeBusy` are not open to a handler of a different principal:
-  only the outbox of a `CalendarDO` and the free/busy handler call them, and each one checks the owner of
-  the object.
+- `applySnapshot`, `applyResponse`, `applyGrant`, `freeBusy` and `accessOf` do not pass `enter`. They
+  are not open to a handler of a different principal: only the outbox of a `CalendarDO`, the free/busy
+  handler and the handler of `calendar.list_shared_calendars` call them.
+- `applySnapshot`, `applyResponse` and `freeBusy` each check the owner of the object.
+- `applyGrant` pins the owner of the object, and ignores a message from that owner. A grant has a
+  version, so an older state changes nothing. It writes only the hint `shared_with_me`.
+- `accessOf` does not pin the owner. It returns only the own grant of the caller, and null on the object
+  of a different owner.
 
 ## Known limits
 
 - The calendar of a different person in the web app updates each 30 seconds, not live. It uses the time
   zone of the browser of the delegate.
-
+- Code from before schema 5 does not know the outbox kind `grant`. After a rollback, that code tries a
+  `grant` row again at each attempt, and the row stays.
 - An attendee follows a change of the organizer after the delivery of the outbox, normally at once.
   While the calendar of an attendee is not reachable, a reminder of the old time can fire there.
 - A copy of an invitation counts for the limits of the calendar of the attendee. A new copy is not stored

@@ -117,7 +117,12 @@ export function CalendarApp({ view, date, calendarId }: CalendarAppProps) {
 	return (
 		<main id="main" className="page-main cal-main" tabIndex={-1}>
 			<PageHeader title="Calendar" icon="calendar">
-				<button type="button" className="button button-primary" onClick={() => createAt(newEventDay)}>
+				<button
+					type="button"
+					className="button button-primary"
+					disabled={refused}
+					onClick={() => createAt(newEventDay)}
+				>
 					<Icon name="plus" />
 					New event
 				</button>
@@ -194,7 +199,10 @@ export function CalendarApp({ view, date, calendarId }: CalendarAppProps) {
 			)}
 			{refused && (
 				<div className="cal-error" role="alert">
-					<span>You cannot use the calendar of {ownerName}. The access ended.</span>
+					<span>
+						You cannot use the calendar of {ownerName}. {ownerName} did not give you schedule access, or the access
+						ended.
+					</span>
 					<Link to={calendarPath(view, anchor)} className="button button-small">
 						My calendar
 					</Link>

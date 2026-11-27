@@ -219,9 +219,12 @@ describe("the change feed of a calendar", () => {
 				);
 			});
 		await refuse(true);
-		await ada.call("calendar.update_event", { event_id: event.id, attendee_ids: [grace.id] });
-		await ada.call("calendar.update_event", { event_id: event.id, attendee_ids: [grace.id, owner.id] });
-		await refuse(false);
+		try {
+			await ada.call("calendar.update_event", { event_id: event.id, attendee_ids: [grace.id] });
+			await ada.call("calendar.update_event", { event_id: event.id, attendee_ids: [grace.id, owner.id] });
+		} finally {
+			await refuse(false);
+		}
 		await settleCalendars(ada.id, grace.id, owner.id);
 		const responses = (await changesAfter(grace, graceStart)).filter(
 			(change) => change.type === "calendar.rsvp.changed",
