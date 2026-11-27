@@ -458,9 +458,6 @@ export const calendarHandlers: Pick<HandlerMap<CallContext>, CalendarOperation> 
 			visibility: input.visibility,
 			...timeOf(input.when),
 		};
-		const attendees = (await resolveAttendees(call, owner, input.attendee_ids)) ?? [];
-		const external = (await resolveExternal(call, owner, input.attendee_emails, attendees.length)) ?? [];
-		assertMayMail(call, external);
 		const { idempotency_key: key, ...request } = input;
 		const idempotency =
 			key === undefined
@@ -469,6 +466,13 @@ export const calendarHandlers: Pick<HandlerMap<CallContext>, CalendarOperation> 
 						key: `${call.caller.principal.id}:${key}`,
 						requestHash: await sha256Hex(JSON.stringify(["calendar.create_event", request])),
 					};
+		// A retry returns the first event before the checks of now: an attendee who left, or a narrower mail policy,
+		// does not refuse the event that the first call added.
+		const replayed = idempotency ? await stub.replay(ctx, idempotency) : null;
+		if (replayed) return { event: toEvent(accept(replayed)) };
+		const attendees = (await resolveAttendees(call, owner, input.attendee_ids)) ?? [];
+		const external = (await resolveExternal(call, owner, input.attendee_emails, attendees.length)) ?? [];
+		assertMayMail(call, external);
 		const id = newId("evt");
 		const record = accept(
 			await stub.create(ctx, {

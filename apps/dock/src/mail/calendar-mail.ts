@@ -51,13 +51,17 @@ export async function sendCalendarMail(env: Env, input: CalendarMailInput): Prom
 	if (!principal || principal.archived_at !== null) return { status: "refused", reason: "sender" };
 	const to = input.to.toLowerCase();
 	if (deniedOutboundAddresses(principal, [to]).length > 0) return { status: "refused", reason: "policy" };
+	// The principal that made the change: the owner, or a delegate. The message names it in `sentBy`, as for
+	// mail.send, so the outbox of the mailbox checks its policy again before each delivery.
+	let actor = principal;
 	if (input.actorId !== undefined && input.actorId !== principal.id) {
 		// A delegate can lose its access or get a narrower policy after the change. The policy of the send is the
 		// policy of now.
-		const actor = await getPrincipal(env.DIRECTORY, input.actorId);
-		if (!actor || actor.archived_at !== null || deniedOutboundAddresses(actor, [to]).length > 0) {
+		const delegate = await getPrincipal(env.DIRECTORY, input.actorId);
+		if (!delegate || delegate.archived_at !== null || deniedOutboundAddresses(delegate, [to]).length > 0) {
 			return { status: "refused", reason: "policy" };
 		}
+		actor = delegate;
 	}
 	let from = principal.address;
 	const wanted = input.fromAddress?.toLowerCase();
@@ -78,7 +82,7 @@ export async function sendCalendarMail(env: Env, input: CalendarMailInput): Prom
 		attachments: [],
 		calendar: { method: input.method, ics: input.ics },
 		headers:
-			principal.kind === "agent"
+			actor.kind === "agent"
 				? [
 						["X-Asterra-Agent", "true"],
 						["X-Soldock-Agent", "true"],
@@ -102,9 +106,9 @@ export async function sendCalendarMail(env: Env, input: CalendarMailInput): Prom
 		replyThreadId: null,
 		recipients: [{ address: to, kind: "external", mailboxId: null, self: false }],
 		sentBy: {
-			principal_id: principal.id,
-			kind: principal.kind === "human" ? "human" : "agent",
-			display_name: principal.display_name,
+			principal_id: actor.id,
+			kind: actor.kind === "human" ? "human" : "agent",
+			display_name: actor.display_name,
 		},
 		mayScreen: false,
 	});

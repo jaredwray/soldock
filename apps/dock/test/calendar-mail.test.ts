@@ -1,4 +1,4 @@
-import { runInDurableObject } from "cloudflare:test";
+import { runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import type { CalendarChange, CalendarEvent, InputOf } from "@asterra/contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -10,6 +10,7 @@ import googleUpdate from "../../../fixtures/calendar/google-update-timed.ics?raw
 import outlookTentative from "../../../fixtures/calendar/outlook-reply-tentative.ics?raw";
 import outlookTimed from "../../../fixtures/calendar/outlook-request-timed.ics?raw";
 import recurring from "../../../fixtures/calendar/recurring-request.ics?raw";
+import type { CalendarDO } from "../src/calendar/calendar.ts";
 import { type ICalInvite, parseICalendar } from "../src/calendar/ical.ts";
 import { sendCalendarMail } from "../src/mail/index.ts";
 import {
@@ -295,9 +296,13 @@ describe("invitations by mail to addresses outside the organization", () => {
 			mode: "allowlist",
 			allowlist: ["partner.example"],
 		});
-		const { event } = await bot.call("calendar.create_event", fromBot);
+		const { event } = await bot.call("calendar.create_event", { ...fromBot, idempotency_key: "bot-invite" });
 		await deliverAll(ada.id);
 		expect(email.sent).toEqual([{ from: "ada@dock.test", to: "guest@partner.example" }]);
+		// The Sent mail of Ada names the agent, so the outbox of the mailbox checks its policy before each delivery.
+		const { threads } = await ada.call("mail.list_threads", { query: "in:sent" });
+		const { messages } = await ada.call("mail.get_thread", { thread_id: threads[0]?.id as string });
+		expect(messages.at(-1)?.sent_by).toMatchObject({ principal_id: bot.id, kind: "agent" });
 
 		// After a change of the policy, a change of the meeting is refused, and a message of the agent that waits
 		// does not leave.
@@ -305,6 +310,9 @@ describe("invitations by mail to addresses outside the organization", () => {
 		expect(
 			await codeOf(bot.call("calendar.update_event", { event_id: event.id, calendar_id: ada.id, title: "Moved" })),
 		).toBe("policy_denied");
+		// A retry of the first create returns the first event: the policy of now does not refuse it.
+		const retry = await bot.call("calendar.create_event", { ...fromBot, idempotency_key: "bot-invite" });
+		expect(retry.event.id).toBe(event.id);
 		expect(
 			await sendCalendarMail(env as Env, {
 				senderId: ada.id,
@@ -348,6 +356,41 @@ describe("invitations by mail to addresses outside the organization", () => {
 		await deliverAll(ada.id);
 		// Only the first event sent an invitation.
 		expect(email.sent).toEqual([{ from: "ada@dock.test", to: "guest@partner.example" }]);
+	});
+
+	it("writes a late answer into the invitation that waits in the outbox", async () => {
+		const { event } = await ada.call("calendar.create_event", meeting(["priya@partner.example"]));
+		await deliverAll(ada.id);
+		await inviteEarlier();
+		const mailbox = env.MAILBOX.get(env.MAILBOX.idFromName(ada.id));
+		const pause = (on: boolean) =>
+			runInDurableObject(mailbox, (_instance, state) => {
+				if (on) state.storage.sql.exec("INSERT OR REPLACE INTO meta (key, value) VALUES ('delivery_pause', '1')");
+				else state.storage.sql.exec("DELETE FROM meta WHERE key = 'delivery_pause'");
+			});
+		// The change of the title waits in the outbox of the calendar while the mailbox is paused.
+		await pause(true);
+		await ada.call("calendar.update_event", { event_id: event.id, title: "Design review v2" });
+		await vi.waitFor(async () =>
+			expect((await calendarOutbox(ada.id)).find((row) => row.kind === "mail")?.attempts).toBe(1),
+		);
+		// The answer to the first invitation arrives now, through the mailbox hand-off.
+		const applied = await runInDurableObject(calendarStub(ada.id), (instance) =>
+			(instance as unknown as CalendarDO).applyMail(ada.id, {
+				ics: stamped(googleReply.replaceAll("{UID}", event.id), Date.now() - 60_000),
+				from: "priya@partner.example",
+				verification: "verified",
+				receivedAt: Date.now(),
+			}),
+		);
+		expect(applied).toEqual({ applied: true });
+		await pause(false);
+		await deliverAll(ada.id);
+		const last = (await sentInvites(ada)).at(-1);
+		expect(last?.subject).toBe("Updated invitation: Design review v2");
+		expect(last?.ical.attendees).toEqual([
+			expect.objectContaining({ email: "priya@partner.example", partstat: "ACCEPTED" }),
+		]);
 	});
 
 	it("asks the attendees by mail again after a new time", async () => {
@@ -679,6 +722,18 @@ describe("invitations by mail from outside the organization", () => {
 		expect(events).toEqual([
 			expect.objectContaining({ id: event?.id, external_attendees: [], external_organizer: null, untrusted: true }),
 		]);
+
+		// The reminder of the copy has the title from the mail, so its Activity item is untrusted too.
+		vi.useFakeTimers({ toFake: ["Date"] });
+		try {
+			vi.setSystemTime(new Date("2026-12-03T14:51:00Z"));
+			await runDurableObjectAlarm(calendarStub(ada.id));
+			await runDurableObjectAlarm(calendarStub(ada.id));
+		} finally {
+			vi.useRealTimers();
+		}
+		const { items } = await ada.call("chat.list_activity", { filter: "calendar_reminder" });
+		expect(items.map((item) => [item.preview, item.untrusted])).toEqual([["Façade samples", true]]);
 	});
 
 	// The answer on the copy goes to the organizer by mail, so it has the rules of a send.

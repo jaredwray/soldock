@@ -1605,6 +1605,40 @@ export class CalendarDO extends DurableObject<Env> {
 	// --- Changes of the organizer ------------------------------------------------------------------
 
 	/**
+	 * The event of an idempotency key that a call of `calendar.create_event` used, or null for a new key. The
+	 * handler asks first, so a retry returns the first event before the checks of the directory and of the mail
+	 * policy of now. The same key with a different request gives `conflict`.
+	 */
+	replay(call: CalendarCall, idempotency: { key: string; requestHash: string }): EventView | Refusal | null {
+		const role = this.enterShared(call);
+		if (typeof role !== "string") return role;
+		return this.replayOf(role, call, idempotency, Date.now());
+	}
+
+	private replayOf(
+		role: Role,
+		call: CalendarCall,
+		idempotency: { key: string; requestHash: string },
+		now: number,
+	): EventView | Refusal | null {
+		const earlier = this.sql
+			.exec<{ request_hash: string; event_id: string }>(
+				"SELECT request_hash, event_id FROM idempotency WHERE key = ? AND created_at > ?",
+				idempotency.key,
+				now - IDEMPOTENCY_TTL_MS,
+			)
+			.toArray()[0];
+		if (!earlier) return null;
+		if (earlier.request_hash !== idempotency.requestHash) {
+			return refuse("conflict", "The idempotency key was used with a different request.");
+		}
+		const event = this.row(earlier.event_id);
+		return event
+			? viewFor(role, call.actorId, this.masterView(event))
+			: refuse("conflict", "The event of this idempotency key does not exist now.");
+	}
+
+	/**
 	 * Adds an event. With an idempotency key that a call with the same request used, it returns that event and
 	 * adds nothing. The check and the write run with no await between them, so two calls with one key add one
 	 * event.
@@ -1614,22 +1648,8 @@ export class CalendarDO extends DurableObject<Env> {
 		if (typeof role !== "string") return role;
 		const now = Date.now();
 		if (input.idempotency) {
-			const earlier = this.sql
-				.exec<{ request_hash: string; event_id: string }>(
-					"SELECT request_hash, event_id FROM idempotency WHERE key = ? AND created_at > ?",
-					input.idempotency.key,
-					now - IDEMPOTENCY_TTL_MS,
-				)
-				.toArray()[0];
-			if (earlier) {
-				if (earlier.request_hash !== input.idempotency.requestHash) {
-					return refuse("conflict", "The idempotency key was used with a different request.");
-				}
-				const event = this.row(earlier.event_id);
-				return event
-					? viewFor(role, call.actorId, this.masterView(event))
-					: refuse("conflict", "The event of this idempotency key does not exist now.");
-			}
+			const earlier = this.replayOf(role, call, input.idempotency, now);
+			if (earlier) return earlier;
 		}
 		const count = Number(this.meta("event_count") ?? 0);
 		if (count >= CALENDAR_LIMITS.events) {
@@ -2880,7 +2900,31 @@ export class CalendarDO extends DurableObject<Env> {
 			row.email,
 		);
 		if (response !== row.response) this.noteChange("calendar.rsvp.changed", event.id, event.revision, null);
+		this.refreshQueuedRequests(event.id, row.email, response);
 		return { applied: true };
+	}
+
+	/**
+	 * Writes a new answer of an attendee by mail into each REQUEST of the event that waits in the outbox. Else a
+	 * REQUEST that the organizer queued before the answer arrived says NEEDS-ACTION for that attendee, and a client
+	 * can take it as a new question. The bytes of a row change only before its send: a row that sends now keeps
+	 * its version, and the drain removes it.
+	 */
+	private refreshQueuedRequests(eventId: string, email: string, response: EventResponse): void {
+		const rows = this.sql
+			.exec<{ id: string; payload: string }>(
+				"SELECT id, payload FROM outbox WHERE kind = 'mail' AND event_id = ?",
+				eventId,
+			)
+			.toArray();
+		for (const row of rows) {
+			const payload = JSON.parse(row.payload) as MailPayload;
+			if (payload.method !== "REQUEST") continue;
+			const attendee = payload.ical.attendees.find((item) => item.email === email);
+			if (!attendee || attendee.partstat === PARTSTAT[response]) continue;
+			attendee.partstat = PARTSTAT[response];
+			this.sql.exec("UPDATE outbox SET payload = ? WHERE id = ?", JSON.stringify(payload), row.id);
+		}
 	}
 
 	/**
@@ -3196,6 +3240,8 @@ export class CalendarDO extends DurableObject<Env> {
 						start_at: reminder.start_at,
 						minutes: event.reminder_minutes,
 						actor: organizer,
+						// The title of a copy by mail comes from outside the organization.
+						untrusted: event.mail !== null,
 					};
 					this.sql.exec(
 						`INSERT OR IGNORE INTO outbox (id, kind, target_id, event_id, payload, version, attempts, next_attempt_at, created_at)
