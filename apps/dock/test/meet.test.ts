@@ -2,7 +2,7 @@ import { runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import { MEET_LIMITS, MEET_SOCKET_CLOSE, MEET_TOKEN_HEADER, meetCallPath, meetSocketPath } from "@asterra/contracts";
 import { beforeEach, describe, expect, it } from "vitest";
-import meetScopesMigration from "../migrations/0041_meet_scopes.sql?raw";
+import meetScopesMigration from "../migrations/0043_meet_scopes.sql?raw";
 import {
 	type Actor,
 	api,

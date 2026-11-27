@@ -11,6 +11,7 @@ import {
 	MAIL_INBOUND_QUEUE,
 } from "./mail/index.ts";
 import { log } from "./platform/index.ts";
+import { isQueue } from "./queues.ts";
 import { isWorkerPath } from "./routes.ts";
 import { runScheduled } from "./scheduled.ts";
 import { handleWebhookBatch, WEBHOOK_QUEUE } from "./webhooks/index.ts";
@@ -40,24 +41,25 @@ export default {
 		await handleEmail(message, env);
 	},
 
+	// Each instance has its own queue names (`queues.ts`), so a batch goes to its consumer by the suffix.
 	async queue(batch, env) {
-		if (batch.queue === MAIL_INBOUND_QUEUE) {
+		if (isQueue(batch.queue, MAIL_INBOUND_QUEUE)) {
 			await handleInboundBatch(batch, env);
 			return;
 		}
-		if (batch.queue === WEBHOOK_QUEUE) {
+		if (isQueue(batch.queue, WEBHOOK_QUEUE)) {
 			await handleWebhookBatch(batch, env);
 			return;
 		}
-		if (batch.queue === CHAT_PREVIEW_QUEUE) {
+		if (isQueue(batch.queue, CHAT_PREVIEW_QUEUE)) {
 			await handleLinkPreviewBatch(batch, env);
 			return;
 		}
-		if (batch.queue === CHAT_PUSH_QUEUE) {
+		if (isQueue(batch.queue, CHAT_PUSH_QUEUE)) {
 			await handleChatPushBatch(batch, env);
 			return;
 		}
-		if (batch.queue === MAIL_AUTOLABEL_QUEUE) {
+		if (isQueue(batch.queue, MAIL_AUTOLABEL_QUEUE)) {
 			await handleAutoLabelBatch(batch, env);
 			return;
 		}

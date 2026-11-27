@@ -24,13 +24,15 @@ interface RailProps {
 	open: boolean;
 	/** True when the page has a sidebar. The sidebar then gets the focus when the drawer opens. */
 	hasSidebar: boolean;
+	/** Opens the feedback dialog. Unset when feedback is off: the rail then has no Feedback button. */
+	onFeedback?: (() => void) | undefined;
 }
 
 /**
- * The rail at the left of each page: the mark of Asterra, the products, Admin, Settings and the
- * account button. At 900px and below it is part of the drawer that the menu button opens.
+ * The rail at the left of each page: the mark of Asterra, the products, Admin, Feedback (when an admin turned it
+ * on), Settings and the account button. At 900px and below it is part of the drawer that the menu button opens.
  */
-export function Rail({ route, open, hasSidebar }: RailProps) {
+export function Rail({ route, open, hasSidebar, onFeedback }: RailProps) {
 	const { whoami } = useSession();
 	const showAdmin = useAdminAccess(whoami.principal);
 	const product = productOf(route);
@@ -81,6 +83,17 @@ export function Rail({ route, open, hasSidebar }: RailProps) {
 				</>
 			)}
 			<span className="rail-spacer" />
+			{onFeedback && (
+				<button
+					type="button"
+					className="rail-link rail-button"
+					onClick={onFeedback}
+					title="Report a bug or send an idea"
+				>
+					<Icon name="feedback" size={22} />
+					<span>Feedback</span>
+				</button>
+			)}
 			<Link to="/settings" className="rail-link" aria-current={route.page === "settings" ? "page" : undefined}>
 				<Icon name="settings" size={22} />
 				<span>Settings</span>

@@ -132,8 +132,9 @@ test("a biweekly meeting: one move, one cancel, the views of the organizer and t
 					time_min: `${first}T00:00:00Z`,
 					time_max: `${addDays(first, 60)}T00:00:00Z`,
 				});
+				// Free/busy needs a grant of the attendee, so the attendee reads the own busy times.
 				const { calendars } = await api<{ calendars: { busy: { start: string }[] }[] }>(
-					organizer,
+					attendee,
 					"GET",
 					`/api/v1/calendar/free_busy?${params}`,
 				);

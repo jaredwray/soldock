@@ -11,7 +11,7 @@
 | **Owns** | `MeetingDO`, one for each meeting. |
 | **Depends on** | `platform`, `identity`. The Cloudflare Realtime SFU and TURN service, through `realtime.ts`. |
 | **Operations** | `meet.create_meeting`, `meet.get_meeting`, `meet.end_meeting`, `meet.list_participants`, `meet.admit_participant`, `meet.deny_participant`, `meet.remove_participant` |
-| **Data inventory** | `MeetingDO` tables `meta`, `meeting`, `participants`, `tracks`, `pulls`, `removed_principals` and `pending_closes`. No R2 object and no D1 table. D1 migration 0041 changes `principals.agent_scopes` only. Backups: not built yet. |
+| **Data inventory** | `MeetingDO` tables `meta`, `meeting`, `participants`, `tracks`, `pulls`, `removed_principals` and `pending_closes`. No R2 object and no D1 table. D1 migration 0043 changes `principals.agent_scopes` only. Backups: not built yet. |
 
 Public surface: `index.ts` only. Other domains must not import files from this folder directly.
 
@@ -168,7 +168,7 @@ reason, and closes with `4403` (refused, removed, credential) or `4410` (ended, 
 
 - `meet.read` (get, list participants) and `meet.write` (create, end, admit, deny, remove). Both are in the ceiling
   of a person, of an agent and of a service account. They are not in `OWN_KEY_SCOPES`, and not in the resource scopes.
-- D1 migration 0041 gives an account from before Meet `meet.read` when it holds `calendar.read`, and `meet.write`
+- D1 migration 0043 gives an account from before Meet `meet.read` when it holds `calendar.read`, and `meet.write`
   when it holds `calendar.write`. A second run changes nothing.
 - An agent can host a meeting and run its lobby through MCP. It cannot send or receive media.
 - Each change of an operation gets an `audit()` line with the meeting id, and the participant id for a decision.

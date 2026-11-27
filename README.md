@@ -118,8 +118,17 @@ month view shows six weeks. An event has a title, a time, a location and a descr
 in a time zone, or all day. An all-day event is on the same days in each time zone. On a phone, the views
 become a list of the days that have events.
 
-An agent adds and reads the events of its own calendar with tools such as `calendar_create_event` and
-`calendar_list_events`. Invitations, recurring events and reminders come in later layers.
+An event can have attendees from the organization: each one gets the event on their calendar. **Find a
+time** in the event dialog shows the busy times of the attendees and suggests free times. A person who
+shares no availability shows as unknown, never as free. In **Calendar › Settings › Sharing**, a person lets a
+colleague or an agent see the busy times, or schedule on their behalf.
+
+An agent uses the same operations through MCP: `calendar_find_times`, then `calendar_create_event` with
+`calendar_id` and `attendee_ids`. The person is the organizer, and the audit names the agent.
+
+An event can also invite addresses outside the organization: each one gets a standard iCalendar invitation
+by mail, and its answer by mail updates the event. An invitation by mail from outside shows a card in Mail
+with Yes, Maybe and No. Yes and Maybe put the meeting on your calendar.
 
 ![The week view of Calendar with the meetings of the studio director](docs/screenshots/calendar.png)
 
@@ -210,27 +219,32 @@ Workspace without a commitment is 20% higher: $8.40, $16.80 or $26.40.
 
 ### Self-host on Cloudflare
 
-Asterra has no one-click deploy. GitHub Actions deploys the Worker from `main`, and no computer holds
-a Cloudflare token. The [self-hosting guide](docs/self-hosting.md) is a first draft. It describes
-the instance of this project, so use your own domains.
+The operator CLI installs Asterra into your own Cloudflare account, and upgrades it. You need a
+Cloudflare account with the Workers Paid plan, your domain as a zone in that account, and Node 22 or
+later. The [self-hosting guide](docs/self-hosting.md) is a first draft.
 
-1. Get a Cloudflare account with the Workers Paid plan. Add your mail domain to the account as an
-   apex zone.
-2. Fork this repository. In `apps/dock/wrangler.jsonc`, replace the hosts of this project with your
-   own dock host.
-3. Do the [GitHub setup](docs/self-hosting.md#github-setup): protect `main`, create the `development`
-   environment, and add the `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` secrets.
-   [Token permissions](docs/self-hosting.md#token-permissions) lists the permissions of the token.
-4. Push to `main`. The deploy workflow makes the D1 database, the R2 bucket and the queues. Then it
-   applies the migrations and attaches your host.
+```sh
+npx asterra install
+```
+
+Until the first release is on npm, run the CLI from a clone of this repository:
+`pnpm install && pnpm build && pnpm release:build`, then `node tools/cli/src/bin.ts install`.
+
+1. The CLI signs you in to Cloudflare with wrangler, and asks for the host (for example
+   `work.example.com`) and a name for the instance.
+2. It deploys the Worker with its own D1 database, R2 bucket and queues (`asterra-<name>-*`), applies
+   the migrations, sets the secrets, and runs a smoke check. One account can hold more than one instance.
+3. Keep the `ENCRYPTION_KEY` that it shows in a password manager.
+4. Create the owner in the browser or in the terminal. The CLI then deletes `SETUP_TOKEN`.
 5. Set up [Mail](docs/self-hosting.md#mail): send the catch-all address of Email Routing to the
    Worker, and add your domain to Email Service.
-6. Add the `SETUP_TOKEN` secret to the Worker, and open your dock host. Create the owner. Then delete
-   the secret.
-7. Create people and agents under **Admin › Members**.
+6. Create people and agents under **Admin › Members**.
 
-The production deploy workflow is not built yet. Email Service is in beta, and its terms are for
-transactional mail. A spike examines if it can carry mail between people.
+To upgrade, run `npx asterra upgrade`. It shows the release notes, checks the schema, applies the
+migrations, deploys, and rolls back when the smoke check fails.
+
+Email Service is in beta, and its terms are for transactional mail. A spike examines if it can carry
+mail between people.
 
 ### Try it on your computer
 

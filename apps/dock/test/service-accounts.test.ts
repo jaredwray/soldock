@@ -545,8 +545,12 @@ describe("calls of a service account", () => {
 		expect(missing.find((entry) => entry.scope === "chat.read")?.description).toBe(
 			SERVICE_SCOPE_DESCRIPTIONS["chat.read"],
 		);
-		// A membership can give mail.read in a team mailbox, so no tool of mail.read is out of reach.
-		expect(missing.find((entry) => entry.scope === "mail.read")).toBeUndefined();
+		// A membership can give mail.read in a team mailbox, so the mail tools are not out of reach. The two tools of
+		// invitations by mail act on the own mailbox only, so they are.
+		expect(missing.find((entry) => entry.scope === "mail.read")?.operations).toEqual([
+			"calendar.get_mail_invitation",
+			"calendar.respond_to_mail_invitation",
+		]);
 
 		expect(await codeOf(token.call("account.create_api_key", { label: "x", scopes: ["mail.read"] }))).toBe("forbidden");
 		expect(

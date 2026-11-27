@@ -26,6 +26,8 @@ export function audit(fields: {
 	mailbox?: string;
 	/** The drive of a Drive, Docs or Sheets operation, when it is not the own drive of the actor. */
 	space?: string;
+	/** The calendar of a Calendar operation, when it is not the own calendar of the actor. */
+	calendar?: string;
 	result: "ok" | "denied" | "error";
 	requestId?: string;
 	code?: string;

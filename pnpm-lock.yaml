@@ -153,6 +153,8 @@ importers:
 
   tools/budgets: {}
 
+  tools/cli: {}
+
   tools/licenses: {}
 
   tools/seed:

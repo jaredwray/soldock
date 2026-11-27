@@ -45,6 +45,7 @@ export {
 	recordExpiryNotice,
 } from "./expiry-notice.ts";
 export { identityHandlers } from "./handlers.ts";
+export { listMailboxAliases } from "./mailbox-aliases.ts";
 export {
 	delegatedMailboxesOf,
 	delegatedMailboxFor,

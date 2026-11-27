@@ -1,9 +1,11 @@
 // The dock Worker: the whole backend, served from one origin.
-// The top level is production. `env.development` is the development Worker at work.soldock.org, which
-// deploy-development.yaml deploys on each push to main. The dock Worker has no other
-// deployment environments. test/config.test.ts checks that both declare the same bindings.
+// This file is the app, for `wrangler dev`, the tests and the release. It names no instance: no host,
+// no account. The operator CLI (tools/cli) makes the config of each instance from this file at release
+// time: each resource name becomes `<prefix>-<suffix>` (the prefix `soldock` gives the names below), and
+// the CLI adds the Worker name and the custom domain. A key that the CLI does not know stops the release
+// build, so add each new binding to tools/cli/src/config.ts too. Each resource name starts with `soldock-`.
 // After editing bindings, run `pnpm --filter @asterra/dock types` and commit worker-configuration.d.ts.
-// Use whole-line comments only: test/config.test.ts strips them to parse this file as JSON.
+// Use whole-line comments only: test/config.test.ts and the CLI strip them to parse this file as JSON.
 {
 	"$schema": "node_modules/wrangler/config-schema.json",
 	"name": "soldock-dock",
@@ -14,15 +16,14 @@
 	// of /mcp then ends at once and closes its watch sockets.
 	"compatibility_flags": ["nodejs_compat", "enable_request_signal"],
 	"rules": [{ "type": "Text", "globs": ["**/*.sql"], "fallthrough": true }],
-	// Production serves only its custom domain, never a second origin on workers.dev.
+	// An instance serves only its custom domain, never a second origin on workers.dev.
 	"workers_dev": false,
-	// Preview URLs are also workers.dev origins, with the same bindings. Each env inherits this value.
+	// Preview URLs are also workers.dev origins, with the same bindings.
 	"preview_urls": false,
 	"observability": {
 		"enabled": true
 	},
 	// One hourly run of `scheduled` (src/scheduled.ts): the notice before a token of a service account ends.
-	// A named env inherits this value.
 	"triggers": {
 		"crons": ["23 * * * *"]
 	},
@@ -150,85 +151,5 @@
 		// The mail domains of this deployment. Addresses on them are local. Comma-separated.
 		// The receiving server whose Authentication-Results header the mailbox trusts.
 		"MAIL_AUTHSERV_ID": "mx.cloudflare.net"
-	},
-	"env": {
-		// A named env inherits `main`, the compatibility settings, observability, `assets`, routes and
-		// Durable Object migrations. It does not inherit bindings or vars: when production gets a binding,
-		// add the development one here.
-		"development": {
-			"name": "soldock-dock-dev",
-			// The development host is the custom domain work.soldock.org, in the soldock.org zone of the
-			// development account. It is the only origin: workers.dev is off. The deploy attaches the domain
-			// and makes its DNS record. Do not give work.soldock.org another DNS record.
-			"workers_dev": false,
-			"routes": [{ "pattern": "work.soldock.org", "custom_domain": true }],
-			"d1_databases": [
-				{ "binding": "DIRECTORY", "database_name": "soldock-directory", "migrations_dir": "migrations" }
-			],
-			"r2_buckets": [{ "binding": "BLOBS", "bucket_name": "soldock-blobs" }],
-			"queues": {
-				"producers": [
-					{ "binding": "MAIL_INBOUND", "queue": "soldock-mail-inbound" },
-					{ "binding": "MAIL_INBOUND_DLQ", "queue": "soldock-mail-inbound-dlq" },
-					{ "binding": "WEBHOOKS", "queue": "soldock-webhooks" },
-					{ "binding": "WEBHOOKS_DLQ", "queue": "soldock-webhooks-dlq" },
-					{ "binding": "CHAT_PREVIEWS", "queue": "soldock-chat-previews" },
-					{ "binding": "CHAT_PUSH", "queue": "soldock-chat-push" },
-					{ "binding": "MAIL_AUTOLABEL", "queue": "soldock-mail-autolabel" }
-				],
-				"consumers": [
-					{
-						"queue": "soldock-mail-inbound",
-						"max_batch_size": 10,
-						"max_batch_timeout": 2,
-						"max_retries": 5,
-						"dead_letter_queue": "soldock-mail-inbound-dlq"
-					},
-					{
-						"queue": "soldock-webhooks",
-						"max_batch_size": 10,
-						"max_batch_timeout": 2,
-						"max_retries": 10,
-						"dead_letter_queue": "soldock-webhooks-dlq"
-					},
-					{
-						"queue": "soldock-chat-previews",
-						"max_batch_size": 5,
-						"max_batch_timeout": 1,
-						"max_retries": 3,
-						"max_concurrency": 2
-					},
-					{
-						"queue": "soldock-chat-push",
-						"max_batch_size": 10,
-						"max_batch_timeout": 1,
-						"max_retries": 5
-					},
-					{
-						"queue": "soldock-mail-autolabel",
-						"max_batch_size": 5,
-						"max_batch_timeout": 2,
-						"max_retries": 3,
-						"max_concurrency": 4
-					}
-				]
-			},
-			"send_email": [{ "name": "EMAIL" }],
-			"durable_objects": {
-				"bindings": [
-					{ "name": "MAILBOX", "class_name": "MailboxDO" },
-					{ "name": "DRIVE_SPACE", "class_name": "DriveSpaceDO" },
-					{ "name": "DOCUMENT", "class_name": "DocumentDO" },
-					{ "name": "CHAT_ROOM", "class_name": "ChatRoomDO" },
-					{ "name": "CHAT_SEARCH", "class_name": "ChatSearchDO" },
-					{ "name": "PRINCIPAL", "class_name": "PrincipalDO" },
-					{ "name": "CALENDAR", "class_name": "CalendarDO" },
-					{ "name": "MEETING", "class_name": "MeetingDO" }
-				]
-			},
-			"vars": {
-				"MAIL_AUTHSERV_ID": "mx.cloudflare.net"
-			}
-		}
 	}
 }

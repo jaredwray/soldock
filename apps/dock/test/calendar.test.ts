@@ -341,9 +341,10 @@ describe("who reaches a calendar", () => {
 		expect(await codeOf(ada.call("calendar.get_event", { event_id: botEvent.id }))).toBe("not_found");
 		// The sponsor and the owner of the organization do not read the calendar of an agent.
 		expect(await codeOf(owner.call("calendar.get_event", { event_id: botEvent.id }))).toBe("not_found");
-		// No field names a different calendar.
-		const other = { event_id: adaEvent.id, calendar_id: ada.id } as unknown as InputOf<"calendar.get_event">;
-		expect(await codeOf(bot.call("calendar.get_event", other))).toBe("invalid");
+		// calendar_id names a different calendar only with a grant of its owner.
+		expect(await codeOf(bot.call("calendar.get_event", { event_id: adaEvent.id, calendar_id: ada.id }))).toBe(
+			"forbidden",
+		);
 		expect((await ada.call("calendar.get_event", { event_id: adaEvent.id })).event).toEqual(adaEvent);
 	});
 
@@ -377,10 +378,14 @@ describe("who reaches a calendar", () => {
 		await setLegacyScopes(bot.id, ["account.read", "mail.read"]);
 		expect(await codeOf(bot.call("calendar.list_events", range))).toBe("forbidden");
 		const { missing_scopes } = await bot.call("account.whoami");
+		// A grant of a person can still give it the calendar of that person, so whoami does not list the operations
+		// that take calendar_id, as for a mailbox delegate.
 		expect(missing_scopes.find((entry) => entry.scope === "calendar.read")?.operations).toEqual([
-			"calendar.list_events",
-			"calendar.get_event",
+			"calendar.get_mail_invitation",
 			"calendar.query_free_busy",
+			"calendar.list_shared_calendars",
+			"calendar.list_changes",
+			"calendar.create_webhook_subscription",
 		]);
 	});
 

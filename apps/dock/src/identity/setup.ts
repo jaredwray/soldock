@@ -36,7 +36,9 @@ import mailboxDelegatesSchema from "../../migrations/0037_mailbox_delegates.sql"
 import calendarScopesSchema from "../../migrations/0038_calendar_scopes.sql";
 import chatPushSettingsSchema from "../../migrations/0039_chat_push_settings.sql";
 import mailboxAliasSchema from "../../migrations/0040_mailbox_aliases.sql";
-import meetScopesSchema from "../../migrations/0041_meet_scopes.sql";
+import calendarWebhooksSchema from "../../migrations/0041_calendar_webhooks.sql";
+import feedbackSchema from "../../migrations/0042_feedback.sql";
+import meetScopesSchema from "../../migrations/0043_meet_scopes.sql";
 import { log, OperationError, randomToken } from "../platform/index.ts";
 import { allMailboxIds } from "./team-mailboxes.ts";
 
@@ -146,6 +148,11 @@ function freshDirectoryStatements(db: D1Database): D1PreparedStatement[] {
 		"DROP TABLE IF EXISTS mail_settings",
 		// The Web Push settings and their key pair belong to the old organization.
 		"DROP TABLE IF EXISTS chat_push_settings",
+		// The feedback settings belong to the old organization, and the reports and attachments name the old
+		// principals. The bytes of an old attachment stay in R2 with no row, so its address stops at once.
+		"DROP TABLE IF EXISTS feedback_attachments",
+		"DROP TABLE IF EXISTS feedback_reports",
+		"DROP TABLE IF EXISTS feedback_settings",
 		// Remove references from agents before SQLite deletes the principals table.
 		"DELETE FROM principals WHERE kind = 'agent'",
 		"DROP TABLE principals",
@@ -188,6 +195,8 @@ function freshDirectoryStatements(db: D1Database): D1PreparedStatement[] {
 		...calendarScopesSchema.split("--> statement-breakpoint"),
 		...chatPushSettingsSchema.split("--> statement-breakpoint"),
 		...mailboxAliasSchema.split("--> statement-breakpoint"),
+		...calendarWebhooksSchema.split("--> statement-breakpoint"),
+		...feedbackSchema.split("--> statement-breakpoint"),
 		...meetScopesSchema.split("--> statement-breakpoint"),
 		// The directory now has the schema of each bundled migration. Record them in the table that
 		// `wrangler d1 migrations apply` reads, or it runs them again later. A second run of 0004 would
@@ -239,5 +248,7 @@ const BUNDLED_MIGRATIONS = [
 	"0038_calendar_scopes.sql",
 	"0039_chat_push_settings.sql",
 	"0040_mailbox_aliases.sql",
-	"0041_meet_scopes.sql",
+	"0041_calendar_webhooks.sql",
+	"0042_feedback.sql",
+	"0043_meet_scopes.sql",
 ] as const;

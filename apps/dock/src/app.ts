@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import { mountRestApi } from "./api/index.ts";
 import { mountChatFiles, mountChatIncomingWebhooks, mountChatSocket } from "./chat/index.ts";
 import { mountDriveTransfer } from "./drive/index.ts";
+import { mountFeedbackFiles } from "./feedback/index.ts";
 import { type CallContext, mountAuthRoutes, mountEventsSocket, mountOAuthRoutes } from "./identity/index.ts";
 import { mountMcp } from "./mcp/index.ts";
 import { mountMeetCalls, mountMeetSocket } from "./meet/index.ts";
@@ -20,7 +21,7 @@ export type AppEnv = { Bindings: Env; Variables: RequestIdVariables };
 
 /**
  * The HTTP app for Worker-owned paths (see `WORKER_PREFIXES`): `/auth/*`, the OAuth server (`/oauth/*`,
- * `/.well-known/*`), REST, MCP, the uploads and downloads of Drive (`/blob/drive/*`, `/dl/drive/*`), the files of Chat (`/dl/chat/*`), the room sockets of Chat (`/ws/chat/*`), the events socket (`/ws/events`), and the call routes
+ * `/.well-known/*`), REST, MCP, the uploads and downloads of Drive (`/blob/drive/*`, `/dl/drive/*`), the files of Chat (`/dl/chat/*`), the attachments of feedback (`/dl/feedback/*`), the room sockets of Chat (`/ws/chat/*`), the events socket (`/ws/events`), and the call routes
  * of Meet (`/api/v1/meet/calls/*`, `/ws/meet/*`). The REST routes and the MCP tools
  * come from the operation registry, with the handlers that the composition root passes in. MCP
  * resource subscriptions use the change feeds that it passes in. MCP Events uses the subscriptions that
@@ -43,6 +44,7 @@ export function createApp(
 	mountMcp(app, handlers, watchers, events);
 	mountDriveTransfer(app);
 	mountChatFiles(app);
+	mountFeedbackFiles(app);
 	mountChatIncomingWebhooks(app);
 	mountChatSocket(app);
 	mountEventsSocket(app);

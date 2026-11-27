@@ -67,6 +67,8 @@ export interface CalendarReminderInput {
 	minutes: number;
 	/** The organizer of the event. */
 	actor: ActivityActor;
+	/** True when the title comes from outside the organization: a meeting by mail. */
+	untrusted?: boolean | undefined;
 }
 
 // Each person, agent and service account has one PrincipalDO. It holds their room state, notification
@@ -876,6 +878,7 @@ export class PrincipalDO extends DurableObject<Env> {
 				actor: item.actor,
 				emoji: null,
 				preview: item.title,
+				untrusted: item.untrusted === true,
 				event: {
 					event_id: item.event_id,
 					occurrence_id: item.occurrence_id,
@@ -894,6 +897,7 @@ export class PrincipalDO extends DurableObject<Env> {
 				title: item.title,
 				start: new Date(item.start_at).toISOString(),
 				minutes: item.minutes,
+				untrusted: item.untrusted === true,
 			};
 			// The reminder has content of the calendar. A socket of a credential without `calendar.read` does not get it.
 			this.ctx.waitUntil(this.enqueue([JSON.stringify(reminder)], undefined, (state) => state.calendar === true));
@@ -1099,6 +1103,17 @@ export class PrincipalDO extends DurableObject<Env> {
 		}
 		if (ended > 0) log("info", "events sockets closed: the credential stopped", { sockets: ended });
 		return ended;
+	}
+
+	/**
+	 * Tells each events socket that holds `calendar.read` that the calendar of the principal has new changes.
+	 * The event has no content: the client reads `calendar.list_changes`. Only the `CalendarDO` of this
+	 * principal calls this method. A socket gets the event only after the credential check of `deliver`.
+	 */
+	async calendarChanged(calendarId: string): Promise<void> {
+		if (this.ctx.getWebSockets().length === 0) return;
+		const event: PrincipalEvent = { type: "calendar.changed", calendar_id: calendarId };
+		await this.enqueue([JSON.stringify(event)], undefined, (state) => state.calendar === true && !state.feed);
 	}
 
 	override async alarm(): Promise<void> {

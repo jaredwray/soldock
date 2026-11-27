@@ -125,7 +125,9 @@ test("an admin adds an alias to a shared mailbox, and removes it", async ({ brow
 	const card = page.locator("details.admin-card").filter({ hasText: name });
 	await card.locator("summary").click();
 	await expect(card.getByText("This mailbox has no aliases.")).toBeVisible();
-	await card.getByLabel("New alias").fill(alias.toUpperCase());
+	// The list of domains has an accessible name and selects a saved domain. The admin types only the part before @.
+	await expect(card.getByRole("combobox", { name: "Email domain of the alias" })).toHaveText("example.com");
+	await card.getByLabel("New alias").fill(`REFUNDS-${local}`);
 	await card.getByRole("button", { name: "Add alias" }).click();
 	await expect(page.getByText(`${alias} now receives mail for ${name}.`)).toBeVisible();
 	await expect(card.getByRole("cell", { name: alias, exact: true })).toBeVisible();

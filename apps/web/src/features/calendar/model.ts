@@ -10,7 +10,10 @@ import {
 	DEFAULT_REMINDER_MINUTES,
 	dateToUtcMs,
 	daysBetween,
+	type EventResponse,
+	type EventVisibility,
 	type EventWhenValue,
+	type MailInvitation,
 	type Recurrence,
 	type RecurrenceInput,
 	type SeriesTime,
@@ -228,6 +231,8 @@ export interface EventForm {
 	count: string;
 	/** The own reminder, in minutes before the start, or "none". */
 	reminder: ReminderChoice;
+	/** private: a person or an agent that schedules for you sees only the time. */
+	visibility: EventVisibility;
 }
 
 export type RepeatChoice = "none" | "daily" | "weekly" | "biweekly" | "monthly";
@@ -312,6 +317,7 @@ export function newEventForm(date: string, hour = 9): EventForm {
 		description: "",
 		...REPEAT_DEFAULTS,
 		reminder: String(DEFAULT_REMINDER_MINUTES) as ReminderChoice,
+		visibility: "default",
 	};
 }
 
@@ -327,6 +333,7 @@ export function formOf(event: CalendarEvent, zone: string): EventForm {
 		until: rule?.until ?? "",
 		count: String(rule?.count ?? 10),
 		reminder: (event.reminder_minutes === null ? "none" : String(event.reminder_minutes)) as ReminderChoice,
+		visibility: event.visibility,
 	};
 	if (event.when.kind === "all_day") {
 		return {
@@ -521,7 +528,7 @@ export function periodTitle(view: CalendarView, date: string, firstDay: FirstDay
  * The time of an event as text, in the time zone of the person: "All day", "All day, Dec 1 – Dec 3", or
  * "9:00 AM – 10:00 AM".
  */
-export function whenText(event: CalendarEvent, zone: string): string {
+export function whenText(event: Pick<CalendarEvent, "when">, zone: string): string {
 	if (event.when.kind === "all_day") {
 		const last = addDays(event.when.end_date, -1);
 		return last === event.when.start_date
@@ -537,10 +544,116 @@ export function whenText(event: CalendarEvent, zone: string): string {
 	return `${shortDate(zonedDate(start, zone))}, ${startText} – ${shortDate(zonedDate(end, zone))}, ${endText}`;
 }
 
+/** The text of an answer to an invitation. */
+export function responseLabel(response: EventResponse): string {
+	switch (response) {
+		case "accepted":
+			return "Yes";
+		case "tentative":
+			return "Maybe";
+		case "declined":
+			return "No";
+		default:
+			return "No answer";
+	}
+}
+
+/** The time of an invitation by mail with its day: "Thu, Dec 3, 9:00 AM – 10:00 AM", or "All day, Dec 10". */
+export function invitationWhenText(when: CalendarEvent["when"], zone: string): string {
+	const day = invitationDay(when, zone);
+	const text = whenText({ when }, zone);
+	if (when.kind === "all_day") return text === "All day" ? `All day, ${longDate(day)}` : text;
+	return text.includes(",") ? text : `${longDate(day)}, ${text}`;
+}
+
+/** The first day of an invitation by mail on the clock of the person, for the link to its week. */
+export function invitationDay(when: CalendarEvent["when"], zone: string): string {
+	return when.kind === "all_day" ? when.start_date : zonedDate(Date.parse(when.start), zone);
+}
+
+/** True for the attachments of a message with a calendar part. The card of the invitation shows only then. */
+export function hasCalendarPart(attachments: readonly { filename: string; mime_type: string }[]): boolean {
+	return attachments.some(
+		(attachment) =>
+			/^(text\/calendar|application\/ics)\b/i.test(attachment.mime_type) || /\.ics$/i.test(attachment.filename),
+	);
+}
+
+/** The line of the card of an invitation by mail that tells where the meeting is now. Null for no line. */
+export function invitationStateText(invitation: Pick<MailInvitation, "method" | "state">): string | null {
+	if (invitation.method === "reply") return null;
+	// A cancellation changes the calendar only when it comes from the verified sender of the invitation.
+	if (invitation.method === "cancel" && (invitation.state === "on_calendar" || invitation.state === "outdated")) {
+		return "Asterra did not apply this cancellation. The meeting is on your calendar.";
+	}
+	switch (invitation.state) {
+		case "on_calendar":
+			return "This meeting is on your calendar.";
+		case "outdated":
+			return "A newer version is on your calendar.";
+		case "cancelled":
+			return "The organizer cancelled this meeting.";
+		case "not_invited":
+			return "This invitation is for a different address.";
+		case "unsupported":
+			return "Asterra cannot read this invitation: it is a recurring meeting, or it has a time that Asterra cannot read.";
+		default:
+			return null;
+	}
+}
+
+/** The line of the card of an answer by mail: "Priya Natarajan answered Yes." */
+export function replyText(invitation: Pick<MailInvitation, "attendees">): string | null {
+	const [attendee] = invitation.attendees;
+	if (!attendee || attendee.response === "needs_action") return null;
+	return `${attendee.name || attendee.email} answered ${responseLabel(attendee.response)}.`;
+}
+
+/** The address outside the organization that the person types, in lowercase, or null. */
+export function typedAddress(text: string): string | null {
+	const address = text.trim().toLowerCase();
+	return /^[a-z0-9.!#$%&'*+/=?^_`{|}~-]{1,64}@[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$/.test(
+		address,
+	)
+		? address
+		: null;
+}
+
+/**
+ * An interval of busy or free time in a time zone: "Mon, Mar 4, 10:00 AM – 12:30 PM", with the date of the end
+ * when it is on a different day.
+ */
+export function intervalText(start: number, end: number, zone: string): string {
+	const day = format(zone, { weekday: "short", month: "short", day: "numeric" });
+	const startText = `${day.format(start)}, ${timeText(start, zone)}`;
+	if (zonedDate(start, zone) === zonedDate(end - 1, zone)) return `${startText} – ${timeText(end, zone)}`;
+	return `${startText} – ${day.format(end)}, ${timeText(end, zone)}`;
+}
+
+/** The title of an event, or "Busy" for a private event of a different person that has no title for the caller. */
+export function eventTitle(event: CalendarEvent): string {
+	return event.title || "Busy";
+}
+
+/**
+ * The form with the time of a suggestion of Find a time. The start and the end are instants: the form shows them
+ * on the clock of the time zone of the dialog, which can differ from the zone of the search.
+ */
+export function withSlot(form: EventForm, start: number, end: number, zone: string): EventForm {
+	return {
+		...form,
+		allDay: false,
+		startDate: zonedDate(start, zone),
+		startTime: wallTime(start, zone),
+		endDate: zonedDate(end, zone),
+		endTime: wallTime(end, zone),
+	};
+}
+
 /** The accessible name of an event: its title, its time and its place. */
 export function eventLabel(event: CalendarEvent, zone: string): string {
 	return [
-		event.title,
+		eventTitle(event),
 		whenText(event, zone),
 		event.location,
 		event.recurrence ? repeatText(event.recurrence) : "",

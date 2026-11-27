@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useState } from "react";
+import { lazy, Suspense, useEffect, useMemo, useState } from "react";
 import { useSession } from "../features/auth/session.tsx";
+import { useFeedbackStatus } from "../features/feedback/useFeedbackStatus.ts";
 import { useMailboxes, useMailSettings } from "../features/mail/data.ts";
 import { MailApp } from "../features/mail/MailApp.tsx";
 import { Icon } from "../lib/icons.tsx";
@@ -29,6 +30,10 @@ const DriveApp = lazyPage(() => import("../features/drive/DriveApp.tsx").then((m
 const ConnectPage = lazyPage(() => import("../features/connect/ConnectPage.tsx").then((module) => module.ConnectPage));
 const DocPage = lazyPage(() => import("../features/docs/DocPage.tsx").then((module) => module.DocPage));
 const SheetPage = lazyPage(() => import("../features/sheets/SheetPage.tsx").then((module) => module.SheetPage));
+// The feedback dialog loads when a person opens it the first time. It shows no loading page.
+const FeedbackWidget = lazy(() =>
+	import("../features/feedback/FeedbackWidget.tsx").then((module) => ({ default: module.FeedbackWidget })),
+);
 
 /** The signed-in app: the rail and the page for the current route. */
 export function Shell() {
@@ -47,6 +52,11 @@ export function Shell() {
 	useChatNotifications(whoami.principal.id);
 	useCalendarReminders();
 	usePrincipalActivity();
+	// Feedback is off by default. The rail shows its button only when an admin turned it on.
+	const feedback = useFeedbackStatus();
+	const [feedbackOpen, setFeedbackOpen] = useState(false);
+	const [feedbackLoaded, setFeedbackLoaded] = useState(false);
+	const canSendFeedback = feedback?.can_submit === true;
 	const needsPassword =
 		whoami.sign_in?.password_set === false && !(route.page === "settings" && route.section === "security");
 
@@ -98,7 +108,20 @@ export function Shell() {
 			>
 				<Icon name="menu" />
 			</button>
-			<Rail route={route} open={navOpen} hasSidebar={navId !== null} />
+			<Rail
+				route={route}
+				open={navOpen}
+				hasSidebar={navId !== null}
+				onFeedback={
+					canSendFeedback
+						? () => {
+								setNavOpen(false);
+								setFeedbackLoaded(true);
+								setFeedbackOpen(true);
+							}
+						: undefined
+				}
+			/>
 			{needsPassword && (
 				<p className="app-banner" role="status">
 					You have no password yet. Set one now: after this session ends, you sign in with your address and a password.{" "}
@@ -106,6 +129,11 @@ export function Shell() {
 				</p>
 			)}
 			{page()}
+			{canSendFeedback && feedbackLoaded && feedback && (
+				<Suspense fallback={null}>
+					<FeedbackWidget status={feedback} route={route} open={feedbackOpen} onOpenChange={setFeedbackOpen} />
+				</Suspense>
+			)}
 			{/* A page with a sidebar has the backdrop of its sidebar. */}
 			{navOpen && navId === null && (
 				<button
@@ -173,7 +201,15 @@ export function Shell() {
 					/>
 				);
 			case "calendar":
-				return <CalendarApp view={route.view} date={route.date} />;
+				// A different calendar gets a new page, so no dialog or event of one calendar stays on the other.
+				return (
+					<CalendarApp
+						key={route.calendarId ?? "own"}
+						view={route.view}
+						date={route.date}
+						calendarId={route.calendarId}
+					/>
+				);
 			case "meet":
 				return <MeetHome />;
 			case "profile":

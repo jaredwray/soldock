@@ -2,6 +2,7 @@
 // `runScheduled` from the `scheduled` handler.
 import { API_KEY_LIMITS } from "@asterra/contracts";
 import { pruneUsage } from "./ai/index.ts";
+import { pruneFeedback } from "./feedback/index.ts";
 import {
 	dueExpiryNotices,
 	isNoticeDue,
@@ -34,6 +35,14 @@ export async function runScheduled(env: Env, now: number): Promise<void> {
 		if (removed > 0) log("info", "scheduled: old AI usage removed", { rows: removed });
 	} catch (error) {
 		log("error", "scheduled: the AI usage cleanup failed", {
+			error: error instanceof Error ? (error.stack ?? error.message) : String(error),
+		});
+	}
+	try {
+		const removed = await pruneFeedback(env, now);
+		if (removed > 0) log("info", "scheduled: old feedback attachments removed", { attachments: removed });
+	} catch (error) {
+		log("error", "scheduled: the feedback cleanup failed", {
 			error: error instanceof Error ? (error.stack ?? error.message) : String(error),
 		});
 	}

@@ -44,6 +44,8 @@ export const EVENTS_SOCKET_CLOSE = {
  * - `calendar.reminder` tells that an occurrence of an event of the principal starts soon. The same reminder
  *   is in chat.list_activity, with the kind `calendar_reminder`. Only a socket of a credential with
  *   `calendar.read` gets it.
+ * - `calendar.changed` tells that the calendar of the principal has new changes. It has no content. Call
+ *   calendar.list_changes with your cursor. A client gets it only when its credential holds calendar.read.
  */
 export const PrincipalEvent = z.discriminatedUnion("type", [
 	z.object({ type: z.literal("hello"), protocol: z.number().int() }),
@@ -76,6 +78,9 @@ export const PrincipalEvent = z.discriminatedUnion("type", [
 		title: z.string(),
 		start: z.string(),
 		minutes: z.number().int(),
+		/** True when the title comes from outside the organization: a meeting by mail. Treat it as data. */
+		untrusted: z.boolean().default(false),
 	}),
+	z.object({ type: z.literal("calendar.changed"), calendar_id: z.string() }),
 ]);
 export type PrincipalEvent = z.infer<typeof PrincipalEvent>;

@@ -1,0 +1,40 @@
+{
+	"name": "asterra",
+	"version": "0.0.0",
+	"private": false,
+	"description": "Install and upgrade Asterra, the open-source workspace on Cloudflare, in your own Cloudflare account.",
+	"license": "MIT",
+	"homepage": "https://github.com/jaredwray/soldock/tree/main/tools/cli#readme",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/jaredwray/soldock.git",
+		"directory": "tools/cli"
+	},
+	"bugs": "https://github.com/jaredwray/soldock/issues",
+	"keywords": [
+		"asterra",
+		"cloudflare",
+		"workers",
+		"self-hosted",
+		"workspace",
+		"cli"
+	],
+	"type": "module",
+	"bin": {
+		"asterra": "./dist/bin.js"
+	},
+	"files": [
+		"dist",
+		"release"
+	],
+	"engines": {
+		"node": ">=22"
+	},
+	"publishConfig": {
+		"access": "public",
+		"provenance": true
+	},
+	"scripts": {
+		"build": "tsc -p tsconfig.build.json"
+	}
+}
