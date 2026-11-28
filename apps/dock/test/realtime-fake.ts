@@ -9,10 +9,18 @@ import { vi } from "vitest";
 // different stand-in: it gets the answer for an unknown id, and it is not in `calls`.
 
 export const REALTIME_BASE = "https://rtc.live.cloudflare.com/v1";
-const APP_ID = "testrealtimeapp00000000000000001";
-const APP_SECRET = "test-realtime-app-secret";
-const TURN_KEY_ID = "testturnkey000000000000000000001";
-const TURN_TOKEN = "test-turn-key-token";
+/**
+ * The Realtime values of the tests. `test/setup.ts` saves them in `meet_settings` before each test, as Admin › Meet
+ * does. They have the form that `meet.update_settings` accepts.
+ */
+export const TEST_REALTIME = {
+	appId: "a0000000000000000000000000000001",
+	appSecret: "test-realtime-app-secret",
+	turnKeyId: "b0000000000000000000000000000001",
+	turnToken: "test-turn-key-token-01",
+} as const;
+
+export type RealtimeValues = { appId: string; appSecret: string; turnKeyId: string; turnToken: string };
 
 export interface RealtimeCall {
 	method: string;
@@ -52,7 +60,9 @@ export interface RealtimeFake {
 }
 
 /** Installs the stand-in. Other requests reach a 599 answer, so a test sees a call to an unknown host. */
-export function fakeRealtime(): RealtimeFake {
+/** A stand-in that accepts only `values`: a test of a second SFU app or TURN key passes its own. */
+export function fakeRealtime(values: RealtimeValues = TEST_REALTIME): RealtimeFake {
+	const { appId: APP_ID, appSecret: APP_SECRET, turnKeyId: TURN_KEY_ID, turnToken: TURN_TOKEN } = values;
 	const calls: RealtimeCall[] = [];
 	const sessions = new Map<string, FakeTrack[]>();
 	const order: string[] = [];

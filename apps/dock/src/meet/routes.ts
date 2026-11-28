@@ -26,7 +26,7 @@ import {
 } from "../platform/index.ts";
 import { accept, meetingStub } from "./handlers.ts";
 import { type Refusal, TOKEN_HASH_HEADER } from "./meeting.ts";
-import { meetConfigured } from "./realtime.ts";
+import { meetConfigured, NOT_CONFIGURED } from "./settings.ts";
 
 // The call routes of Meet: what a browser uses to join a meeting and to carry its media. They are not operations,
 // as the room socket of Chat and the uploads of Drive are not: a guest is not a principal, and an agent sends no
@@ -106,7 +106,7 @@ export function mountMeetCalls(app: Hono<MeetEnv>): void {
 			host_name: info.host_name,
 			status: info.status,
 			origin: info.origin,
-			media: meetConfigured(c.env) ? "ready" : "not_configured",
+			media: (await meetConfigured(c.env)) ? "ready" : "not_configured",
 			viewer: member ? { display_name: member.principal.display_name, is_host: info.viewer_is_host } : null,
 		};
 		return json(c, out);
@@ -114,7 +114,7 @@ export function mountMeetCalls(app: Hono<MeetEnv>): void {
 
 	app.post(`${BASE}/join`, async (c) => {
 		const code = codeOf(c);
-		if (!meetConfigured(c.env)) throw new OperationError("unavailable", "Meet is not set up on this server.");
+		if (!(await meetConfigured(c.env))) throw new OperationError("unavailable", NOT_CONFIGURED);
 		const input = await bodyOf(c, JoinRequest, SMALL_BODY_BYTES);
 		const member = await memberOf(c);
 		if (member && !isSameOrigin(c.req.raw)) {

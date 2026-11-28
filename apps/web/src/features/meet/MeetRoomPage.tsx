@@ -33,7 +33,7 @@ const OVER_TEXT: Record<EndReason | "unavailable", { title: string; text: string
 	expired: { title: "Your place in the meeting expired", text: "Join again with the link.", rejoin: true },
 	unavailable: {
 		title: "Meet is not set up",
-		text: "The operator of this server did not set up the media service.",
+		text: "Your organization did not set up the media service of Meet yet.",
 		rejoin: false,
 	},
 };

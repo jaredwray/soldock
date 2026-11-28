@@ -864,6 +864,8 @@ export function withEnv(
 		DRIVE_SPACE?: Env["DRIVE_SPACE"];
 		REALTIME_APP_ID?: string | undefined;
 		REALTIME_APP_SECRET?: string | undefined;
+		REALTIME_TURN_KEY_ID?: string | undefined;
+		REALTIME_TURN_KEY_TOKEN?: string | undefined;
 	},
 	path: string,
 	init: { method?: string; headers?: Record<string, string>; body?: string } = {},
@@ -1151,4 +1153,11 @@ export async function captureCalendarJobs(principalId: string): Promise<unknown[
 		};
 	});
 	return jobs;
+}
+
+/** Removes the Realtime values of Admin › Meet. With no REALTIME_* binding in the tests, Meet is then not set up. */
+export async function clearMeetSettings(): Promise<void> {
+	await env.DIRECTORY.prepare(
+		"UPDATE meet_settings SET app_id = NULL, app_secret = NULL, turn_key_id = NULL, turn_key_token = NULL, updated_at = 1",
+	).run();
 }

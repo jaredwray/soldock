@@ -13,6 +13,7 @@ const SECTIONS: Record<AdminSection, { title: string; icon: IconName; adminOnly:
 	mail: { title: "Mail", icon: "mail", adminOnly: true },
 	domains: { title: "Email domains", icon: "external", adminOnly: true },
 	ai: { title: "AI", icon: "sparks", adminOnly: true },
+	meet: { title: "Meet", icon: "video", adminOnly: true },
 };
 
 /** A member who sponsors an agent sees only those agents. The section title says so. */

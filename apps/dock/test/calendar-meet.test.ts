@@ -9,6 +9,7 @@ import {
 	calendarOutbox,
 	calendarStub,
 	callTool,
+	clearMeetSettings,
 	codeOf,
 	createActor,
 	drainOutbox,
@@ -139,12 +140,8 @@ describe("the Meet link of an event", () => {
 		await narrow("calendar.delete_event", { event_id: event.id });
 		expect((await callInfo(linked.meet?.code as string)).meeting).toBe("cancelled");
 
-		const res = await withEnv({ REALTIME_APP_ID: undefined }, "/api/v1/calendar/events", {
-			method: "POST",
-			headers: { authorization: `Bearer ${ada.key}`, "content-type": "application/json" },
-			body: JSON.stringify(review({ title: "No Meet" })),
-		});
-		expect(res.status).toBe(503);
+		await clearMeetSettings();
+		expect(await codeOf(ada.call("calendar.create_event", review({ title: "No Meet" })))).toBe("unavailable");
 		expect((await ada.call("calendar.list_events", MARCH)).events).toEqual([]);
 	});
 

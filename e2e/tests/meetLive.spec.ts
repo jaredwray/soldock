@@ -1,6 +1,8 @@
 import { appendFileSync } from "node:fs";
 import { type Browser, expect, type Page, test } from "@playwright/test";
+import { signIn } from "../support/chat.ts";
 import { createMeeting, expectMediaFlows, launchMediaBrowser, mediaContext, signInMedia } from "../support/meet.ts";
+import { BASE_URL } from "../support/server.ts";
 
 // The paths of the network to Cloudflare Realtime. Only the live-meet workflow runs this file (MEET_LIVE=1): the
 // stand-in SFU of a pull request has no TURN server. Each test writes the candidate types of the selected ICE
@@ -93,4 +95,19 @@ test("media flows over the TURN relay of Cloudflare", async () => {
 	report("turn-relay", pair);
 	expect(pair?.local).toBe("relay");
 	await close();
+});
+
+test("the connection test of Admin › Meet passes against Cloudflare", async ({ browser }) => {
+	// The live run has no saved values: the Worker secrets of .dev.vars apply, and the test uses them.
+	const admin = await signIn(browser, "tomasz");
+	try {
+		const response = await admin.request.post("/api/v1/meet/settings/test", {
+			headers: { origin: BASE_URL, "content-type": "application/json" },
+			data: {},
+		});
+		expect(response.ok(), await response.text()).toBe(true);
+		expect(await response.json()).toMatchObject({ sfu: { ok: true }, turn: { ok: true } });
+	} finally {
+		await admin.close();
+	}
 });

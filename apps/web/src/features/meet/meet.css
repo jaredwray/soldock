@@ -444,3 +444,8 @@
 		align-self: stretch;
 	}
 }
+
+/* The notice of an owner or an admin when Meet is not set up: one row above the cards. */
+.meet-home-notice {
+	grid-column: 1 / -1;
+}

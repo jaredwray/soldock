@@ -17,6 +17,7 @@ import { ChatPushCard } from "./ChatPushCard.tsx";
 import { FeedbackSettingsCard } from "./FeedbackSettingsCard.tsx";
 import { MailDomainsCard } from "./MailDomainsCard.tsx";
 import { MailSettingsCard } from "./MailSettingsCard.tsx";
+import { MeetAdminSection } from "./MeetAdminSection.tsx";
 import { memberIcon } from "./MemberIdentity.tsx";
 import { MemberPage } from "./MemberPage.tsx";
 import { listedPrincipals, type MemberFilter, MembersSection } from "./MembersSection.tsx";
@@ -259,6 +260,8 @@ export function AdminPage({ section: routeSection, memberId: routeMemberId, navO
 				return <MailDomainsCard />;
 			case "ai":
 				return <AiSection />;
+			case "meet":
+				return <MeetAdminSection />;
 		}
 	}
 }

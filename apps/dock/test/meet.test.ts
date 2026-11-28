@@ -7,6 +7,7 @@ import {
 	type Actor,
 	api,
 	callTool,
+	clearMeetSettings,
 	codeOf,
 	createActor,
 	ORIGIN,
@@ -16,7 +17,6 @@ import {
 	seedOrg,
 	setLegacyScopes,
 	signIn,
-	withEnv,
 } from "./helpers.ts";
 import { fakeRealtime, type RealtimeFake } from "./realtime-fake.ts";
 
@@ -221,15 +221,7 @@ describe("meet", () => {
 		expect((await writer("meet.end_meeting", { code: mine.code })).meeting.status).toBe("ended");
 	});
 
-	it("is off without the Realtime secrets, and names no meeting for a bad code", async () => {
-		const res = await withEnv({ REALTIME_APP_ID: undefined }, "/api/v1/meet/meetings", {
-			method: "POST",
-			headers: { authorization: `Bearer ${ada.key}`, "content-type": "application/json" },
-			body: "{}",
-		});
-		expect(res.status).toBe(503);
-		expect(((await res.json()) as { code: string }).code).toBe("unavailable");
-
+	it("is off without the Realtime values, and names no meeting for a bad code", async () => {
 		expect((await callRoute("not-a-code", "")).status).toBe(404);
 		expect((await callRoute("aaaa-bbbb-cccc-dddd", "")).status).toBe(404);
 		expect((await callRoute("aaaa-bbbb-cccc-dddd", "/join", { body: { display_name: "X" } })).status).toBe(404);
@@ -239,6 +231,10 @@ describe("meet", () => {
 		await runInDurableObject(stub, (_instance, state) => {
 			expect(state.storage.sql.exec("SELECT name FROM sqlite_master WHERE type = 'table'").toArray()).toEqual([]);
 		});
+
+		// Without the values of Admin › Meet (and no Worker secret), Meet is off.
+		await clearMeetSettings();
+		expect(await codeOf(ada.call("meet.create_meeting", {}))).toBe("unavailable");
 	});
 
 	it("keeps a guest in the lobby with no media and no roster until the host admits it", async () => {

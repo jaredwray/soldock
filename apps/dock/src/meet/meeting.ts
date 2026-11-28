@@ -25,11 +25,11 @@ import {
 	pushTracks,
 	type RealtimeConfig,
 	RealtimeError,
-	realtimeConfig,
 	renegotiate,
 	revokeTurn,
 	sessionState,
 } from "./realtime.ts";
+import { NOT_CONFIGURED, resolveRealtime } from "./settings.ts";
 
 // One MeetingDO for each meeting. Its name is the meeting code. It holds the meeting, its participants and the
 // map from the tracks of each participant to the tracks of the Realtime SFU. It is the only place that decides
@@ -835,8 +835,9 @@ export class MeetingDO extends DurableObject<Env> {
 
 	// --- Media ---------------------------------------------------------------------------------------
 
-	private config(): RealtimeConfig | Refusal {
-		return realtimeConfig(this.env) ?? refuse("unavailable", "Meet is not set up. See docs/self-hosting.md#meet.");
+	/** The Realtime values that apply now (Admin › Meet, else the Worker secrets). Each call reads them again. */
+	private async config(): Promise<RealtimeConfig | Refusal> {
+		return (await resolveRealtime(this.env)) ?? refuse("unavailable", NOT_CONFIGURED);
 	}
 
 	/** Runs `run` after the earlier SFU calls of the participant. */
@@ -862,9 +863,10 @@ export class MeetingDO extends DurableObject<Env> {
 	async mediaSession(tokenHash: string): Promise<{ session: number; ice_servers: IceServer[] } | Refusal> {
 		const first = this.admittedByToken(tokenHash);
 		if ("error" in first) return first;
-		const config = this.config();
-		if ("error" in config) return config;
 		return this.enqueue(first.id, async () => {
+			// The read of the settings waits for D1, so it runs in the queue, before the check of the participant.
+			const config = await this.config();
+			if ("error" in config) return config;
 			const before = this.admittedByToken(tokenHash);
 			if ("error" in before) return before;
 			let sessionId: string;
@@ -1065,7 +1067,9 @@ export class MeetingDO extends DurableObject<Env> {
 	 * alarm: each time two times longer, then each `CLOSE_RETRY_MAX_MS` while the meeting has data.
 	 */
 	private async closeSession(ownerId: string, sessionId: string): Promise<void> {
-		const config = realtimeConfig(this.env);
+		if (this.dueCloses(sessionId, "sweep").length === 0 && this.dueCloses(sessionId, "track").length === 0) return;
+		const config = await resolveRealtime(this.env);
+		// The read of the settings waited for D1: read the rows again after it.
 		const sweep = this.dueCloses(sessionId, "sweep").length > 0;
 		const due = this.dueCloses(sessionId, "track");
 		if (!sweep && due.length === 0) return;
@@ -1175,8 +1179,6 @@ export class MeetingDO extends DurableObject<Env> {
 	): Promise<{ answer: string; tracks: { id: string; kind: "audio" | "video"; mid: string }[] } | Refusal> {
 		const first = this.admittedByToken(tokenHash);
 		if ("error" in first) return first;
-		const config = this.config();
-		if ("error" in config) return config;
 		const kinds = new Set(input.tracks.map((track) => track.kind));
 		if (kinds.size !== input.tracks.length) return refuse("invalid", "Send at most one audio and one video track.");
 		// The contract refuses such a mid too. The object does not trust that each caller used the contract.
@@ -1187,6 +1189,9 @@ export class MeetingDO extends DurableObject<Env> {
 			return refuse("invalid", "Each track needs a different mid.");
 		}
 		return this.enqueue(first.id, async () => {
+			// The read of the settings waits for D1, so it runs in the queue, before the check of the participant.
+			const config = await this.config();
+			if ("error" in config) return config;
 			const row = this.admittedByToken(tokenHash);
 			if ("error" in row) return row;
 			if (row.session_epoch !== input.session || !row.sfu_session_id) return refuse("conflict", STALE);
@@ -1251,9 +1256,10 @@ export class MeetingDO extends DurableObject<Env> {
 	): Promise<{ ok: true } | Refusal> {
 		const first = this.admittedByToken(tokenHash);
 		if ("error" in first) return first;
-		const config = this.config();
-		if ("error" in config) return config;
 		return this.enqueue(first.id, async () => {
+			// The read of the settings waits for D1, so it runs in the queue, before the check of the participant.
+			const config = await this.config();
+			if ("error" in config) return config;
 			const row = this.admittedByToken(tokenHash);
 			if ("error" in row) return row;
 			if (row.session_epoch !== input.session || !row.sfu_session_id) return refuse("conflict", STALE);
@@ -1281,9 +1287,10 @@ export class MeetingDO extends DurableObject<Env> {
 	): Promise<{ offer: string | null; tracks: { id: string; mid: string }[]; failed: string[] } | Refusal> {
 		const first = this.admittedByToken(tokenHash);
 		if ("error" in first) return first;
-		const config = this.config();
-		if ("error" in config) return config;
 		return this.enqueue(first.id, async () => {
+			// The read of the settings waits for D1, so it runs in the queue, before the check of the participant.
+			const config = await this.config();
+			if ("error" in config) return config;
 			const row = this.admittedByToken(tokenHash);
 			if ("error" in row) return row;
 			if (row.session_epoch !== input.session || !row.sfu_session_id) return refuse("conflict", STALE);
@@ -1382,9 +1389,10 @@ export class MeetingDO extends DurableObject<Env> {
 	async answer(tokenHash: string, input: { session: number; sdp: string }): Promise<{ ok: true } | Refusal> {
 		const first = this.admittedByToken(tokenHash);
 		if ("error" in first) return first;
-		const config = this.config();
-		if ("error" in config) return config;
 		return this.enqueue(first.id, async () => {
+			// The read of the settings waits for D1, so it runs in the queue, before the check of the participant.
+			const config = await this.config();
+			if ("error" in config) return config;
 			const row = this.admittedByToken(tokenHash);
 			if ("error" in row) return row;
 			if (row.session_epoch !== input.session || !row.sfu_session_id) return refuse("conflict", STALE);
@@ -1439,8 +1447,10 @@ export class MeetingDO extends DurableObject<Env> {
 			);
 		}
 		this.broadcast();
-		const config = realtimeConfig(this.env);
-		await Promise.all([this.flushCloses(false), ...(config ? turns.map((turn) => revokeTurn(config, turn)) : [])]);
+		// The closes start now. The read of the settings for the revokes waits for D1 after that.
+		const flushing = this.flushCloses(false);
+		const config = turns.length > 0 ? await resolveRealtime(this.env) : null;
+		await Promise.all([flushing, ...(config ? turns.map((turn) => revokeTurn(config, turn)) : [])]);
 	}
 
 	/** Ends or cancels the meeting: each participant leaves, and each socket closes. */

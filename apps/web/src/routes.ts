@@ -40,6 +40,7 @@ export const ADMIN_SECTIONS = [
 	"mail",
 	"domains",
 	"ai",
+	"meet",
 ] as const;
 export type AdminSection = (typeof ADMIN_SECTIONS)[number];
 

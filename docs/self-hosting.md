@@ -319,6 +319,7 @@ The Worker stores some secrets that it must read back to do its work. With the o
 | --- | --- |
 | The VAPID private key of [Web Push](#web-push) | `chat_push_settings.private_key` |
 | The API token of [AI](#ai) from Admin › AI | `ai_settings.api_token` |
+| The App Secret and the TURN key token of [Meet](#meet) from Admin › Meet | `meet_settings.app_secret`, `turn_key_token` |
 | The signing secret, the auth key and the custom header value of each webhook endpoint | `webhook_endpoints.secret`, `auth_key`, `header_value` |
 | The signing secret of each MCP Events subscription | `webhook_endpoints.secret`, `previous_secret` |
 | The signing secret of each incoming webhook of Chat | `chat_incoming_webhooks.signing_secret` |
@@ -353,6 +354,7 @@ the correct value again, or repair each secret:
 | --- | --- | --- | --- |
 | VAPID private key | **Replace keys** in Admin › Chat | Web Push is off | Select **Replace keys** in Admin › Chat. Each browser subscribes again |
 | API token of AI | A save in Admin › AI | AI uses `AI_GATEWAY_TOKEN`. Without that secret, AI makes no calls | Enter the token again in Admin › AI |
+| App Secret and TURN key token of Meet | A save in Admin › Meet | Meet uses the `REALTIME_*` Worker secrets of that pair. Without them, Meet has no SFU app (or no TURN key) | Enter the secret again in Admin › Meet |
 | Webhook endpoint | A change of the auth key or the header seals that value. The signing secret stays as it is | No POST goes out. The endpoint shows the error `secret_unreadable`, and it stops after 5 failed events | Delete the endpoint and create it again. Give the new signing secret to the receiver |
 | MCP Events subscription | The next refresh by the client | No POST goes out, as for a webhook endpoint | The client subscribes again |
 | Incoming webhook of Chat | None | Each POST gets HTTP 401 | Delete the webhook and create it again. Give the new signing secret to the sender |
@@ -456,24 +458,30 @@ is inbox auto labels. AI is off until an owner or an admin turns it on in **Admi
 ## Meet
 
 Meet sends audio and video through the Cloudflare Realtime SFU, in your own Cloudflare account. Asterra keeps the
-meetings, the lobby and the admission. Meet is off until the Worker has the Realtime secrets. Do these steps once
-for each environment.
+meetings, the lobby and the admission. Meet is off until it has an SFU app. Do these steps once for each
+environment.
 
 1. In the Cloudflare dashboard, open **Realtime › Serverless SFU**. Create an app, for example `asterra-meet`. Use a
    different app for each environment. Copy the **App ID** and the **App Secret**.
 2. In **Realtime**, open the TURN service. Create a TURN key, for example `asterra-meet-turn`. Copy the **Key ID**
    and the **API token** of the key.
-3. Set the four values as Worker secrets of each environment:
+3. As an owner or an admin, open **Admin › Meet**. Enter the App ID and the App Secret under **Realtime SFU app**,
+   and the Key ID and the API token under **TURN key**. Select **Save Meet settings**.
+4. Select **Test connection**. Each line must say that Cloudflare answered.
+5. Open **Meet** in the app, create a meeting link, and join it from a second browser.
 
-   ```sh
-   wrangler secret put REALTIME_APP_ID --name <worker>
-   wrangler secret put REALTIME_APP_SECRET --name <worker>
-   wrangler secret put REALTIME_TURN_KEY_ID --name <worker>
-   wrangler secret put REALTIME_TURN_KEY_TOKEN --name <worker>
-   ```
+As an alternative to step 3, set the values as Worker secrets of each environment:
 
-   For an instance of the CLI, the Worker is `asterra-<name>`. Do it again for each instance.
-4. Open **Meet** in the app, create a meeting link, and join it from a second browser.
+```sh
+wrangler secret put REALTIME_APP_ID --name <worker>
+wrangler secret put REALTIME_APP_SECRET --name <worker>
+wrangler secret put REALTIME_TURN_KEY_ID --name <worker>
+wrangler secret put REALTIME_TURN_KEY_TOKEN --name <worker>
+```
+
+For an instance of the CLI, the Worker is `asterra-<name>`. A pair that is saved in Admin › Meet replaces the pair
+of Worker secrets. A pair that is not saved there comes from the Worker secrets. So to stop Meet, remove the values
+in both places. Admin › Meet shows where each pair comes from, never the value of a Worker secret.
 
 You can also create the app and the key with the API, with a token that has **Realtime Admin** (or **Calls
 Write**): `POST /accounts/{account_id}/calls/apps` gives `uid` (the App ID) and `secret` (the App Secret), and
@@ -482,24 +490,32 @@ Write**): `POST /accounts/{account_id}/calls/apps` gives `uid` (the App ID) and 
 - The App Secret has full control of the SFU app. The Worker sends it only to the Realtime API, and no API answer, log
   or browser gets it. The SFU has no access control of its own, so each call of a browser goes through the Worker,
   which checks that the participant is admitted.
-- Without `REALTIME_APP_ID` and `REALTIME_APP_SECRET`, `meet.create_meeting` and a join give `unavailable`, and the page
-  of a link says that Meet is not set up.
+- Without an SFU app, `meet.create_meeting` and a join give `unavailable`, and the page of a link says that Meet is
+  not set up.
+- With `ENCRYPTION_KEY`, the Worker seals the App Secret and the TURN key token in D1 (`meet_settings`, migration
+  `0044`). Without it, they are plaintext: keep a backup of D1 as a secret. See
+  [Encryption of stored secrets](#encryption-of-stored-secrets).
+- A change of the SFU app during a call stops the media of that call. Each participant joins again.
 - The TURN key is optional. Without it, browsers get only the STUN server of Cloudflare. A network that blocks UDP, such
   as some company or hotel networks, then cannot carry the media. With it, each admitted participant gets a TURN
   credential that ends after 12 hours.
 - Cost: the SFU and TURN cost $0.05 for each GB that Cloudflare sends to the browsers. The first 1,000 GB of each month
   are free, for the SFU and TURN together. TURN traffic to the SFU is not counted again. Each participant receives the
   tracks of each other participant, so the traffic grows with the square of the size of a call.
-- The deploy adds the Durable Object class `MeetingDO` (migration tag `v7` in `wrangler.jsonc`). It needs no D1 table,
-  no R2 bucket and no queue.
+- The deploy adds the Durable Object class `MeetingDO` (migration tag `v7` in `wrangler.jsonc`) and the D1 table
+  `meet_settings` (migration `0044`: run `wrangler d1 migrations apply` as for each migration). It needs no R2 bucket
+  and no queue.
 - `REALTIME_API_BASE` is optional, for tests only: the Worker accepts only an https URL or a loopback URL there.
-- For local work, put the values in `apps/dock/.dev.vars`. Never commit that file.
+- For local work, save the values in Admin › Meet, or put the Worker secrets in `apps/dock/.dev.vars`. Never commit
+  that file.
 
 ### The live-meet workflow
 
 The tests of a pull request use a stand-in SFU, because no session holds Cloudflare credentials.
 [`live-meet.yaml`](../.github/workflows/live-meet.yaml) runs the same tests against the real SFU and TURN. It runs
-`wrangler dev` on the runner, so it deploys nothing.
+`wrangler dev` on the runner, so it deploys nothing. It gives the values to that Worker as the `REALTIME_*` Worker
+secrets, so it proves the fallback to the Worker secrets and the connection test of Admin › Meet against Cloudflare.
+The tests of a pull request prove the values that Admin › Meet saves, with the stand-in SFU.
 
 1. Make a separate SFU app and TURN key for these tests, as in the steps above.
 2. In the `development` environment of the repository, add the secrets `MEET_REALTIME_APP_SECRET` and

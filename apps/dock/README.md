@@ -145,6 +145,7 @@ with injected inbound mail.
 | Auto labels (marks, header signals, settings, corrections, classifier outbox) | [`mail`](src/mail/README.md#auto-labels) | `MailboxDO` SQLite; queue `soldock-mail-autolabel` |
 | AI settings and usage ledger | [`ai`](src/ai/README.md#data-inventory) | D1 `DIRECTORY`, tables `ai_settings` (with the API token, which `ENCRYPTION_KEY` seals) and `ai_usage`; optional Worker secret `AI_GATEWAY_TOKEN` |
 | Feedback settings, reports and attachments | [`feedback`](src/feedback/README.md#data-inventory) | D1 `DIRECTORY`, tables `feedback_settings` (with the GitHub token, which `ENCRYPTION_KEY` seals), `feedback_reports` and `feedback_attachments`; R2 `BLOBS`, `feedback/<attachment id>` |
+| Meet settings (the Cloudflare Realtime values of Admin › Meet) | [`meet`](src/meet/README.md#set-up) | D1 `DIRECTORY`, table `meet_settings` (with the App Secret and the TURN key token, which `ENCRYPTION_KEY` seals) |
 | Drives (items, versions, grants, search index, stars, shared-with-me index, outbox, idempotency keys, and the members of a shared drive) | [`drive`](src/drive/README.md) | `DriveSpaceDO` SQLite |
 | The index of the shared drives (a copy for the lists) | [`drive`](src/drive/README.md#the-index-in-d1) | D1 `DIRECTORY`, tables `shared_drives` and `shared_drive_members` |
 | File bytes | [`drive`](src/drive/README.md) | R2 `BLOBS`, `drive/<space id>/<item id>/<version id>`, and the small picture with `.thumb-<id>` |
