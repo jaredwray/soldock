@@ -1,5 +1,4 @@
 import {
-	ALL_SCOPES,
 	InviteAcceptInput,
 	type InviteAcceptResult,
 	InviteCheckInput,
@@ -26,13 +25,12 @@ import {
 } from "../platform/index.ts";
 import { isSameOrigin, readCookie, SESSION_COOKIE } from "./auth.ts";
 import { acceptInvite, findInvite } from "./invites.ts";
-import { toApiKeyOutput, toPrincipalOutput } from "./output.ts";
+import { toPrincipalOutput } from "./output.ts";
 import { hashPassword } from "./password.ts";
 import { endEventSockets } from "./principal.ts";
 import { prepareFreshDirectory } from "./setup.ts";
 import { signInWithPassword } from "./signin.ts";
 import {
-	type ApiKeyRecord,
 	assertPrimaryAddress,
 	createPrincipal,
 	createSession,
@@ -135,7 +133,7 @@ export function mountAuthRoutes(app: AuthApp): void {
 	// First-run setup: creates the owner, once, when the directory is empty. The operator sends the
 	// SETUP_TOKEN Worker secret. Without that secret, or with a short one, setup is off. From the web
 	// app (an Origin header of this origin), setup also signs the owner in. A request from another
-	// origin gets 403. A request without an Origin header (curl) gets no session.
+	// origin gets 403. A request without an Origin header (curl) gets no session. Setup creates no API key.
 	app.post("/auth/setup", async (c) => {
 		const fromBrowser = authorizeSetup(c.req.raw, c.env);
 		const parsed = SetupInput.safeParse(await jsonBody(c.req.raw));
@@ -147,13 +145,13 @@ export function mountAuthRoutes(app: AuthApp): void {
 		assertPrimaryAddress(address);
 		const passwordHash = await hashPassword(password);
 		const reset = parsed.data.start_fresh ? await prepareFreshDirectory(c.env) : null;
-		// Setup always gives the owner a first key.
-		let created: { principal: PrincipalRecord; key: ApiKeyRecord; secret: string } | null = null;
+		// Setup creates no API key. The owner signs in with the password and creates a key in the session.
+		let created: { principal: PrincipalRecord } | null = null;
 		try {
 			created = await createPrincipal(
 				c.env.DIRECTORY,
 				{ kind: "human", display_name, address, org_role: "owner", sponsor_id: null, password_hash: passwordHash },
-				{ label: "First-run setup", scopes: ALL_SCOPES, created_by: null },
+				null,
 				{
 					onlyIfEmpty: true,
 					beforeCreate: reset?.statements ?? [],
@@ -175,25 +173,21 @@ export function mountAuthRoutes(app: AuthApp): void {
 		});
 		const headers: Record<string, string> = { "cache-control": "no-store" };
 		if (fromBrowser) {
-			// The owner and the key exist now, so setup cannot run again. A failed session must not lose
-			// the only key: the response still holds the key, without a session, and the owner signs in
-			// with the password.
+			// The owner exists now, so setup cannot run again. A failed session does not fail the request:
+			// the owner signs in with the password.
 			try {
 				const session = await createSession(c.env.DIRECTORY, created.principal.id);
 				headers["set-cookie"] = sessionCookie(session, SESSION_TTL_SECONDS);
 				log("info", "session created", { principalId: created.principal.id, requestId: c.var.requestId });
 			} catch (error) {
-				log("error", "setup session failed; the key is returned without a session", {
+				log("error", "setup session failed; the owner signs in with the password", {
 					principalId: created.principal.id,
 					requestId: c.var.requestId,
 					err: error instanceof Error ? (error.stack ?? error.message) : String(error),
 				});
 			}
 		}
-		const result: SetupResult = {
-			principal: toPrincipalOutput(created.principal),
-			api_key: { ...toApiKeyOutput(created.key, created.principal), secret: created.secret },
-		};
+		const result: SetupResult = { principal: toPrincipalOutput(created.principal) };
 		return c.json(result, 201, headers);
 	});
 

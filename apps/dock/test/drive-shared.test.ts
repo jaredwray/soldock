@@ -12,6 +12,7 @@ import {
 	driveBlobKeys,
 	fromBase64,
 	ORIGIN,
+	ownKey,
 	PASSWORD,
 	request,
 	SETUP_TOKEN,
@@ -921,7 +922,7 @@ describe("the index of the shared drives", () => {
 			}),
 		});
 		expect(res.status).toBe(201);
-		const fresh = api(((await res.json()) as { api_key: { secret: string } }).api_key.secret);
+		const fresh = api(await ownKey("nia@dock.test"));
 
 		// The old drive writes its rows again.
 		await runInDurableObject(stub, (_instance, state) => {

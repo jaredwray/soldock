@@ -54,7 +54,8 @@ calls.
 
 The seed has no access to a database or to a Durable Object. It uses only the public surface:
 
-1. `POST /auth/setup` creates the owner and the mail domain.
+1. `POST /auth/setup` creates the owner and the mail domain. Setup creates no API key. The seed signs the
+   owner in with `POST /auth/session`, as the web app does, and creates a key for the owner in that session.
 2. The REST operations of [`packages/contracts`](../../packages/contracts) create each other thing.
    The seed calls them through the typed client of the contracts.
 3. `POST /cdn-cgi/local/email` delivers the mail from outside senders. This endpoint exists only in

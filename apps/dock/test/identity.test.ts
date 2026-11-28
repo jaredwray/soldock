@@ -29,6 +29,7 @@ import {
 	enableAi,
 	mcp,
 	ORIGIN,
+	ownKey,
 	PASSWORD,
 	racing,
 	request,
@@ -36,6 +37,7 @@ import {
 	SETUP_TOKEN,
 	seedOrg,
 	sendMemberStates,
+	sessionApi,
 	setLegacyScopes,
 	setupOwner,
 	signIn,
@@ -160,15 +162,17 @@ describe("first-run setup", () => {
 		expect((await setup(SETUP_TOKEN, { ...OWNER, sign_in_email: "olive@home.example" })).status).toBe(400);
 		const res = await setup(SETUP_TOKEN, OWNER);
 		expect(res.status).toBe(201);
-		// Without an Origin header (curl), setup makes no session.
+		// Without an Origin header (curl), setup makes no session. Setup makes no API key either.
 		expect(res.headers.get("set-cookie")).toBeNull();
-		const { api_key } = (await res.json()) as { api_key: { secret: string } };
-		expect(await api(api_key.secret)("account.whoami")).toMatchObject({
+		const result = (await res.json()) as Record<string, unknown>;
+		expect(Object.keys(result)).toEqual(["principal"]);
+		expect(await env.DIRECTORY.prepare("SELECT COUNT(*) AS count FROM api_keys").first("count")).toBe(0);
+		// The owner signs in with the password.
+		expect(await sessionApi(await signIn("owner@dock.test"))("account.whoami")).toMatchObject({
 			principal: { kind: "human", org_role: "owner", address: "owner@dock.test" },
-			credential: "api_key",
+			credential: "session",
 			sign_in: { password_set: true, totp_enabled: false },
 		});
-		await signIn("owner@dock.test");
 		const again = await setup(SETUP_TOKEN, { ...OWNER, display_name: "Mallory", address: "mallory@dock.test" });
 		expect(again.status).toBe(409);
 	});
@@ -251,22 +255,21 @@ describe("first-run setup", () => {
 		);
 		expect(res.status).toBe(201);
 		expect(res.headers.get("set-cookie")).toMatch(SESSION_COOKIE);
-		const result = (await res.json()) as { principal: { id: string }; api_key: { secret: string } };
+		const result = (await res.json()) as { principal: { id: string } };
 		expect(result.principal.id).not.toBe(owner.id);
 		expect(await denied(api(owner.key)("account.whoami"))).toBe("unauthenticated");
 		expect(await denied(api(bot.key)("account.whoami"))).toBe("unauthenticated");
 		expect(await denied(api(oldToken.api_key.secret)("account.whoami"))).toBe("unauthenticated");
 		expect((await request("/api/v1/account", { headers: { cookie } })).status).toBe(401);
 		expect((await request("/api/v1/account", { headers: { cookie: cookieOf(res) } })).status).toBe(200);
-		expect(await api(result.api_key.secret)("account.whoami")).toMatchObject({
-			principal: { id: result.principal.id },
-		});
-		expect(await api(result.api_key.secret)("directory.list_mail_domains")).toEqual({
+		const fresh = sessionApi(cookieOf(res));
+		expect(await fresh("account.whoami")).toMatchObject({ principal: { id: result.principal.id } });
+		expect(await fresh("directory.list_mail_domains")).toEqual({
 			mail_domains: ["dock.test", "new.example", "second.test"],
 		});
 		expect(await env.DIRECTORY.prepare("SELECT COUNT(*) AS count FROM principals").first("count")).toBe(1);
 		// The token of the old organization goes too: only the Worker secret of the test is left.
-		expect(await api(result.api_key.secret)("ai.get_settings")).toMatchObject({
+		expect(await fresh("ai.get_settings")).toMatchObject({
 			enabled: false,
 			account_id: null,
 			token_source: "secret",
@@ -274,7 +277,6 @@ describe("first-run setup", () => {
 		expect(await env.DIRECTORY.prepare("SELECT COUNT(*) AS count FROM ai_usage").first("count")).toBe(0);
 		// The fresh directory has the columns of 0024 and 0026: a service account with its account scopes, and a
 		// key with an end.
-		const fresh = api(result.api_key.secret);
 		const service = await fresh("directory.create_service_account", {
 			display_name: "CI",
 			address: "ci@new.example",
@@ -379,9 +381,9 @@ describe("first-run setup", () => {
 		await signIn(OWNER.address);
 	});
 
-	// The owner and the key exist after the first D1 batch, so setup cannot run again. If the session
-	// batch then fails, the response must still hold the key, or nobody can sign in.
-	it("returns the key without a session when the session after setup fails", async () => {
+	// The owner exists after the first D1 batch, so setup cannot run again. If the session batch then
+	// fails, setup must still succeed, and the owner signs in with the password.
+	it("succeeds without a session when the session after setup fails", async () => {
 		let batches = 0;
 		const failing = new Proxy(env.DIRECTORY, {
 			get(target, property) {
@@ -404,8 +406,9 @@ describe("first-run setup", () => {
 		expect(batches).toBe(2);
 		expect(res.status).toBe(201);
 		expect(res.headers.get("set-cookie")).toBeNull();
-		const { api_key } = (await res.json()) as { api_key: { secret: string } };
-		expect(await api(api_key.secret)("account.whoami")).toMatchObject({ principal: { org_role: "owner" } });
+		expect(await sessionApi(await signIn(OWNER.address))("account.whoami")).toMatchObject({
+			principal: { org_role: "owner" },
+		});
 	});
 
 	it("signs the owner in when setup runs from the web app, and refuses another origin", async () => {
@@ -1391,7 +1394,7 @@ describe("directory upgrade", () => {
 			.prepare("INSERT INTO sign_in_codes VALUES ('sic_2', 'prn_owner', 'x', 0, '2026-01-01', '2999-01-01', NULL)")
 			.run();
 		// Without a password, the person signs in after somebody sets one: the person in a kept session,
-		// or the owner with the setup key.
+		// or the owner with an own API key.
 		await refusal(await submitSignIn("owner@dock.test", "olive@home.example"));
 		await owner("account.set_password", { password: PASSWORD });
 		await signIn("owner@dock.test");
@@ -2007,8 +2010,8 @@ describe("a bounded read of the directory", () => {
 		await setupOwner();
 		const fresh = await setup(SETUP_TOKEN, { ...OWNER, start_fresh: "DELETE DIRECTORY" }, ORIGIN);
 		expect(fresh.status).toBe(201);
-		const created = (await fresh.json()) as { principal: { id: string }; api_key: { secret: string } };
-		const owner = { key: created.api_key.secret, call: api(created.api_key.secret) };
+		const key = await ownKey(OWNER.address);
+		const owner = { key, call: api(key) };
 		const ada = await owner.call("directory.create_principal", {
 			kind: "human",
 			display_name: "Ada Lovelace",

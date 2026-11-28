@@ -1,12 +1,4 @@
-import {
-	AGENT_SCOPES,
-	ALL_SCOPES,
-	ApiError,
-	type OperationName,
-	operations,
-	type Scope,
-	SetupInput,
-} from "@asterra/contracts";
+import { AGENT_SCOPES, ApiError, type OperationName, operations, type Scope, SetupInput } from "@asterra/contracts";
 import { describe, expect, it } from "vitest";
 import { localOrigin, type SeedApi, SeedStop } from "../src/api.ts";
 import { runSeed } from "../src/run.ts";
@@ -96,12 +88,23 @@ function fakeAsterra(options: { ownerExists?: boolean } = {}) {
 		"sheets.create": () => ({ item: { id: id("itm") } }),
 	};
 
+	/** The owner from setup. Only that person can sign in, because the seed knows no other password yet. */
+	let owner: { address: string; password: string } | null = null;
+
 	const api: SeedApi = {
+		// As the server: setup creates the owner and no API key.
 		async setup(input) {
 			if (options.ownerExists) throw new ApiError(409, { code: "conflict" });
 			const parsed = SetupInput.safeParse(input);
 			if (!parsed.success) problems.push(`setup: ${parsed.error.message}`);
-			return { principal: principal("human", input.address), api_key: key("human", ALL_SCOPES) } as never;
+			owner = { address: input.address, password: input.password };
+			return { principal: principal("human", input.address) } as never;
+		},
+		async ownKey(address, password, scopes) {
+			if (owner?.address !== address || owner.password !== password) {
+				problems.push("ownKey: the sign-in does not match the owner from setup");
+			}
+			return key("human", scopes).secret;
 		},
 		async call(apiKey, name, input) {
 			calls.push({ name, input: input as Record<string, unknown> });

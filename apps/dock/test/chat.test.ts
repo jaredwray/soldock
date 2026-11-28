@@ -15,6 +15,7 @@ import {
 	connectRoomSocket,
 	createActor,
 	ORIGIN,
+	ownKey,
 	PASSWORD,
 	request,
 	restartLegacyRoom,
@@ -3706,7 +3707,7 @@ describe("a room object", () => {
 			}),
 		});
 		expect(res.status).toBe(201);
-		const fresh = api(((await res.json()) as { api_key: { secret: string } }).api_key.secret);
+		const fresh = api(await ownKey("nia@dock.test"));
 		expect((await fresh("chat.list_rooms", { view: "public" })).rooms).toEqual([]);
 		// A new room works in the new directory.
 		const { room: created } = await fresh("chat.create_room", { kind: "public", name: "New plans" });

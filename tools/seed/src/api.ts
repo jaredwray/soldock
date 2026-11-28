@@ -1,5 +1,5 @@
 // The connection from the seed to Asterra. The seed uses only the public surface: the setup ceremony,
-// the REST operations of `@asterra/contracts`, and the local inbound mail endpoint of `wrangler dev`.
+// the sign-in of the web app, the REST operations of `@asterra/contracts`, and the local inbound mail endpoint of `wrangler dev`.
 import {
 	ApiError,
 	createClient,
@@ -7,8 +7,10 @@ import {
 	type OperationName,
 	type OutputOf,
 	operations,
+	type Scope,
 	SetupInput,
 	type SetupResult,
+	SignInResult,
 } from "@asterra/contracts";
 
 /** The seed stopped before it changed anything, for a reason that the operator can correct. */
@@ -24,6 +26,12 @@ export interface Delivery {
 export interface SeedApi {
 	/** `POST /auth/setup`: creates the owner. It fails with the code `conflict` if an owner exists. */
 	setup(input: SetupInput): Promise<SetupResult>;
+	/**
+	 * Signs a person in with the address and the password, as the web app does, creates an API key with
+	 * the given scopes in that session, and signs out. Setup creates no API key, so the seed gets the key of
+	 * the owner here.
+	 */
+	ownKey(address: string, password: string, scopes: readonly Scope[]): Promise<string>;
 	/** Calls one operation with the API key of a person or an agent. */
 	call<N extends OperationName>(apiKey: string, name: N, input: InputOf<N>): Promise<OutputOf<N>>;
 	/** Posts a raw message to the local inbound mail endpoint. */
@@ -83,6 +91,39 @@ export function createHttpApi(origin: string, setupToken: string): SeedApi {
 			const body = (await response.json().catch(() => ({}))) as Record<string, unknown>;
 			if (!response.ok) throw new ApiError(response.status, body);
 			return body as SetupResult;
+		},
+
+		async ownKey(address, password, scopes) {
+			// The sign-in route and a call with the session cookie need the Origin header of this origin. A
+			// sign-in is safe to repeat, so a transient error gets the same retries as a read.
+			let cookie = "";
+			for (let attempt = 0; ; attempt++) {
+				try {
+					const response = await fetch(`${origin}/auth/session`, {
+						method: "POST",
+						headers: { origin, "content-type": "application/json" },
+						body: JSON.stringify({ address, password }),
+					});
+					const body = (await response.json().catch(() => ({}))) as Record<string, unknown>;
+					if (!response.ok) throw new ApiError(response.status, body);
+					const result = SignInResult.safeParse(body);
+					cookie = (response.headers.get("set-cookie") ?? "").split(";")[0] ?? "";
+					if (!result.success || result.data.status !== "signed_in" || !cookie) {
+						throw new Error(`The sign-in of ${address} did not give a session.`);
+					}
+					break;
+				} catch (error) {
+					// A network error (TypeError from fetch) or a server error is transient. A refusal is not.
+					const transient = error instanceof TypeError || (error instanceof ApiError && error.status >= 500);
+					if (attempt >= RETRIES || !transient) throw error;
+					await new Promise((resolve) => setTimeout(resolve, 500 * (attempt + 1)));
+				}
+			}
+			const session = createClient({ baseUrl: origin, headers: () => ({ cookie, origin }) });
+			const created = await session.call("account.create_api_key", { label: "Seed", scopes: [...scopes] });
+			// The key exists, so the seed does not keep the session.
+			await fetch(`${origin}/auth/sign-out`, { method: "POST", headers: { cookie, origin } });
+			return created.api_key.secret;
 		},
 
 		async call(apiKey, name, input) {

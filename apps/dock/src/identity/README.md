@@ -962,7 +962,7 @@ principal can get an address. The New member form of the web app calls it while 
   `start_fresh_available: true`, and the token state without a D1 query.
   Without a valid token, an empty directory gets the token state.
   A directory with accounts gets only `setup_needed: false` in that case.
-- `POST /auth/setup`: creates the owner and a first key, once, when the directory is empty. A
+- `POST /auth/setup`: creates the owner, once, when the directory is empty. It creates no API key. A
   guarded insert in one D1 transaction stops two concurrent setups. The request includes `mail_domain`.
   Setup saves that domain and the owner in the same transaction. The owner address must use that domain.
   The owner address cannot contain `+`. The body also holds the owner's password (`Password`, 12 to
@@ -970,9 +970,9 @@ principal can get an address. The New member form of the web app calls it while 
   through `account.create_totp_secret` and `account.enable_totp`, and the owner can skip it. When
   the request has an `Origin` header of this origin (the web app), setup also
   signs the owner in with a session. A request from a different origin gets `403`. A request
-  without an `Origin` header (`curl`) gets the key and no session. If the session cannot be made
-  after the owner exists, the response still holds the key, without a session, because setup
-  cannot run again. The owner then signs in with the password.
+  without an `Origin` header (`curl`) gets the owner and no session. If the session cannot be made
+  after the owner exists, the response is still `201`, without a session, because setup cannot run
+  again. The owner then signs in with the password, and creates keys with `account.create_api_key`.
 - `POST /auth/setup/verify`: checks the setup token and origin before the web app offers setup choices.
   It creates no session. The final setup request checks the token again.
   After a correct token, it returns `SetupVerifyResult`: `empty`, `has_accounts`, or `unknown`.
@@ -1152,8 +1152,9 @@ Known limits:
 3. `account.disable_totp` removes both secrets: yourself by default, or a person that you can manage.
 
 The web app shows the QR code and the secret as text. Recovery codes do not exist yet: after a lost
-phone, an owner or an admin turns off two-step verification for the person. The owner turns off
-their own with the API key from setup.
+phone, an owner or an admin turns off two-step verification for the person. Nobody else manages the
+credentials of the owner. The owner turns off their own in a session that still exists, or with a recovery
+key: an API key with every human scope that the owner created. Setup creates no API key.
 
 ## Invite links
 
@@ -1207,13 +1208,14 @@ link, chooses a password, and is signed in. The code is in `invites.ts`.
   `principal_id`).
 - A person who did not set a password yet, for example after the invite link expired, asks an owner or an
   admin for a new invite link (`directory.create_invite`).
-- The owner sets a new password with a credential that holds every human scope, for example the API
-  key from setup.
+- The owner sets a new password with their own credential that holds every human scope: a session that
+  still exists, or an API key that the owner created as a recovery key. Setup creates no API key, and
+  nobody else manages the credentials of the owner (`canManageCredentialsOf`).
 - The operator can still start fresh with `SETUP_TOKEN`, which deletes the directory.
 - Upgrade: after migration `0004`, people keep their addresses, keys and sessions, but they have no
   password. While `sign_in.password_set` is false, the web app shows a notice in each page and in
-  Settings. A person in a kept session sets a password there. The owner can also use the API key
-  from setup, and then set passwords for the others, or send each of them an invite link.
+  Settings. A person in a kept session sets a password there. The owner can also use an own API key
+  with every human scope, and then set passwords for the others, or send each of them an invite link.
 - Migration `0004` keeps the old Worker working, because the deploy applies migrations while the
   old Worker runs. The old Worker reads `sign_in_email` and writes `sign_in_codes`, so both stay,
   empty. The old Worker then sends no code, but sessions and API keys keep working, also after a

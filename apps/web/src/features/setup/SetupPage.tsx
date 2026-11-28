@@ -5,14 +5,12 @@ import {
 	MailDomain,
 	SETUP_TOKEN_MIN_LENGTH,
 	type SetupInput,
-	type SetupResult,
 	type SetupVerifyResult,
 } from "@asterra/contracts";
 import { type FormEvent, useEffect, useId, useRef, useState } from "react";
 import { ConfirmDialog } from "../../lib/ConfirmDialog.tsx";
 import { setPageTitle } from "../../lib/pageTitle.ts";
 import { BrandMark } from "../../shell/BrandMark.tsx";
-import { SecretDialog } from "../settings/SecretDialog.tsx";
 import { newPasswordError } from "../settings/SignInSettings.tsx";
 import { TotpSetup } from "../settings/TotpSetup.tsx";
 import { runSetup, type SetupNeeded, setupErrorMessage, verifySetupToken } from "./setup.ts";
@@ -29,14 +27,13 @@ interface SetupPageProps {
 
 /**
  * Setup and optional directory reset. The operator proves control with the SETUP_TOKEN Worker secret.
- * The owner gets an address and a password. After the API key shows, the page offers two-step
- * verification, which the owner can skip.
+ * The owner gets an address and a password. Setup creates no API key: the owner creates keys later in
+ * Settings. After setup, the page offers two-step verification, which the owner can skip.
  */
 export function SetupPage({ status, onRecheck, onDone, onKeepAccounts }: SetupPageProps) {
-	const [created, setCreated] = useState<SetupResult | null>(null);
+	const [created, setCreated] = useState(false);
 	// The password from the owner form. Turning on two-step verification asks for it, and the owner just typed it.
 	const [ownerPassword, setOwnerPassword] = useState("");
-	const [keyCopied, setKeyCopied] = useState(false);
 	const [choice, setChoice] = useState<"new" | "fresh" | null>(null);
 	const [verifiedToken, setVerifiedToken] = useState<string | null>(null);
 	const [directory, setDirectory] = useState<SetupVerifyResult["directory"]>("unknown");
@@ -45,10 +42,10 @@ export function SetupPage({ status, onRecheck, onDone, onKeepAccounts }: SetupPa
 		if (verifiedToken !== null && choice === null) choiceRef.current?.focus();
 	}, [verifiedToken, choice]);
 
-	function ownerCreated(result: SetupResult, password: string) {
+	function ownerCreated(password: string) {
 		setVerifiedToken(null);
 		setOwnerPassword(password);
-		setCreated(result);
+		setCreated(true);
 	}
 
 	useEffect(() => {
@@ -65,17 +62,13 @@ export function SetupPage({ status, onRecheck, onDone, onKeepAccounts }: SetupPa
 					<h1 className="auth-title">Set up Asterra</h1>
 				</header>
 				{created ? (
-					keyCopied ? (
-						<TwoStepStep
-							password={ownerPassword}
-							onDone={() => {
-								setOwnerPassword("");
-								onDone();
-							}}
-						/>
-					) : (
-						<p>The owner is ready. Copy your API key before you continue.</p>
-					)
+					<TwoStepStep
+						password={ownerPassword}
+						onDone={() => {
+							setOwnerPassword("");
+							onDone();
+						}}
+					/>
 				) : status.setup_token === "ready" ? (
 					verifiedToken === null ? (
 						<TokenForm
@@ -141,18 +134,6 @@ export function SetupPage({ status, onRecheck, onDone, onKeepAccounts }: SetupPa
 					<TokenSteps tooShort={status.setup_token === "too_short"} onRecheck={onRecheck} />
 				)}
 			</div>
-			{created && !keyCopied && (
-				<SecretDialog apiKey={created.api_key} title="Copy your API key" onClose={() => setKeyCopied(true)}>
-					<p className="field-hint">
-						You are signed in on this browser. Use this key with the API and MCP. To sign in on a different browser, use
-						your address and your password. Keep this key: it can also set a new password if you forget yours.
-					</p>
-					<p className="notice">
-						Now delete the <code>SETUP_TOKEN</code> secret in the Cloudflare dashboard. This disables the option to
-						start fresh.
-					</p>
-				</SecretDialog>
-			)}
 		</main>
 	);
 }
@@ -257,7 +238,7 @@ function TokenSteps({ tooShort, onRecheck }: { tooShort: boolean; onRecheck: () 
 
 interface OwnerFormProps {
 	token: string;
-	onCreated: (result: SetupResult, password: string) => void;
+	onCreated: (password: string) => void;
 	startFresh: boolean;
 	onBack: () => void;
 }
@@ -319,8 +300,8 @@ function OwnerForm({ token, startFresh, onCreated, onBack }: OwnerFormProps) {
 		setBusy(true);
 		setError(null);
 		try {
-			const result = await runSetup(token.trim(), input);
-			onCreated(result, input.password);
+			await runSetup(token.trim(), input);
+			onCreated(input.password);
 		} catch (caught) {
 			setError(
 				caught instanceof ApiError && caught.status === 409 && !startFresh
@@ -473,6 +454,14 @@ function TwoStepStep({ password, onDone }: { password: string; onDone: () => voi
 
 	return (
 		<div className="auth-form">
+			<p className="notice">
+				The owner is ready. Now delete the <code>SETUP_TOKEN</code> secret in the Cloudflare dashboard. This disables
+				the option to start fresh.
+			</p>
+			<p className="field-hint">
+				Nobody else can reset your sign-in. After setup, create a recovery key with every scope in{" "}
+				<strong>Settings › API keys</strong>, and keep it in a password manager.
+			</p>
 			<p className="setup-intro">Two-step verification (optional)</p>
 			{enabled ? (
 				<p className="notice">Two-step verification is on. Each sign-in needs your password and a code.</p>

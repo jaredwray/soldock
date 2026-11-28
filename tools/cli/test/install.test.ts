@@ -26,7 +26,7 @@ function setupApi(verifyAnswers: string[] = ["has_accounts"]) {
 		const url = String(input);
 		requests.push({ url, init });
 		if (url === `${ORIGIN}/auth/setup`) {
-			return Response.json({ api_key: { secret: "sdk_owner_key" } }, { status: 201 });
+			return Response.json({ principal: { id: "prn_owner" } }, { status: 201 });
 		}
 		if (url === `${ORIGIN}/auth/setup/verify`)
 			return Response.json({ directory: verifyAnswers.shift() ?? "has_accounts" });
@@ -72,8 +72,8 @@ describe("install", () => {
 		expect(set?.ENCRYPTION_KEY).toMatch(/^[A-Za-z0-9_-]{43}$/);
 		expect(cleared).toEqual({ SETUP_TOKEN: null });
 		// Secret values go on stdin only: never in an argument, and never on the terminal of a run without
-		// questions. The log of such a run is not a safe place, also for the API key of the owner.
-		const values = [String(set?.SETUP_TOKEN), String(set?.ENCRYPTION_KEY), "sdk_owner_key"];
+		// questions. The log of such a run is not a safe place.
+		const values = [String(set?.SETUP_TOKEN), String(set?.ENCRYPTION_KEY)];
 		for (const call of cloud.calls) for (const value of values) expect(call.args.join(" ")).not.toContain(value);
 		for (const value of values) expect(ctx.output() + ctx.errors()).not.toContain(value);
 
@@ -86,8 +86,8 @@ describe("install", () => {
 			password: "a-long-password",
 		});
 
-		// The two values reach the operator in a new file that only the operator can read.
-		expect(readFileSync(out, "utf8")).toBe(`ENCRYPTION_KEY=${set?.ENCRYPTION_KEY}\nOWNER_API_KEY=sdk_owner_key\n`);
+		// The key reaches the operator in a new file that only the operator can read. Setup creates no API key.
+		expect(readFileSync(out, "utf8")).toBe(`ENCRYPTION_KEY=${set?.ENCRYPTION_KEY}\n`);
 		expect(statSync(out).mode & 0o777).toBe(0o600);
 	});
 
@@ -104,14 +104,6 @@ describe("install", () => {
 		expect(api.requests.filter((request) => request.url.endsWith("/verify"))).toHaveLength(3);
 		expect(cloud.state.bulk.at(-1)).toEqual({ SETUP_TOKEN: null });
 		expect(cloud.liveVersion("asterra-rivus")?.secrets).toEqual(["ENCRYPTION_KEY"]);
-	});
-
-	it("shows the API key of the owner one time on a terminal", async () => {
-		const cloud = fakeCloud();
-		const prompt = scripted([true, true, "Olive Owner", "olive@rivus.com", "a-long-password"]);
-		const ctx = fakeContext({ httpGet: healthyWorker(ORIGIN), fetch: setupApi().fetch, prompt });
-		await install(ctx, flags({ yes: false }), { wrangler: async () => cloud });
-		expect(ctx.output().split("sdk_owner_key")).toHaveLength(2);
 	});
 
 	it("gives ENCRYPTION_KEY to the operator when the smoke check fails", async () => {

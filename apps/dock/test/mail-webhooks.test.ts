@@ -14,6 +14,7 @@ import {
 	drainWebhookEvents,
 	holdWebhookEvents,
 	inject,
+	ownKey,
 	PASSWORD,
 	rawMessage,
 	receiveWebhooks,
@@ -830,8 +831,7 @@ describe("a fresh start", () => {
 			}),
 		});
 		expect(res.status).toBe(201);
-		const { api_key } = (await res.json()) as { api_key: { secret: string } };
-		const fresh = api(api_key.secret);
+		const fresh = api(await ownKey("new@dock.test"));
 		expect((await fresh("mail.list_webhook_subscriptions")).subscriptions).toEqual([]);
 		expect((await fresh("chat.list_webhook_subscriptions")).subscriptions).toEqual([]);
 		expect(await env.DIRECTORY.prepare("SELECT COUNT(*) AS n FROM webhook_endpoints").first("n")).toBe(0);

@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { EmailAddress } from "./common.ts";
-import { CreatedApiKey, DisplayName, Principal } from "./directory.ts";
+import { DisplayName, Principal } from "./directory.ts";
 import { MailDomain } from "./domains.ts";
 import { Password } from "./signin.ts";
 
@@ -50,9 +50,11 @@ export const SetupInput = z.strictObject({
 });
 export type SetupInput = z.infer<typeof SetupInput>;
 
-/** The `201` response of `POST /auth/setup`: the owner and the owner's first API key, shown once. */
+/**
+ * The `201` response of `POST /auth/setup`: the owner. Setup creates no API key. The owner signs in with the
+ * address and the password, and creates a key in the session (`account.create_api_key`).
+ */
 export const SetupResult = z.object({
 	principal: Principal,
-	api_key: CreatedApiKey,
 });
 export type SetupResult = z.infer<typeof SetupResult>;

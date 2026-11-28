@@ -1,4 +1,4 @@
-// First-run setup of a new instance: the owner and the first API key. The CLI deletes SETUP_TOKEN
+// First-run setup of a new instance: the owner. Setup creates no API key. The CLI deletes SETUP_TOKEN
 // after setup, because a valid token turns on "Start fresh", which deletes the directory.
 import { type Context, say } from "./context.ts";
 import { Refusal } from "./errors.ts";
@@ -31,8 +31,8 @@ export async function waitForOwner(ctx: Context, origin: string, token: string):
 	}
 }
 
-/** Runs setup from the terminal. Returns the secret of the first API key of the owner. */
-export async function createOwner(ctx: Context, origin: string, token: string, owner: Owner): Promise<string> {
+/** Runs setup from the terminal. The owner then signs in with the address and the password. */
+export async function createOwner(ctx: Context, origin: string, token: string, owner: Owner): Promise<void> {
 	const response = await ctx.fetch(`${origin}/auth/setup`, {
 		method: "POST",
 		headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
@@ -43,11 +43,10 @@ export async function createOwner(ctx: Context, origin: string, token: string, o
 			password: owner.password,
 		}),
 	});
-	const result = (await response.json().catch(() => ({}))) as { api_key?: { secret?: string }; detail?: string };
-	if (response.status !== 201 || !result.api_key?.secret) {
+	if (response.status !== 201) {
+		const result = (await response.json().catch(() => ({}))) as { detail?: string };
 		throw new Refusal(`Setup failed (${response.status}): ${result.detail ?? "no detail"}`);
 	}
-	return result.api_key.secret;
 }
 
 /** The domain of an address. Setup uses it as the first mail domain. */
