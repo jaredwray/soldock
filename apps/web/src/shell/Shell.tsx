@@ -11,7 +11,7 @@ import { useCalendarReminders } from "../lib/useCalendarReminders.ts";
 import { useChatNotifications } from "../lib/useChatNotifications.ts";
 import { useOnChange } from "../lib/useOnChange.ts";
 import { usePrincipalActivity } from "../lib/usePrincipalActivity.ts";
-import { INBOX_PATH, ownMailboxPath, parseRoute, settingsPath } from "../routes.ts";
+import { CALENDAR_PATH, calendarPath, INBOX_PATH, ownMailboxPath, parseRoute, settingsPath } from "../routes.ts";
 import { MENU_BUTTON_ID, RAIL_ID, sidebarId } from "./nav.ts";
 import { PageHeader } from "./PageHeader.tsx";
 import { Rail } from "./Rail.tsx";
@@ -86,10 +86,16 @@ export function Shell() {
 	// The own id of the person in an agent mailbox path is the own mailbox: go to its normal path.
 	const ownPath = ownMailboxPath(route, whoami.principal.id);
 
+	// The own id of the person in a calendar path is the own calendar: go to its normal path. The page shows the
+	// own calendar at once, with the change feed, **Sharing** and the reminders.
+	const ownCalendar = route.page === "calendar" && route.calendarId === whoami.principal.id;
+
 	useEffect(() => {
 		if (route.page === "redirect") navigate(route.to, { replace: true });
 		else if (ownPath) navigate(ownPath, { replace: true });
-	}, [route, ownPath]);
+		else if (route.page === "calendar" && ownCalendar)
+			navigate(route.date ? calendarPath(route.view, route.date) : CALENDAR_PATH, { replace: true });
+	}, [route, ownPath, ownCalendar]);
 
 	return (
 		<div className={needsPassword ? "app app-with-banner" : "app"}>
@@ -200,16 +206,11 @@ export function Shell() {
 						onCloseNav={() => setNavOpen(false)}
 					/>
 				);
-			case "calendar":
+			case "calendar": {
 				// A different calendar gets a new page, so no dialog or event of one calendar stays on the other.
-				return (
-					<CalendarApp
-						key={route.calendarId ?? "own"}
-						view={route.view}
-						date={route.date}
-						calendarId={route.calendarId}
-					/>
-				);
+				const calendarId = ownCalendar ? null : route.calendarId;
+				return <CalendarApp key={calendarId ?? "own"} view={route.view} date={route.date} calendarId={calendarId} />;
+			}
 			case "meet":
 				return <MeetHome />;
 			case "profile":

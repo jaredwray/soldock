@@ -424,7 +424,6 @@ export function itemPath(item: {
 	}
 }
 
-/** The path of a view of Calendar, for the period that holds `date` (YYYY-MM-DD). */
 /** The path of a period of Calendar: of the own calendar, or with `calendarId` of the calendar of that person. */
 export function calendarPath(view: CalendarView, date: string, calendarId: string | null = null): string {
 	return calendarId === null

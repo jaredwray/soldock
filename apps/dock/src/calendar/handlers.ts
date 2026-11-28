@@ -735,7 +735,11 @@ export const calendarHandlers: Pick<HandlerMap<CallContext>, CalendarOperation> 
 						actorId: call.caller.principal.id,
 					});
 					return access === null ? null : { calendar_id: owner.id, display_name: owner.display_name, access };
-				} catch {
+				} catch (error) {
+					// The hint stays. The calendar is not in this answer, and a later call asks the owner again.
+					log("warn", "calendar shared access failed", {
+						error: error instanceof Error ? error.message : String(error),
+					});
 					return null;
 				}
 			}),

@@ -71,6 +71,8 @@ async function headCursor(): Promise<string> {
 export function useEvents(timeMin: string, timeMax: string, zone: string, calendarId: string | null = null) {
 	const [state, setState] = useState<EventsState>({ status: "loading", events: [] });
 	const generation = useRef(0);
+	/** The number of loads that run now. A poll of the calendar of a different person waits for zero. */
+	const running = useRef(0);
 	/** The position of the page in the change feed. Each range sets it again after its first load. */
 	const cursor = useRef<string | null>(null);
 	/** The range whose events are on screen, or null. A load of the range sets it, also a load of Try again. */
@@ -84,6 +86,7 @@ export function useEvents(timeMin: string, timeMax: string, zone: string, calend
 				shownRange.current = null;
 				setState({ status: "loading", events: [] });
 			}
+			running.current++;
 			try {
 				const events = await loadRange(timeMin, timeMax, zone, calendarId);
 				if (current !== generation.current) return false;
@@ -107,6 +110,8 @@ export function useEvents(timeMin: string, timeMax: string, zone: string, calend
 					fresh || previous.status !== "ready" ? { status: "error", events: previous.events, error } : previous,
 				);
 				return false;
+			} finally {
+				running.current--;
 			}
 		},
 		[timeMin, timeMax, zone, calendarId, rangeKey],
@@ -115,10 +120,12 @@ export function useEvents(timeMin: string, timeMax: string, zone: string, calend
 	useEffect(() => {
 		if (calendarId === null) return;
 		// The calendar of a different person has no change feed for the caller: the page reads the range again at
-		// each interval while it is visible, and on focus.
+		// each interval while it is visible, and on focus. A poll starts no load while a load runs: a new load
+		// discards the answer of the load before it, so a slow read would never show. Focus and `visibilitychange`
+		// come together, and they give one read.
 		void load(true);
 		const loadIfVisible = () => {
-			if (document.visibilityState === "visible") void load(false);
+			if (document.visibilityState === "visible" && running.current === 0) void load(false);
 		};
 		const timer = window.setInterval(loadIfVisible, FALLBACK_MS);
 		window.addEventListener("focus", loadIfVisible);

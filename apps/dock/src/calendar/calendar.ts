@@ -46,6 +46,9 @@ import { storedTime } from "./time.ts";
 // - The owner gives grants (`grants`): `free_busy` shows the busy times, `schedule` also lets a delegate list the
 //   events and add, change and delete the events that it added. `enterShared` reads the grant on each call, and
 //   `viewFor` hides the details of the other events from a delegate.
+// - Each change of a grant puts a row of the kind `grant` in the `outbox`. The delivery writes the current grant
+//   in `shared_with_me` of the calendar of the grantee (`applyGrant`). That table is a hint for
+//   `calendar.list_shared_calendars`: the handler asks each owner for the grant again (`accessOf`).
 
 type Row = Record<string, SqlStorageValue>;
 
