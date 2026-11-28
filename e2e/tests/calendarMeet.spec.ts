@@ -228,7 +228,7 @@ function addDays(day: string, days: number): string {
 	return date.toISOString().slice(0, 10);
 }
 
-test("a link added from one occurrence is for the series, and the other changes still ask which events", async ({
+test("a link added from one occurrence is for the series, the other changes still ask which events, and a retry works", async ({
 	browser,
 }) => {
 	const owner = await signIn(browser, "nadia");
@@ -262,6 +262,16 @@ test("a link added from one occurrence is for the series, and the other changes 
 		await edit.getByRole("button", { name: "Save" }).click();
 		const change = page.getByRole("dialog", { name: "Change a repeated event" });
 		await expect(change.getByLabel("This event")).toBeChecked();
+		// The link goes first. The change of the occurrence then fails once at the network: a second Change sends only
+		// the occurrence, on the revision after the link, and gets no conflict.
+		let failed = false;
+		await page.route("**/api/v1/calendar/occurrences/**", (route) => {
+			if (failed) return route.continue();
+			failed = true;
+			return route.abort();
+		});
+		await change.getByRole("button", { name: "Change" }).click();
+		await expect(change.getByRole("alert")).toBeVisible();
 		await change.getByRole("button", { name: "Change" }).click();
 		await expect(page.getByText("Event saved.")).toBeVisible();
 

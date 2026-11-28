@@ -95,6 +95,9 @@ export function EventDialog({ event, initial, zone, onChanged, onClose, calendar
 	const [scope, setScope] = useState<Scope>("this");
 	// A change of the Meet link goes with Save, as each other field: "create" adds a link, "remove" stops it.
 	const [meetChange, setMeetChange] = useState<"create" | "remove" | null>(null);
+	// A save from one occurrence sends two requests. When the link went and the second request failed, a retry
+	// sends only the rest, on the revision after the link.
+	const linked = useRef<{ revision: number } | null>(null);
 	// One key for each request of the dialog. A second click on Save, or a retry after a lost answer, sends the
 	// same request with the same key, so the server adds one event. A different request gets its own key.
 	const keys = useRef(new Map<string, string>());
@@ -190,10 +193,10 @@ export function EventDialog({ event, initial, zone, onChanged, onClose, calendar
 		if (!event) return;
 		await saveReminder();
 		if (target === "this" && occurrence) {
-			let revision = event.revision;
+			let revision = linked.current?.revision ?? event.revision;
 			// The link is for the entire series. It goes first: a refused link (`unavailable`) then changes nothing,
 			// and a second save sends the same revision.
-			if (meetChange) {
+			if (meetChange && linked.current === null) {
 				const { event: saved } = await updateEvent({
 					...on,
 					event_id: event.id,
@@ -202,6 +205,7 @@ export function EventDialog({ event, initial, zone, onChanged, onClose, calendar
 				});
 				onChanged(saved);
 				revision = saved.revision;
+				linked.current = { revision };
 			}
 			if (contentChanged) {
 				const { event: saved } = await updateOccurrence({
@@ -217,7 +221,7 @@ export function EventDialog({ event, initial, zone, onChanged, onClose, calendar
 			}
 			return;
 		}
-		if (!contentChanged && !seriesOnly && meetChange === null) return;
+		if (!contentChanged && !seriesOnly && (meetChange === null || linked.current !== null)) return;
 		const timeChanged = !sameTimeFields(form, opened);
 		// From an occurrence, the change of the time applies to the first occurrence of the series.
 		const seriesTime = async () =>
@@ -237,9 +241,10 @@ export function EventDialog({ event, initial, zone, onChanged, onClose, calendar
 			...(sameAttendees ? {} : { attendee_ids: attendees }),
 			...(sameGuests ? {} : { attendee_emails: guests }),
 			...(sameVisibility ? {} : { visibility: form.visibility }),
-			...(meetChange ? { meet: meetChange } : {}),
-			// The revision that the dialog opened with: a change from a different place gives a conflict.
-			base_revision: event.revision,
+			...(meetChange && linked.current === null ? { meet: meetChange } : {}),
+			// The revision that the dialog opened with (or after its own link): a change from a different place gives a
+			// conflict.
+			base_revision: linked.current?.revision ?? event.revision,
 		});
 		onChanged(saved);
 	}
