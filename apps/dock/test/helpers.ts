@@ -848,6 +848,8 @@ export function withEnv(
 		VAPID_SUBJECT?: string | undefined;
 		DIRECTORY?: D1Database;
 		DRIVE_SPACE?: Env["DRIVE_SPACE"];
+		REALTIME_APP_ID?: string | undefined;
+		REALTIME_APP_SECRET?: string | undefined;
 	},
 	path: string,
 	init: { method?: string; headers?: Record<string, string>; body?: string } = {},

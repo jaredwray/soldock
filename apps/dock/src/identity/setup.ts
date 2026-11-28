@@ -38,6 +38,7 @@ import chatPushSettingsSchema from "../../migrations/0039_chat_push_settings.sql
 import mailboxAliasSchema from "../../migrations/0040_mailbox_aliases.sql";
 import calendarWebhooksSchema from "../../migrations/0041_calendar_webhooks.sql";
 import feedbackSchema from "../../migrations/0042_feedback.sql";
+import meetScopesSchema from "../../migrations/0043_meet_scopes.sql";
 import { log, OperationError, randomToken } from "../platform/index.ts";
 import { allMailboxIds } from "./team-mailboxes.ts";
 
@@ -196,6 +197,7 @@ function freshDirectoryStatements(db: D1Database): D1PreparedStatement[] {
 		...mailboxAliasSchema.split("--> statement-breakpoint"),
 		...calendarWebhooksSchema.split("--> statement-breakpoint"),
 		...feedbackSchema.split("--> statement-breakpoint"),
+		...meetScopesSchema.split("--> statement-breakpoint"),
 		// The directory now has the schema of each bundled migration. Record them in the table that
 		// `wrangler d1 migrations apply` reads, or it runs them again later. A second run of 0004 would
 		// copy the principals without their passwords. The columns are the ones that wrangler creates.
@@ -248,4 +250,5 @@ const BUNDLED_MIGRATIONS = [
 	"0040_mailbox_aliases.sql",
 	"0041_calendar_webhooks.sql",
 	"0042_feedback.sql",
+	"0043_meet_scopes.sql",
 ] as const;

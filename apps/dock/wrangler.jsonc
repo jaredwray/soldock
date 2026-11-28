@@ -124,6 +124,8 @@
 	// One ChatSearchDO for the organization: the search index of Chat (the plain text and the filter values of
 	// each message). Its name has a shard key, so a later change can add more.
 	// One CalendarDO for each principal: the events of its calendar. Its name is the principal id.
+	// One MeetingDO for each meeting of Meet: the lobby, the participants and their media tracks. Its name is the
+	// meeting code.
 	"durable_objects": {
 		"bindings": [
 			{ "name": "MAILBOX", "class_name": "MailboxDO" },
@@ -132,7 +134,8 @@
 			{ "name": "CHAT_ROOM", "class_name": "ChatRoomDO" },
 			{ "name": "CHAT_SEARCH", "class_name": "ChatSearchDO" },
 			{ "name": "PRINCIPAL", "class_name": "PrincipalDO" },
-			{ "name": "CALENDAR", "class_name": "CalendarDO" }
+			{ "name": "CALENDAR", "class_name": "CalendarDO" },
+			{ "name": "MEETING", "class_name": "MeetingDO" }
 		]
 	},
 	"migrations": [
@@ -141,7 +144,8 @@
 		{ "tag": "v3", "new_sqlite_classes": ["ChatRoomDO"] },
 		{ "tag": "v4", "new_sqlite_classes": ["PrincipalDO"] },
 		{ "tag": "v5", "new_sqlite_classes": ["ChatSearchDO"] },
-		{ "tag": "v6", "new_sqlite_classes": ["CalendarDO"] }
+		{ "tag": "v6", "new_sqlite_classes": ["CalendarDO"] },
+		{ "tag": "v7", "new_sqlite_classes": ["MeetingDO"] }
 	],
 	"vars": {
 		// The mail domains of this deployment. Addresses on them are local. Comma-separated.

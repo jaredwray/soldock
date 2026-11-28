@@ -235,6 +235,7 @@ of the instance.
 | --- | --- |
 | `asterra install` and `asterra upgrade` (and `deploy-development.yaml`) | Account › Workers Scripts: Edit, Account › Account Settings: Read, Account › D1: Edit, Account › Workers R2 Storage: Edit and Account › Queues: Edit (the deploy makes the D1 database, the R2 bucket and the queues, and the CLI applies the D1 migrations). Zone › Workers Routes: Edit on the zone of the host (the deploy attaches the custom domain). The Cloudflare API reference names only Workers Scripts for custom domains. If the deploy fails on the custom domain with an authentication error, add Zone › DNS: Edit on the zone and record it here. If the deploy of the `send_email` binding needs an Email Service permission, add it and record it here |
 | `asterra status`, `asterra rollback` and `asterra secrets` | A part of the permissions of `upgrade`. Use the same token |
+| `live-meet.yaml` | No Cloudflare API token. It uses only the App Secret of a Realtime SFU app and the API token of a TURN key, as environment secrets ([Meet](#meet)) |
 | `spike-email-service.yaml` | Also event subscriptions edit, and Email Service sending on `soldock.org`. Record the exact names in the spike findings |
 | Inbound mail routing through the API (not built yet) | Also DNS edit and Email Routing rules edit on the mail zone |
 
@@ -450,6 +451,61 @@ is inbox auto labels. AI is off until an owner or an admin turns it on in **Admi
   `wrangler d1 migrations apply` as for each migration.
 - For local work, enter a token in Admin › AI of `wrangler dev`, or put `AI_GATEWAY_TOKEN=<token>` in
   `apps/dock/.dev.vars`. Never commit that file.
+
+## Meet
+
+Meet sends audio and video through the Cloudflare Realtime SFU, in your own Cloudflare account. Asterra keeps the
+meetings, the lobby and the admission. Meet is off until the Worker has the Realtime secrets. Do these steps once
+for each environment.
+
+1. In the Cloudflare dashboard, open **Realtime › Serverless SFU**. Create an app, for example `asterra-meet`. Use a
+   different app for each environment. Copy the **App ID** and the **App Secret**.
+2. In **Realtime**, open the TURN service. Create a TURN key, for example `asterra-meet-turn`. Copy the **Key ID**
+   and the **API token** of the key.
+3. Set the four values as Worker secrets of each environment:
+
+   ```sh
+   wrangler secret put REALTIME_APP_ID --name <worker>
+   wrangler secret put REALTIME_APP_SECRET --name <worker>
+   wrangler secret put REALTIME_TURN_KEY_ID --name <worker>
+   wrangler secret put REALTIME_TURN_KEY_TOKEN --name <worker>
+   ```
+
+   For an instance of the CLI, the Worker is `asterra-<name>`. Do it again for each instance.
+4. Open **Meet** in the app, create a meeting link, and join it from a second browser.
+
+You can also create the app and the key with the API, with a token that has **Realtime Admin** (or **Calls
+Write**): `POST /accounts/{account_id}/calls/apps` gives `uid` (the App ID) and `secret` (the App Secret), and
+`POST /accounts/{account_id}/calls/turn_keys` gives `uid` (the Key ID) and `secret` (the API token).
+
+- The App Secret has full control of the SFU app. The Worker sends it only to the Realtime API, and no API answer, log
+  or browser gets it. The SFU has no access control of its own, so each call of a browser goes through the Worker,
+  which checks that the participant is admitted.
+- Without `REALTIME_APP_ID` and `REALTIME_APP_SECRET`, `meet.create_meeting` and a join give `unavailable`, and the page
+  of a link says that Meet is not set up.
+- The TURN key is optional. Without it, browsers get only the STUN server of Cloudflare. A network that blocks UDP, such
+  as some company or hotel networks, then cannot carry the media. With it, each admitted participant gets a TURN
+  credential that ends after 12 hours.
+- Cost: the SFU and TURN cost $0.05 for each GB that Cloudflare sends to the browsers. The first 1,000 GB of each month
+  are free, for the SFU and TURN together. TURN traffic to the SFU is not counted again. Each participant receives the
+  tracks of each other participant, so the traffic grows with the square of the size of a call.
+- The deploy adds the Durable Object class `MeetingDO` (migration tag `v7` in `wrangler.jsonc`). It needs no D1 table,
+  no R2 bucket and no queue.
+- `REALTIME_API_BASE` is optional, for tests only: the Worker accepts only an https URL or a loopback URL there.
+- For local work, put the values in `apps/dock/.dev.vars`. Never commit that file.
+
+### The live-meet workflow
+
+The tests of a pull request use a stand-in SFU, because no session holds Cloudflare credentials.
+[`live-meet.yaml`](../.github/workflows/live-meet.yaml) runs the same tests against the real SFU and TURN. It runs
+`wrangler dev` on the runner, so it deploys nothing.
+
+1. Make a separate SFU app and TURN key for these tests, as in the steps above.
+2. In the `development` environment of the repository, add the secrets `MEET_REALTIME_APP_SECRET` and
+   `MEET_TURN_KEY_TOKEN`, and the variables `MEET_REALTIME_APP_ID` and `MEET_TURN_KEY_ID`.
+3. Open **Actions › live-meet › Run workflow** and select `main`.
+
+The job summary lists each test with its result, and the selected ICE pair of the default path and of the TURN relay.
 
 ## Feedback
 
@@ -1141,6 +1197,24 @@ Feedback adds the scope `feedback.write`. No migration changes the scopes of a k
   signs in (a password, two-step verification, a new key for an account) and `chat.delete_room`.
 - An old key that held each scope before the upgrade does not hold `feedback.write`. It now gets `forbidden` for
   these operations. Create the key again. A browser session is not affected.
+
+### Meet scopes
+
+Meet adds the scopes `meet.read` and `meet.write`. They apply only to the meetings that the caller hosts.
+
+- Nothing writes the account scopes of an agent or a service account after its creation. So migration
+  `0043_meet_scopes.sql` gives each account from before the upgrade `meet.read` when it holds `calendar.read`, and
+  `meet.write` when it holds `calendar.write`. An account with narrower scopes stays narrow. A second run of the
+  migration changes nothing.
+- The old Worker keeps working between the migration and the deploy. It drops the scopes that it does not know.
+- A browser session has both scopes. An API key of a person from before the upgrade does not have them: create a new
+  key with the scopes.
+- A key that creates agents or service accounts, or their keys and tokens, must hold each account scope of the
+  account. After the upgrade, the accounts hold the Meet scopes, so an old key gets `forbidden`. Create the key again
+  with the Meet scopes.
+- A rollback to a Worker from before this change works. That Worker has no Meet routes, and the meetings stay in
+  their objects until they are deleted.
+- [Agents](agents.md#meet) has the rules for an agent.
 
 ### Recover a sign-in
 

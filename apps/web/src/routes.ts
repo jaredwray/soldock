@@ -102,6 +102,8 @@ export type Route =
 			/** The id of the person whose calendar the page shows: a person who lets the person schedule. Null: own. */
 			calendarId: string | null;
 	  }
+	/** The Meet page of the app: a new meeting link, and a field to open a link. A meeting has its own page outside the app. */
+	| { page: "meet" }
 	/** The profile of a person or an agent. It is a page of the workspace, not a part of a product. */
 	| { page: "profile"; principalId: string }
 	/**
@@ -121,6 +123,8 @@ export const DRIVE_PATH = "/drive";
 export const SHARED_DRIVES_PATH = "/drive/shared-drives";
 export const CHAT_PATH = "/chat";
 export const CALENDAR_PATH = "/calendar";
+/** The Meet page of the app. `/meet/<code>` is the page of one meeting, which `App` opens outside the app. */
+export const MEET_PATH = "/meet";
 export const PEOPLE_PATH = "/people";
 export const ADMIN_PATH = "/admin";
 export const SETTINGS_PATH = "/settings";
@@ -255,6 +259,7 @@ export function parseRoute(location: string): Route {
 		}
 		return { page: "not-found" };
 	}
+	if (first === "meet" && parts.length === 1) return { page: "meet" };
 	if ((first === "docs" || first === "sheets") && parts.length === 3 && isSpaceId(second) && isItemId(third)) {
 		return { page: first === "docs" ? "doc" : "sheet", spaceId: second, itemId: third };
 	}

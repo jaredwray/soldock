@@ -39,6 +39,8 @@ export const SCOPES = {
 	"calendar.webhooks": "Subscribe to the changes of your calendar through MCP Events and webhooks",
 	"feedback.write":
 		"Send bug reports and ideas about Asterra as public issues to the GitHub repository that your admin chose",
+	"meet.read": "Read the meetings that you host and their lobby and participants",
+	"meet.write": "Create and end the meetings that you host, and admit, refuse and remove their participants",
 } as const;
 
 export type Scope = keyof typeof SCOPES;
@@ -75,6 +77,8 @@ export const AGENT_SCOPES: readonly Scope[] = [
 	"calendar.read",
 	"calendar.write",
 	"calendar.webhooks",
+	"meet.read",
+	"meet.write",
 ];
 
 /**
@@ -95,6 +99,8 @@ const SERVICE_SCOPE_LIST = [
 	"chat.write",
 	"calendar.read",
 	"calendar.write",
+	"meet.read",
+	"meet.write",
 ] as const satisfies readonly Scope[];
 
 export type ServiceScope = (typeof SERVICE_SCOPE_LIST)[number];
@@ -122,6 +128,9 @@ export const SERVICE_SCOPE_DESCRIPTIONS: Readonly<Record<ServiceScope, string>> 
 		"Read the events of the own calendar of the service account and of the calendars whose owners let it schedule, and find free times",
 	"calendar.write":
 		"Add, change and delete the events of the own calendar of the service account, and the events that it adds to the calendars whose owners let it schedule",
+	"meet.read": "Read the meetings that the service account hosts and their lobby and participants",
+	"meet.write":
+		"Create and end the meetings that the service account hosts, and admit, refuse and remove their participants",
 };
 
 /** The text of a scope for a caller of this kind: the service text for a service account. */

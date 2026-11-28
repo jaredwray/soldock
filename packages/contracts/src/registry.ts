@@ -12,6 +12,7 @@ import { feedbackOperations } from "./feedback.ts";
 import { mailOperations } from "./mail.ts";
 import { mailboxAliasOperations } from "./mailbox-aliases.ts";
 import { mailboxDelegateOperations } from "./mailbox-delegates.ts";
+import { meetOperations } from "./meet.ts";
 import { oauthOperations } from "./oauth.ts";
 import type { Operation } from "./operation.ts";
 import { sheetsOperations } from "./sheets.ts";
@@ -37,6 +38,7 @@ export const operations = {
 	...aiOperations,
 	...calendarOperations,
 	...feedbackOperations,
+	...meetOperations,
 } as const;
 
 export type Operations = typeof operations;

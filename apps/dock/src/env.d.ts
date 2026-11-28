@@ -24,4 +24,21 @@ interface Env {
 	 * API answer or in a log.
 	 */
 	ENCRYPTION_KEY?: string;
+	/**
+	 * Optional. Meet: the App ID and the App Secret of a Cloudflare Realtime SFU app. Without both, Meet is off. The
+	 * secret has full control of the app: it is never in an API answer, in a log or in a browser.
+	 */
+	REALTIME_APP_ID?: string;
+	REALTIME_APP_SECRET?: string;
+	/**
+	 * Optional. Meet: the key ID and the key API token of a Cloudflare Realtime TURN key. Without both, browsers get
+	 * only the STUN server of Cloudflare, and a strict firewall can stop the media.
+	 */
+	REALTIME_TURN_KEY_ID?: string;
+	REALTIME_TURN_KEY_TOKEN?: string;
+	/**
+	 * Optional. The base URL of the Realtime API, `https://rtc.live.cloudflare.com/v1` by default. Only an https URL
+	 * or a loopback URL is accepted. The end-to-end tests set a loopback stand-in here.
+	 */
+	REALTIME_API_BASE?: string;
 }

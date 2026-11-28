@@ -2,9 +2,13 @@
 // byte for byte, with the license of Iconoir. `test/icons.test.ts` compares each icon with its file.
 // Each icon is decoration only: the button or link that holds it has the accessible name.
 
-/** One `<path>` of an Iconoir file. Iconoir draws each path with the current color and round ends. */
+/**
+ * One `<path>` of an Iconoir file. Iconoir draws each path with the current color and round ends. A few files
+ * draw a rounded box with `<rect>`: `rect` then has its x, y, width, height and rx, and `d` is empty.
+ */
 interface IconPath {
 	d: string;
+	rect?: readonly [x: number, y: number, width: number, height: number, rx: number];
 	/** The path is also filled with the current color, for example a dot. */
 	fill?: true;
 	/** False when the file gives the path no round line ends. */
@@ -550,6 +554,34 @@ const PATHS = {
 			d: "M15 12V16.4C15 16.7314 14.7314 17 14.4 17H3.6C3.26863 17 3 16.7314 3 16.4V7.6C3 7.26863 3.26863 7 3.6 7H14.4C14.7314 7 15 7.26863 15 7.6V12ZM15 12L20.0159 7.82009C20.4067 7.49443 21 7.77232 21 8.28103V15.719C21 16.2277 20.4067 16.5056 20.0159 16.1799L15 12Z",
 		},
 	],
+	video: [
+		{
+			d: "M15 12V16.4C15 16.7314 14.7314 17 14.4 17H3.6C3.26863 17 3 16.7314 3 16.4V7.6C3 7.26863 3.26863 7 3.6 7H14.4C14.7314 7 15 7.26863 15 7.6V12ZM15 12L20.0159 7.82009C20.4067 7.49443 21 7.77232 21 8.28103V15.719C21 16.2277 20.4067 16.5056 20.0159 16.1799L15 12Z",
+		},
+	],
+	videoOff: [
+		{
+			d: "M6.5 7H3.6C3.26863 7 3 7.26863 3 7.6V16.4C3 16.7314 3.26863 17 3.6 17H14.4C14.7314 17 15 16.7314 15 16.4V15M11.5 7H14.4C14.7314 7 15 7.26863 15 7.6V10.719C15 11.2277 15.5933 11.5056 15.9841 11.1799L20.0159 7.82009C20.4067 7.49443 21 7.77232 21 8.28103V15.5",
+		},
+		{ d: "M3 3L21 21" },
+	],
+	microphone: [
+		{ d: "", rect: [9, 2, 6, 12, 3], cap: false, join: false, width: "1.5" },
+		{ d: "M5 10V11C5 14.866 8.13401 18 12 18V18V18C15.866 18 19 14.866 19 11V10" },
+		{ d: "M12 18V22M12 22H9M12 22H15" },
+	],
+	microphoneOff: [
+		{ d: "M3 3L21 21" },
+		{ d: "M9 9V9C9 11.7614 11.2386 14 14 14V14M15 10.5V5C15 3.34315 13.6569 2 12 2V2C10.3431 2 9 3.34315 9 5V5.5" },
+		{ d: "M5 10V11C5 14.866 8.13401 18 12 18V18V18C15.866 18 19 14.866 19 11V10" },
+		{ d: "M12 18V22M12 22H9M12 22H15" },
+	],
+	callEnd: [
+		{
+			d: "M8.77964 8.5L9.26995 5.8699L7.81452 2L4.0636 2C2.93605 2 2.04804 2.93086 2.2164 4.04576C2.50361 5.94771 3.17338 8.90701 4.72526 11.7468M10.9413 13.5C11.778 14.244 12.7881 14.8917 14 15.5L18.1182 14.702L22 16.1812L22 19.7655C22 20.9575 20.9679 21.8664 19.8031 21.613C16.9734 20.9974 11.9738 19.506 8.22387 16.1812",
+		},
+		{ d: "M21 3L3 21" },
+	],
 } as const satisfies Record<string, readonly IconPath[]>;
 
 /** The solid star of Iconoir (`iconoir/solid/star.svg`). A set star shows it. */
@@ -583,17 +615,30 @@ export function Icon({ name, size = 20, filled = false, className }: IconProps) 
 			aria-hidden="true"
 			focusable="false"
 		>
-			{paths.map((path) => (
-				<path
-					key={path.d}
-					d={path.d}
-					stroke="currentColor"
-					fill={path.fill ? "currentColor" : undefined}
-					strokeLinecap={path.cap === false ? undefined : "round"}
-					strokeLinejoin={path.join === false ? undefined : "round"}
-					strokeWidth={path.width}
-				/>
-			))}
+			{paths.map((path) =>
+				path.rect ? (
+					<rect
+						key={path.rect.join(" ")}
+						x={path.rect[0]}
+						y={path.rect[1]}
+						width={path.rect[2]}
+						height={path.rect[3]}
+						rx={path.rect[4]}
+						stroke="currentColor"
+						strokeWidth={path.width}
+					/>
+				) : (
+					<path
+						key={path.d}
+						d={path.d}
+						stroke="currentColor"
+						fill={path.fill ? "currentColor" : undefined}
+						strokeLinecap={path.cap === false ? undefined : "round"}
+						strokeLinejoin={path.join === false ? undefined : "round"}
+						strokeWidth={path.width}
+					/>
+				),
+			)}
 		</svg>
 	);
 }

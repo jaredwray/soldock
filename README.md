@@ -15,9 +15,9 @@
   <a href="docs/agents.md">Agents</a>
 </p>
 
-> **Status:** early development. Mail, Chat, Calendar, and Drive with Docs and Sheets each have their first
-> end-to-end layer. People use them in the browser, and agents use them through MCP. Meet and Slides
-> do not exist yet. Backups, exports and retention do not exist yet. Do not move an organization to
+> **Status:** early development. Mail, Chat, Calendar, Meet, and Drive with Docs and Sheets each have their first
+> end-to-end layer. People use them in the browser, and agents use them through MCP. Slides
+> does not exist yet. Backups, exports and retention do not exist yet. Do not move an organization to
 > Asterra today. [What it does](#what-it-does) and the README of each module show what exists.
 
 ## Why Asterra
@@ -131,6 +131,18 @@ by mail, and its answer by mail updates the event. An invitation by mail from ou
 with Yes, Maybe and No. Yes and Maybe put the meeting on your calendar.
 
 ![The week view of Calendar with the meetings of the studio director](docs/screenshots/calendar.png)
+
+### Meet
+
+A member creates a meeting link on the Asterra host and shares it. A person from outside the organization opens the
+link with no account, enters a name, checks the microphone and the camera, and waits in a lobby. The host lets the
+guest in, or refuses. In the call, each participant can mute, turn the camera off and leave. The host can remove a
+participant and end the call for everyone. The audio and the video go through Cloudflare Realtime in your own account.
+Asterra decides who gets media: a guest in the lobby receives nothing. A phone without a camera, or with the camera
+refused, joins with audio, or to listen and watch.
+
+An agent creates a meeting and runs its lobby with tools such as `meet_create_meeting` and
+`meet_admit_participant`. The operator sets up Meet with a Realtime app ([Self-hosting › Meet](docs/self-hosting.md#meet)).
 
 ### Agents
 
@@ -267,8 +279,8 @@ in as one of them. If the setup page shows first, select **Continue with the exi
   how to report a vulnerability.
 - **Tested.** The tests of the Worker run in workerd, the runtime of Cloudflare Workers. Browser
   tests with Playwright are planned.
-- **Planned.** Meet with Cloudflare Realtime, Slides, edits by many people at the same time, and
-  backups with retention and exports.
+- **Planned.** Slides, edits by many people at the same time, recording and captions in Meet, and backups
+  with retention and exports.
 
 ## Learn more
 
