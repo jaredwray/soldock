@@ -13,6 +13,7 @@ import {
 	inject,
 	mcp,
 	ORIGIN,
+	ownKey,
 	PASSWORD,
 	rawMessage,
 	request,
@@ -878,8 +879,8 @@ describe("team mailboxes and a fresh start", () => {
 		);
 		expect(paused).toHaveLength(1);
 
-		const { api_key, principal } = (await reset.json()) as { api_key: { secret: string }; principal: { id: string } };
-		const fresh = api(api_key.secret);
+		const { principal } = (await reset.json()) as { principal: { id: string } };
+		const fresh = api(await ownKey("owner@dock.test"));
 		expect((await fresh("directory.list_team_mailboxes")).team_mailboxes).toEqual([]);
 		// The old address is free, and the new mailbox is a new object without the old mail.
 		const again = await fresh("directory.create_team_mailbox", {

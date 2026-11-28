@@ -1,5 +1,5 @@
 // The connection from the seed to Asterra. The seed uses only the public surface: the setup ceremony,
-// the REST operations of `@asterra/contracts`, and the local inbound mail endpoint of `wrangler dev`.
+// the sign-in of the web app, the REST operations of `@asterra/contracts`, and the local inbound mail endpoint of `wrangler dev`.
 import {
 	ApiError,
 	createClient,
@@ -9,6 +9,7 @@ import {
 	operations,
 	SetupInput,
 	type SetupResult,
+	SignInResult,
 } from "@asterra/contracts";
 
 /** The seed stopped before it changed anything, for a reason that the operator can correct. */
@@ -24,6 +25,11 @@ export interface Delivery {
 export interface SeedApi {
 	/** `POST /auth/setup`: creates the owner. It fails with the code `conflict` if an owner exists. */
 	setup(input: SetupInput): Promise<SetupResult>;
+	/**
+	 * Signs a person in with the address and the password, as the web app does, and creates an API key with
+	 * the given scopes in that session. Setup creates no API key, so the seed gets the key of the owner here.
+	 */
+	ownKey(address: string, password: string, scopes: readonly string[]): Promise<string>;
 	/** Calls one operation with the API key of a person or an agent. */
 	call<N extends OperationName>(apiKey: string, name: N, input: InputOf<N>): Promise<OutputOf<N>>;
 	/** Posts a raw message to the local inbound mail endpoint. */
@@ -83,6 +89,25 @@ export function createHttpApi(origin: string, setupToken: string): SeedApi {
 			const body = (await response.json().catch(() => ({}))) as Record<string, unknown>;
 			if (!response.ok) throw new ApiError(response.status, body);
 			return body as SetupResult;
+		},
+
+		async ownKey(address, password, scopes) {
+			// The sign-in route and a call with the session cookie need the Origin header of this origin.
+			const response = await fetch(`${origin}/auth/session`, {
+				method: "POST",
+				headers: { origin, "content-type": "application/json" },
+				body: JSON.stringify({ address, password }),
+			});
+			const body = (await response.json().catch(() => ({}))) as Record<string, unknown>;
+			if (!response.ok) throw new ApiError(response.status, body);
+			const result = SignInResult.safeParse(body);
+			if (!result.success || result.data.status !== "signed_in") {
+				throw new Error(`The sign-in of ${address} did not give a session.`);
+			}
+			const cookie = (response.headers.get("set-cookie") ?? "").split(";")[0] ?? "";
+			const session = createClient({ baseUrl: origin, headers: () => ({ cookie, origin }) });
+			const created = await session.call("account.create_api_key", { label: "Seed", scopes: [...scopes] as never });
+			return created.api_key.secret;
 		},
 
 		async call(apiKey, name, input) {

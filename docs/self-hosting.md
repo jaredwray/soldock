@@ -75,8 +75,9 @@ same data.
 7. Create the owner. The CLI asks where:
    - In the browser: the CLI shows `SETUP_TOKEN` and waits. Open the host, enter the token, and create
      the owner.
-   - In the terminal: the CLI asks for the name, the address and the password of the owner, and shows
-     the first API key of the owner one time. The domain of the address is the first mail domain.
+   - In the terminal: the CLI asks for the name, the address and the password of the owner. The domain
+     of the address is the first mail domain. Setup creates no API key. Sign in at the host to create
+     keys.
 
    When the owner exists, the CLI deletes `SETUP_TOKEN`, because a valid token turns on **Start fresh**,
    which deletes the directory.
@@ -116,8 +117,8 @@ npx asterra install --yes --name rivus --hostname work.rivus.com --secrets-out .
 unset CLOUDFLARE_API_TOKEN ASTERRA_OWNER_PASSWORD
 ```
 
-The file then holds `ENCRYPTION_KEY` and `OWNER_API_KEY`, the first API key of the owner. Move the two
-values to a password manager, and delete the file.
+The file then holds `ENCRYPTION_KEY`. Move the value to a password manager, and delete the file. Setup
+creates no API key: sign in at the host, and create keys in **Settings › API keys**.
 
 Without `--owner-name` and `--owner-address`, the file holds `ENCRYPTION_KEY` and `SETUP_TOKEN`. Create
 the owner in the browser, then delete the token with `npx asterra secrets clear-setup-token --name rivus`.
@@ -581,9 +582,10 @@ top-level only and applies to each instance. So it cannot hold a rule for one in
    3. Open `https://<dock-host>/` (development: `https://work.soldock.org/`). Enter the token, then select **Continue**.
       Select **Set up without a reset**. Enter your name, email domain, mailbox name, and a password
       of at least 12 characters. Select **Create the owner**.
-   4. The page signs you in, and shows the first API key of the owner once. Copy the key. Use it
-      with the API and MCP. Keep it: it can also set a new owner password (`account.set_password`).
-      To sign in on a different browser, use your address and your password.
+   4. The page signs you in. Setup creates no API key. To sign in on a different browser, use your
+      address and your password. For the API and MCP, create a key in **Settings › API keys**.
+      Only the owner can reset the sign-in of the owner. Thus create a key with every scope, and keep
+      it in a password manager as a recovery key ([Recover a sign-in](#recover-a-sign-in)).
    5. Optional: set up two-step verification. Scan the QR code with an authenticator app, and enter
       the code. You can also do this later in **Settings**, or select **Skip for now**.
    6. Delete the `SETUP_TOKEN` secret.
@@ -672,7 +674,8 @@ The page checks setup before it checks the session. An old session therefore can
 2. Reload the dock host. Enter the token, then select **Continue**.
 3. After the server accepts the token, select **Start fresh**. Enter the details of the new owner.
 4. Select **Review fresh start**. Read the confirmation, then confirm the reset.
-5. Copy the new API key. Delete the `SETUP_TOKEN` secret to disable further resets.
+5. The page signs you in. Delete the `SETUP_TOKEN` secret to disable further resets. The reset creates no
+   API key: create a recovery key in **Settings › API keys**.
 
 The reset deletes all directory accounts, addresses, API keys, sessions, and passwords.
 Saved mail domains stay in place. Setup adds the new owner domain in the same transaction.
@@ -705,7 +708,7 @@ migration. Do one of these steps:
 
 - In a browser session from before the upgrade, open **Settings** and set a password. Each page shows
   a notice until you do.
-- With the owner API key from setup, call `account.set_password`:
+- With an owner API key that has every human scope, call `account.set_password`:
 
   ```sh
   curl -X POST "https://<dock-host>/api/v1/account/password" \
@@ -715,7 +718,7 @@ migration. Do one of these steps:
 
 Then sign in. Open each other person under **Admin › Members**. Under **Reset sign-in**, set a password, or
 select **New invite link** and send the link to the person.
-Without a session or the owner key, start fresh with `SETUP_TOKEN`.
+Without a session or an owner key, start fresh with `SETUP_TOKEN`.
 
 ### Upgrade to permissions on the service account
 
@@ -1223,7 +1226,10 @@ Meet adds the scopes `meet.read` and `meet.write`. They apply only to the meetin
 - A person who forgot the password, or lost the phone with the authenticator app, asks an owner or an
   admin. Open the person under **Admin › Members**. **Reset sign-in** sets a new password or turns off
   two-step verification.
-- The owner uses the API key from setup: `account.set_password`, or `account.disable_totp`.
+- Nobody else can reset the sign-in of the owner. The owner uses a session that still exists, or a recovery
+  key: an API key with every human scope that the owner created in **Settings › API keys**. With it, call
+  `account.set_password` or `account.disable_totp`. Setup creates no API key. Without a session or a
+  recovery key, the operator can only start fresh with `SETUP_TOKEN`, which deletes the directory.
 - After 10 failed attempts, sign-in to that account stops for 15 minutes. API keys and existing
   sessions still work.
 

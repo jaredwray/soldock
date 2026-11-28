@@ -20,6 +20,7 @@ import {
 	drainOutbox,
 	inject,
 	ORIGIN,
+	ownKey,
 	PASSWORD,
 	rawMessage,
 	request,
@@ -48,9 +49,9 @@ describe("mail domain settings", () => {
 	it("saves the setup domain and supports mail and sign-in at that address", async () => {
 		const res = await setup(" Example.COM ", "jw@example.com");
 		expect(res.status).toBe(201);
-		const { api_key } = (await res.json()) as { api_key: { secret: string } };
-		const call = api(api_key.secret);
-		expect(await (await domains(api_key.secret)).json()).toEqual({ mail_domains: ["example.com"] });
+		const key = await ownKey("jw@example.com");
+		const call = api(key);
+		expect(await (await domains(key)).json()).toEqual({ mail_domains: ["example.com"] });
 		expect(await call("mail.get_profile")).toMatchObject({ address: "jw@example.com", mail_domains: ["example.com"] });
 		const cookie = await signIn("jw@example.com");
 		expect((await request("/api/v1/account", { headers: { cookie } })).status).toBe(200);
@@ -68,8 +69,8 @@ describe("mail domain settings", () => {
 		]);
 		expect(results.map((res) => res.status).sort()).toEqual([201, 409]);
 		const winner = results.find((res) => res.status === 201);
-		const body = (await winner?.json()) as { principal: { address: string }; api_key: { secret: string } };
-		expect(await (await domains(body.api_key.secret)).json()).toEqual({
+		const body = (await winner?.json()) as { principal: { address: string } };
+		expect(await (await domains(await ownKey(body.principal.address))).json()).toEqual({
 			mail_domains: [body.principal.address.split("@")[1]],
 		});
 	});

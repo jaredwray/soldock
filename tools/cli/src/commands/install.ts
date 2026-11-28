@@ -102,11 +102,9 @@ async function installInstance(
 				(await ctx.prompt.confirm("Create the owner here in the terminal? (No: in the browser)", false)));
 		if (inTerminal) {
 			const owner = await askOwner(ctx, { name: flags.ownerName, address: flags.ownerAddress });
-			const apiKey = await createOwner(ctx, origin, setupToken, owner);
-			// The key goes to the terminal one time, or to the file of --secrets-out. A run without questions
-			// always has the file, so its log never holds the key.
-			say(ctx, "The owner exists. The first API key of the owner (the CLI shows it one time):");
-			handOver.give({ OWNER_API_KEY: apiKey });
+			await createOwner(ctx, origin, setupToken, owner);
+			say(ctx, `The owner exists. Sign in at ${origin} with ${owner.address} and the password.`);
+			say(ctx, "Setup creates no API key. Create keys in Settings › API keys.");
 			await putSecrets(wrangler, workerName, { SETUP_TOKEN: null });
 			say(ctx, "The CLI deleted SETUP_TOKEN.");
 		} else if (ctx.prompt.interactive) {

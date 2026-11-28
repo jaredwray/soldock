@@ -76,9 +76,9 @@ MCP clients. The app has no UI-only path.
     The address suffix follows the domain field. Setup saves the domain and owner together.
     The owner signs in with the full mailbox address and the password.
     The form explains that DNS and Cloudflare email need separate configuration.
-  - `POST /auth/setup` creates the owner and signs the owner in. The first API key shows once,
-    with a copy button and a reminder to delete the `SETUP_TOKEN` secret.
-  - Done goes to an optional step for two-step verification: the same panel as in Settings, and
+  - `POST /auth/setup` creates the owner and signs the owner in. Setup creates no API key.
+  - Then the page shows a reminder to delete the `SETUP_TOKEN` secret, and an optional step for two-step
+    verification: the same panel as in Settings, and
     **Skip for now**. If the setup session failed, the panel shows the error, and the owner can skip.
   - If accounts appear during setup without a reset (`409`), the page explains how to return and select **Start fresh**.
 - **Shell.** Each signed-in page has a rail at the left. The page of the route fills the other space.

@@ -170,7 +170,7 @@ export function SignInPage({ expired, onSignedIn }: SignInPageProps) {
 							{busy ? "Signing in…" : "Sign in"}
 						</button>
 						<p className="auth-help">
-							Forgot your password? Ask an admin to set a new one. The owner can set it with the API key from setup.
+							Forgot your password? Ask an admin to set a new one. The owner can set it with a recovery API key.
 						</p>
 					</form>
 				) : (

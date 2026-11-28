@@ -114,6 +114,12 @@ export function api(key: string) {
 	return client.call as <N extends OperationName>(name: N, input?: InputOf<N>) => Promise<OutputOf<N>>;
 }
 
+/** A REST client for one browser session, as the web app sends its requests. */
+export function sessionApi(cookie: string) {
+	const client = createClient({ baseUrl: ORIGIN, fetch: workerFetch, headers: () => ({ cookie, origin: ORIGIN }) });
+	return client.call as <N extends OperationName>(name: N, input?: InputOf<N>) => Promise<OutputOf<N>>;
+}
+
 export interface Actor {
 	id: string;
 	address: string;
@@ -121,7 +127,10 @@ export interface Actor {
 	call: ReturnType<typeof api>;
 }
 
-/** Runs first-run setup and returns the owner. */
+/**
+ * Runs first-run setup and returns the owner. Setup creates no API key, so the owner signs in and creates a key
+ * with every human scope in the session, then signs out.
+ */
 export async function setupOwner(address = "owner@dock.test"): Promise<Actor> {
 	const res = await request("/auth/setup", {
 		method: "POST",
@@ -134,14 +143,17 @@ export async function setupOwner(address = "owner@dock.test"): Promise<Actor> {
 		}),
 	});
 	if (res.status !== 201) throw new Error(`setup failed: ${res.status} ${await res.text()}`);
-	const body = (await res.json()) as { principal: { id: string; address: string }; api_key: { secret: string } };
-	await api(body.api_key.secret)("directory.add_mail_domain", { domain: "second.test" });
-	return {
-		id: body.principal.id,
-		address: body.principal.address,
-		key: body.api_key.secret,
-		call: api(body.api_key.secret),
-	};
+	const body = (await res.json()) as { principal: { id: string; address: string } };
+	// The owner signs out after the key exists, so a test that counts sessions starts with none, as before.
+	const cookie = await signIn(address);
+	const { api_key } = await sessionApi(cookie)("account.create_api_key", {
+		label: "Test key",
+		scopes: [...ALL_SCOPES],
+	});
+	const key = api_key.secret;
+	await request("/auth/sign-out", { method: "POST", headers: { cookie, origin: ORIGIN } });
+	await api(key)("directory.add_mail_domain", { domain: "second.test" });
+	return { id: body.principal.id, address: body.principal.address, key, call: api(key) };
 }
 
 /**
@@ -160,10 +172,11 @@ export async function setLegacyScopes(principalId: string, scopes: readonly stri
  * A key with each human scope that a person creates in their own session. Only the person creates a key with
  * a scope of `OWN_KEY_SCOPES` (`mail.share`), so an admin cannot create this key for the person.
  */
-async function ownKey(address: string, password: string): Promise<string> {
-	const cookie = await signIn(address, password);
-	const client = createClient({ baseUrl: ORIGIN, fetch: workerFetch, headers: () => ({ cookie, origin: ORIGIN }) });
-	const { api_key } = await client.call("account.create_api_key", { label: "Test key", scopes: [...ALL_SCOPES] });
+export async function ownKey(address: string, password = PASSWORD): Promise<string> {
+	const { api_key } = await sessionApi(await signIn(address, password))("account.create_api_key", {
+		label: "Test key",
+		scopes: [...ALL_SCOPES],
+	});
 	return api_key.secret;
 }
 

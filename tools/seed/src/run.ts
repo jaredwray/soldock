@@ -78,7 +78,6 @@ export async function runSeed(api: SeedApi, options: SeedOptions = {}): Promise<
 			address: owner.address,
 			password: owner.password,
 		});
-		apiKeys.set(OWNER, result.api_key.secret);
 		principalIds.set(OWNER, result.principal.id);
 	} catch (error) {
 		if (error instanceof ApiError && error.code === "conflict") {
@@ -89,6 +88,8 @@ export async function runSeed(api: SeedApi, options: SeedOptions = {}): Promise<
 		}
 		throw error;
 	}
+	// Setup creates no API key. The owner signs in, as in the web app, and creates a key in that session.
+	apiKeys.set(OWNER, await api.ownKey(owner.address, owner.password, ALL_SCOPES));
 	log(`Setup: ${owner.displayName} is the owner, and the mail domain is ${ORGANIZATION.mailDomain}.`);
 
 	// 2. The people, the agents and the shared mailbox.

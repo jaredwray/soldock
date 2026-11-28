@@ -36,7 +36,7 @@ No service of the project receives a credential. The
 | `--account-id <id>` | The Cloudflare account (id or name) |
 | `--yes` | Ask nothing. Each answer then comes from a flag |
 | `--secrets-out <file>` | Write new secrets to this new file (mode 0600), not to the terminal. The CLI makes the file before it changes anything |
-| `--owner-name`, `--owner-address` | `install`: create the owner in the terminal. The password comes from `ASTERRA_OWNER_PASSWORD`, or the CLI asks. The first API key of the owner shows one time on a terminal. A run without questions writes it to the secrets file as `OWNER_API_KEY` |
+| `--owner-name`, `--owner-address` | `install`: create the owner in the terminal. The password comes from `ASTERRA_OWNER_PASSWORD`, or the CLI asks. Setup creates no API key: the owner signs in at the host and creates keys in Settings |
 | `--no-rollback` | `upgrade`: keep the new version when the smoke check fails |
 | `--device` | Sign in with a code on a different device |
 | `--prefix`, `--worker-name` | An instance from before the CLI (prefix `soldock`). Give the two together, and not with `--name` |

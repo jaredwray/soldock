@@ -45,7 +45,7 @@ export async function verifySetupToken(token: string): Promise<SetupVerifyResult
 
 /**
  * Creates the owner with the setup token. The server also signs the owner in with an HttpOnly
- * session cookie, because the browser sends the Origin header of this origin.
+ * session cookie, because the browser sends the Origin header of this origin. Setup creates no API key.
  */
 export async function runSetup(token: string, input: SetupInput): Promise<SetupResult> {
 	const response = await fetch("/auth/setup", {
