@@ -443,6 +443,46 @@ export class MeetingDO extends DurableObject<Env> {
 		return this.record(this.meetingRow() as Row);
 	}
 
+	/**
+	 * Makes the meeting of a calendar event, from the outbox of the calendar. A second call for the same event, host
+	 * and code changes only the title and the host name. A cancelled meeting never opens again: a removed link stays
+	 * dead.
+	 */
+	async ensureForEvent(input: CreateMeetingInput): Promise<MeetingRecord | Refusal> {
+		if (!this.exists()) return this.create({ ...input, origin: "calendar" });
+		const meeting = this.meetingRow() as Row;
+		if (meeting.origin !== "calendar" || meeting.event_id !== input.eventId || meeting.host_id !== input.hostId) {
+			return refuse("conflict", "A meeting with that code exists for a different event.");
+		}
+		if (meeting.status === "open" && (meeting.title !== input.title || meeting.host_name !== input.hostName)) {
+			this.sql.exec("UPDATE meeting SET title = ?, host_name = ?", input.title, input.hostName);
+			this.broadcast();
+		}
+		return this.record(this.meetingRow() as Row);
+	}
+
+	/**
+	 * Cancels the meeting of a calendar event: the event was deleted, or its link removed. Each participant leaves, and
+	 * each later join gets conflict. With no meeting yet, a cancelled row stays, so a late make of the meeting cannot
+	 * open a room for a link that the calendar removed.
+	 */
+	async cancelForEvent(input: CreateMeetingInput & { actorId: string }): Promise<{ ok: true } | Refusal> {
+		if (!this.exists()) {
+			const created = await this.create({ ...input, origin: "calendar" });
+			if ("error" in created) return created;
+			const now = Date.now();
+			this.sql.exec("UPDATE meeting SET status = 'cancelled', ended_at = ?, ended_by = ?", now, input.actorId);
+			await this.schedule();
+			return { ok: true };
+		}
+		const meeting = this.meetingRow() as Row;
+		if (meeting.origin !== "calendar" || meeting.event_id !== input.eventId || meeting.host_id !== input.hostId) {
+			return refuse("conflict", "A meeting with that code exists for a different event.");
+		}
+		if (meeting.status === "open") await this.close("cancelled", input.actorId);
+		return { ok: true };
+	}
+
 	async get(actorId: string): Promise<MeetingRecord | Refusal> {
 		const checked = this.hostCheck(actorId);
 		if ("error" in checked) return checked;
@@ -467,8 +507,33 @@ export class MeetingDO extends DurableObject<Env> {
 		if ("error" in checked) return checked;
 		const { meeting } = checked;
 		if (meeting.status !== "open") return { meeting: this.record(meeting), changed: false };
+		// The meeting of a calendar event keeps its link: a series has one link for each occurrence. The end stops the
+		// call only. The calendar stops the link.
+		if (meeting.origin === "calendar") {
+			const changed = await this.clearCall();
+			return { meeting: this.record(this.meetingRow() as Row), changed };
+		}
 		await this.close("ended", actorId);
 		return { meeting: this.record(this.meetingRow() as Row), changed: true };
+	}
+
+	/** Ends the call of a calendar meeting: each participant leaves with the reason ended. The meeting stays open. */
+	private async clearCall(): Promise<boolean> {
+		const now = Date.now();
+		const live = this.sql
+			.exec("SELECT id FROM participants WHERE state IN ('waiting', 'admitted')")
+			.toArray()
+			.map((row) => row.id as string);
+		if (live.length === 0) return false;
+		this.sql.exec(
+			"UPDATE participants SET state = 'left', end_reason = 'ended', left_at = ? WHERE state IN ('waiting', 'admitted')",
+			now,
+		);
+		this.broadcast();
+		for (const id of live) this.endSockets(id, "ended");
+		await this.teardown(live);
+		await this.schedule();
+		return true;
 	}
 
 	/** Admits, refuses or removes a participant. */
@@ -1504,7 +1569,9 @@ export class MeetingDO extends DurableObject<Env> {
 		if (meeting.status !== "open") {
 			next = (meeting.ended_at as number) + ENDED_KEEP_MS;
 		} else {
-			next = (meeting.last_activity_at as number) + IDLE_KEEP_MS;
+			// The calendar owns the life of the meeting of an event: it never ends for lack of activity.
+			next =
+				meeting.origin === "calendar" ? Number.POSITIVE_INFINITY : (meeting.last_activity_at as number) + IDLE_KEEP_MS;
 			const live = this.sql
 				.exec("SELECT * FROM participants WHERE state IN ('waiting', 'admitted')")
 				.toArray() as unknown as ParticipantRow[];
@@ -1523,6 +1590,10 @@ export class MeetingDO extends DurableObject<Env> {
 		}
 		const close = this.sql.exec("SELECT MIN(next_at) AS at FROM pending_closes").one().at as number | null;
 		if (close !== null) next = Math.min(next, close);
+		if (!Number.isFinite(next)) {
+			await this.ctx.storage.deleteAlarm();
+			return;
+		}
 		await this.ctx.storage.setAlarm(Math.max(next, now + 1000));
 	}
 
@@ -1539,7 +1610,7 @@ export class MeetingDO extends DurableObject<Env> {
 			await this.flushCloses(true);
 			return;
 		}
-		if ((meeting.last_activity_at as number) + IDLE_KEEP_MS <= now) {
+		if (meeting.origin !== "calendar" && (meeting.last_activity_at as number) + IDLE_KEEP_MS <= now) {
 			await this.close("ended", "system");
 			return;
 		}

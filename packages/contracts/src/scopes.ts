@@ -40,7 +40,8 @@ export const SCOPES = {
 	"feedback.write":
 		"Send bug reports and ideas about Asterra as public issues to the GitHub repository that your admin chose",
 	"meet.read": "Read the meetings that you host and their lobby and participants",
-	"meet.write": "Create and end the meetings that you host, and admit, refuse and remove their participants",
+	"meet.write":
+		"Create and end the meetings that you host, admit, refuse and remove their participants, and add or remove the Meet link of a calendar event",
 } as const;
 
 export type Scope = keyof typeof SCOPES;
@@ -130,7 +131,7 @@ export const SERVICE_SCOPE_DESCRIPTIONS: Readonly<Record<ServiceScope, string>> 
 		"Add, change and delete the events of the own calendar of the service account, and the events that it adds to the calendars whose owners let it schedule",
 	"meet.read": "Read the meetings that the service account hosts and their lobby and participants",
 	"meet.write":
-		"Create and end the meetings that the service account hosts, and admit, refuse and remove their participants",
+		"Create and end the meetings that the service account hosts, admit, refuse and remove their participants, and add or remove the Meet link of a calendar event",
 };
 
 /** The text of a scope for a caller of this kind: the service text for a service account. */

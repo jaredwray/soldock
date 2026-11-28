@@ -455,6 +455,11 @@ export const CalendarEvent = z.object({
 	 * not private, of an event that it did not add.
 	 */
 	redacted: z.boolean(),
+	/**
+	 * The Meet link of the event, or of the series: the same for each occurrence. Null with no link, when redacted is
+	 * true, and on a meeting that came by mail.
+	 */
+	meet: z.object({ code: z.string(), join_url: z.string() }).nullable(),
 });
 export type CalendarEvent = z.infer<typeof CalendarEvent>;
 
@@ -580,6 +585,14 @@ export const getEvent = defineOperation({
 	errors: ["not_found", "forbidden"],
 });
 
+const MEET_NOTE = [
+	'meet: "create" adds a Meet link to the event. The owner of the calendar is the host of the meeting, also when a delegate adds the link.',
+	"A series has one link for each occurrence. A change of the time keeps the link. A second create keeps the link.",
+	'meet: "remove", and a delete of the event, stop the link: each participant leaves the call, and nobody can join again.',
+	"An invitation by mail has the link.",
+	"meet needs the scope meet.write in your credential. When the operator did not set up Meet, the call fails with unavailable and changes nothing.",
+].join(" ");
+
 export const createEvent = defineOperation({
 	name: "calendar.create_event",
 	summary: "Add an event to your calendar",
@@ -590,6 +603,7 @@ export const createEvent = defineOperation({
 		ATTENDEES_NOTE,
 		MAIL_NOTE,
 		REMINDER_NOTE,
+		MEET_NOTE,
 		`A calendar can have at most ${CALENDAR_LIMITS.events} events and ${CALENDAR_LIMITS.recurringEvents} series.`,
 		"Set idempotency_key to make a retry safe.",
 		OWN_NOTE,
@@ -608,6 +622,10 @@ export const createEvent = defineOperation({
 		attendee_emails: AttendeeEmails.optional(),
 		reminder_minutes: ReminderInput.optional(),
 		visibility: Visibility.default("default"),
+		meet: z
+			.literal("create")
+			.optional()
+			.describe('"create" adds a Meet link. A retry with the idempotency key keeps the first link.'),
 		calendar_id: CALENDAR_ID,
 		idempotency_key: z
 			.string()
@@ -619,7 +637,7 @@ export const createEvent = defineOperation({
 			),
 	}),
 	output: z.object({ event: CalendarEvent }),
-	errors: ["conflict", "forbidden", "not_found", "policy_denied"],
+	errors: ["conflict", "forbidden", "not_found", "policy_denied", "unavailable"],
 });
 
 export const updateEvent = defineOperation({
@@ -635,6 +653,8 @@ export const updateEvent = defineOperation({
 		"A change of the title, description, location, time or attendees by mail sends an updated invitation by mail. A removed address gets a cancellation.",
 		MAIL_NOTE,
 		"Only the organizer can change an event. On an invitation, use calendar.respond_to_event and calendar.set_reminder.",
+		MEET_NOTE,
+		'meet: "create" on an event with a link, and meet: "remove" on an event without one, change nothing.',
 		"A call that changes nothing keeps the revision.",
 		"Set base_revision to the revision that you read. When the event has a different revision now, the call fails with conflict and changes nothing: read the event again.",
 		"Without base_revision, the change applies to the current event.",
@@ -654,11 +674,17 @@ export const updateEvent = defineOperation({
 		attendee_ids: AttendeeIds.optional(),
 		attendee_emails: AttendeeEmails.optional(),
 		visibility: Visibility.optional(),
+		meet: z
+			.enum(["create", "remove"])
+			.optional()
+			.describe(
+				'"create" adds a Meet link. "remove" stops the link: each participant leaves, and nobody can join again.',
+			),
 		calendar_id: CALENDAR_ID,
 		base_revision: BASE_REVISION,
 	}),
 	output: z.object({ event: CalendarEvent }),
-	errors: ["not_found", "conflict", "forbidden", "policy_denied"],
+	errors: ["not_found", "conflict", "forbidden", "policy_denied", "unavailable"],
 });
 
 export const deleteEvent = defineOperation({
@@ -669,6 +695,7 @@ export const deleteEvent = defineOperation({
 		"The event is removed from the calendar of each attendee too, and each attendee by mail gets a cancellation by mail.",
 		"On an invitation of a person of your organization, the call fails with forbidden: decline it with calendar.respond_to_event.",
 		"A meeting that came by mail is an exception: the delete removes it from your calendar only, and sends nothing.",
+		"The delete stops the Meet link of the event: each participant leaves the call, and nobody can join again. This needs no meet scope.",
 		"Set dry_run to true to get the event without a change.",
 		"Set base_revision to the revision that you read. When the event has a different revision now, the call fails with conflict and deletes nothing: read the event again.",
 		"Without base_revision, the call deletes the current event.",
@@ -706,6 +733,7 @@ export const updateOccurrence = defineOperation({
 		"when moves the occurrence to a different date or time. Its kind must be the kind of the series.",
 		SCOPE_NOTE,
 		"The attendees get the change. To change the entire series, use calendar.update_event.",
+		"The occurrence keeps the Meet link of the series.",
 		OWN_NOTE,
 	].join(" "),
 	http: { method: "POST", path: "/api/v1/calendar/occurrences/{occurrence_id}" },
@@ -732,6 +760,7 @@ export const cancelOccurrence = defineOperation({
 		"Cancels one occurrence of a series. The occurrence is removed from your calendar and from the calendar of each attendee. Its reminders do not occur. This cannot be undone.",
 		SCOPE_NOTE,
 		"Set dry_run to true to get the occurrence without a change. To delete the entire series, use calendar.delete_event.",
+		"The Meet link of the series stays: the other occurrences use it.",
 		OWN_NOTE,
 	].join(" "),
 	http: { method: "DELETE", path: "/api/v1/calendar/occurrences/{occurrence_id}" },

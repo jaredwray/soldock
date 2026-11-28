@@ -722,8 +722,8 @@ calendar of the agent.
 | `calendar_list_events` | `calendar.read` | The events that overlap a range, first start first, with pages |
 | `calendar_get_event` | `calendar.read` | One event |
 | `calendar_find_times` | `calendar.read` | The busy times of people, and free times for a meeting |
-| `calendar_create_event` | `calendar.write` | Add an event, invite `attendee_ids`, and invite `attendee_emails` by mail. Takes `idempotency_key` |
-| `calendar_update_event` | `calendar.write` | Change the fields that you give. Takes `base_revision` |
+| `calendar_create_event` | `calendar.write` | Add an event, invite `attendee_ids`, and invite `attendee_emails` by mail. `meet: "create"` adds a Meet link (also needs `meet.write`). Takes `idempotency_key` |
+| `calendar_update_event` | `calendar.write` | Change the fields that you give. `meet: "create"` or `"remove"` adds or removes the Meet link (also needs `meet.write`). Takes `base_revision` |
 | `calendar_delete_event` | `calendar.write` | Delete an event. Takes `base_revision` and `dry_run` |
 | `calendar_update_occurrence` | `calendar.write` | Change or move one occurrence of a series. Takes `base_revision` |
 | `calendar_cancel_occurrence` | `calendar.write` | Cancel one occurrence of a series. Takes `base_revision` and `dry_run` |
@@ -885,7 +885,7 @@ needs a browser. The person or the guest in the browser opens the link.
 | `meet_admit_participant` | `meet.write` | Let a participant in the lobby join the call |
 | `meet_deny_participant` | `meet.write` | Refuse a participant in the lobby |
 | `meet_remove_participant` | `meet.write` | Remove a participant from the call. Its media stops at once |
-| `meet_end_meeting` | `meet.write` | End the meeting for everyone. The link does not work again |
+| `meet_end_meeting` | `meet.write` | End the meeting for everyone. The link does not work again, except the link of a calendar event |
 
 - **Only the host.** Each tool except `meet_create_meeting` works only for the host of the meeting. A different
   agent, the sponsor of an agent, and an owner or an admin get `forbidden`.
@@ -895,6 +895,10 @@ needs a browser. The person or the guest in the browser opens the link.
 - **An agent from before Meet.** Migration `0043` gives an agent `meet.read` when it holds `calendar.read`, and
   `meet.write` when it holds `calendar.write`.
 - When the operator did not set up Meet, `meet_create_meeting` returns `unavailable`.
+- **The Meet link of a calendar event.** Use `meet: "create"` of `calendar_create_event` or
+  `calendar_update_event`. The event gets `meet.join_url`, and each invitation has the link. The owner of the
+  calendar is the host, also when you schedule for that person: you cannot run the lobby of that meeting. A
+  delete of the event, or `meet: "remove"`, cancels the meeting, and each participant leaves.
 
 ## Chat
 

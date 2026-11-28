@@ -3,16 +3,16 @@
 > Status: **started**. A personal calendar for each person, agent and service account exists, with
 > recurring events, changes and cancellations of single occurrences, invitations between people of the
 > organization, invitations by mail to and from addresses outside the organization, free/busy with grants
-> and **Find a time**, scheduling by a delegate, and personal reminders. Keep this README current as the module grows. It is
+> and **Find a time**, scheduling by a delegate, personal reminders, and the Meet link of an event. Keep this README current as the module grows. It is
 > the module's contract.
 
 | | |
 | --- | --- |
 | **Purpose** | Calendar: the events of each principal, the time zones and all-day events, recurrence, attendees, the grants of a calendar, free/busy, scheduling by a delegate and reminders. |
 | **Owns** | `CalendarDO`, one for each principal. |
-| **Depends on** | `platform`, `identity` (the Activity of a reminder in `PrincipalDO`, the hint `calendar.changed`), `chat` (the push queue `soldock-chat-push`), `webhooks` (the type of the queue job, and the subscription handlers), `mail` (`sendCalendarMail`, `readCalendarPart` and the outbound policy, for the invitations by mail). |
+| **Depends on** | `platform`, `meet` (the `MeetingDO` of the Meet link of an event), `identity` (the Activity of a reminder in `PrincipalDO`, the hint `calendar.changed`), `chat` (the push queue `soldock-chat-push`), `webhooks` (the type of the queue job, and the subscription handlers), `mail` (`sendCalendarMail`, `readCalendarPart` and the outbound policy, for the invitations by mail). |
 | **Operations** | `calendar.list_events`, `calendar.get_event`, `calendar.create_event`, `calendar.update_event`, `calendar.delete_event`, `calendar.update_occurrence`, `calendar.cancel_occurrence`, `calendar.respond_to_event`, `calendar.set_reminder`, `calendar.query_free_busy`, `calendar.find_times`, `calendar.list_grants`, `calendar.set_grant`, `calendar.remove_grant`, `calendar.list_shared_calendars`, `calendar.list_changes`, `calendar.create_webhook_subscription`, `calendar.list_webhook_subscriptions`, `calendar.delete_webhook_subscription`, `calendar.get_mail_invitation`, `calendar.respond_to_mail_invitation` |
-| **Data inventory** | `CalendarDO` tables `events` (with `visibility` and `created_by` since schema 4), `grants` (principal, access, time; schema 4), `shared_with_me` (the calendars that other owners share with this owner: owner, access or null for a removed grant, version, time; schema 5; a hint that the grants of the other calendars can build again), `outbox` with the kind `grant` since schema 5, `meta.grant_seq`, since schema 6 the columns `events.uid` (the UID of a copy by mail) and `events.mail_json` (the organizer, the sender, the last `DTSTAMP` and the own address of a copy by mail), the tables `external_attendees` (event, address, name, answer, time of the answer, time of the invitation, sequence of the last question, and a flag for a sent REQUEST) and `mail_tombstones` (UID, organizer, sequence, state `cancelled`, `removed` or `no_copy`, time; kept 30 days), and `outbox` with the kind `mail`, `event_overrides`, `event_attendees`, `occurrence_responses`, `reminders`, `reminder_log`, `outbox`, `changes`, `idempotency` and `meta` (with, for the change feed, `change_feed`, `change_head`, `change_published`, `change_floor`, `publish_attempts`, `publish_at` and `webhook_events`). `PrincipalDO` column `chat_activity.event_json` (the reminders in the Activity). A message of Calendar in Sent is state of the mail module. No R2 object. D1: the subscriptions of MCP Events and of the calendar webhooks are rows of `webhook_endpoints` and `webhook_subscriptions` (domain `calendar`). D1 migration 0038 changes `principals.agent_scopes` only. D1 migration 0041 builds `webhook_subscriptions` again with the domain `calendar`, and gives `calendar.webhooks` to agents. Backups: not built yet. |
+| **Data inventory** | `CalendarDO` tables `events` (with `visibility` and `created_by` since schema 4), `grants` (principal, access, time; schema 4), `shared_with_me` (the calendars that other owners share with this owner: owner, access or null for a removed grant, version, time; schema 5; a hint that the grants of the other calendars can build again), `outbox` with the kind `grant` since schema 5, `meta.grant_seq`, since schema 6 the columns `events.uid` (the UID of a copy by mail) and `events.mail_json` (the organizer, the sender, the last `DTSTAMP` and the own address of a copy by mail), the tables `external_attendees` (event, address, name, answer, time of the answer, time of the invitation, sequence of the last question, and a flag for a sent REQUEST) and `mail_tombstones` (UID, organizer, sequence, state `cancelled`, `removed` or `no_copy`, time; kept 30 days), and `outbox` with the kind `mail`, since schema 7 the column `events.meet_code` (the code of the Meet link), `outbox` with the kind `meet` and `meta.meet_seq`, `event_overrides`, `event_attendees`, `occurrence_responses`, `reminders`, `reminder_log`, `outbox`, `changes`, `idempotency` and `meta` (with, for the change feed, `change_feed`, `change_head`, `change_published`, `change_floor`, `publish_attempts`, `publish_at` and `webhook_events`). `PrincipalDO` column `chat_activity.event_json` (the reminders in the Activity). A message of Calendar in Sent is state of the mail module. No R2 object. D1: the subscriptions of MCP Events and of the calendar webhooks are rows of `webhook_endpoints` and `webhook_subscriptions` (domain `calendar`). D1 migration 0038 changes `principals.agent_scopes` only. D1 migration 0041 builds `webhook_subscriptions` again with the domain `calendar`, and gives `calendar.webhooks` to agents. Backups: not built yet. |
 
 Public surface: `index.ts` only. Other domains must not import files from this folder directly.
 
@@ -211,7 +211,7 @@ Public surface: `index.ts` only. Other domains must not import files from this f
 | --- | --- | --- | --- |
 | Owner | Each event | Each field | An own event: yes. An invitation: respond and reminder only |
 | `schedule` delegate | An event or a series that it added | Each field | Update, delete, and change or cancel an occurrence |
-| `schedule` delegate | A different event that is not private | `id`, `when`, `title`, `visibility`, `revision`, `recurrence`, the fields of the occurrence, times. `description`, `location` and `attendees` are empty. `organizer`, `my_response`, `reminder_minutes` and `created_by` are null, also for an invitation: the delegate does not learn who the owner meets. `redacted` is true | `forbidden` |
+| `schedule` delegate | A different event that is not private | `id`, `when`, `title`, `visibility`, `revision`, `recurrence`, the fields of the occurrence, times. `description`, `location` and `attendees` are empty. `organizer`, `my_response`, `reminder_minutes`, `created_by` and `meet` are null, also for an invitation: the delegate does not learn who the owner meets. `redacted` is true | `forbidden` |
 | `schedule` delegate | A different private event | The same, and `title` is empty. The web app shows "Busy" | `forbidden` |
 | `free_busy` grantee | — | `forbidden` from each event operation. Merged busy intervals from `calendar.query_free_busy` and `calendar.find_times` | — |
 | Each other caller | — | `forbidden`. `unknown` in free/busy | — |
@@ -335,7 +335,7 @@ the check of the revision.
   | Change of the organizer | Mail to each attendee by mail |
   | --- | --- |
   | New event, or a new attendee by mail | `METHOD:REQUEST`, subject "Invitation: <title>" |
-  | A change of the title, the description, the place, the time or the attendees by mail | `METHOD:REQUEST` with a larger `SEQUENCE`, subject "Updated invitation: <title>". The subject stays "Invitation: <title>" until one REQUEST to that address left the outbox of the calendar |
+  | A change of the title, the description, the place, the time, the Meet link or the attendees by mail | `METHOD:REQUEST` with a larger `SEQUENCE`, subject "Updated invitation: <title>". The subject stays "Invitation: <title>" until one REQUEST to that address left the outbox of the calendar |
   | The organizer removes the attendee by mail | `METHOD:CANCEL` to that address only, subject "Cancelled: <title>" |
   | The organizer deletes the event | `METHOD:CANCEL` to each address |
   | A change of the visibility, of the reminder or of the attendees of the organization, or a response | No mail |
@@ -425,6 +425,10 @@ the check of the revision.
 - `RRULE`, `RDATE`, `EXDATE`, `RECURRENCE-ID` and a second `VEVENT` mark a recurring meeting: `unsupported`.
 - The texts lose their control characters (the description keeps tabs and line breaks) and are cut to the
   limits of an event. An empty title becomes "(No title)".
+- An event with a Meet link gets `CONFERENCE;VALUE=URI;FEATURE=AUDIO,VIDEO;LABEL=Join the meeting:<link>` (RFC
+  7986) in a REQUEST. A client that does not read `CONFERENCE` gets the link in `LOCATION` when the event has no
+  place, and in a last paragraph of `DESCRIPTION`: "Join the meeting: <link>". The text part of the mail has the
+  same line. A CANCEL has no link.
 - The builder writes CRLF line ends and folds each line at 75 octets. A `CN` loses its quotes and control
   characters, so a name cannot add a parameter or a property. The parser keeps a `UID` as the sender wrote it,
   and an answer writes the same characters back, so the organizer finds the meeting.
@@ -455,6 +459,41 @@ The workerd tests use synthetic fixtures in the forms of Google Calendar, Outloo
 4. The form of the REPLY of each client: one `ATTENDEE`, the echo of `SEQUENCE`, and `DTSTAMP`.
 5. The `TZID` names of Outlook outside the fixed list.
 6. Email Service accepts the `text/calendar` part and keeps its `method` parameter.
+
+## The Meet link
+
+- An event can have one Meet link. `meet: "create"` of `calendar.create_event` and `calendar.update_event` adds
+  it, and `meet: "remove"` of `calendar.update_event` removes it. "create" on an event with a link and "remove" on
+  an event without one change nothing. The output has `meet: { code, join_url }` or null.
+- The link needs `meet.write` on the credential (`forbidden`), and the Realtime secrets for "create"
+  (`unavailable`). The web app shows **Create Meet link** in the event dialog. The change goes with **Save**, as
+  each other field does.
+- The object makes the code (`newMeetingCode` of the `meet` module) before the transaction, and writes it in
+  `events.meet_code`. A retry with the same idempotency key gives the stored answer, so it makes no second room.
+  A series has one link for each occurrence: a move or a cancel of one occurrence keeps it.
+- The owner of the calendar is the host, also when a `schedule` delegate adds the link. A delegate adds and
+  removes the link only on the events that it added, as each other change. A redacted event has `meet: null`.
+  A `free_busy` grantee gets `forbidden`, as for each event operation.
+- **The outbox.** Each change puts one row of the kind `meet` in the outbox (`meet:<code>`, version
+  `meta.meet_seq`). The object sends it before the call returns, so a new link works at once and a removed link
+  stops at once. A failure waits 10 seconds for the alarm. The delivery reads the event at that time:
+  - The event holds the code, and the calendar is the organizer: `MeetingDO.ensureForEvent` makes the meeting
+    with the origin `calendar`, or changes its title and the name of the host.
+  - Each other case (the event is deleted, or its link is removed): `MeetingDO.cancelForEvent` cancels the
+    meeting. Each participant leaves, and each later join gets `409`. With no meeting yet, the object writes a
+    cancelled row, so a late delivery cannot open a room for a removed link.
+  - A meeting with that code for a different event, origin or host refuses with `conflict`. The calendar writes
+    an error log and drops the row: a retry cannot help.
+- The title of the meeting is the title of the event, cut to 120 code points. A private event gives the meeting
+  no title, because each person with the link sees it. A change of the title or of the visibility sends the row
+  again.
+- A new time, the occurrences and the attendees do not change the meeting. A delete of the event or of the
+  series cancels the meeting. A cancel of one occurrence does not.
+- A meeting of the origin `calendar` has no idle end. `meet.end_meeting` stops the call: each participant
+  leaves, and the link works again for the next call. Only the calendar cancels the meeting.
+- An attendee of the organization gets the link in the copy of the event, and joins as a member. A copy by mail
+  has no link: the organizer outside the organization owns the meeting.
+- The invitation by mail has the link: see [Outbound](#outbound) and [iCalendar subset](#icalendar-subset).
 
 ## Free/busy
 
@@ -709,6 +748,8 @@ write no record.
   service account, a `calendar_id` of a different principal makes the grant decide, not the account
   scopes (`resourceDecidedScopes`). Without `calendar_id`, or with the own id, the account scopes decide.
   `calendar.create_webhook_subscription` is account-decided: its `calendar_id` can only be the caller.
+- `meet: "create"` and `meet: "remove"` also need `meet.write` (see [The Meet link](#the-meet-link)). For an
+  agent or a service account, the account scope decides, also in the calendar of a different principal.
 - A key of a person keeps its scopes in the calendar of a different person. A key with only
   `calendar.read` lists the events of the owner, and cannot schedule.
 - A session of the web app holds each scope. A key of a person holds the scopes that the person gave

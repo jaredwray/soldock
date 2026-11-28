@@ -194,6 +194,7 @@ export const endMeeting = defineOperation({
 	summary: "End a meeting for everyone",
 	description: [
 		"Ends the meeting for each participant at once: their audio and video stop, and nobody can join again with the link. This cannot be undone.",
+		"For the meeting of a calendar event, the call ends for each participant, and the link works again later. To stop the link, remove it from the event or delete the event.",
 		"A second call changes nothing.",
 		HOST_NOTE,
 	].join(" "),

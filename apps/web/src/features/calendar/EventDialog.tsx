@@ -1,8 +1,9 @@
-import { ApiError, CALENDAR_LIMITS, type CalendarEvent, type EventResponse } from "@asterra/contracts";
+import { ApiError, CALENDAR_LIMITS, type CalendarEvent, type EventResponse, meetPath } from "@asterra/contracts";
 import { type FormEvent, useId, useMemo, useRef, useState } from "react";
 import { errorMessage } from "../../lib/api.ts";
 import { ConfirmDialog } from "../../lib/ConfirmDialog.tsx";
 import { Dialog } from "../../lib/Dialog.tsx";
+import { Icon } from "../../lib/icons.tsx";
 import { Select } from "../../lib/Select.tsx";
 import { useToast } from "../../lib/toast.tsx";
 import { principalOption, usePrincipals } from "../../lib/usePrincipals.ts";
@@ -92,6 +93,8 @@ export function EventDialog({ event, initial, zone, onChanged, onClose, calendar
 	const [confirmDelete, setConfirmDelete] = useState(false);
 	const [scoped, setScoped] = useState<ScopedAction | null>(null);
 	const [scope, setScope] = useState<Scope>("this");
+	// A change of the Meet link goes with Save, as each other field: "create" adds a link, "remove" stops it.
+	const [meetChange, setMeetChange] = useState<"create" | "remove" | null>(null);
 	// One key for each request of the dialog. A second click on Save, or a retry after a lost answer, sends the
 	// same request with the same key, so the server adds one event. A different request gets its own key.
 	const keys = useRef(new Map<string, string>());
@@ -147,7 +150,8 @@ export function EventDialog({ event, initial, zone, onChanged, onClose, calendar
 	const sameGuests = guests.length === openedGuests.length && guests.every((email) => openedGuests.includes(email));
 	const sameVisibility = form.visibility === opened.visibility;
 	// A change of the rule, of the attendees or of the visibility is a change of the entire series.
-	const seriesOnly = !sameRepeat(form, opened) || !sameAttendees || !sameGuests || !sameVisibility;
+	const seriesOnly =
+		!sameRepeat(form, opened) || !sameAttendees || !sameGuests || !sameVisibility || meetChange !== null;
 	const repeats = customRule !== null || form.repeat !== "none";
 	const address = typedAddress(typed);
 
@@ -219,6 +223,7 @@ export function EventDialog({ event, initial, zone, onChanged, onClose, calendar
 			...(sameAttendees ? {} : { attendee_ids: attendees }),
 			...(sameGuests ? {} : { attendee_emails: guests }),
 			...(sameVisibility ? {} : { visibility: form.visibility }),
+			...(meetChange ? { meet: meetChange } : {}),
 			// The revision that the dialog opened with: a change from a different place gives a conflict.
 			base_revision: event.revision,
 		});
@@ -279,6 +284,7 @@ export function EventDialog({ event, initial, zone, onChanged, onClose, calendar
 					// A delegate sends no reminder: the server gives the owner the default one.
 					...(form.allDay || calendarId !== null ? {} : { reminder_minutes: reminderOf(form) }),
 					visibility: form.visibility,
+					...(meetChange === "create" ? { meet: "create" as const } : {}),
 					...on,
 				};
 				const text = JSON.stringify(request);
@@ -366,6 +372,7 @@ export function EventDialog({ event, initial, zone, onChanged, onClose, calendar
 					{event.external_attendees.length > 0
 						? " Each person outside your organization gets a cancellation by mail."
 						: ""}
+					{event.meet ? " The Meet link stops: each participant leaves the call." : ""}
 				</p>
 			</ConfirmDialog>
 		);
@@ -460,6 +467,13 @@ export function EventDialog({ event, initial, zone, onChanged, onClose, calendar
 						</p>
 					)}
 					{event.location && <p>{event.location}</p>}
+					{event.meet && (
+						<p>
+							<a className="button button-primary" href={meetPath(event.meet.code)} target="_blank" rel="noopener">
+								Join meeting
+							</a>
+						</p>
+					)}
 					{event.description && <p className="cal-invite-notes">{event.description}</p>}
 					<div className="cal-rsvp">
 						<span role="status">{RESPONSE_TEXT[event.my_response ?? "needs_action"]}</span>
@@ -768,6 +782,7 @@ export function EventDialog({ event, initial, zone, onChanged, onClose, calendar
 						onChange={(change) => set("location", change.target.value)}
 					/>
 				</div>
+				<MeetRow link={event?.meet ?? null} change={meetChange} onChange={setMeetChange} disabled={busy} />
 				<div className="field">
 					<label className="field-label" htmlFor={ids.notes}>
 						Description
@@ -829,5 +844,74 @@ export function EventDialog({ event, initial, zone, onChanged, onClose, calendar
 				</div>
 			</form>
 		</Dialog>
+	);
+}
+
+interface MeetRowProps {
+	/** The link that the event has now, or null. */
+	link: { code: string; join_url: string } | null;
+	change: "create" | "remove" | null;
+	onChange(change: "create" | "remove" | null): void;
+	disabled: boolean;
+}
+
+/** The Meet link of the event: join, copy, add or remove it. A change applies when the person saves the event. */
+function MeetRow({ link, change, onChange, disabled }: MeetRowProps) {
+	const toast = useToast();
+	async function copy(url: string) {
+		try {
+			await navigator.clipboard.writeText(url);
+			toast({ message: "Link copied" });
+		} catch {
+			toast({ message: "The browser did not copy the link. Select it and copy it." });
+		}
+	}
+	return (
+		<section className="cal-meet" aria-label="Meet">
+			<span className="field-label">Meet</span>
+			{link === null ? (
+				change === "create" ? (
+					<p className="cal-meet-row field-hint">
+						A Meet link is added when you save.
+						<button type="button" className="button button-small" disabled={disabled} onClick={() => onChange(null)}>
+							Undo
+						</button>
+					</p>
+				) : (
+					<p className="cal-meet-row">
+						<button type="button" className="button" disabled={disabled} onClick={() => onChange("create")}>
+							<Icon name="video" />
+							Create Meet link
+						</button>
+					</p>
+				)
+			) : change === "remove" ? (
+				<p className="cal-meet-row field-hint">
+					When you save, the link stops and each participant leaves the call.
+					<button type="button" className="button button-small" disabled={disabled} onClick={() => onChange(null)}>
+						Undo
+					</button>
+				</p>
+			) : (
+				<p className="cal-meet-row">
+					<a className="button button-primary" href={meetPath(link.code)} target="_blank" rel="noopener">
+						<Icon name="video" />
+						Join meeting
+					</a>
+					<button type="button" className="button" onClick={() => void copy(link.join_url)}>
+						<Icon name="copy" />
+						Copy link
+					</button>
+					<button
+						type="button"
+						className="button button-danger-outline"
+						disabled={disabled}
+						onClick={() => onChange("remove")}
+					>
+						Remove link
+					</button>
+				</p>
+			)}
+		</section>
 	);
 }
