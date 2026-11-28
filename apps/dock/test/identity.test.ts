@@ -1394,7 +1394,7 @@ describe("directory upgrade", () => {
 			.prepare("INSERT INTO sign_in_codes VALUES ('sic_2', 'prn_owner', 'x', 0, '2026-01-01', '2999-01-01', NULL)")
 			.run();
 		// Without a password, the person signs in after somebody sets one: the person in a kept session,
-		// or the owner with the setup key.
+		// or the owner with an own API key.
 		await refusal(await submitSignIn("owner@dock.test", "olive@home.example"));
 		await owner("account.set_password", { password: PASSWORD });
 		await signIn("owner@dock.test");

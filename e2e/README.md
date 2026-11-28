@@ -83,8 +83,8 @@ pnpm e2e
 The first flows to cover, because they are tested by hand only:
 
 - First-run setup: the page without a token, with a short token, and with a ready token. The owner
-  form, the errors (wrong token, `+` address, a short password, two different passwords), the key
-  dialog, the optional two-step verification step (QR code, a wrong code, a correct code, Skip),
+  form, the errors (wrong token, `+` address, a short password, two different passwords), the
+  reminder to delete `SETUP_TOKEN`, the optional two-step verification step (QR code, a wrong code, a correct code, Skip),
   and `409` into the sign-in page.
 - Sign-in with a password: a wrong password, the TOTP step, a used code, "Use a different account",
   the password change in Settings, which ends the session of a second browser, and **Reset sign-in**

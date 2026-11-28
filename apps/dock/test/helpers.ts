@@ -145,12 +145,7 @@ export async function setupOwner(address = "owner@dock.test"): Promise<Actor> {
 	if (res.status !== 201) throw new Error(`setup failed: ${res.status} ${await res.text()}`);
 	const body = (await res.json()) as { principal: { id: string; address: string } };
 	// The owner signs out after the key exists, so a test that counts sessions starts with none, as before.
-	const cookie = await signIn(address);
-	const { api_key } = await sessionApi(cookie)("account.create_api_key", {
-		label: "Test key",
-		scopes: [...ALL_SCOPES],
-	});
-	const key = api_key.secret;
+	const { key, cookie } = await keyInSession(address, PASSWORD);
 	await request("/auth/sign-out", { method: "POST", headers: { cookie, origin: ORIGIN } });
 	await api(key)("directory.add_mail_domain", { domain: "second.test" });
 	return { id: body.principal.id, address: body.principal.address, key, call: api(key) };
@@ -173,11 +168,17 @@ export async function setLegacyScopes(principalId: string, scopes: readonly stri
  * a scope of `OWN_KEY_SCOPES` (`mail.share`), so an admin cannot create this key for the person.
  */
 export async function ownKey(address: string, password = PASSWORD): Promise<string> {
-	const { api_key } = await sessionApi(await signIn(address, password))("account.create_api_key", {
+	return (await keyInSession(address, password)).key;
+}
+
+/** Signs a person in, creates a key with every human scope in that session, and returns the key and the cookie. */
+async function keyInSession(address: string, password: string): Promise<{ key: string; cookie: string }> {
+	const cookie = await signIn(address, password);
+	const { api_key } = await sessionApi(cookie)("account.create_api_key", {
 		label: "Test key",
 		scopes: [...ALL_SCOPES],
 	});
-	return api_key.secret;
+	return { key: api_key.secret, cookie };
 }
 
 /**

@@ -596,8 +596,9 @@ top-level only and applies to each instance. So it cannot hold a rule for one in
       **Set a password** and give the first password to the person, who can change it in **Settings**. A
       person gets no API key. The person creates keys in **Settings**.
 
-   `curl` does the same setup without a browser. The response holds the key (`api_key.secret`),
-   and gives no session. Do not write the token or the password in the command: the shell keeps a
+   `curl` does the same setup without a browser. The response holds the owner. It holds no API key and
+   gives no session. Then sign in at the host in a browser, and create keys in **Settings › API keys**.
+   Do not write the token or the password in the command: the shell keeps a
    history of commands, and other users of the computer can see the arguments of a process. Put the
    header and the body in two files that only you can read, and delete the files after the call:
 
@@ -610,8 +611,8 @@ top-level only and applies to each instance. So it cannot hold a rule for one in
    rm setup-header.txt setup-body.json
    ```
 
-   To turn on two-step verification without a browser, call `account.create_totp_secret` with the
-   key, add the `otpauth_uri` to an authenticator app, and send a code to `account.enable_totp`.
+   To turn on two-step verification with an API key, call `account.create_totp_secret`, add the
+   `otpauth_uri` to an authenticator app, and send a code to `account.enable_totp`.
 
    After you delete the token, the setup page does not show again. While the token exists and accounts exist,
    the page offers **Continue with the existing accounts** in place of **Set up without a reset**.

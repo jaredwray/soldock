@@ -458,6 +458,10 @@ function TwoStepStep({ password, onDone }: { password: string; onDone: () => voi
 				The owner is ready. Now delete the <code>SETUP_TOKEN</code> secret in the Cloudflare dashboard. This disables
 				the option to start fresh.
 			</p>
+			<p className="field-hint">
+				Nobody else can reset your sign-in. After setup, create a recovery key with every scope in{" "}
+				<strong>Settings › API keys</strong>, and keep it in a password manager.
+			</p>
 			<p className="setup-intro">Two-step verification (optional)</p>
 			{enabled ? (
 				<p className="notice">Two-step verification is on. Each sign-in needs your password and a code.</p>

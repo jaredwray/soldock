@@ -89,7 +89,14 @@ export async function runSeed(api: SeedApi, options: SeedOptions = {}): Promise<
 		throw error;
 	}
 	// Setup creates no API key. The owner signs in, as in the web app, and creates a key in that session.
-	apiKeys.set(OWNER, await api.ownKey(owner.address, owner.password, ALL_SCOPES));
+	try {
+		apiKeys.set(OWNER, await api.ownKey(owner.address, owner.password, ALL_SCOPES));
+	} catch (error) {
+		throw new SeedStop(
+			`The seed created the owner, but it could not sign in to create the key of the owner (${(error as Error).message}). ` +
+				"Start the Worker with a new, empty --persist-to directory, apply the migrations to it, and run the seed again.",
+		);
+	}
 	log(`Setup: ${owner.displayName} is the owner, and the mail domain is ${ORGANIZATION.mailDomain}.`);
 
 	// 2. The people, the agents and the shared mailbox.

@@ -104,7 +104,7 @@ function fakeAsterra(options: { ownerExists?: boolean } = {}) {
 			if (owner?.address !== address || owner.password !== password) {
 				problems.push("ownKey: the sign-in does not match the owner from setup");
 			}
-			return key("human", scopes as Scope[]).secret;
+			return key("human", scopes).secret;
 		},
 		async call(apiKey, name, input) {
 			calls.push({ name, input: input as Record<string, unknown> });
