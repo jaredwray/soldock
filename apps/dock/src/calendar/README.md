@@ -575,7 +575,7 @@ the delivery.
 | `calendar_id` | The owner of the calendar |
 | `event_id` | The event or series. The copy of an attendee has the same id as the event of the organizer |
 | `occurrence_id` | For a change of one occurrence of a series: its id, as `calendar.list_events` gives it (`<event id>_<key>`, where the key is the original start of the occurrence). It stays the same when the occurrence moves. Null for a change of the entire event or series |
-| `revision` | The revision of the event after the change. The revisions of the records of one event are not contiguous ([below](#revision-and-order)), so a client deduplicates by `id`, not by `revision` |
+| `revision` | The revision of the event after the change. For `calendar.event.deleted` and `calendar.invitation.cancelled`, it is the last revision before the delete. The revisions of the records of one event are not contiguous ([below](#revision-and-order)), so a client deduplicates by `id`, not by `revision` |
 | `actor_id` | The principal that caused the change, or null when two attendees changed their responses in one state. A response that went back to `needs_action` because of the organizer (a new time, a moved occurrence, or a new invitation) has the organizer |
 | `at` | The time of the commit |
 | `cursor` | The position after the change |
@@ -609,7 +609,7 @@ gives `not_found`.
 | `calendar.invitation.received` | An attendee | A copy of an event arrives |
 | `calendar.invitation.updated` | An attendee | The organizer changed the event of a copy (`occurrence_id` null), or one occurrence of it (`occurrence_id` set) |
 | `calendar.invitation.cancelled` | An attendee | The copy went away: the organizer deleted the event or removed the attendee |
-| `calendar.rsvp.changed` | Each | A response to the series (`occurrence_id` null) or to one occurrence changed: the own response, the response of an attendee to an event of the owner, or the response of a different attendee on a copy |
+| `calendar.rsvp.changed` | Each | A response to the series (`occurrence_id` null) or to one occurrence changed: the own response, the response of an attendee to an event of the owner, or the response of a different attendee on a copy. Also a reset by the organizer |
 
 Invitations by mail use the same names:
 
@@ -633,10 +633,21 @@ write no record.
   Else each changed or cancelled occurrence gives one record. Then a changed response gives
   `calendar.rsvp.changed`: one for the series when a response to the series changed, else one for each
   occurrence with a changed response.
+- A reset by the organizer gives the same record on the calendar of the organizer, in the transaction of the
+  change, after the `calendar.event.updated` record and with its `revision`. A new time or a new rule of the
+  event gives one record for the series. A new time of one occurrence gives one record for that occurrence.
+  The `actor_id` is the principal that made the change. The record is written only when an attendee that
+  stays had a response other than `needs_action`.
+- The removal of an attendee gives no `calendar.rsvp.changed`. The attendee left the event, so the
+  `updated` record covers it. A copy compares only the attendees that it has before and after the state.
+- A response to the series replaces the responses of that attendee to single occurrences. It gives a record
+  only when the response to the series is different, or when one of those responses was different and its
+  occurrence is not cancelled.
 - The response of the owner of a copy comes back in the next state of the organizer. The copy shows its own
   response for the owner, so that echo changes nothing that the owner sees, and it gives no record.
 - These calls write no record: a refusal, a `dry_run`, a retry with an idempotency key, an update or a move
-  that changes nothing, a second cancel, a repeated response, `calendar.set_reminder`, a reminder that fires,
+  that changes nothing, a second cancel, a repeated response, a response to the series that changes no shown
+  response, `calendar.set_reminder`, a reminder that fires,
   and a message of the outbox that the calendar does not take (an old `sequence` or time, a different owner or
   organizer, an unknown attendee or occurrence, or a calendar at a limit).
 
@@ -656,12 +667,16 @@ write no record.
 
 ### Publish
 
-- The alarm fires the due reminders, then publishes the rows in order (`publishChanges`), then delivers the
-  outbox. One publish runs at a time. For each batch of 50 rows it
-  sends the hint to the `PrincipalDO` of the owner, then, when `webhook_events` is set, one queue job for each
-  row on `soldock-webhooks`.
-- `change_published` moves only after the sends of a row succeed. A stop of the Worker after a send and
-  before the move sends the row again, with the same id: delivery is at least once.
+- The alarm fires the due reminders, then publishes the oldest rows in order (`publishChanges`), then
+  delivers the outbox. Alarms do not overlap, so one publish runs at a time.
+- One alarm publishes at most 50 rows. When more rows wait, the alarm sets itself again for now. So a long
+  feed does not hold back a reminder or the outbox.
+- For its rows, the publish sends the hint to the `PrincipalDO` of the owner. Then, when `webhook_events` is
+  set, it sends one queue job for each row on `soldock-webhooks`, as one batch (`sendBatch`).
+- The hint does not wait for the events sockets: the `PrincipalDO` sends the event after the call returns.
+- `change_published` moves only after the sends of the batch succeed. A failed send, or a stop of the Worker
+  after a send and before the move, sends each row of the batch again, with the same id: delivery is at least
+  once.
 - A failure tries again after 1 minute, doubled for each failure, at most 1 hour, and never drops a change.
   The object sets an alarm at its start when a change waits.
 - `webhook_events` is set by `enableCalendarEvents`, before a webhook subscription or a subscription of MCP
@@ -679,8 +694,10 @@ write no record.
 - `data` of each POST: `calendar_id`, `event_id`, `change_id`, `occurrence_id`, `revision`, `actor_id`
   and `cursor`. The top-level `cursor` of MCP Events stays null: the replay is `calendar.list_changes` from the
   `cursor` of `data`.
-- A subscription starts from now. A change from before the subscription sends nothing. An agent gets its own
-  changes too: skip a change with your own `actor_id` to prevent a loop.
+- A subscription starts from now. A change from before the subscription sends nothing. The start is
+  approximate: the fan-out compares the time of the change, from the clock of the `CalendarDO`, with the time
+  of the subscription, from the clock of the Worker. A change near the start can be on the wrong side. An
+  agent gets its own changes too: skip a change with your own `actor_id` to prevent a loop.
 - Retries, the signature and the end of an endpoint are the rules of the webhook queue
   ([webhooks](../webhooks/README.md)). A retry has the same `webhook-id`.
 
@@ -696,8 +713,8 @@ write no record.
   subscription. A sponsor, an owner and an admin get nothing of the calendar of an agent.
 - The POST is a signed Standard Webhooks POST. Its body has `type`, `timestamp` and `data` with `webhook_id`,
   `calendar_id`, `event_id`, `change_id`, `occurrence_id`, `revision`, `actor_id` and `cursor`.
-- A subscription starts from now, as for MCP Events. The fan-out sends nothing to a subscription from after
-  the change.
+- A subscription starts from now, as for MCP Events, and the start is approximate for the same reason. The
+  fan-out sends nothing to a subscription from after the change.
 
 ### Access to the changes
 

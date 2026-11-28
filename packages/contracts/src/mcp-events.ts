@@ -140,7 +140,7 @@ const CalendarPayload = z.strictObject({
 	event_id: z
 		.string()
 		.describe(
-			"Read the event with calendar_get_event. The event has no title, time or answer. After a delete or a cancel, the event is gone.",
+			"Read the event with calendar_get_event. For a change with occurrence_id, read the occurrence with calendar_list_events over its range. The event has no title, time or answer. After a delete or a cancel, the event is gone.",
 		),
 	change_id: z
 		.string()

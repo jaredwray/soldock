@@ -426,7 +426,7 @@ const IDEMPOTENCY_TTL_MS = 24 * 60 * 60 * 1000;
 /** A fired reminder stays in `reminder_log` this long after the start of its occurrence. */
 const REMINDER_LOG_MS = 7 * 24 * 60 * 60 * 1000;
 const OUTBOX_BATCH = 50;
-/** The rows of the change feed that one round of `publishChanges` sends. */
+/** The most rows of the change feed that one alarm publishes. One batch of the queue has at most 100 messages. */
 const PUBLISH_BATCH = 50;
 /** The oldest rows that one read of the prune takes. The prune deletes only a prefix of the feed. */
 const PRUNE_BATCH = 500;
@@ -888,8 +888,6 @@ function changeRefusal(role: Role, actorId: string, event: EventRecord): Refusal
 
 export class CalendarDO extends DurableObject<Env> {
 	private readonly sql: SqlStorage;
-	/** The publish of the change feed that runs now. One publish at a time, so the pointer never moves back. */
-	private publishTask: Promise<void> | null = null;
 
 	constructor(ctx: DurableObjectState, env: Env) {
 		super(ctx, env);
@@ -1084,7 +1082,7 @@ export class CalendarDO extends DurableObject<Env> {
 		});
 	}
 
-	/** The time of the next round of `publishChanges`, or null when each change is published. */
+	/** The time of the next publish (`publishChanges`), or null when each change is published. */
 	private publishDue(): number | null {
 		if (this.metaNumber("change_head") <= this.metaNumber("change_published")) return null;
 		return Math.max(this.metaNumber("publish_at"), Date.now());
@@ -1108,41 +1106,34 @@ export class CalendarDO extends DurableObject<Env> {
 		};
 	}
 
-	/** One publish at a time: a second call while one runs joins it. */
-	private publishChanges(): Promise<void> {
-		if (!this.publishTask) {
-			this.publishTask = this.publishNow().finally(() => {
-				this.publishTask = null;
-			});
-		}
-		return this.publishTask;
-	}
-
 	/**
-	 * Publishes the committed changes in order: a hint to the events sockets of the owner, then one queue job
-	 * for each change when a subscription of MCP Events or a webhook exists. `change_published` moves only after
-	 * the sends of a change succeed, so a stop of the Worker sends a change again, never loses one. A job sent
-	 * again has the same `eventId`, so the receiver gets the same `webhook-id`. A failure tries again later,
-	 * with `backoff`, and never drops a change. It never throws, so a failure does not stop a reminder.
+	 * Publishes the oldest committed changes, at most `PUBLISH_BATCH`: a hint to the events sockets of the
+	 * owner, then one batch of queue jobs, one job for each change, when a subscription of MCP Events or a webhook
+	 * exists. More changes wait for the next alarm, so a long feed does not hold back a reminder or the outbox.
+	 * `change_published` moves only after the sends of the batch succeed, so a stop of the Worker sends the batch
+	 * again, never loses a change. A job sent again has the same `eventId`, so the receiver gets the same
+	 * `webhook-id`. A failure tries again later, with `backoff`, and never drops a change. It never throws, so a
+	 * failure does not stop the outbox. Only the alarm calls it, and alarms do not overlap, so one publish runs
+	 * at a time.
 	 */
-	private async publishNow(): Promise<void> {
+	private async publishChanges(): Promise<void> {
 		const calendarId = this.meta("owner_id");
 		if (calendarId === null || this.publishDue() === null || this.metaNumber("publish_at") > Date.now()) return;
 		try {
-			for (;;) {
-				const rows = this.sql
-					.exec<Row>(
-						"SELECT seq, id, type, event_id, occurrence_id, revision, actor_id, at FROM changes WHERE seq > ? ORDER BY seq LIMIT ?",
-						this.metaNumber("change_published"),
-						PUBLISH_BATCH,
-					)
-					.toArray();
-				if (rows.length === 0) break;
+			const rows = this.sql
+				.exec<Row>(
+					"SELECT seq, id, type, event_id, occurrence_id, revision, actor_id, at FROM changes WHERE seq > ? ORDER BY seq LIMIT ?",
+					this.metaNumber("change_published"),
+					PUBLISH_BATCH,
+				)
+				.toArray();
+			const last = rows.at(-1);
+			if (last) {
 				await this.env.PRINCIPAL.get(this.env.PRINCIPAL.idFromName(calendarId)).calendarChanged(calendarId);
-				for (const row of rows) {
-					if (this.meta("webhook_events") === "1") {
+				if (this.meta("webhook_events") === "1") {
+					const jobs = rows.map((row): CalendarWebhookEventJob => {
 						const change = this.toChange(row, calendarId);
-						const job: CalendarWebhookEventJob = {
+						return {
 							v: 1,
 							kind: "calendar_event",
 							calendarId,
@@ -1155,11 +1146,10 @@ export class CalendarDO extends DurableObject<Env> {
 							actorId: change.actor_id,
 							cursor: change.cursor,
 						};
-						await this.env.WEBHOOKS.send(job);
-					}
-					this.setMeta("change_published", String(row.seq));
+					});
+					await this.env.WEBHOOKS.sendBatch(jobs.map((body) => ({ body })));
 				}
-				if (rows.length < PUBLISH_BATCH) break;
+				this.setMeta("change_published", String(last.seq));
 			}
 			if (this.meta("publish_attempts") !== null) {
 				this.sql.exec("DELETE FROM meta WHERE key IN ('publish_attempts', 'publish_at')");
@@ -1947,6 +1937,18 @@ export class CalendarDO extends DurableObject<Env> {
 		const now = Date.now();
 		const removed =
 			wanted === undefined ? [] : before.filter((old) => !wanted.some((a) => a.principal_id === old.principal_id));
+		// A reset changes a response only when an attendee that stays had a response, to the series or to one
+		// occurrence. A removed attendee leaves the event: that is a change of the attendees, not of a response.
+		const answered = new Set(
+			[...this.occurrenceResponses(eventId).values()].flatMap((answers) =>
+				[...answers].flatMap(([principal, answer]) => (answer.response === "needs_action" ? [] : [principal])),
+			),
+		);
+		const reset =
+			timeChanged &&
+			before.some(
+				(old) => !removed.includes(old) && (old.response !== "needs_action" || answered.has(old.principal_id)),
+			);
 		this.ctx.storage.transactionSync(() => {
 			this.sql.exec(
 				`UPDATE events SET title = ?, description = ?, location = ?, all_day = ?, start_at = ?, end_at = ?,
@@ -2032,6 +2034,7 @@ export class CalendarDO extends DurableObject<Env> {
 				for (const email of removedGuests) this.queueCancel(call, current, current.sequence, email, "removed");
 			}
 			this.noteChange("calendar.event.updated", eventId, event.revision + 1, call.actorId);
+			if (reset) this.noteChange("calendar.rsvp.changed", eventId, event.revision + 1, call.actorId);
 			this.rearm(eventId);
 		});
 		// The view of this change, before an await that lets a different call change or delete the event.
@@ -2189,9 +2192,10 @@ export class CalendarDO extends DurableObject<Env> {
 			} else {
 				this.writeOverride(eventId, next);
 			}
-			if (moved) this.askAgain(eventId, key, now);
+			const reset = moved && this.askAgain(eventId, key, now);
 			this.sql.exec("UPDATE events SET revision = revision + 1, updated_at = ? WHERE id = ?", now, eventId);
 			this.noteChange("calendar.event.updated", eventId, event.revision + 1, call.actorId, key);
+			if (reset) this.noteChange("calendar.rsvp.changed", eventId, event.revision + 1, call.actorId, key);
 			this.fanOut(eventId, []);
 			this.rearm(eventId);
 		});
@@ -2203,12 +2207,16 @@ export class CalendarDO extends DurableObject<Env> {
 	/**
 	 * Sets the response of each attendee to one occurrence to `needs_action`, after a change of its time. The row
 	 * of the occurrence comes before the response of the series. Its time is after each response that the
-	 * organizer has, so the reset is the newer one, and the copy of the attendee takes it from the state.
+	 * organizer has, so the reset is the newer one, and the copy of the attendee takes it from the state. Returns
+	 * true when the reset changed a response: an attendee had a different response to the occurrence.
 	 */
-	private askAgain(eventId: string, key: string, now: number): void {
+	private askAgain(eventId: string, key: string, now: number): boolean {
 		const answers = this.occurrenceResponses(eventId).get(key);
+		let reset = false;
 		for (const attendee of this.attendeesOf(eventId)) {
-			const at = Math.max(now, attendee.responded_at + 1, (answers?.get(attendee.principal_id)?.at ?? 0) + 1);
+			const answer = answers?.get(attendee.principal_id);
+			if ((answer?.response ?? attendee.response) !== "needs_action") reset = true;
+			const at = Math.max(now, attendee.responded_at + 1, (answer?.at ?? 0) + 1);
 			this.sql.exec(
 				`INSERT OR REPLACE INTO occurrence_responses (event_id, occ_key, principal_id, response, responded_at)
 				VALUES (?, ?, ?, 'needs_action', ?)`,
@@ -2218,6 +2226,7 @@ export class CalendarDO extends DurableObject<Env> {
 				at,
 			);
 		}
+		return reset;
 	}
 
 	private writeOverride(eventId: string, record: OverrideRecord): void {
@@ -2321,9 +2330,12 @@ export class CalendarDO extends DurableObject<Env> {
 			.one().at;
 		const at = Math.max(Date.now(), event.my_responded_at + 1, (latest ?? 0) + 1);
 		// A repeated response still goes to the organizer, as before, but it is no change of what the owner sees.
+		// A response to the series also replaces each own response to one occurrence. That is a change only when
+		// such a response was different and its occurrence is not cancelled.
 		const changed =
 			key === null
-				? (event.my_response ?? "needs_action") !== response || latest !== null
+				? (event.my_response ?? "needs_action") !== response ||
+					this.otherAnswers(eventId, call.ownerId, response, Number.MAX_SAFE_INTEGER) > 0
 				: this.occurrenceView(event, key)?.my_response !== response;
 		this.ctx.storage.transactionSync(() => {
 			if (changed) this.noteChange("calendar.rsvp.changed", eventId, event.revision, call.actorId, key);
@@ -2359,6 +2371,26 @@ export class CalendarDO extends DurableObject<Env> {
 		await this.scheduleAlarm();
 		const updated = this.row(eventId) as EventRecord;
 		return key === null ? this.masterView(updated) : (this.occurrenceView(updated, key) as EventView);
+	}
+
+	/**
+	 * The number of responses of a principal to single occurrences, from before `before`, that are not
+	 * `response`. A response to the series removes these rows, and each one is a response that changes. A row
+	 * of a cancelled occurrence shows nothing, so it does not count.
+	 */
+	private otherAnswers(eventId: string, principalId: string, response: EventResponse, before: number): number {
+		return this.sql
+			.exec<{ n: number }>(
+				`SELECT COUNT(*) AS n FROM occurrence_responses AS answer
+				WHERE answer.event_id = ?1 AND answer.principal_id = ?2 AND answer.response != ?3 AND answer.responded_at < ?4
+					AND NOT EXISTS (SELECT 1 FROM event_overrides AS o
+						WHERE o.event_id = ?1 AND o.occ_key = answer.occ_key AND o.cancelled = 1)`,
+				eventId,
+				principalId,
+				response,
+				before,
+			)
+			.one().n;
 	}
 
 	/** Sets the own reminder of the owner. It does not change the revision. */
@@ -2539,14 +2571,16 @@ export class CalendarDO extends DurableObject<Env> {
 					message.event_id,
 					message.attendee_id,
 				);
-				const cleared = this.sql.exec(
+				// Read the rows before the delete: a row with the same response shows no change when it goes.
+				const different = this.otherAnswers(message.event_id, message.attendee_id, message.response, message.at);
+				this.sql.exec(
 					"DELETE FROM occurrence_responses WHERE event_id = ? AND principal_id = ? AND responded_at < ?",
 					message.event_id,
 					message.attendee_id,
 					message.at,
-				).rowsWritten;
+				);
 				changed = true;
-				if (attendee.response !== message.response || cleared > 0) {
+				if (attendee.response !== message.response || different > 0) {
 					this.noteChange("calendar.rsvp.changed", message.event_id, event.revision, message.attendee_id);
 				}
 			} else {

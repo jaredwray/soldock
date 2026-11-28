@@ -1077,8 +1077,9 @@ export const removeGrant = defineOperation({
 });
 
 /**
- * One committed change of a calendar. It has ids only: read the event with calendar.get_event. The change
- * feed, the events socket hint and MCP Events use the same record, with the same `id`.
+ * One committed change of a calendar. It has ids only: read the event with calendar.get_event. For a change
+ * with occurrence_id, read the occurrence with calendar.list_events over its range. The change feed, the
+ * events socket hint and MCP Events use the same record, with the same `id`.
  */
 export const CalendarChange = z.object({
 	id: z.string().describe("The stable id of the change. A retry of a delivery has the same id."),
@@ -1108,6 +1109,7 @@ export const listChanges = defineOperation({
 	summary: "List the changes of your calendar after a cursor",
 	description: [
 		"Returns the changes of your calendar after cursor, oldest first. Each change has ids only: read the event with calendar.get_event.",
+		"For a change with occurrence_id, read the occurrence with calendar.list_events over its range.",
 		"Without cursor, the result has no changes and the cursor of now: keep it, then read your events.",
 		"When has_more is true, call again with the cursor of the result.",
 		`When expired is true, the cursor is older than the feed (${CALENDAR_LIMITS.changeDays} days or ${CALENDAR_LIMITS.changes} changes): read your events again with calendar.list_events, and continue from the cursor of the result.`,
@@ -1148,6 +1150,7 @@ const createCalendarWebhookSubscription = defineOperation({
 		"Adds a subscription for your own calendar. No person or agent can subscribe for the calendar of a different principal.",
 		"Choose the event. Each POST is one change of calendar.list_changes, with the same id (change_id) and its cursor.",
 		"The POST has ids only, and no title, time or answer. Read the event with calendar.get_event.",
+		"For a change with occurrence_id, read the occurrence with calendar.list_events over its range.",
 		"A change from before the subscription sends no POST. Read it with calendar.list_changes.",
 		"The endpoint must be yours and active.",
 	].join(" "),
