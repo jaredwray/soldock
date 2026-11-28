@@ -3,15 +3,16 @@
 > Status: **started**. The first layer exists: a member creates a meeting link, a guest from outside asks to join and
 > waits in a lobby, and the host admits, refuses and removes participants and ends the call. Browsers send and receive
 > audio and video through the Cloudflare Realtime SFU. Asterra keeps the state of the meeting and decides who gets
-> media. A calendar event can have a Meet link, and its invitation by mail has the link. Keep this README current as the module grows. It is the module's contract.
+> media. A calendar event can have a Meet link, and its invitation by mail has the link. An owner or an admin sets up
+> Meet in Admin › Meet. Keep this README current as the module grows. It is the module's contract.
 
 | | |
 | --- | --- |
 | **Purpose** | Meet backend: `MeetingDO` (lobby, roster, admission, track registry), the broker of the Realtime SFU and TURN, and the meeting of a calendar event. Later: captions, recording and agent participants. |
-| **Owns** | `MeetingDO`, one for each meeting. |
+| **Owns** | `MeetingDO`, one for each meeting. D1 table `meet_settings` (Admin › Meet). |
 | **Depends on** | `platform`, `identity`. The Cloudflare Realtime SFU and TURN service, through `realtime.ts`. |
-| **Operations** | `meet.create_meeting`, `meet.get_meeting`, `meet.end_meeting`, `meet.list_participants`, `meet.admit_participant`, `meet.deny_participant`, `meet.remove_participant` |
-| **Data inventory** | `MeetingDO` tables `meta`, `meeting`, `participants`, `tracks`, `pulls`, `removed_principals` and `pending_closes`. No R2 object and no D1 table. D1 migration 0043 changes `principals.agent_scopes` only. Backups: not built yet. |
+| **Operations** | `meet.get_settings`, `meet.update_settings`, `meet.test_connection`, `meet.create_meeting`, `meet.get_meeting`, `meet.end_meeting`, `meet.list_participants`, `meet.admit_participant`, `meet.deny_participant`, `meet.remove_participant` |
+| **Data inventory** | `MeetingDO` tables `meta`, `meeting`, `participants`, `tracks`, `pulls`, `removed_principals` and `pending_closes`. No R2 object. D1 table `meet_settings` (migration `0044`): one row with the App ID, the App Secret, the TURN Key ID and the TURN key token from Admin › Meet. With `ENCRYPTION_KEY`, the two secrets are sealed. Without it, they are plaintext: keep a backup of D1 as a secret. A directory reset deletes the row. D1 migration 0043 changes `principals.agent_scopes` only. Backups: not built yet. |
 
 Public surface: `index.ts` only. Other domains must not import files from this folder directly.
 
@@ -21,6 +22,7 @@ Public surface: `index.ts` only. Other domains must not import files from this f
 | --- | --- |
 | `meeting.ts` | `MeetingDO`: the tables of one meeting, the lobby and the admission, the socket, the alarm, and the broker of each SFU call of a participant |
 | `realtime.ts` | The client of the Realtime SFU (Connection API) and of Realtime TURN. Only `MeetingDO` and the handlers call it |
+| `settings.ts` | The Realtime values of Admin › Meet: the read, the fallback to the Worker secrets, the seal of the secrets and the write |
 | `handlers.ts` | The operation handlers. They check nothing that the object checks: the object decides who is the host |
 | `routes.ts` | The call routes of a browser (`/api/v1/meet/calls/{code}/…`) and the socket (`/ws/meet/{code}`) |
 
@@ -164,7 +166,7 @@ operation. Members and guests use the same routes.
 | Route | Body and answer | Checks |
 | --- | --- | --- |
 | `GET /api/v1/meet/calls/{code}` | `CallInfo`: the title, the name of the host, the status, `media` and the viewer | None. A session cookie names the viewer |
-| `POST …/join` | `{ display_name? }` → `{ token, participant }` | A session cookie from this origin joins as a member. A guest needs a name. `409` after the end, `429` for a full lobby, too many join requests of guests, or too many join requests of this member, `503` without the Realtime secrets |
+| `POST …/join` | `{ display_name? }` → `{ token, participant }` | A session cookie from this origin joins as a member. A guest needs a name. `409` after the end, `429` for a full lobby, too many join requests of guests, or too many join requests of this member, `503` when Meet is not set up |
 | `GET …/state` | `CallState` | The token. A final state tells why |
 | `POST …/leave` | `{}` | The token |
 | `POST …/media/session` | `{ session, ice_servers }` | Admitted. A new SFU session and epoch |
@@ -194,14 +196,48 @@ reason, and closes with `4403` (refused, removed, credential) or `4410` (ended, 
 
 ## Set up
 
-Meet is off until the operator sets the Worker secrets `REALTIME_APP_ID` and `REALTIME_APP_SECRET` (and, for
-strict networks, `REALTIME_TURN_KEY_ID` and `REALTIME_TURN_KEY_TOKEN`). Without them, `meet.create_meeting` and
-`join` give `unavailable`, and the page of a link tells it. [Self-hosting › Meet](../../../../docs/self-hosting.md#meet)
-has the steps. `REALTIME_API_BASE` changes the base URL of the Realtime API: only https or a loopback URL. The tests
-of pull requests set a stand-in there.
+Meet is off until it has an SFU app. An owner or an admin saves the values in **Admin › Meet**
+([Self-hosting › Meet](../../../../docs/self-hosting.md#meet) has the steps):
+
+| Value | Pair | Worker secret (the fallback) |
+| --- | --- | --- |
+| App ID | SFU app, required | `REALTIME_APP_ID` |
+| App Secret | SFU app, required | `REALTIME_APP_SECRET` |
+| TURN Key ID | TURN key, optional | `REALTIME_TURN_KEY_ID` |
+| TURN key API token | TURN key, optional | `REALTIME_TURN_KEY_TOKEN` |
+
+- Each pair resolves as a whole: the saved pair when both of its values are there and the secret opens, else the
+  pair of Worker secrets, else none. The two pairs resolve on their own. So a removal in Admin › Meet falls back to
+  the Worker secrets when they are set. To stop Meet, remove both.
+- `meet.update_settings` sets a pair as a whole: both values, or null for both. A new ID needs its secret in the same
+  request. An ID is 32 hexadecimal characters, and the server keeps it in lower case.
+- The answer of `meet.get_settings` has the saved IDs, whether each secret is set, and where each pair comes from
+  (`sfu_source`, `turn_source`). It never has a secret or the value of a Worker secret.
+- Each write with `ENCRYPTION_KEY` seals the two secrets (`sealSecret` of
+  [`platform`](../platform/README.md#secrets-at-rest), purposes `meet_settings.app_secret` and
+  `meet_settings.turn_key_token`). A plaintext secret from before the key stays in use, and the next write seals it.
+  A sealed secret that does not open makes its saved pair unusable: the Worker secrets apply, and the row stays.
+- A change of a secret writes its own audit line (`app_secret_set`, `turn_key_token_removed`), without the secret.
+- Nothing caches the values. Each create, join and SFU call reads the one row, so a change applies at the next call.
+  A failure of that read writes a log line and refuses with `unavailable`.
+- `meet.test_connection` makes one SFU session, which carries no media and ends by itself, and one TURN credential for
+  60 seconds, which it revokes at once. It writes the result in the audit.
+- Only an owner or an admin calls the three operations, never an agent or a service account. They need
+  `directory.read` or `directory.write`, not a `meet.*` scope: a key with `meet.write` cannot read or change the values.
+- Without an SFU app, `meet.create_meeting`, a Meet link of Calendar and `join` give `unavailable`. The page of a link
+  says that the organization did not set up Meet. The Meet page of an owner or an admin links to Admin › Meet.
+- `REALTIME_API_BASE` changes the base URL of the Realtime API: only https or a loopback URL. Only a Worker variable
+  sets it, never Admin › Meet, because a base URL in the settings could send the App Secret to a different host. The
+  tests of pull requests set a stand-in there.
 
 ## Tests
 
+- `test/meet-admin.test.ts` (workerd) proves Admin › Meet: the access of an owner, an admin, a member, an agent
+  through REST and MCP, a service account and scoped keys; no secret in an answer or an audit line; the seal; the
+  pair rules; two changes at the same time; the fallback to the Worker secrets; a sealed secret that does not open;
+  a `MeetingDO` that uses a new SFU app at its next call and refuses media after a removal; and the connection test.
+  `test/setup.ts` saves the values of the stand-in in `meet_settings` before each test, and the test config has no
+  `REALTIME_*` binding.
 - `test/meet.test.ts` (workerd) replaces `fetch` with a stand-in of the Realtime API (`test/realtime-fake.ts`).
   Each stand-in has its own session ids, so a late call from the object of an earlier test is not counted. It
   proves the access of each operation for a person, an agent through MCP, a service account and a scoped key, that
@@ -243,6 +279,9 @@ of pull requests set a stand-in there.
   guest waits one minute.
 - A pull that the server closed keeps its transceiver in the browser until the next media session.
 - The title and the name of the host are visible to each person with the link.
+- A change of the SFU app during a call stops the media of that call: the sessions belong to the old app. Each
+  participant joins again. The object cannot close the old tracks with the new secret, so they end on the SFU by
+  themselves.
 - Firefox and Safari on iOS have no automated test.
 
 ## Not built yet
@@ -250,5 +289,4 @@ of pull requests set a stand-in there.
 1. Screen share, device selection, simulcast, in-call chat and reactions.
 2. Co-hosts, and moderation by an owner or an admin.
 3. `meet.list_meetings` and a limit of meetings for each principal.
-4. Settings of Meet in Admin, in place of Worker secrets.
-5. Captions and transcription through the SFU WebSocket adapter and Workers AI, recording, and agent participants.
+4. Captions and transcription through the SFU WebSocket adapter and Workers AI, recording, and agent participants.

@@ -158,7 +158,7 @@ export const createMeeting = defineOperation({
 		"Share the link with each person who joins. A member of the organization who is signed in joins at once. A guest from outside enters a name and waits in the lobby until the host admits the guest.",
 		"The meeting stays open until the host ends it with meet.end_meeting. An ended meeting cannot open again.",
 		"Media needs a browser: an agent can create a meeting and admit or remove participants, but it cannot send or receive audio or video.",
-		"Returns unavailable when the operator did not set up Meet.",
+		"Returns unavailable when Meet is not set up: an owner or an admin sets it up in Admin › Meet.",
 	].join(" "),
 	http: { method: "POST", path: "/api/v1/meet/meetings" },
 	scopes: ["meet.write"],
@@ -279,7 +279,121 @@ export const removeParticipant = defineOperation({
 	errors: ["not_found", "conflict"],
 });
 
+// --- Settings (Admin › Meet) ------------------------------------------------------------------------------------
+
+const ADMIN_ONLY = "Owners and admins only.";
+
+/** The App ID of a Realtime SFU app or the Key ID of a TURN key: 32 hexadecimal characters. */
+export const MeetRealtimeId = z
+	.string()
+	.trim()
+	.toLowerCase()
+	.regex(/^[0-9a-f]{32}$/, "Paste the whole ID from the Cloudflare dashboard: 32 characters, 0-9 and a-f.");
+
+/** The App Secret of an SFU app or the API token of a TURN key. */
+export const MeetRealtimeSecret = z
+	.string()
+	.trim()
+	.min(20, "Paste the whole value from the Cloudflare dashboard.")
+	.max(200)
+	.regex(/^[A-Za-z0-9_-]+$/, "The value has only letters, digits, _ and -.");
+
+/** Where a pair of Realtime values comes from: saved in Admin › Meet (it wins), or the Worker secrets. */
+export const MeetValueSource = z.enum(["settings", "secret"]);
+
+export const MeetSettings = z.object({
+	/** The App ID that is saved here, or null. The Worker secrets are never in an answer. */
+	app_id: z.string().nullable(),
+	/** True when the SFU app has its secret, from here or from the Worker secrets. The secret is never in an answer. */
+	app_secret_configured: z.boolean(),
+	/** Where the SFU app comes from, or null when Meet has no SFU app. */
+	sfu_source: MeetValueSource.nullable(),
+	/** The TURN Key ID that is saved here, or null. */
+	turn_key_id: z.string().nullable(),
+	/** True when the TURN key has its token, from here or from the Worker secrets. */
+	turn_key_token_configured: z.boolean(),
+	/** Where the TURN key comes from, or null. Without a TURN key, browsers get only the STUN server. */
+	turn_source: MeetValueSource.nullable(),
+	/** True when people can create and join meetings. */
+	ready: z.boolean(),
+	/** `no_app`: no SFU app. `api_base`: the Worker variable REALTIME_API_BASE is not https. */
+	not_ready_reason: z.enum(["no_app", "api_base"]).nullable(),
+});
+export type MeetSettings = z.infer<typeof MeetSettings>;
+export type MeetNotReadyReason = NonNullable<MeetSettings["not_ready_reason"]>;
+
+const MeetCheck = z.object({
+	ok: z.boolean(),
+	/** The HTTP status of Cloudflare, or null when no request went out or no answer came. */
+	status: z.number().int().nullable(),
+	latency_ms: z.number().int(),
+	reason: z.enum(["not_configured", "http", "timeout", "bad_response"]).nullable(),
+});
+
+export const MeetConnectionTest = z.object({
+	/** A new session of the SFU app. It makes no media and ends by itself. */
+	sfu: MeetCheck,
+	/** A TURN credential for 60 seconds, revoked at once. `not_configured` when Meet has no TURN key. */
+	turn: MeetCheck,
+});
+export type MeetConnectionTest = z.infer<typeof MeetConnectionTest>;
+
+export const getMeetSettings = defineOperation({
+	name: "meet.get_settings",
+	summary: "Get the Meet settings of the organization",
+	description: `${ADMIN_ONLY} Returns the Cloudflare Realtime SFU app and the TURN key of Meet, where each comes from, and whether Meet is ready. The answer never contains the App Secret or the TURN key token.`,
+	http: { method: "GET", path: "/api/v1/meet/settings" },
+	scopes: ["directory.read"],
+	callers: ["human"],
+	annotations: { readOnly: true, destructive: false, idempotent: true, openWorld: false },
+	auditDenied: true,
+	input: z.strictObject({}),
+	output: MeetSettings,
+	errors: [],
+});
+
+export const updateMeetSettings = defineOperation({
+	name: "meet.update_settings",
+	summary: "Change the Meet settings of the organization",
+	description: [
+		ADMIN_ONLY,
+		"Changes the values that the request names and keeps the others.",
+		"app_id and app_secret are the Realtime SFU app. turn_key_id and turn_key_token are the TURN key, which is optional.",
+		"Each pair is set as a whole: both values, or null for both to remove the pair. A new ID needs its secret in the same request.",
+		"A pair that is not saved here comes from the Worker secrets, when they are set.",
+		"No answer returns a secret: app_secret_configured and turn_key_token_configured say whether one is set.",
+	].join(" "),
+	http: { method: "POST", path: "/api/v1/meet/settings" },
+	scopes: ["directory.write"],
+	callers: ["human"],
+	annotations: { readOnly: false, destructive: false, idempotent: true, openWorld: false },
+	input: z.strictObject({
+		app_id: MeetRealtimeId.nullable().optional(),
+		app_secret: MeetRealtimeSecret.nullable().optional(),
+		turn_key_id: MeetRealtimeId.nullable().optional(),
+		turn_key_token: MeetRealtimeSecret.nullable().optional(),
+	}),
+	output: MeetSettings,
+	errors: ["invalid", "conflict"],
+});
+
+export const testMeetConnection = defineOperation({
+	name: "meet.test_connection",
+	summary: "Test the Cloudflare Realtime values of Meet",
+	description: `${ADMIN_ONLY} Tests the saved values: it makes one session of the SFU app, which carries no media, and one TURN credential for 60 seconds, which it revokes at once. It returns the result of each.`,
+	http: { method: "POST", path: "/api/v1/meet/settings/test" },
+	scopes: ["directory.write"],
+	callers: ["human"],
+	annotations: { readOnly: false, destructive: false, idempotent: false, openWorld: true },
+	input: z.strictObject({}),
+	output: MeetConnectionTest,
+	errors: [],
+});
+
 export const meetOperations = {
+	"meet.get_settings": getMeetSettings,
+	"meet.update_settings": updateMeetSettings,
+	"meet.test_connection": testMeetConnection,
 	"meet.create_meeting": createMeeting,
 	"meet.get_meeting": getMeeting,
 	"meet.end_meeting": endMeeting,
@@ -328,7 +442,7 @@ export const CallInfo = z.object({
 	status: MeetingStatus,
 	/** `calendar` for the meeting of a calendar event: its link works until the calendar cancels it. */
 	origin: z.enum(["standalone", "calendar"]),
-	/** `not_configured` when the operator did not set up the media service. */
+	/** `not_configured` when Meet is not set up (Admin › Meet). */
 	media: z.enum(["ready", "not_configured"]),
 	/** The signed-in member of this browser, or null for a guest. */
 	viewer: z.object({ display_name: z.string(), is_host: z.boolean() }).nullable(),

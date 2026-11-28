@@ -39,6 +39,7 @@ import mailboxAliasSchema from "../../migrations/0040_mailbox_aliases.sql";
 import calendarWebhooksSchema from "../../migrations/0041_calendar_webhooks.sql";
 import feedbackSchema from "../../migrations/0042_feedback.sql";
 import meetScopesSchema from "../../migrations/0043_meet_scopes.sql";
+import meetSettingsSchema from "../../migrations/0044_meet_settings.sql";
 import { log, OperationError, randomToken } from "../platform/index.ts";
 import { allMailboxIds } from "./team-mailboxes.ts";
 
@@ -153,6 +154,8 @@ function freshDirectoryStatements(db: D1Database): D1PreparedStatement[] {
 		"DROP TABLE IF EXISTS feedback_attachments",
 		"DROP TABLE IF EXISTS feedback_reports",
 		"DROP TABLE IF EXISTS feedback_settings",
+		// The Realtime values of Meet belong to the old organization.
+		"DROP TABLE IF EXISTS meet_settings",
 		// Remove references from agents before SQLite deletes the principals table.
 		"DELETE FROM principals WHERE kind = 'agent'",
 		"DROP TABLE principals",
@@ -198,6 +201,7 @@ function freshDirectoryStatements(db: D1Database): D1PreparedStatement[] {
 		...calendarWebhooksSchema.split("--> statement-breakpoint"),
 		...feedbackSchema.split("--> statement-breakpoint"),
 		...meetScopesSchema.split("--> statement-breakpoint"),
+		...meetSettingsSchema.split("--> statement-breakpoint"),
 		// The directory now has the schema of each bundled migration. Record them in the table that
 		// `wrangler d1 migrations apply` reads, or it runs them again later. A second run of 0004 would
 		// copy the principals without their passwords. The columns are the ones that wrangler creates.
@@ -251,4 +255,5 @@ const BUNDLED_MIGRATIONS = [
 	"0041_calendar_webhooks.sql",
 	"0042_feedback.sql",
 	"0043_meet_scopes.sql",
+	"0044_meet_settings.sql",
 ] as const;

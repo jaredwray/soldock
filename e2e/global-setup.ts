@@ -53,13 +53,7 @@ interface Worker {
 export const LIVE_MEET = process.env.MEET_LIVE === "1";
 
 /** The Realtime settings of the Worker of a run without credentials: the stand-in SFU on this machine. */
-const FAKE_REALTIME_VARS = [
-	`REALTIME_API_BASE:${FAKE_SFU_BASE}`,
-	`REALTIME_APP_ID:${FAKE_APP_ID}`,
-	`REALTIME_APP_SECRET:${FAKE_APP_SECRET}`,
-	`REALTIME_TURN_KEY_ID:${FAKE_TURN_KEY_ID}`,
-	`REALTIME_TURN_KEY_TOKEN:${FAKE_TURN_KEY_TOKEN}`,
-];
+const FAKE_REALTIME_VARS = [`REALTIME_API_BASE:${FAKE_SFU_BASE}`];
 
 /** Starts `wrangler dev` on the state, with the setup token or without it, and waits until it answers. */
 async function startWorker(state: string, setupToken: string | null): Promise<Worker> {
@@ -100,6 +94,34 @@ async function startWorker(state: string, setupToken: string | null): Promise<Wo
 }
 
 /**
+ * Saves the values of the stand-in SFU in Admin › Meet, as an admin of the seed data, so each Meet test uses the
+ * settings path. The live run (MEET_LIVE=1) uses the Worker secrets of `.dev.vars` in place of them.
+ */
+async function saveMeetSettings(): Promise<void> {
+	const session = await fetch(`${BASE_URL}/auth/session`, {
+		method: "POST",
+		headers: { origin: BASE_URL, "content-type": "application/json" },
+		body: JSON.stringify({ address: "tomasz@example.com", password: "tomasz local password" }),
+	});
+	if (!session.ok) throw new Error(`The sign-in of the admin failed: ${session.status}`);
+	const cookie = session.headers
+		.getSetCookie()
+		.map((value) => value.split(";")[0])
+		.join("; ");
+	const saved = await fetch(`${BASE_URL}/api/v1/meet/settings`, {
+		method: "POST",
+		headers: { origin: BASE_URL, cookie, "content-type": "application/json" },
+		body: JSON.stringify({
+			app_id: FAKE_APP_ID,
+			app_secret: FAKE_APP_SECRET,
+			turn_key_id: FAKE_TURN_KEY_ID,
+			turn_key_token: FAKE_TURN_KEY_TOKEN,
+		}),
+	});
+	if (!saved.ok) throw new Error(`The save of the Meet settings failed: ${saved.status} ${await saved.text()}`);
+}
+
+/**
  * Starts the built Worker in `wrangler dev`, with a new local state: the migrations of D1, then the
  * seed data (`tools/seed`). The seed needs the setup token. A Worker with a setup token shows the
  * setup page, so the Worker of the tests starts again without it. Returns the function that stops
@@ -128,6 +150,7 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
 			await seeding.stop();
 		}
 		const worker = await startWorker(state, null);
+		if (!LIVE_MEET) await saveMeetSettings();
 		return async () => {
 			await worker.stop();
 			await sfu?.stop();

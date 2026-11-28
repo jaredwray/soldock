@@ -472,6 +472,13 @@ MCP clients. The app has no UI-only path.
   the fill of the address of a new person on or off (on at the start). When it is on, the admin selects the
   format: `ada.lovelace`, `ada` or `alovelace` for Ada Lovelace (`first.last`, `first` or `flast`). Each change
   saves at once, with a toast.
+- **Admin › Meet** (`/admin/meet`, [`MeetAdminSection.tsx`](src/features/admin/MeetAdminSection.tsx), with the
+  rules of the form in [`meetSettingsModel.ts`](src/features/admin/meetSettingsModel.ts)). An owner or an admin
+  saves the Cloudflare Realtime values of Meet (`meet.update_settings`): the App ID and the App Secret of the SFU
+  app, and the Key ID and the API token of the TURN key, which is optional. A status line tells if Meet is ready.
+  A saved secret shows "A secret is saved. Asterra never shows it again." with **Replace** and **Remove**. A new ID
+  needs its secret, and the form says so before a request. A pair that comes from the Worker secrets names them.
+  **Test connection** (`meet.test_connection`) shows a line for the SFU app and a line for the TURN key.
 - **Mailbox settings** (`/mail/settings`, `/mail/team/<tmb_id>/settings`, `/mail/person/<prn_id>/settings`,
   `/mail/agent/<prn_id>/settings`,
   [`MailboxSettings.tsx`](src/features/mail/MailboxSettings.tsx)). The gear after Refresh in the header of
@@ -1295,6 +1302,8 @@ MCP clients. The app has no UI-only path.
     assistive technology and from the Tab key: **New event** does the same for a keyboard.
 - **Meet** (`/meet`, [`MeetHome.tsx`](src/features/meet/MeetHome.tsx)). **New meeting** calls
   `meet.create_meeting` and shows the link with **Copy** and **Join now**. **Join a meeting** opens a link or a code.
+  When Meet is not set up, an owner or an admin sees a notice with a link to Admin › Meet (`meet.get_settings`). A
+  member sees the reason of the server after **Create meeting link**.
 - **A meeting link** (`/meet/<code>`, [`MeetRoomPage.tsx`](src/features/meet/MeetRoomPage.tsx)). The page needs
   no session: a guest from outside the organization types a name, and a member joins as itself. The page shows
   the preview of the camera and the microphone, then the lobby, then the call (`CallView.tsx`): mute, camera,
@@ -2197,7 +2206,7 @@ dock Worker serves `index.html` for each app path, so a deep link works on reloa
 | `/mail/person/<prn_id>/…` | The same views, threads, settings and Screener, in the mailbox of a person who lets the person use it. `/mail/person/<prn_id>` goes to its inbox |
 | `/mail/agent/<prn_id>/…` | The same views, threads and settings, read only, in the mailbox of an agent, for an owner or an admin. `/mail/agent/<prn_id>` goes to its inbox |
 | `/admin` | Goes to the first section of Admin that the person can use |
-| `/admin/<section>` | One section of Admin: `general`, `members`, `shared-mailboxes`, `shared-drives`, `chat`, `mail`, `domains` or `ai` |
+| `/admin/<section>` | One section of Admin: `general`, `members`, `shared-mailboxes`, `shared-drives`, `chat`, `mail`, `domains`, `ai` or `meet` |
 | `/admin/members/<prn_id>` | The page of one person, agent or service account in Admin › Members |
 | `/connect/<oar_id>` | The approval page of an OAuth request from an MCP client |
 | `/drive` | The root of the own drive |

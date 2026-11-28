@@ -64,23 +64,15 @@ function safeBase(value: string): boolean {
 	}
 }
 
-/** The Realtime settings of the deployment, or null when Meet is not set up. */
-export function realtimeConfig(env: Env): RealtimeConfig | null {
-	const appId = env.REALTIME_APP_ID?.trim();
-	const appSecret = env.REALTIME_APP_SECRET?.trim();
-	if (!appId || !appSecret) return null;
+/**
+ * The base URL of the Realtime API, or null when REALTIME_API_BASE is not safe. Only a Worker variable sets it, never
+ * Admin › Meet: a base URL in the settings could send the App Secret to a different host.
+ */
+export function realtimeBase(env: Env): string | null {
 	const base = (env.REALTIME_API_BASE?.trim() || DEFAULT_BASE).replace(/\/+$/, "");
-	if (!safeBase(base)) {
-		log("error", "REALTIME_API_BASE must be an https URL or a loopback URL; Meet is off", {});
-		return null;
-	}
-	const keyId = env.REALTIME_TURN_KEY_ID?.trim();
-	const token = env.REALTIME_TURN_KEY_TOKEN?.trim();
-	return { base, appId, appSecret, turn: keyId && token ? { keyId, token } : null };
-}
-
-export function meetConfigured(env: Env): boolean {
-	return realtimeConfig(env) !== null;
+	if (safeBase(base)) return base;
+	log("error", "REALTIME_API_BASE must be an https URL or a loopback URL; Meet is off", {});
+	return null;
 }
 
 export interface SessionDescription {
@@ -317,29 +309,43 @@ export async function closeTracks(
  */
 export async function iceServers(config: RealtimeConfig): Promise<{ servers: IceServer[]; username: string | null }> {
 	if (!config.turn) return { servers: [CLOUDFLARE_STUN], username: null };
+	const result = await turnCredential(config.turn, config.base, TURN_TTL_SECONDS);
+	if (result.ok) return { servers: result.servers, username: result.username };
+	if (result.status === null) log("warn", "meet: TURN did not answer; STUN only", { reason: result.reason });
+	else log("warn", "meet: TURN refused the credential request; STUN only", { status: result.status });
+	return { servers: [CLOUDFLARE_STUN], username: null };
+}
+
+/** The result of one request for a TURN credential. `status` is null when no answer came. */
+export type TurnResult =
+	| { ok: true; status: number; servers: IceServer[]; username: string | null }
+	| { ok: false; status: number | null; reason: "http" | "timeout" | "bad_response" };
+
+/** Asks TURN for a credential that lives `ttl` seconds. */
+export async function turnCredential(
+	turn: { keyId: string; token: string },
+	base: string,
+	ttl: number,
+): Promise<TurnResult> {
 	let response: Response;
 	try {
-		response = await fetch(
-			`${config.base}/turn/keys/${encodeURIComponent(config.turn.keyId)}/credentials/generate-ice-servers`,
-			{
-				method: "POST",
-				headers: { authorization: `Bearer ${config.turn.token}`, "content-type": "application/json" },
-				body: JSON.stringify({ ttl: TURN_TTL_SECONDS }),
-				signal: AbortSignal.timeout(TIMEOUT_MS),
-			},
-		);
-	} catch (error) {
-		log("warn", "meet: TURN did not answer; STUN only", { error: String(error) });
-		return { servers: [CLOUDFLARE_STUN], username: null };
+		response = await fetch(`${base}/turn/keys/${encodeURIComponent(turn.keyId)}/credentials/generate-ice-servers`, {
+			method: "POST",
+			headers: { authorization: `Bearer ${turn.token}`, "content-type": "application/json" },
+			body: JSON.stringify({ ttl }),
+			signal: AbortSignal.timeout(TIMEOUT_MS),
+		});
+	} catch {
+		return { ok: false, status: null, reason: "timeout" };
 	}
-	if (!response.ok) {
-		log("warn", "meet: TURN refused the credential request; STUN only", { status: response.status });
-		return { servers: [CLOUDFLARE_STUN], username: null };
+	if (!response.ok) return { ok: false, status: response.status, reason: "http" };
+	const body = (await response.json().catch(() => null)) as { iceServers?: unknown } | null;
+	if (body === null || !Array.isArray(body.iceServers)) {
+		return { ok: false, status: response.status, reason: "bad_response" };
 	}
-	const body = (await response.json().catch(() => ({}))) as { iceServers?: unknown };
 	const servers: IceServer[] = [];
 	let username: string | null = null;
-	for (const entry of Array.isArray(body.iceServers) ? body.iceServers : []) {
+	for (const entry of body.iceServers) {
 		if (typeof entry !== "object" || entry === null) continue;
 		const raw = (entry as { urls?: unknown }).urls;
 		// Browsers block port 53. Without trickle ICE, such a URL only makes the gathering wait.
@@ -356,7 +362,7 @@ export async function iceServers(config: RealtimeConfig): Promise<{ servers: Ice
 		}
 		servers.push(server);
 	}
-	return { servers, username };
+	return { ok: true, status: response.status, servers, username };
 }
 
 /** Revokes a TURN credential. A failure only writes a log line: the credential ends with its ttl. */

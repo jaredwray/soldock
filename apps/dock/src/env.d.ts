@@ -25,14 +25,16 @@ interface Env {
 	 */
 	ENCRYPTION_KEY?: string;
 	/**
-	 * Optional. Meet: the App ID and the App Secret of a Cloudflare Realtime SFU app. Without both, Meet is off. The
-	 * secret has full control of the app: it is never in an API answer, in a log or in a browser.
+	 * Optional. Meet: the App ID and the App Secret of a Cloudflare Realtime SFU app, the fallback when Admin › Meet
+	 * has no saved SFU app (`meet/settings.ts`). Without either, Meet is off. The secret has full control of the app:
+	 * it is never in an API answer, in a log or in a browser.
 	 */
 	REALTIME_APP_ID?: string;
 	REALTIME_APP_SECRET?: string;
 	/**
-	 * Optional. Meet: the key ID and the key API token of a Cloudflare Realtime TURN key. Without both, browsers get
-	 * only the STUN server of Cloudflare, and a strict firewall can stop the media.
+	 * Optional. Meet: the key ID and the key API token of a Cloudflare Realtime TURN key, the fallback when Admin › Meet
+	 * has no saved TURN key. Without either, browsers get only the STUN server of Cloudflare, and a strict firewall can
+	 * stop the media.
 	 */
 	REALTIME_TURN_KEY_ID?: string;
 	REALTIME_TURN_KEY_TOKEN?: string;

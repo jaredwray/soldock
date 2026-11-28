@@ -590,7 +590,7 @@ const MEET_NOTE = [
 	"A series has one link for each occurrence. A change of the time keeps the link. A second create keeps the link.",
 	'meet: "remove", and a delete of the event, stop the link: each participant leaves the call, and nobody can join again.',
 	"An invitation by mail has the link.",
-	"meet needs the scope meet.write in your credential. When the operator did not set up Meet, the call fails with unavailable and changes nothing.",
+	"meet needs the scope meet.write in your credential. When Meet is not set up (Admin › Meet), the call fails with unavailable and changes nothing.",
 ].join(" ");
 
 export const createEvent = defineOperation({

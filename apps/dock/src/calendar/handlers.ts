@@ -38,7 +38,7 @@ import {
 	outboundPolicyDenial,
 	readCalendarPart,
 } from "../mail/index.ts";
-import { meetConfigured } from "../meet/index.ts";
+import { meetConfigured, NOT_CONFIGURED } from "../meet/index.ts";
 import {
 	audit,
 	decodeCursor,
@@ -195,14 +195,12 @@ function assertMayMail(call: CallContext, addresses: readonly string[]): void {
  * Refuses a change of the Meet link that the credential does not allow: the scope meet.write, also of a delegate, as
  * for mail. The calendar grant decides where. The scope decides that the caller can make or stop a meeting at all.
  */
-function assertMayMeet(call: CallContext, meet: "create" | "remove" | undefined): void {
+async function assertMayMeet(call: CallContext, meet: "create" | "remove" | undefined): Promise<void> {
 	if (meet === undefined) return;
 	if (!call.caller.scopes.has("meet.write")) {
 		throw new OperationError("forbidden", "A Meet link needs the scope meet.write. The credential does not have it.");
 	}
-	if (meet === "create" && !meetConfigured(call.env)) {
-		throw new OperationError("unavailable", "Meet is not set up. See docs/self-hosting.md#meet.");
-	}
+	if (meet === "create" && !(await meetConfigured(call.env))) throw new OperationError("unavailable", NOT_CONFIGURED);
 }
 
 /** Refuses more attendees than the limit: the people of the organization and the addresses by mail together. */
@@ -502,7 +500,7 @@ export const calendarHandlers: Pick<HandlerMap<CallContext>, CalendarOperation> 
 		const external = (await resolveExternal(call, owner, input.attendee_emails)) ?? [];
 		assertAttendeeCount(attendees.length, external.length);
 		assertMayMail(call, external);
-		assertMayMeet(call, input.meet);
+		await assertMayMeet(call, input.meet);
 		const id = newId("evt");
 		const record = accept(
 			await stub.create(ctx, {
@@ -542,7 +540,7 @@ export const calendarHandlers: Pick<HandlerMap<CallContext>, CalendarOperation> 
 			assertAttendeeCount((attendees ?? current?.attendees ?? []).length, (external ?? mailed).length);
 		}
 		assertMayMail(call, [...mailed, ...(external ?? [])]);
-		assertMayMeet(call, input.meet);
+		await assertMayMeet(call, input.meet);
 		const result = accept(
 			await stub.update(ctx, input.event_id, {
 				patch,

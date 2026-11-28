@@ -3,8 +3,11 @@ import { type FormEvent, useEffect, useId, useState } from "react";
 import { api, errorMessage } from "../../lib/api.ts";
 import { Icon } from "../../lib/icons.tsx";
 import { setPageTitle } from "../../lib/pageTitle.ts";
+import { Link } from "../../lib/router.tsx";
 import { useToast } from "../../lib/toast.tsx";
+import { adminPath } from "../../routes.ts";
 import { PageHeader } from "../../shell/PageHeader.tsx";
+import { isOrgAdmin, useSession } from "../auth/session.tsx";
 import "./meet.css";
 
 /**
@@ -21,9 +24,27 @@ export function MeetHome() {
 	const ids = { title: useId(), link: useId() };
 	const toast = useToast();
 
+	const { whoami } = useSession();
+	const admin = isOrgAdmin(whoami.principal);
+	// An owner or an admin sees at once when Meet is not set up, with a link to Admin › Meet. A member sees the reason
+	// when a create fails.
+	const [notReady, setNotReady] = useState(false);
 	useEffect(() => {
 		setPageTitle("Meet – Asterra");
 	}, []);
+	useEffect(() => {
+		if (!admin) return;
+		let current = true;
+		api
+			.call("meet.get_settings")
+			.then((settings) => {
+				if (current) setNotReady(!settings.ready);
+			})
+			.catch(() => undefined);
+		return () => {
+			current = false;
+		};
+	}, [admin]);
 
 	async function create(event: FormEvent<HTMLFormElement>) {
 		event.preventDefault();
@@ -62,6 +83,15 @@ export function MeetHome() {
 		<main id="main" className="page-main meet-home" tabIndex={-1}>
 			<PageHeader title="Meet" icon="video" />
 			<div className="meet-home-body">
+				{notReady && (
+					<div className="notice notice-warning meet-home-notice" role="status">
+						<Icon name="warning" size={16} className="notice-icon" />
+						<span>
+							Meet is not set up. Save the Cloudflare Realtime values in{" "}
+							<Link to={adminPath("meet")}>Admin › Meet</Link>.
+						</span>
+					</div>
+				)}
 				<section className="meet-home-card" aria-labelledby={`${ids.title}-heading`}>
 					<h2 id={`${ids.title}-heading`} className="meet-panel-title">
 						New meeting

@@ -142,7 +142,7 @@ Asterra decides who gets media: a guest in the lobby receives nothing. A phone w
 refused, joins with audio, or to listen and watch.
 
 An agent creates a meeting and runs its lobby with tools such as `meet_create_meeting` and
-`meet_admit_participant`. The operator sets up Meet with a Realtime app ([Self-hosting › Meet](docs/self-hosting.md#meet)).
+`meet_admit_participant`. An owner or an admin sets up Meet in Admin › Meet with the values of a Cloudflare Realtime app ([Self-hosting › Meet](docs/self-hosting.md#meet)).
 
 ### Agents
 

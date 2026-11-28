@@ -6672,3 +6672,18 @@ fieldset {
 		opacity: 0.35;
 	}
 }
+
+/* Admin › Meet: each pair of Realtime values is a fieldset with no frame of its own. */
+.meet-admin-pair {
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+	margin: 0;
+	padding: 0;
+	border: 0;
+	min-width: 0;
+}
+
+.meet-admin-check {
+	display: block;
+}

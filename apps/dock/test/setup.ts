@@ -1,6 +1,7 @@
 import { applyD1Migrations } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import { beforeEach } from "vitest";
+import { TEST_REALTIME } from "./realtime-fake.ts";
 
 // The same migrations that `wrangler d1 migrations apply` runs on deploy.
 await applyD1Migrations(env.DIRECTORY, (env as unknown as { TEST_MIGRATIONS: D1Migration[] }).TEST_MIGRATIONS);
@@ -49,5 +50,10 @@ beforeEach(async () => {
 		env.DIRECTORY.prepare(
 			"UPDATE feedback_settings SET enabled = 0, repo_owner = 'jaredwray', repo_name = 'soldock', github_token = NULL, updated_at = 0",
 		),
+		// Meet is set up from Admin › Meet with the values of the stand-in (test/realtime-fake.ts). The secrets are
+		// plaintext here, as in a row from before ENCRYPTION_KEY.
+		env.DIRECTORY.prepare(
+			"UPDATE meet_settings SET app_id = ?, app_secret = ?, turn_key_id = ?, turn_key_token = ?, updated_at = 0",
+		).bind(TEST_REALTIME.appId, TEST_REALTIME.appSecret, TEST_REALTIME.turnKeyId, TEST_REALTIME.turnToken),
 	]);
 });

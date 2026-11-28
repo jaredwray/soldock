@@ -894,7 +894,8 @@ needs a browser. The person or the guest in the browser opens the link.
   everyone" is only a name.
 - **An agent from before Meet.** Migration `0043` gives an agent `meet.read` when it holds `calendar.read`, and
   `meet.write` when it holds `calendar.write`.
-- When the operator did not set up Meet, `meet_create_meeting` returns `unavailable`.
+- When Meet is not set up, `meet_create_meeting` returns `unavailable`. An owner or an admin sets it up in Admin ›
+  Meet. An agent cannot read or change the Realtime values of Meet.
 - **The Meet link of a calendar event.** Use `meet: "create"` of `calendar_create_event` or
   `calendar_update_event`. The event gets `meet.join_url`, and each invitation has the link. The owner of the
   calendar is the host, also when you schedule for that person: you cannot run the lobby of that meeting. A

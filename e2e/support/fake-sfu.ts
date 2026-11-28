@@ -11,9 +11,10 @@ import { type Browser, chromium, type Page } from "@playwright/test";
 
 export const FAKE_SFU_PORT = 8798;
 export const FAKE_SFU_BASE = `http://127.0.0.1:${FAKE_SFU_PORT}/v1`;
-export const FAKE_APP_ID = "e2eapp0000000000000000000000000a";
+/** The values have the form of Admin › Meet: an ID is 32 hexadecimal characters. */
+export const FAKE_APP_ID = "e2e0000000000000000000000000000a";
 export const FAKE_APP_SECRET = "e2e-fake-realtime-app-secret-0123456789abcdef";
-export const FAKE_TURN_KEY_ID = "e2eturn00000000000000000000000ab";
+export const FAKE_TURN_KEY_ID = "e2e000000000000000000000000000ab";
 export const FAKE_TURN_KEY_TOKEN = "e2e-fake-turn-key-token-0123456789abcdef";
 
 /** Chromium flags for a browser that sends media to the stand-in on the same machine. */
