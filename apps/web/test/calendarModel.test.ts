@@ -54,6 +54,7 @@ function event(id: string, when: CalendarEvent["when"], title = id): CalendarEve
 		redacted: false,
 		external_attendees: [],
 		external_organizer: null,
+		meet: null,
 		untrusted: false,
 	};
 }

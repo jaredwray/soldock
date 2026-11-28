@@ -11,6 +11,9 @@ import {
 	type EventVisibility,
 	expandOccurrences,
 	firstOccurrenceAfter,
+	isMeetingCode,
+	MEET_LIMITS,
+	meetPath,
 	type Occurrence,
 	occurrenceAt,
 	occurrenceId,
@@ -21,7 +24,8 @@ import {
 import { type CalendarPushJob, enqueueCalendarPush } from "../chat/index.ts";
 import type { CalendarReminderInput } from "../identity/index.ts";
 import { type CalendarSenderCheck, sendCalendarMail } from "../mail/index.ts";
-import { decodeCursor, encodeCursor, log, newId } from "../platform/index.ts";
+import { newMeetingCode } from "../meet/index.ts";
+import { audit, decodeCursor, encodeCursor, log, newId } from "../platform/index.ts";
 import type { CalendarWebhookEventJob } from "../webhooks/index.ts";
 import { mergeIntervals } from "./find-times.ts";
 import { buildICalendar, type ICalInvite, type ICalOutput, type PartStat, parseICalendar } from "./ical.ts";
@@ -57,6 +61,8 @@ const NO_GRANT = "The owner of this calendar gave you no access to it.";
 const FREE_BUSY_ONLY = "Your access to this calendar shows only busy times. The owner can let you schedule.";
 const OWN_EVENTS_ONLY = "You can change only the events that you added to this calendar.";
 
+/** The wait before the alarm sends a `meet` row of the outbox: the call that queued it sends it first. */
+const MEET_RETRY_MS = 10_000;
 /** The rows of a free/busy query. A calendar with more events in the range gives unknown, never a part. */
 const BUSY_ROWS = 2000;
 const NO_OCCURRENCE = "The event has no occurrence with that id.";
@@ -71,6 +77,8 @@ export interface CalendarCall {
 	actorId: string;
 	/** The address and the name of the owner: the organizer of an invitation by mail. The handler sets it. */
 	ownerMail?: { email: string; name: string } | undefined;
+	/** The origin of the request, such as `https://dock.example.com`: the host of a Meet link in a mail. */
+	origin?: string | undefined;
 }
 
 /** What the caller is in this calendar: the owner, or a principal with a `schedule` grant. */
@@ -177,6 +185,8 @@ export interface EventRecord extends EventFields {
 	uid: string | null;
 	/** The facts of a copy of a meeting by mail. Null for each other event. */
 	mail: MailCopy | null;
+	/** The code of the Meet link of the event or of the series. Null with no link. */
+	meet_code: string | null;
 }
 
 /** One entry of a calendar: a one-off event, a series, or one occurrence of a series. */
@@ -204,6 +214,8 @@ export interface EventView extends EventFields {
 	external_organizer: { email: string; display_name: string } | null;
 	/** True for a copy of a meeting by mail from outside the organization. */
 	untrusted: boolean;
+	/** The code of the Meet link. Null with no link, when redacted, and on a copy by mail. */
+	meet_code: string | null;
 }
 
 /** The range of a list. The handler computes the dates and the lower bound from the time zone of the call. */
@@ -235,6 +247,8 @@ export interface CreateInput {
 	externalAttendees: string[];
 	reminderMinutes: number | null;
 	idempotency?: { key: string; requestHash: string } | undefined;
+	/** True adds a Meet link. The object makes the code in the step of the write. */
+	meet?: boolean | undefined;
 }
 
 export interface UpdateInput {
@@ -246,6 +260,8 @@ export interface UpdateInput {
 	/** The attendees by mail, in lowercase. Undefined keeps them. */
 	externalAttendees?: string[] | undefined;
 	baseRevision: number | undefined;
+	/** "create" adds a Meet link when the event has none. "remove" stops the link. */
+	meet?: "create" | "remove" | undefined;
 }
 
 /** The answer to an invitation by mail. */
@@ -352,6 +368,7 @@ function mailText(intro: string, ical: ICalOutput): string {
 	if (ical.method === "REQUEST" && ical.attendees.length > 0) {
 		lines.push(`Attendees: ${ical.attendees.map((attendee) => attendee.email).join(", ")}`);
 	}
+	if (ical.method === "REQUEST" && ical.conference) lines.push(`Join the meeting: ${ical.conference}`);
 	if (fields.description && ical.method !== "REPLY") lines.push("", fields.description);
 	return lines.join("\n");
 }
@@ -372,6 +389,8 @@ export interface EventSnapshot {
 	occurrence_responses?: { occ_key: string; principal_id: string; response: EventResponse; responded_at: number }[];
 	created_at?: number;
 	updated_at?: number;
+	/** The code of the Meet link. Undefined from a Worker before Meet: the copy keeps its code. */
+	meet_code?: string | null;
 }
 
 /** A response of an attendee, as the organizer gets it. `key` is empty for the entire series. */
@@ -700,6 +719,26 @@ const MIGRATIONS: readonly (readonly string[])[] = [
 		"ALTER TABLE outbox_next RENAME TO outbox",
 		"CREATE INDEX outbox_due ON outbox (next_attempt_at)",
 	],
+	[
+		// The Meet link of an event or of a series, and the kind `meet` of the outbox: the changes for its MeetingDO.
+		"ALTER TABLE events ADD COLUMN meet_code TEXT",
+		`CREATE TABLE outbox_next (
+			id TEXT PRIMARY KEY,
+			kind TEXT NOT NULL CHECK (kind IN ('snapshot', 'response', 'reminder', 'grant', 'mail', 'meet')),
+			target_id TEXT NOT NULL,
+			event_id TEXT NOT NULL,
+			payload TEXT NOT NULL,
+			version INTEGER NOT NULL,
+			attempts INTEGER NOT NULL DEFAULT 0,
+			next_attempt_at INTEGER NOT NULL,
+			created_at INTEGER NOT NULL
+		) WITHOUT ROWID`,
+		`INSERT INTO outbox_next (id, kind, target_id, event_id, payload, version, attempts, next_attempt_at, created_at)
+			SELECT id, kind, target_id, event_id, payload, version, attempts, next_attempt_at, created_at FROM outbox`,
+		"DROP TABLE outbox",
+		"ALTER TABLE outbox_next RENAME TO outbox",
+		"CREATE INDEX outbox_due ON outbox (next_attempt_at)",
+	],
 ];
 
 const COLUMNS = `id, title, description, location, all_day, start_at, end_at, start_date, end_date, time_zone, revision,
@@ -707,7 +746,7 @@ const COLUMNS = `id, title, description, location, all_day, start_at, end_at, st
 	reminder_minutes, visibility, created_by`;
 
 /** The columns that a read takes: `COLUMNS`, and the UID and the facts of a copy by mail. */
-const READ_COLUMNS = `${COLUMNS}, uid, mail_json`;
+const READ_COLUMNS = `${COLUMNS}, uid, mail_json, meet_code`;
 
 function toRecord(row: Row): EventRecord {
 	return {
@@ -736,6 +775,7 @@ function toRecord(row: Row): EventRecord {
 		created_by: (row.created_by as string | null) ?? null,
 		uid: (row.uid as string | null | undefined) ?? null,
 		mail: row.mail_json == null ? null : (JSON.parse(row.mail_json as string) as MailCopy),
+		meet_code: (row.meet_code as string | null | undefined) ?? null,
 	};
 }
 
@@ -829,6 +869,9 @@ function viewFor(role: Role, actorId: string, view: EventView): EventView {
 		redacted: true,
 		external_attendees: [],
 		external_organizer: null,
+		// A member with the code joins the call with no lobby. A delegate must not read the link of an event that it
+		// did not add.
+		meet_code: null,
 	};
 }
 
@@ -1181,7 +1224,7 @@ export class CalendarDO extends DurableObject<Env> {
 			occurrences.set(key, new Map([...inner].map(([principal, value]) => [principal, value.response] as const)));
 		}
 		return {
-			fields: JSON.stringify(FIELD_KEYS.map((key) => event[key])),
+			fields: JSON.stringify([...FIELD_KEYS.map((key) => event[key]), event.meet_code]),
 			rule: JSON.stringify(event.recurrence),
 			attendees: JSON.stringify(attendees.map((attendee) => attendee.principal_id).sort()),
 			overrides: new Map([...overrides].map(([key, record]) => [key, JSON.stringify(record)] as const)),
@@ -1228,6 +1271,7 @@ export class CalendarDO extends DurableObject<Env> {
 				? { email: event.mail.organizer.email, display_name: event.mail.organizer.name }
 				: null,
 			untrusted: event.mail !== null,
+			meet_code: event.mail === null ? event.meet_code : null,
 		};
 	}
 
@@ -1519,6 +1563,61 @@ export class CalendarDO extends DurableObject<Env> {
 		this.putOutbox(`grant:${principalId}`, "grant", principalId, "", "", seq);
 	}
 
+	/**
+	 * A different meeting has the code of a link: a defect, or a collision of 80 random bits. A retry cannot help, so
+	 * the row goes.
+	 */
+	private refusedLink(errorCode: string): true {
+		log("error", "calendar: the meeting of a link refused the change", { code: errorCode });
+		return true;
+	}
+
+	/**
+	 * Puts a change of the Meet link `code` in the outbox. The delivery reads the event then: a link that the event
+	 * holds makes or renames its meeting, and each other link cancels its meeting.
+	 */
+	private queueMeet(code: string, eventId: string, actorId: string): void {
+		const seq = Number(this.meta("meet_seq") ?? 0) + 1;
+		this.setMeta("meet_seq", String(seq));
+		this.putOutbox(`meet:${code}`, "meet", code, eventId, JSON.stringify({ v: 1, actor: actorId }), seq);
+		// The call sends the row at once (`deliverNow`). The alarm is only the fallback, so it does not send the row
+		// at the same time.
+		this.sql.exec("UPDATE outbox SET next_attempt_at = ? WHERE id = ?", Date.now() + MEET_RETRY_MS, `meet:${code}`);
+	}
+
+	/**
+	 * Sends rows of the outbox now, so a new link works and a removed link stops before the call returns. The alarm is
+	 * set already: a row that fails here waits for it. The alarm can send the same row at the same time, which is
+	 * safe: each row is idempotent.
+	 */
+	private async deliverNow(ids: readonly string[]): Promise<void> {
+		for (const id of ids) {
+			const row = this.sql
+				.exec<{ id: string; kind: string; target_id: string; event_id: string; payload: string; version: number }>(
+					"SELECT id, kind, target_id, event_id, payload, version FROM outbox WHERE id = ?",
+					id,
+				)
+				.toArray()[0];
+			if (!row) continue;
+			try {
+				await this.deliver(row);
+				this.sql.exec("DELETE FROM outbox WHERE id = ? AND version = ?", row.id, row.version);
+			} catch (error) {
+				// The same backoff as the alarm. The row waits, and the alarm moves to its time.
+				this.sql.exec(
+					"UPDATE outbox SET attempts = attempts + 1, next_attempt_at = ? WHERE id = ? AND version = ?",
+					Date.now() + MEET_RETRY_MS,
+					row.id,
+					row.version,
+				);
+				log("warn", "calendar: a change of a meeting waits for the alarm", {
+					error: error instanceof Error ? error.name : "unknown",
+				});
+			}
+		}
+		await this.scheduleAlarm();
+	}
+
 	/** Gives a principal a grant, or changes it. `changed` is false when the grant was the same. */
 	async setGrant(
 		call: CalendarCall,
@@ -1685,6 +1784,8 @@ export class CalendarDO extends DurableObject<Env> {
 				);
 			}
 		}
+		// The code of a new link, made in the step of the write: only a stored code ever gets a room.
+		const meetCode = input.meet ? newMeetingCode() : null;
 		this.ctx.storage.transactionSync(() => {
 			this.sql.exec(
 				`INSERT INTO events (${COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, 'organizer', ?, 0, NULL, 0, ?, ?, ?)`,
@@ -1707,6 +1808,10 @@ export class CalendarDO extends DurableObject<Env> {
 				fields.visibility,
 				role === "owner" ? null : call.actorId,
 			);
+			if (meetCode !== null) {
+				this.sql.exec("UPDATE events SET meet_code = ? WHERE id = ?", meetCode, input.id);
+				this.queueMeet(meetCode, input.id, call.actorId);
+			}
 			this.addCount(1);
 			for (const attendee of input.attendees) {
 				this.sql.exec(
@@ -1736,8 +1841,11 @@ export class CalendarDO extends DurableObject<Env> {
 			this.noteChange("calendar.event.created", input.id, 1, call.actorId);
 			this.rearm(input.id);
 		});
+		// The view of this change, before an await that lets a different call change or delete the event.
+		const view = viewFor(role, call.actorId, this.masterView(this.row(input.id) as EventRecord));
 		await this.scheduleAlarm();
-		return viewFor(role, call.actorId, this.masterView(this.row(input.id) as EventRecord));
+		if (meetCode !== null) await this.deliverNow([`meet:${meetCode}`]);
+		return view;
 	}
 
 	private seriesCount(): number {
@@ -1810,7 +1918,15 @@ export class CalendarDO extends DurableObject<Env> {
 		) {
 			return refuse("invalid", `An event can have at most ${CALENDAR_LIMITS.attendees} attendees.`);
 		}
-		if (!fieldsChanged && !timeChanged && !attendeesChanged && !guestsChanged)
+		// "create" on an event with a link, and "remove" on an event without one, change nothing.
+		const meetCode =
+			input.meet === "remove"
+				? null
+				: input.meet === "create" && event.meet_code === null
+					? newMeetingCode()
+					: event.meet_code;
+		const meetChanged = meetCode !== event.meet_code;
+		if (!fieldsChanged && !timeChanged && !attendeesChanged && !guestsChanged && !meetChanged)
 			return { event: viewFor(role, call.actorId, this.masterView(event)), changed: false };
 		const removedGuests =
 			wantedGuests === undefined ? [] : guestsBefore.filter((email) => !wantedGuests.includes(email));
@@ -1820,9 +1936,11 @@ export class CalendarDO extends DurableObject<Env> {
 		const mailChanged =
 			guestsChanged ||
 			timeChanged ||
+			meetChanged ||
 			next.title !== event.title ||
 			next.description !== event.description ||
 			next.location !== event.location;
+		const meetRows: string[] = [];
 		const now = Date.now();
 		const removed =
 			wanted === undefined ? [] : before.filter((old) => !wanted.some((a) => a.principal_id === old.principal_id));
@@ -1830,7 +1948,7 @@ export class CalendarDO extends DurableObject<Env> {
 			this.sql.exec(
 				`UPDATE events SET title = ?, description = ?, location = ?, all_day = ?, start_at = ?, end_at = ?,
 					start_date = ?, end_date = ?, time_zone = ?, recurrence = ?, series_end_at = ?, visibility = ?,
-					revision = revision + 1, updated_at = ?
+					meet_code = ?, revision = revision + 1, updated_at = ?
 				WHERE id = ?`,
 				next.title,
 				next.description,
@@ -1844,9 +1962,19 @@ export class CalendarDO extends DurableObject<Env> {
 				next.recurrence === null ? null : JSON.stringify(next.recurrence),
 				seriesEndOf(next, next.recurrence),
 				next.visibility,
+				meetCode,
 				now,
 				eventId,
 			);
+			// The old link stops when it goes. The meeting of the link that stays gets the new title.
+			if (event.meet_code !== null && event.meet_code !== meetCode) {
+				this.queueMeet(event.meet_code, eventId, call.actorId);
+				meetRows.push(`meet:${event.meet_code}`);
+			}
+			if (meetCode !== null && (meetChanged || next.title !== event.title || next.visibility !== event.visibility)) {
+				this.queueMeet(meetCode, eventId, call.actorId);
+				meetRows.push(`meet:${meetCode}`);
+			}
 			if (timeChanged) {
 				this.sql.exec("DELETE FROM event_overrides WHERE event_id = ?", eventId);
 				this.sql.exec("DELETE FROM occurrence_responses WHERE event_id = ?", eventId);
@@ -1903,8 +2031,11 @@ export class CalendarDO extends DurableObject<Env> {
 			this.noteChange("calendar.event.updated", eventId, event.revision + 1, call.actorId);
 			this.rearm(eventId);
 		});
+		// The view of this change, before an await that lets a different call change or delete the event.
+		const view = viewFor(role, call.actorId, this.masterView(this.row(eventId) as EventRecord));
 		await this.scheduleAlarm();
-		return { event: viewFor(role, call.actorId, this.masterView(this.row(eventId) as EventRecord)), changed: true };
+		if (meetRows.length > 0) await this.deliverNow(meetRows);
+		return { event: view, changed: true };
 	}
 
 	/** Deletes an event, or with `dryRun` returns it without a change. Each attendee loses the copy. */
@@ -1945,10 +2076,13 @@ export class CalendarDO extends DurableObject<Env> {
 			const attendees = this.attendeesOf(eventId).map((attendee) => attendee.principal_id);
 			this.fanOut(eventId, attendees);
 			for (const email of guests) this.queueCancel(call, event, event.sequence + 1, email, "cancelled");
+			// The link stops with the event: the row reads the event at the delivery, and finds none.
+			if (event.meet_code !== null) this.queueMeet(event.meet_code, eventId, call.actorId);
 			this.noteChange("calendar.event.deleted", eventId, event.revision, call.actorId);
 			this.deleteEventRows(eventId);
 		});
 		await this.scheduleAlarm();
+		if (event.meet_code !== null) await this.deliverNow([`meet:${event.meet_code}`]);
 		return view;
 	}
 
@@ -2321,6 +2455,13 @@ export class CalendarDO extends DurableObject<Env> {
 				// A state from a Worker before visibility has no such field.
 				fields.visibility ?? "default",
 			);
+			// The replace clears the columns that COLUMNS does not name. A state from a Worker before Meet keeps the code.
+			const code = snapshot.meet_code === undefined ? (existing?.meet_code ?? null) : snapshot.meet_code;
+			this.sql.exec(
+				"UPDATE events SET meet_code = ? WHERE id = ?",
+				code !== null && isMeetingCode(code) ? code : null,
+				snapshot.event_id,
+			);
 			if (!existing) this.addCount(1);
 			this.sql.exec("DELETE FROM event_overrides WHERE event_id = ?", snapshot.event_id);
 			for (const override of snapshot.overrides ?? []) this.writeOverride(snapshot.event_id, override);
@@ -2444,7 +2585,7 @@ export class CalendarDO extends DurableObject<Env> {
 
 	private putOutbox(
 		id: string,
-		kind: "snapshot" | "response" | "reminder" | "grant" | "mail",
+		kind: "snapshot" | "response" | "reminder" | "grant" | "mail" | "meet",
 		target: string,
 		eventId: string,
 		payload: string,
@@ -2496,6 +2637,7 @@ export class CalendarDO extends DurableObject<Env> {
 			occurrence_responses: responses,
 			created_at: event.created_at,
 			updated_at: event.updated_at,
+			meet_code: event.meet_code,
 		};
 	}
 
@@ -2527,6 +2669,46 @@ export class CalendarDO extends DurableObject<Env> {
 				access: this.grantOf(row.target_id),
 				version: row.version,
 			});
+			return true;
+		}
+		if (row.kind === "meet") {
+			const { actor } = JSON.parse(row.payload) as { actor: string };
+			const code = row.target_id;
+			const event = this.row(row.event_id);
+			const stub = this.env.MEETING.get(this.env.MEETING.idFromName(code));
+			const input = {
+				id: newId("mtg"),
+				code,
+				hostId: owner,
+				hostName: event?.organizer?.display_name ?? "",
+				// A private event gives its meeting no title: each person with the link sees the title.
+				title:
+					event && event.visibility !== "private" ? [...event.title].slice(0, MEET_LIMITS.titleChars).join("") : "",
+				origin: "calendar" as const,
+				eventId: row.event_id,
+				createdBy: actor,
+			};
+			// The audit line of the calendar operation names the event. This line names the meeting that the change of
+			// its link made or cancelled. The outbox has no credential: the operation line of the actor has it.
+			const record = (op: string, meetingId: string) =>
+				audit({
+					op,
+					actor,
+					actorKind: "calendar_outbox",
+					credential: "calendar_outbox",
+					target: meetingId,
+					...(owner === actor ? {} : { calendar: owner }),
+					result: "ok",
+				});
+			if (event?.role === "organizer" && event.meet_code === code) {
+				const result = await stub.ensureForEvent(input);
+				if ("error" in result) return this.refusedLink(result.error.code);
+				if (result.created) record("meet.create_meeting", result.meeting.id);
+			} else {
+				const result = await stub.cancelForEvent({ ...input, actorId: actor });
+				if ("error" in result) return this.refusedLink(result.error.code);
+				if (result.cancelled) record("meet.cancel_meeting", result.meetingId);
+			}
 			return true;
 		}
 		if (row.kind === "mail") {
@@ -2611,6 +2793,9 @@ export class CalendarDO extends DurableObject<Env> {
 			fields: this.fieldsOf(event),
 			organizer: call.ownerMail,
 			attendees,
+			...(method === "REQUEST" && event.meet_code !== null && call.origin
+				? { conference: `${call.origin}${meetPath(event.meet_code)}` }
+				: {}),
 		};
 	}
 

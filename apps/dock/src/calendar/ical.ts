@@ -357,6 +357,8 @@ export interface ICalOutput {
 	organizer: { email: string; name: string };
 	/** A REPLY has only the attendee who answers. */
 	attendees: ICalAttendee[];
+	/** The Meet link of a REQUEST. It has only the origin and the code: no text of a person. */
+	conference?: string | undefined;
 }
 
 function escapeText(value: string): string {
@@ -428,8 +430,15 @@ export function buildICalendar(input: ICalOutput): string {
 		lines.push(`DTSTART:${utcStamp(fields.start_at)}`, `DTEND:${utcStamp(fields.end_at)}`);
 	}
 	lines.push(`SUMMARY:${escapeText(fields.title)}`);
-	if (fields.location) lines.push(`LOCATION:${escapeText(fields.location)}`);
-	if (fields.description) lines.push(`DESCRIPTION:${escapeText(fields.description)}`);
+	const conference = input.method === "REQUEST" ? input.conference : undefined;
+	// A calendar app makes a link of the place. Only an empty place gets the Meet link.
+	const location = fields.location || conference || "";
+	if (location) lines.push(`LOCATION:${escapeText(location)}`);
+	const join = conference ? `Join the meeting: ${conference}` : "";
+	const description = [fields.description, join].filter(Boolean).join("\n\n");
+	if (description) lines.push(`DESCRIPTION:${escapeText(description)}`);
+	// RFC 7986: the address of the meeting, for a calendar app that shows a Join button.
+	if (conference) lines.push(`CONFERENCE;VALUE=URI;FEATURE=AUDIO,VIDEO;LABEL=Join the meeting:${conference}`);
 	lines.push(`ORGANIZER${cnParam(input.organizer.name)}:mailto:${input.organizer.email}`);
 	for (const attendee of input.attendees) {
 		const rsvp = input.method === "REQUEST" && attendee.partstat === "NEEDS-ACTION" ? ";RSVP=TRUE" : "";

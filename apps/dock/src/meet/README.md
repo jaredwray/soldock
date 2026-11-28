@@ -3,11 +3,11 @@
 > Status: **started**. The first layer exists: a member creates a meeting link, a guest from outside asks to join and
 > waits in a lobby, and the host admits, refuses and removes participants and ends the call. Browsers send and receive
 > audio and video through the Cloudflare Realtime SFU. Asterra keeps the state of the meeting and decides who gets
-> media. Keep this README current as the module grows. It is the module's contract.
+> media. A calendar event can have a Meet link, and its invitation by mail has the link. Keep this README current as the module grows. It is the module's contract.
 
 | | |
 | --- | --- |
-| **Purpose** | Meet backend: `MeetingDO` (lobby, roster, admission, track registry), the broker of the Realtime SFU and TURN. Later: the meeting of a calendar event, ICS invitations, captions, recording and agent participants. |
+| **Purpose** | Meet backend: `MeetingDO` (lobby, roster, admission, track registry), the broker of the Realtime SFU and TURN, and the meeting of a calendar event. Later: captions, recording and agent participants. |
 | **Owns** | `MeetingDO`, one for each meeting. |
 | **Depends on** | `platform`, `identity`. The Cloudflare Realtime SFU and TURN service, through `realtime.ts`. |
 | **Operations** | `meet.create_meeting`, `meet.get_meeting`, `meet.end_meeting`, `meet.list_participants`, `meet.admit_participant`, `meet.deny_participant`, `meet.remove_participant` |
@@ -81,12 +81,31 @@ Public surface: `index.ts` only. Other domains must not import files from this f
   before it wakes an object.
 - The host is the principal that created the meeting. Only the host calls the operations of a meeting. A different
   member, an owner or an admin, and the sponsor of an agent get `forbidden`.
-- Status: `open`, then `ended` (the host). `cancelled` is for the meeting of a calendar event in a later layer. Both end
-  states are final: each participant leaves, each socket closes with `4410`, the object closes each track on the SFU,
-  and each later join gets `conflict`.
+- Status: `open`, then `ended` (the host) or `cancelled` (the calendar). Both end states are final: each
+  participant leaves, each socket closes with `4410`, the object closes each track on the SFU, and each later join
+  gets `conflict`. After the delete of the data, 30 days after the end, a join gets `not_found`.
 - The object ends an open meeting 90 days after its last activity, and deletes its data 30 days after the end.
   Activity is a decision of the host (admit, refuse, remove) or a new media session of an admitted participant. A
   join or a leave is not activity, so a person with the link cannot keep an idle meeting open.
+
+## The meeting of a calendar event
+
+- A meeting has an origin: `standalone` (`meet.create_meeting`) or `calendar` (the Meet link of an event). Only the
+  outbox of a `CalendarDO` calls `ensureForEvent` and `cancelForEvent`. The calendar module has the rules of the
+  link: [Calendar › The Meet link](../calendar/README.md#the-meet-link).
+- `ensureForEvent` makes the meeting with the code of the event, the owner of the calendar as the host, and the
+  event id. A second call changes the title and the name of the host of an open meeting. It never opens an ended
+  or a cancelled meeting.
+- `cancelForEvent` cancels an open meeting: each participant leaves with the reason `cancelled`. With no meeting,
+  it writes a cancelled meeting, so a later `ensureForEvent` with that code cannot open a room.
+- Both refuse with `conflict` when the meeting of the code has a different origin, event or host.
+- Both tell the calendar what changed (`created`, `cancelled`). The calendar outbox then writes the audit line
+  `meet.create_meeting` or `meet.cancel_meeting` with the meeting id, the actor of the calendar change, and the
+  calendar when the actor is a delegate. The credential is `calendar_outbox`: the audit line of the calendar
+  operation has the credential of the actor.
+- A meeting of the origin `calendar` has no idle end: the event decides how long the link works.
+  `meet.end_meeting` stops the call: each participant leaves with the reason `ended`, each socket closes, and the
+  object closes each track on the SFU. The status stays `open`, so the link works for the next call.
 
 ## Participants
 
@@ -192,16 +211,28 @@ of pull requests set a stand-in there.
   pull without an answer, the wait after a failed credential check, the limits of join requests of guests and of
   one member, the delete of the old rows of a member, the idle end that a join does not move, the
   stale epoch, the alarm (absence, token life, credential, deletion) and the scope migration.
+- `test/calendar-meet.test.ts` (workerd) proves the Meet link of a calendar event: one room for a retry, the
+  scope and the secrets, the delegates, a series, the cancel at a remove and a delete, the delivery from the
+  alarm after a failure, no new room after a cancel, the content of the invitation, and the end of a call that
+  keeps the link.
 - `e2e/tests/meet.spec.ts` runs two browsers with synthetic media against a stand-in SFU (`e2e/support/fake-sfu.ts`):
   a headless Chromium that holds one real `RTCPeerConnection` for each SFU session and sends each received track on.
   It proves the gate, the broker and the client with real media. It does not prove the paths of Cloudflare.
+  `e2e/tests/calendarMeet.spec.ts` adds the link in the event dialog, reads it from the invitation in Sent, and
+  lets a guest with no account join from it. A new time keeps the link, and the delete of the event ends the
+  call.
 - `.github/workflows/live-meet.yaml` runs the same tests and `e2e/tests/meetLive.spec.ts` against Cloudflare Realtime:
   the default path and the TURN relay.
 
 ## Known limits
 
 - A host who is not in the call leaves guests in the lobby until they are away too long.
-- An ended link does not work again. The host makes a new meeting.
+- An ended link does not work again. The host makes a new meeting. The link of a calendar event works until the
+  calendar cancels it.
+- The room of a past calendar event stays open until the owner deletes the event or removes the link. A member
+  of the organization can use its media with no host. A guest waits in the lobby.
+- A member that the host removed from a call of a calendar meeting waits in the lobby in each later call of that
+  link, also after `meet.end_meeting`. The host admits the member again.
 - The code is in the URLs of Worker requests, so it can be in the logs of invocations. It allows only a request to
   join.
 - The revoke of a TURN credential has one try. If it fails, a removed participant keeps the credential for at most
@@ -216,9 +247,8 @@ of pull requests set a stand-in there.
 
 ## Not built yet
 
-1. The meeting of a calendar event, and the Join link in the invitation (increment 2).
-2. Screen share, device selection, simulcast, in-call chat and reactions.
-3. Co-hosts, and moderation by an owner or an admin.
-4. `meet.list_meetings` and a limit of meetings for each principal.
-5. Settings of Meet in Admin, in place of Worker secrets.
-6. Captions and transcription through the SFU WebSocket adapter and Workers AI, recording, and agent participants.
+1. Screen share, device selection, simulcast, in-call chat and reactions.
+2. Co-hosts, and moderation by an owner or an admin.
+3. `meet.list_meetings` and a limit of meetings for each principal.
+4. Settings of Meet in Admin, in place of Worker secrets.
+5. Captions and transcription through the SFU WebSocket adapter and Workers AI, recording, and agent participants.

@@ -105,6 +105,7 @@ export function mountMeetCalls(app: Hono<MeetEnv>): void {
 			title: info.title,
 			host_name: info.host_name,
 			status: info.status,
+			origin: info.origin,
 			media: meetConfigured(c.env) ? "ready" : "not_configured",
 			viewer: member ? { display_name: member.principal.display_name, is_host: info.viewer_is_host } : null,
 		};

@@ -8,7 +8,9 @@ import {
 	DEFAULT_REMINDER_MINUTES,
 	dateToUtcMs,
 	type EventWhenValue,
+	isMeetingCode,
 	type MailInvitation,
+	meetPath,
 	type OperationName,
 	occurrenceId,
 	parseOccurrenceId,
@@ -36,6 +38,7 @@ import {
 	outboundPolicyDenial,
 	readCalendarPart,
 } from "../mail/index.ts";
+import { meetConfigured } from "../meet/index.ts";
 import {
 	audit,
 	decodeCursor,
@@ -100,6 +103,7 @@ function ownCalendar(call: CallContext): { stub: ReturnType<typeof calendarStub>
 			ownerId: principal.id,
 			actorId: principal.id,
 			ownerMail: { email: principal.address, name: principal.display_name },
+			origin: call.origin,
 		},
 	};
 }
@@ -124,6 +128,7 @@ async function openCalendar(
 		ownerId: target.id,
 		actorId: principal.id,
 		ownerMail: { email: target.address, name: target.display_name },
+		origin: call.origin,
 	};
 	const stub = calendarStub(call.env, target.id);
 	accept(await stub.authorize(ctx));
@@ -186,6 +191,20 @@ function assertMayMail(call: CallContext, addresses: readonly string[]): void {
 	}
 }
 
+/**
+ * Refuses a change of the Meet link that the credential does not allow: the scope meet.write, also of a delegate, as
+ * for mail. The calendar grant decides where. The scope decides that the caller can make or stop a meeting at all.
+ */
+function assertMayMeet(call: CallContext, meet: "create" | "remove" | undefined): void {
+	if (meet === undefined) return;
+	if (!call.caller.scopes.has("meet.write")) {
+		throw new OperationError("forbidden", "A Meet link needs the scope meet.write. The credential does not have it.");
+	}
+	if (meet === "create" && !meetConfigured(call.env)) {
+		throw new OperationError("unavailable", "Meet is not set up. See docs/self-hosting.md#meet.");
+	}
+}
+
 /** Refuses more attendees than the limit: the people of the organization and the addresses by mail together. */
 function assertAttendeeCount(people: number, addresses: number): void {
 	if (people + addresses > CALENDAR_LIMITS.attendees) {
@@ -230,7 +249,7 @@ function iso(ms: number): string {
 	return new Date(ms).toISOString();
 }
 
-function toEvent(view: EventView): CalendarEvent {
+function toEvent(origin: string, view: EventView): CalendarEvent {
 	return {
 		id: view.id,
 		title: view.title,
@@ -277,6 +296,10 @@ function toEvent(view: EventView): CalendarEvent {
 		})),
 		external_organizer: view.external_organizer,
 		untrusted: view.untrusted,
+		meet:
+			view.meet_code !== null && isMeetingCode(view.meet_code)
+				? { code: view.meet_code, join_url: `${origin}${meetPath(view.meet_code)}` }
+				: null,
 	};
 }
 
@@ -444,14 +467,14 @@ export const calendarHandlers: Pick<HandlerMap<CallContext>, CalendarOperation> 
 		const last = page.events.at(-1);
 		const lastId = last && (last.occurrence_key === null ? last.id : occurrenceId(last.id, last.occurrence_key));
 		return {
-			events: page.events.map(toEvent),
+			events: page.events.map((view) => toEvent(call.origin, view)),
 			next_cursor: page.more && last && lastId ? encodeCursor([last.start_at, lastId]) : null,
 		};
 	},
 
 	async "calendar.get_event"(call, input) {
 		const { stub, ctx } = await openCalendar(call, input.calendar_id);
-		return { event: toEvent(accept(await stub.get(ctx, input.event_id))) };
+		return { event: toEvent(call.origin, accept(await stub.get(ctx, input.event_id))) };
 	},
 
 	async "calendar.create_event"(call, input) {
@@ -474,11 +497,12 @@ export const calendarHandlers: Pick<HandlerMap<CallContext>, CalendarOperation> 
 		// A retry returns the first event before the checks of now: an attendee who left, or a narrower mail policy,
 		// does not refuse the event that the first call added.
 		const replayed = idempotency ? await stub.replay(ctx, idempotency) : null;
-		if (replayed) return { event: toEvent(accept(replayed)) };
+		if (replayed) return { event: toEvent(call.origin, accept(replayed)) };
 		const attendees = (await resolveAttendees(call, owner, input.attendee_ids)) ?? [];
 		const external = (await resolveExternal(call, owner, input.attendee_emails)) ?? [];
 		assertAttendeeCount(attendees.length, external.length);
 		assertMayMail(call, external);
+		assertMayMeet(call, input.meet);
 		const id = newId("evt");
 		const record = accept(
 			await stub.create(ctx, {
@@ -490,11 +514,12 @@ export const calendarHandlers: Pick<HandlerMap<CallContext>, CalendarOperation> 
 				externalAttendees: external,
 				reminderMinutes: input.reminder_minutes === undefined ? DEFAULT_REMINDER_MINUTES : input.reminder_minutes,
 				idempotency,
+				meet: input.meet === "create",
 			}),
 		);
 		// A retry with the key returns the first event: only the call that added it audits.
 		if (record.id === id) auditCalendar(call, ctx, "calendar.create_event", id);
-		return { event: toEvent(record) };
+		return { event: toEvent(call.origin, record) };
 	},
 
 	async "calendar.update_event"(call, input) {
@@ -517,6 +542,7 @@ export const calendarHandlers: Pick<HandlerMap<CallContext>, CalendarOperation> 
 			assertAttendeeCount((attendees ?? current?.attendees ?? []).length, (external ?? mailed).length);
 		}
 		assertMayMail(call, [...mailed, ...(external ?? [])]);
+		assertMayMeet(call, input.meet);
 		const result = accept(
 			await stub.update(ctx, input.event_id, {
 				patch,
@@ -525,10 +551,11 @@ export const calendarHandlers: Pick<HandlerMap<CallContext>, CalendarOperation> 
 				attendees,
 				externalAttendees: external,
 				baseRevision: input.base_revision,
+				meet: input.meet,
 			}),
 		);
 		if (result.changed) auditCalendar(call, ctx, "calendar.update_event", input.event_id);
-		return { event: toEvent(result.event) };
+		return { event: toEvent(call.origin, result.event) };
 	},
 
 	async "calendar.delete_event"(call, input) {
@@ -545,7 +572,7 @@ export const calendarHandlers: Pick<HandlerMap<CallContext>, CalendarOperation> 
 		}
 		const record = accept(await stub.remove(ctx, input.event_id, input.base_revision, input.dry_run));
 		if (!input.dry_run) auditCalendar(call, ctx, "calendar.delete_event", input.event_id);
-		return { event: toEvent(record), dry_run: input.dry_run };
+		return { event: toEvent(call.origin, record), dry_run: input.dry_run };
 	},
 
 	async "calendar.update_occurrence"(call, input) {
@@ -553,7 +580,7 @@ export const calendarHandlers: Pick<HandlerMap<CallContext>, CalendarOperation> 
 		const { eventId, key } = occurrenceOf(input.occurrence_id);
 		const result = accept(await stub.updateOccurrence(ctx, eventId, key, contentPatch(input), input.base_revision));
 		if (result.changed) auditCalendar(call, ctx, "calendar.update_occurrence", input.occurrence_id);
-		return { event: toEvent(result.event) };
+		return { event: toEvent(call.origin, result.event) };
 	},
 
 	async "calendar.cancel_occurrence"(call, input) {
@@ -561,7 +588,7 @@ export const calendarHandlers: Pick<HandlerMap<CallContext>, CalendarOperation> 
 		const { eventId, key } = occurrenceOf(input.occurrence_id);
 		const record = accept(await stub.cancelOccurrence(ctx, eventId, key, input.base_revision, input.dry_run));
 		if (!input.dry_run) auditCalendar(call, ctx, "calendar.cancel_occurrence", input.occurrence_id);
-		return { event: toEvent(record), dry_run: input.dry_run };
+		return { event: toEvent(call.origin, record), dry_run: input.dry_run };
 	},
 
 	async "calendar.respond_to_event"(call, input) {
@@ -581,13 +608,13 @@ export const calendarHandlers: Pick<HandlerMap<CallContext>, CalendarOperation> 
 		}
 		const record = accept(await stub.respond(ctx, input.event_id, key, input.response));
 		auditOk(call, "calendar.respond_to_event", input.occurrence_id ?? input.event_id);
-		return { event: toEvent(record) };
+		return { event: toEvent(call.origin, record) };
 	},
 
 	async "calendar.set_reminder"(call, input) {
 		const { stub, ctx } = ownCalendar(call);
 		const record = accept(await stub.setReminder(ctx, input.event_id, input.minutes));
-		return { event: toEvent(record) };
+		return { event: toEvent(call.origin, record) };
 	},
 
 	async "calendar.query_free_busy"(call, input) {
@@ -764,7 +791,7 @@ export const calendarHandlers: Pick<HandlerMap<CallContext>, CalendarOperation> 
 		if (result.changed) auditOk(call, "calendar.respond_to_mail_invitation", input.message_id);
 		return {
 			invitation: (await invitationOf(call, read.part, invite)).invitation,
-			event: result.event ? toEvent(result.event) : null,
+			event: result.event ? toEvent(call.origin, result.event) : null,
 		};
 	},
 

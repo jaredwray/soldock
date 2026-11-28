@@ -183,7 +183,8 @@ describe("busy times", () => {
 				`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 1997)
 				INSERT INTO events SELECT printf('evt_COPY%018d', i), title, description, location, all_day, start_at, end_at,
 					start_date, end_date, time_zone, revision, created_at, updated_at, recurrence, series_end_at, role,
-					organizer_json, sequence, my_response, my_responded_at, reminder_minutes, visibility, created_by, uid, mail_json
+					organizer_json, sequence, my_response, my_responded_at, reminder_minutes, visibility, created_by, uid, mail_json,
+					meet_code
 				FROM events, n WHERE id = ?`,
 				seed.id,
 			);
@@ -351,6 +352,7 @@ describe("a calendar from before grants", () => {
 					sql.exec("DROP TABLE shared_with_me");
 					sql.exec("ALTER TABLE events DROP COLUMN visibility");
 					sql.exec("ALTER TABLE events DROP COLUMN created_by");
+					sql.exec("ALTER TABLE events DROP COLUMN meet_code");
 					sql.exec("UPDATE meta SET value = '3' WHERE key = 'schema_version'");
 					await state.storage.sync();
 					state.abort("Restart the legacy calendar.");
