@@ -272,6 +272,11 @@ test("a link added from one occurrence is for the series, the other changes stil
 		});
 		await change.getByRole("button", { name: "Change" }).click();
 		await expect(change.getByRole("alert")).toBeVisible();
+		// Back in the form, the row shows that the link is saved: an Undo cannot take it back now.
+		await change.getByRole("button", { name: "Cancel" }).click();
+		await expect(edit.getByText("The Meet link is saved.")).toBeVisible();
+		await expect(edit.getByRole("button", { name: "Undo" })).toHaveCount(0);
+		await edit.getByRole("button", { name: "Save" }).click();
 		await change.getByRole("button", { name: "Change" }).click();
 		await expect(page.getByText("Event saved.")).toBeVisible();
 

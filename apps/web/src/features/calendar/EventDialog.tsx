@@ -98,6 +98,8 @@ export function EventDialog({ event, initial, zone, onChanged, onClose, calendar
 	// A save from one occurrence sends two requests. When the link went and the second request failed, a retry
 	// sends only the rest, on the revision after the link.
 	const linked = useRef<{ revision: number } | null>(null);
+	// The same fact for the form: the Meet row then shows that the link change is saved, with no Undo.
+	const [linkSaved, setLinkSaved] = useState(false);
 	// One key for each request of the dialog. A second click on Save, or a retry after a lost answer, sends the
 	// same request with the same key, so the server adds one event. A different request gets its own key.
 	const keys = useRef(new Map<string, string>());
@@ -206,6 +208,7 @@ export function EventDialog({ event, initial, zone, onChanged, onClose, calendar
 				onChanged(saved);
 				revision = saved.revision;
 				linked.current = { revision };
+				setLinkSaved(true);
 			}
 			if (contentChanged) {
 				const { event: saved } = await updateOccurrence({
@@ -810,6 +813,7 @@ export function EventDialog({ event, initial, zone, onChanged, onClose, calendar
 					onChange={setMeetChange}
 					disabled={busy}
 					series={repeats}
+					saved={linkSaved}
 				/>
 				<div className="field">
 					<label className="field-label" htmlFor={ids.notes}>
@@ -883,10 +887,12 @@ interface MeetRowProps {
 	disabled: boolean;
 	/** True for a repeated event: the link is for each occurrence. */
 	series: boolean;
+	/** True when a save already sent the change of the link, and a different part of the save failed. */
+	saved: boolean;
 }
 
 /** The Meet link of the event: join, copy, add or remove it. A change applies when the person saves the event. */
-function MeetRow({ link, change, onChange, disabled, series }: MeetRowProps) {
+function MeetRow({ link, change, onChange, disabled, series, saved }: MeetRowProps) {
 	const toast = useToast();
 	const ids = { hint: useId() };
 	const row = useRef<HTMLElement>(null);
@@ -914,7 +920,9 @@ function MeetRow({ link, change, onChange, disabled, series }: MeetRowProps) {
 		<section className="cal-meet" aria-label="Meet" ref={row}>
 			<span className="field-label">Meet</span>
 			{link === null ? (
-				change === "create" ? (
+				change === "create" && saved ? (
+					<p className="cal-meet-row field-hint">The Meet link is saved.</p>
+				) : change === "create" ? (
 					<p className="cal-meet-row field-hint">
 						<span id={ids.hint}>A Meet link is added when you save.</span>
 						<button
@@ -935,6 +943,8 @@ function MeetRow({ link, change, onChange, disabled, series }: MeetRowProps) {
 						</button>
 					</p>
 				)
+			) : change === "remove" && saved ? (
+				<p className="cal-meet-row field-hint">The Meet link is removed. Each participant left the call.</p>
 			) : change === "remove" ? (
 				<p className="cal-meet-row field-hint">
 					<span id={ids.hint}>When you save, the link stops and each participant leaves the call.</span>

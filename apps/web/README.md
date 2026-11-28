@@ -1272,7 +1272,8 @@ MCP clients. The app has no UI-only path.
     decide the scope of the other fields: from one occurrence, a change of the title or of the time still asks
     **This event** or **All events**. For **This event**, `calendar.update_event` sends only `meet` first, so a
     refused link changes nothing, then `calendar.update_occurrence` sends the fields. When only the second
-    request fails, a retry sends only the fields, on the revision after the link. The dialog of an invitation shows **Join meeting**. A redacted
+    request fails, a retry sends only the fields, on the revision after the link. The row then says that the link
+    change is saved, with no **Undo**. The dialog of an invitation shows **Join meeting**. A redacted
     event shows no link. The delete question tells that the link stops, also for **All events** of a series.
   - An occurrence of a series has the repeat mark before its title. A declined event has its title
     struck through. The key of an entry is its occurrence id.
