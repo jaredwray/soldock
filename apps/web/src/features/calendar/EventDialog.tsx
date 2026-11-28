@@ -191,6 +191,18 @@ export function EventDialog({ event, initial, zone, onChanged, onClose, calendar
 		await saveReminder();
 		if (target === "this" && occurrence) {
 			let revision = event.revision;
+			// The link is for the entire series. It goes first: a refused link (`unavailable`) then changes nothing,
+			// and a second save sends the same revision.
+			if (meetChange) {
+				const { event: saved } = await updateEvent({
+					...on,
+					event_id: event.id,
+					meet: meetChange,
+					base_revision: revision,
+				});
+				onChanged(saved);
+				revision = saved.revision;
+			}
 			if (contentChanged) {
 				const { event: saved } = await updateOccurrence({
 					...on,
@@ -199,17 +211,6 @@ export function EventDialog({ event, initial, zone, onChanged, onClose, calendar
 					location: form.location.trim(),
 					description: form.description,
 					...(sameTimeFields(form, opened) ? {} : { when: whenOf(form, zone, eventZone) }),
-					base_revision: event.revision,
-				});
-				onChanged(saved);
-				revision = saved.revision;
-			}
-			// The link is for the entire series: it goes after the change of this occurrence, on its revision.
-			if (meetChange) {
-				const { event: saved } = await updateEvent({
-					...on,
-					event_id: event.id,
-					meet: meetChange,
 					base_revision: revision,
 				});
 				onChanged(saved);

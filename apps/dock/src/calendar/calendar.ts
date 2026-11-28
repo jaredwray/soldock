@@ -1567,8 +1567,8 @@ export class CalendarDO extends DurableObject<Env> {
 	 * A different meeting has the code of a link: a defect, or a collision of 80 random bits. A retry cannot help, so
 	 * the row goes.
 	 */
-	private refusedLink(code: string): true {
-		log("error", "calendar: the meeting of a link refused the change", { code });
+	private refusedLink(errorCode: string): true {
+		log("error", "calendar: the meeting of a link refused the change", { code: errorCode });
 		return true;
 	}
 
