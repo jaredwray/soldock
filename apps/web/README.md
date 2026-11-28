@@ -1267,9 +1267,12 @@ MCP clients. The app has no UI-only path.
   - **The Meet link.** The form has a **Meet** row. **Create Meet link** shows "A Meet link is added when
     you save." with **Undo**, and the save sends `meet: "create"`. An event with a link shows **Join
     meeting** (a new tab), **Copy link** and **Remove link**. **Remove link** shows that the call stops at the
-    save, with **Undo**, and the save sends `meet: "remove"`. A change of the link applies to the entire
-    series. The dialog of an invitation shows **Join meeting**. A redacted event shows no link. The delete
-    question tells that the link stops.
+    save, with **Undo**, and the save sends `meet: "remove"`. The focus moves to the first control of the new
+    row. A repeated event says that the link is for each event of the series. A change of the link does not
+    decide the scope of the other fields: from one occurrence, a change of the title or of the time still asks
+    **This event** or **All events**. For **This event**, `calendar.update_occurrence` sends the fields, then
+    `calendar.update_event` sends only `meet`. The dialog of an invitation shows **Join meeting**. A redacted
+    event shows no link. The delete question tells that the link stops, also for **All events** of a series.
   - An occurrence of a series has the repeat mark before its title. A declined event has its title
     struck through. The key of an entry is its occurrence id.
   - **Reminders.** Each page of the app shows a toast for the `calendar.reminder` event of the events

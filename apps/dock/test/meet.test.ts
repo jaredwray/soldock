@@ -249,6 +249,7 @@ describe("meet", () => {
 			title: "Weekly sync",
 			host_name: "Ada Lovelace",
 			status: "open",
+			origin: "standalone",
 			media: "ready",
 			viewer: null,
 		});

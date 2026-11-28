@@ -25,7 +25,7 @@ import { type CalendarPushJob, enqueueCalendarPush } from "../chat/index.ts";
 import type { CalendarReminderInput } from "../identity/index.ts";
 import { type CalendarSenderCheck, sendCalendarMail } from "../mail/index.ts";
 import { newMeetingCode } from "../meet/index.ts";
-import { decodeCursor, encodeCursor, log, newId } from "../platform/index.ts";
+import { audit, decodeCursor, encodeCursor, log, newId } from "../platform/index.ts";
 import type { CalendarWebhookEventJob } from "../webhooks/index.ts";
 import { mergeIntervals } from "./find-times.ts";
 import { buildICalendar, type ICalInvite, type ICalOutput, type PartStat, parseICalendar } from "./ical.ts";
@@ -61,6 +61,8 @@ const NO_GRANT = "The owner of this calendar gave you no access to it.";
 const FREE_BUSY_ONLY = "Your access to this calendar shows only busy times. The owner can let you schedule.";
 const OWN_EVENTS_ONLY = "You can change only the events that you added to this calendar.";
 
+/** The wait before the alarm sends a `meet` row of the outbox: the call that queued it sends it first. */
+const MEET_RETRY_MS = 10_000;
 /** The rows of a free/busy query. A calendar with more events in the range gives unknown, never a part. */
 const BUSY_ROWS = 2000;
 const NO_OCCURRENCE = "The event has no occurrence with that id.";
@@ -1562,6 +1564,15 @@ export class CalendarDO extends DurableObject<Env> {
 	}
 
 	/**
+	 * A different meeting has the code of a link: a defect, or a collision of 80 random bits. A retry cannot help, so
+	 * the row goes.
+	 */
+	private refusedLink(code: string): true {
+		log("error", "calendar: the meeting of a link refused the change", { code });
+		return true;
+	}
+
+	/**
 	 * Puts a change of the Meet link `code` in the outbox. The delivery reads the event then: a link that the event
 	 * holds makes or renames its meeting, and each other link cancels its meeting.
 	 */
@@ -1569,6 +1580,9 @@ export class CalendarDO extends DurableObject<Env> {
 		const seq = Number(this.meta("meet_seq") ?? 0) + 1;
 		this.setMeta("meet_seq", String(seq));
 		this.putOutbox(`meet:${code}`, "meet", code, eventId, JSON.stringify({ v: 1, actor: actorId }), seq);
+		// The call sends the row at once (`deliverNow`). The alarm is only the fallback, so it does not send the row
+		// at the same time.
+		this.sql.exec("UPDATE outbox SET next_attempt_at = ? WHERE id = ?", Date.now() + MEET_RETRY_MS, `meet:${code}`);
 	}
 
 	/**
@@ -1592,7 +1606,7 @@ export class CalendarDO extends DurableObject<Env> {
 				// The same backoff as the alarm. The row waits, and the alarm moves to its time.
 				this.sql.exec(
 					"UPDATE outbox SET attempts = attempts + 1, next_attempt_at = ? WHERE id = ? AND version = ?",
-					Date.now() + 10_000,
+					Date.now() + MEET_RETRY_MS,
 					row.id,
 					row.version,
 				);
@@ -1827,9 +1841,11 @@ export class CalendarDO extends DurableObject<Env> {
 			this.noteChange("calendar.event.created", input.id, 1, call.actorId);
 			this.rearm(input.id);
 		});
+		// The view of this change, before an await that lets a different call change or delete the event.
+		const view = viewFor(role, call.actorId, this.masterView(this.row(input.id) as EventRecord));
 		await this.scheduleAlarm();
 		if (meetCode !== null) await this.deliverNow([`meet:${meetCode}`]);
-		return viewFor(role, call.actorId, this.masterView(this.row(input.id) as EventRecord));
+		return view;
 	}
 
 	private seriesCount(): number {
@@ -2015,9 +2031,11 @@ export class CalendarDO extends DurableObject<Env> {
 			this.noteChange("calendar.event.updated", eventId, event.revision + 1, call.actorId);
 			this.rearm(eventId);
 		});
+		// The view of this change, before an await that lets a different call change or delete the event.
+		const view = viewFor(role, call.actorId, this.masterView(this.row(eventId) as EventRecord));
 		await this.scheduleAlarm();
 		if (meetRows.length > 0) await this.deliverNow(meetRows);
-		return { event: viewFor(role, call.actorId, this.masterView(this.row(eventId) as EventRecord)), changed: true };
+		return { event: view, changed: true };
 	}
 
 	/** Deletes an event, or with `dryRun` returns it without a change. Each attendee loses the copy. */
@@ -2670,13 +2688,27 @@ export class CalendarDO extends DurableObject<Env> {
 				eventId: row.event_id,
 				createdBy: actor,
 			};
-			const result =
-				event?.role === "organizer" && event.meet_code === code
-					? await stub.ensureForEvent(input)
-					: await stub.cancelForEvent({ ...input, actorId: actor });
-			// A different meeting has the code: a defect, or a collision of 80 random bits. A retry cannot help.
-			if ("error" in result)
-				log("error", "calendar: the meeting of a link refused the change", { code: result.error.code });
+			// The audit line of the calendar operation names the event. This line names the meeting that the change of
+			// its link made or cancelled. The outbox has no credential: the operation line of the actor has it.
+			const record = (op: string, meetingId: string) =>
+				audit({
+					op,
+					actor,
+					actorKind: "calendar_outbox",
+					credential: "calendar_outbox",
+					target: meetingId,
+					...(owner === actor ? {} : { calendar: owner }),
+					result: "ok",
+				});
+			if (event?.role === "organizer" && event.meet_code === code) {
+				const result = await stub.ensureForEvent(input);
+				if ("error" in result) return this.refusedLink(result.error.code);
+				if (result.created) record("meet.create_meeting", result.meeting.id);
+			} else {
+				const result = await stub.cancelForEvent({ ...input, actorId: actor });
+				if ("error" in result) return this.refusedLink(result.error.code);
+				if (result.cancelled) record("meet.cancel_meeting", result.meetingId);
+			}
 			return true;
 		}
 		if (row.kind === "mail") {

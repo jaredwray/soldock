@@ -81,15 +81,16 @@ Public surface: `index.ts` only. Other domains must not import files from this f
   before it wakes an object.
 - The host is the principal that created the meeting. Only the host calls the operations of a meeting. A different
   member, an owner or an admin, and the sponsor of an agent get `forbidden`.
-- Status: `open`, then `ended` (the host) or `cancelled` (the calendar). Both end states are final: each participant leaves, each socket closes with `4410`, the object closes each track on the SFU,
-  and each later join gets `conflict`.
+- Status: `open`, then `ended` (the host) or `cancelled` (the calendar). Both end states are final: each
+  participant leaves, each socket closes with `4410`, the object closes each track on the SFU, and each later join
+  gets `conflict`. After the delete of the data, 30 days after the end, a join gets `not_found`.
 - The object ends an open meeting 90 days after its last activity, and deletes its data 30 days after the end.
   Activity is a decision of the host (admit, refuse, remove) or a new media session of an admitted participant. A
   join or a leave is not activity, so a person with the link cannot keep an idle meeting open.
 
 ## The meeting of a calendar event
 
-- A meeting has an origin: `meet` (`meet.create_meeting`) or `calendar` (the Meet link of an event). Only the
+- A meeting has an origin: `standalone` (`meet.create_meeting`) or `calendar` (the Meet link of an event). Only the
   outbox of a `CalendarDO` calls `ensureForEvent` and `cancelForEvent`. The calendar module has the rules of the
   link: [Calendar › The Meet link](../calendar/README.md#the-meet-link).
 - `ensureForEvent` makes the meeting with the code of the event, the owner of the calendar as the host, and the
@@ -98,6 +99,10 @@ Public surface: `index.ts` only. Other domains must not import files from this f
 - `cancelForEvent` cancels an open meeting: each participant leaves with the reason `cancelled`. With no meeting,
   it writes a cancelled meeting, so a later `ensureForEvent` with that code cannot open a room.
 - Both refuse with `conflict` when the meeting of the code has a different origin, event or host.
+- Both tell the calendar what changed (`created`, `cancelled`). The calendar outbox then writes the audit line
+  `meet.create_meeting` or `meet.cancel_meeting` with the meeting id, the actor of the calendar change, and the
+  calendar when the actor is a delegate. The credential is `calendar_outbox`: the audit line of the calendar
+  operation has the credential of the actor.
 - A meeting of the origin `calendar` has no idle end: the event decides how long the link works.
   `meet.end_meeting` stops the call: each participant leaves with the reason `ended`, each socket closes, and the
   object closes each track on the SFU. The status stays `open`, so the link works for the next call.
@@ -224,6 +229,10 @@ of pull requests set a stand-in there.
 - A host who is not in the call leaves guests in the lobby until they are away too long.
 - An ended link does not work again. The host makes a new meeting. The link of a calendar event works until the
   calendar cancels it.
+- The room of a past calendar event stays open until the owner deletes the event or removes the link. A member
+  of the organization can use its media with no host. A guest waits in the lobby.
+- A member that the host removed from a call of a calendar meeting waits in the lobby in each later call of that
+  link, also after `meet.end_meeting`. The host admits the member again.
 - The code is in the URLs of Worker requests, so it can be in the logs of invocations. It allows only a request to
   join.
 - The revoke of a TURN credential has one try. If it fails, a removed participant keeps the credential for at most

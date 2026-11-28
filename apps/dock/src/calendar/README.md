@@ -476,12 +476,16 @@ The workerd tests use synthetic fixtures in the forms of Google Calendar, Outloo
   A `free_busy` grantee gets `forbidden`, as for each event operation.
 - **The outbox.** Each change puts one row of the kind `meet` in the outbox (`meet:<code>`, version
   `meta.meet_seq`). The object sends it before the call returns, so a new link works at once and a removed link
-  stops at once. A failure waits 10 seconds for the alarm. The delivery reads the event at that time:
+  stops at once. The alarm sends the row only after 10 seconds, so the two do not send it at the same time. A failure
+  waits for the alarm. The delivery reads the event at that time:
   - The event holds the code, and the calendar is the organizer: `MeetingDO.ensureForEvent` makes the meeting
     with the origin `calendar`, or changes its title and the name of the host.
   - Each other case (the event is deleted, or its link is removed): `MeetingDO.cancelForEvent` cancels the
-    meeting. Each participant leaves, and each later join gets `409`. With no meeting yet, the object writes a
+    meeting. Each participant leaves, and each later join gets `409` (`404` after the delete of the data of the
+    meeting, 30 days later). With no meeting yet, the object writes a
     cancelled row, so a late delivery cannot open a room for a removed link.
+  - A make or a cancel writes an audit line that names the meeting: see
+    [Meet › The meeting of a calendar event](../meet/README.md#the-meeting-of-a-calendar-event).
   - A meeting with that code for a different event, origin or host refuses with `conflict`. The calendar writes
     an error log and drops the row: a retry cannot help.
 - The title of the meeting is the title of the event, cut to 120 code points. A private event gives the meeting

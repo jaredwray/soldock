@@ -46,6 +46,20 @@ beforeEach(async () => {
 
 type CreateInput = InputOf<"calendar.create_event">;
 
+/** The result of `run`, and the audit lines that the Worker wrote while it ran. */
+async function audited<T>(run: () => Promise<T>): Promise<{ result: T; lines: Record<string, unknown>[] }> {
+	const spy = vi.spyOn(console, "log");
+	try {
+		const result = await run();
+		const lines = spy.mock.calls
+			.map(([line]) => (typeof line === "string" && line.startsWith("{") ? JSON.parse(line) : null))
+			.filter((line): line is Record<string, unknown> => line?.audit === true);
+		return { result, lines };
+	} finally {
+		spy.mockRestore();
+	}
+}
+
 const review = (extra: Partial<CreateInput> = {}): CreateInput => ({
 	title: "Design review",
 	when: { kind: "timed", start: "2030-03-04T15:00:00Z", end: "2030-03-04T16:00:00Z", time_zone: "UTC" },
@@ -56,11 +70,11 @@ const review = (extra: Partial<CreateInput> = {}): CreateInput => ({
 const MARCH = { time_min: "2030-03-01T00:00:00Z", time_max: "2030-04-01T00:00:00Z" } as const;
 
 /** The state of a meeting for each person with its link: its title and its status, or the HTTP status. */
-async function callInfo(code: string): Promise<{ status: number; title?: string; meeting?: string }> {
+async function callInfo(code: string): Promise<{ status: number; title?: string; meeting?: string; origin?: string }> {
 	const res = await withEnv({}, meetCallPath(code));
 	if (!res.ok) return { status: res.status };
-	const body = (await res.json()) as { title: string; status: string };
-	return { status: res.status, title: body.title, meeting: body.status };
+	const body = (await res.json()) as { title: string; status: string; origin: string };
+	return { status: res.status, title: body.title, meeting: body.status, origin: body.origin };
 }
 
 async function joinAsGuest(code: string, name = "Casey Customer") {
@@ -89,7 +103,7 @@ describe("the Meet link of an event", () => {
 		expect((await ada.call("calendar.create_event", input)).event.meet?.code).toBe(code);
 		// The same key with a request without the link makes nothing.
 		expect(await codeOf(ada.call("calendar.create_event", { ...input, meet: undefined }))).toBe("conflict");
-		expect(await callInfo(code)).toEqual({ status: 200, title: "Design review", meeting: "open" });
+		expect(await callInfo(code)).toEqual({ status: 200, title: "Design review", meeting: "open", origin: "calendar" });
 		const { meeting } = await ada.call("meet.get_meeting", { code });
 		expect(meeting).toMatchObject({ origin: "calendar", event_id: first.event.id, host: { principal_id: ada.id } });
 		expect(await meetRows(ada.id)).toEqual([]);
@@ -139,10 +153,18 @@ describe("the Meet link of an event", () => {
 		await ada.call("calendar.set_grant", { principal_id: grace.id, access: "schedule" });
 		await ada.call("calendar.set_grant", { principal_id: bot.id, access: "schedule" });
 
-		const { event: added } = await grace.call("calendar.create_event", review({ calendar_id: ada.id }));
+		const {
+			result: { event: added },
+			lines: made,
+		} = await audited(() => grace.call("calendar.create_event", review({ calendar_id: ada.id })));
 		const code = added.meet?.code as string;
 		expect(added.created_by).toBe(grace.id);
-		expect((await ada.call("meet.get_meeting", { code })).meeting.host.principal_id).toBe(ada.id);
+		const { meeting } = await ada.call("meet.get_meeting", { code });
+		expect(meeting.host.principal_id).toBe(ada.id);
+		// The audit names the meeting that the link made, the delegate and the calendar.
+		expect(made.filter((line) => line.op === "meet.create_meeting")).toEqual([
+			expect.objectContaining({ actor: grace.id, calendar: ada.id, target: meeting.id, result: "ok" }),
+		]);
 		expect(await codeOf(grace.call("meet.get_meeting", { code }))).toBe("forbidden");
 		expect(await codeOf(grace.call("meet.end_meeting", { code }))).toBe("forbidden");
 
@@ -161,6 +183,28 @@ describe("the Meet link of an event", () => {
 		expect(byId.get(own.id)).toMatchObject({ redacted: true, meet: null });
 		expect(byId.get(added.id)?.meet?.code).toBe(code);
 		expect((await grace.call("calendar.get_event", { event_id: own.id, calendar_id: ada.id })).event.meet).toBeNull();
+
+		// A service account with the grant. Its token holds the account scopes, with meet.write.
+		const { principal: service } = await owner.call("directory.create_service_account", {
+			display_name: "Scheduler",
+			address: "scheduler@dock.test",
+		});
+		const { api_key } = await owner.call("account.create_api_key", { principal_id: service.id, label: "jobs" });
+		await ada.call("calendar.set_grant", { principal_id: service.id, access: "schedule" });
+		const { event: booked } = await api(api_key.secret)(
+			"calendar.create_event",
+			review({ calendar_id: ada.id, title: "Booked" }),
+		);
+		const bookedCode = booked.meet?.code as string;
+		expect((await ada.call("meet.get_meeting", { code: bookedCode })).meeting.host.principal_id).toBe(ada.id);
+
+		// The delete of the delegate cancels the meeting, and the audit names it.
+		const { lines: cancelled } = await audited(() =>
+			grace.call("calendar.delete_event", { event_id: added.id, calendar_id: ada.id }),
+		);
+		expect(cancelled.filter((line) => line.op === "meet.cancel_meeting")).toEqual([
+			expect.objectContaining({ actor: grace.id, calendar: ada.id, target: meeting.id, result: "ok" }),
+		]);
 
 		// A grant of busy times only gives no event at all.
 		await ada.call("calendar.set_grant", { principal_id: grace.id, access: "free_busy" });
@@ -197,6 +241,10 @@ describe("the Meet link of an event", () => {
 		await settleCalendars(ada.id, grace.id);
 		const copy = (await grace.call("calendar.get_event", { event_id: series.id })).event;
 		expect(copy).toMatchObject({ role: "attendee", meet: { code } });
+		// A removed link leaves the copy too.
+		await ada.call("calendar.update_event", { event_id: series.id, meet: "remove" });
+		await settleCalendars(ada.id, grace.id);
+		expect((await grace.call("calendar.get_event", { event_id: series.id })).event.meet).toBeNull();
 	});
 
 	it("stops the link for a removed link or a deleted event: each participant leaves, and nobody joins again", async () => {
@@ -261,6 +309,35 @@ describe("the Meet link of an event", () => {
 		});
 		expect(await callInfo(lateCode)).toMatchObject({ meeting: "cancelled" });
 		expect((await joinAsGuest(lateCode)).status).toBe(409);
+	});
+
+	it("returns the view of its own change when a delete runs while the meeting is made", async () => {
+		const { event } = await ada.call("calendar.create_event", review({ meet: undefined }));
+		let release = () => {};
+		const gate = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		let started = () => {};
+		const waiting = new Promise<void>((resolve) => {
+			started = resolve;
+		});
+		// The prototype can hold the spy of an earlier test. Its default calls the real method.
+		const original = MeetingDO.prototype.ensureForEvent;
+		vi.spyOn(MeetingDO.prototype, "ensureForEvent").mockImplementationOnce(async function (this: MeetingDO, input) {
+			started();
+			await gate;
+			return original.call(this, input);
+		});
+		const linking = ada.call("calendar.update_event", { event_id: event.id, meet: "create" });
+		await waiting;
+		// The update waits on the meeting. The input gate is open, so the delete runs now.
+		await ada.call("calendar.delete_event", { event_id: event.id });
+		release();
+		const { event: linked } = await linking;
+		expect(linked).toMatchObject({ id: event.id, revision: event.revision + 1 });
+		const code = linked.meet?.code as string;
+		await settleCalendars(ada.id);
+		expect(await callInfo(code)).toMatchObject({ meeting: "cancelled" });
 	});
 
 	it("puts the link in the invitation by mail, and an update without it after a removal", async () => {

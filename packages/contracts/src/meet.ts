@@ -326,6 +326,8 @@ export const CallInfo = z.object({
 	title: z.string(),
 	host_name: z.string(),
 	status: MeetingStatus,
+	/** `calendar` for the meeting of a calendar event: its link works until the calendar cancels it. */
+	origin: z.enum(["standalone", "calendar"]),
 	/** `not_configured` when the operator did not set up the media service. */
 	media: z.enum(["ready", "not_configured"]),
 	/** The signed-in member of this browser, or null for a guest. */

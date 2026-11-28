@@ -275,7 +275,9 @@ export function CallView({ code, info, token, local, startMuted, startWithoutVid
 					}}
 					onClose={() => setConfirmEnd(false)}
 				>
-					Each participant leaves the call, and nobody can join again with this link.
+					{info.origin === "calendar"
+						? "Each participant leaves the call. The link of the calendar event still works: remove the link or delete the event to stop it."
+						: "Each participant leaves the call, and nobody can join again with this link."}
 				</ConfirmDialog>
 			)}
 		</main>

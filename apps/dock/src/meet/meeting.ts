@@ -230,6 +230,7 @@ export interface CallInfoRecord {
 	title: string;
 	host_name: string;
 	status: MeetingStatus;
+	origin: "standalone" | "calendar";
 	viewer_is_host: boolean;
 }
 
@@ -423,11 +424,18 @@ export class MeetingDO extends DurableObject<Env> {
 	/** Makes the meeting. A second call for a code that has a meeting gives conflict. */
 	async create(input: CreateMeetingInput): Promise<MeetingRecord | Refusal> {
 		if (this.exists()) return refuse("conflict", "A meeting with that code exists.");
+		this.insertMeeting(input, null);
+		await this.schedule();
+		return this.record(this.meetingRow() as Row);
+	}
+
+	/** Writes the row of a new meeting: open, or cancelled by `cancelledBy` in the same statement. */
+	private insertMeeting(input: CreateMeetingInput, cancelledBy: string | null): void {
 		this.migrate();
 		const now = Date.now();
 		this.sql.exec(
 			`INSERT INTO meeting (id, code, host_id, host_name, title, origin, event_id, status, created_by, created_at,
-				last_activity_at) VALUES (?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ?)`,
+				last_activity_at, ended_at, ended_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			input.id,
 			input.code,
 			input.hostId,
@@ -435,12 +443,13 @@ export class MeetingDO extends DurableObject<Env> {
 			input.title,
 			input.origin,
 			input.eventId,
+			cancelledBy === null ? "open" : "cancelled",
 			input.createdBy,
 			now,
 			now,
+			cancelledBy === null ? null : now,
+			cancelledBy,
 		);
-		await this.schedule();
-		return this.record(this.meetingRow() as Row);
 	}
 
 	/**
@@ -448,8 +457,11 @@ export class MeetingDO extends DurableObject<Env> {
 	 * and code changes only the title and the host name. A cancelled meeting never opens again: a removed link stays
 	 * dead.
 	 */
-	async ensureForEvent(input: CreateMeetingInput): Promise<MeetingRecord | Refusal> {
-		if (!this.exists()) return this.create({ ...input, origin: "calendar" });
+	async ensureForEvent(input: CreateMeetingInput): Promise<{ meeting: MeetingRecord; created: boolean } | Refusal> {
+		if (!this.exists()) {
+			const created = await this.create({ ...input, origin: "calendar" });
+			return "error" in created ? created : { meeting: created, created: true };
+		}
 		const meeting = this.meetingRow() as Row;
 		if (meeting.origin !== "calendar" || meeting.event_id !== input.eventId || meeting.host_id !== input.hostId) {
 			return refuse("conflict", "A meeting with that code exists for a different event.");
@@ -458,7 +470,7 @@ export class MeetingDO extends DurableObject<Env> {
 			this.sql.exec("UPDATE meeting SET title = ?, host_name = ?", input.title, input.hostName);
 			this.broadcast();
 		}
-		return this.record(this.meetingRow() as Row);
+		return { meeting: this.record(this.meetingRow() as Row), created: false };
 	}
 
 	/**
@@ -466,21 +478,22 @@ export class MeetingDO extends DurableObject<Env> {
 	 * each later join gets conflict. With no meeting yet, a cancelled row stays, so a late make of the meeting cannot
 	 * open a room for a link that the calendar removed.
 	 */
-	async cancelForEvent(input: CreateMeetingInput & { actorId: string }): Promise<{ ok: true } | Refusal> {
+	async cancelForEvent(
+		input: CreateMeetingInput & { actorId: string },
+	): Promise<{ meetingId: string; cancelled: boolean } | Refusal> {
 		if (!this.exists()) {
-			const created = await this.create({ ...input, origin: "calendar" });
-			if ("error" in created) return created;
-			const now = Date.now();
-			this.sql.exec("UPDATE meeting SET status = 'cancelled', ended_at = ?, ended_by = ?", now, input.actorId);
+			// No room ever opened for this link: the cancelled row only blocks a late make.
+			this.insertMeeting({ ...input, origin: "calendar" }, input.actorId);
 			await this.schedule();
-			return { ok: true };
+			return { meetingId: input.id, cancelled: false };
 		}
 		const meeting = this.meetingRow() as Row;
 		if (meeting.origin !== "calendar" || meeting.event_id !== input.eventId || meeting.host_id !== input.hostId) {
 			return refuse("conflict", "A meeting with that code exists for a different event.");
 		}
-		if (meeting.status === "open") await this.close("cancelled", input.actorId);
-		return { ok: true };
+		if (meeting.status !== "open") return { meetingId: meeting.id as string, cancelled: false };
+		await this.close("cancelled", input.actorId);
+		return { meetingId: meeting.id as string, cancelled: true };
 	}
 
 	async get(actorId: string): Promise<MeetingRecord | Refusal> {
@@ -623,6 +636,7 @@ export class MeetingDO extends DurableObject<Env> {
 			title: meeting.title as string,
 			host_name: meeting.host_name as string,
 			status: meeting.status as MeetingStatus,
+			origin: meeting.origin as CallInfoRecord["origin"],
 			viewer_is_host: viewerId !== null && viewerId === meeting.host_id,
 		};
 	}

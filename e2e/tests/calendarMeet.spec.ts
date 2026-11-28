@@ -35,11 +35,15 @@ test.afterAll(async () => {
 	await guestBrowser?.close();
 });
 
-/** A random day of March in a far year, so no other test and no seed event uses it. */
+/**
+ * A random day in a far year, so no other test and no seed event uses it. The days are from March 15 to 28: the
+ * clock of New York changes on the second Sunday of March, at the latest on March 14, so each day that a test
+ * uses (to two weeks later) has the offset -04:00.
+ */
 function farDay(): string {
 	const year = 2090 + Math.floor(Math.random() * 10);
-	const day = 1 + Math.floor(Math.random() * 28);
-	return `${year}-03-${String(day).padStart(2, "0")}`;
+	const day = 15 + Math.floor(Math.random() * 14);
+	return `${year}-03-${day}`;
 }
 
 interface ApiEvent {
@@ -214,5 +218,62 @@ test("a delegate adds a Meet link in the calendar of a colleague, and the collea
 		await chidi.request.delete(`/api/v1/calendar/grants/${meilingId}`, { headers: { origin: BASE_URL } });
 		await meiling.close();
 		await chidi.close();
+	}
+});
+
+/** The day `days` after `day` (`YYYY-MM-DD`). */
+function addDays(day: string, days: number): string {
+	const date = new Date(`${day}T12:00:00Z`);
+	date.setUTCDate(date.getUTCDate() + days);
+	return date.toISOString().slice(0, 10);
+}
+
+test("a link added from one occurrence is for the series, and the other changes still ask which events", async ({
+	browser,
+}) => {
+	const owner = await signIn(browser, "nadia");
+	try {
+		const day = farDay();
+		const title = unique("Weekly sync");
+		const created = await owner.request.post("/api/v1/calendar/events", {
+			headers: JSON_HEADERS,
+			data: {
+				title,
+				when: {
+					kind: "timed",
+					start: `${day}T10:00:00-04:00`,
+					end: `${day}T11:00:00-04:00`,
+					time_zone: "America/New_York",
+				},
+				recurrence: { frequency: "weekly", interval: 1, count: 3 },
+			},
+		});
+		expect(created.ok(), await created.text()).toBe(true);
+
+		// From the second occurrence: a new title and a new link. The title asks for the scope.
+		const second = addDays(day, 7);
+		const page = await owner.newPage();
+		await page.goto(`/calendar/week/${second}`);
+		await page.getByRole("button", { name: new RegExp(`^${title}, 10:00 AM`) }).click();
+		const edit = page.getByRole("dialog", { name: "Edit event" });
+		await expect(edit.getByText("The link is for each event of the series.")).toBeVisible();
+		await edit.getByLabel("Title").fill(`${title} (moved agenda)`);
+		await edit.getByRole("button", { name: "Create Meet link" }).click();
+		await edit.getByRole("button", { name: "Save" }).click();
+		const change = page.getByRole("dialog", { name: "Change a repeated event" });
+		await expect(change.getByLabel("This event")).toBeChecked();
+		await change.getByRole("button", { name: "Change" }).click();
+		await expect(page.getByText("Event saved.")).toBeVisible();
+
+		// Only the second occurrence has the new title. Each occurrence has the same link.
+		await expect
+			.poll(async () => (await eventsOn(owner, second, `${title} (moved agenda)`)).map((event) => event.meet !== null))
+			.toEqual([true]);
+		const [moved] = await eventsOn(owner, second, `${title} (moved agenda)`);
+		for (const other of [day, addDays(day, 14)]) {
+			expect((await eventsOn(owner, other, title)).map((event) => event.meet?.code)).toEqual([moved?.meet?.code]);
+		}
+	} finally {
+		await owner.close();
 	}
 });
